@@ -34,6 +34,18 @@ Saglik kontrolu:
 docker compose up -d
 ```
 
+## Railway Deploy
+
+Repo kokunde `railway.json` ve `package.json` bulunduğu icin Railway kökten deploy edebilir.
+
+Gerekli environment variables:
+
+- `DATABASE_URL`
+- `REDIS_URL`
+- `JWT_SECRET`
+- `NODE_ENV=production`
+- `CORS_ORIGIN=*`
+
 ## Sonraki Adim
 
 1. Flutter CLI kurup `mobile_flutter` icinde app scaffold olustur.

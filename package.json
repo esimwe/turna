@@ -1,0 +1,9 @@
+{
+  "name": "turna-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "railway:build": "npm --prefix backend ci && npm --prefix backend run prisma:generate && npm --prefix backend run build",
+    "railway:start": "npm --prefix backend run prisma:push && npm --prefix backend run start"
+  }
+}
