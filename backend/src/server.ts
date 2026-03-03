@@ -1,5 +1,5 @@
 import { createServer } from "http";
-import Redis from "ioredis";
+import { Redis } from "ioredis";
 import { Server } from "socket.io";
 import { createApp } from "./app.js";
 import { env } from "./config/env.js";
@@ -19,7 +19,7 @@ const io = new Server(httpServer, {
 registerChatSocket(io);
 
 const redis = new Redis(env.REDIS_URL, { lazyConnect: true, maxRetriesPerRequest: 1 });
-redis.connect().then(() => logInfo("redis connected")).catch((err) => logError("redis connect failed", err));
+redis.connect().then(() => logInfo("redis connected")).catch((err: unknown) => logError("redis connect failed", err));
 
 httpServer.listen(env.PORT, () => {
   logInfo(`backend listening on :${env.PORT}`);
