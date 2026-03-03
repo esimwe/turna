@@ -1,7 +1,7 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
+
+const String kBackendBaseUrl = 'https://turna-production.up.railway.app';
 
 void main() {
   runApp(const TurnaApp());
@@ -477,9 +477,8 @@ class TurnaSocketClient extends ChangeNotifier {
   io.Socket? _socket;
 
   void connect() {
-    final host = Platform.isAndroid ? '10.0.2.2' : 'localhost';
     _socket = io.io(
-      'http://$host:4000',
+      kBackendBaseUrl,
       io.OptionBuilder().setTransports(['websocket']).disableAutoConnect().build(),
     );
 
