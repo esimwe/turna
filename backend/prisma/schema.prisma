@@ -1,0 +1,79 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ChatType {
+  DIRECT
+  GROUP
+}
+
+enum MessageStatus {
+  sent
+  delivered
+  read
+}
+
+model User {
+  id          String       @id @default(uuid())
+  displayName String
+  phone       String?      @unique
+  email       String?      @unique
+  avatarUrl   String?
+  about       String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  messages    Message[]
+  memberships ChatMember[]
+}
+
+model Chat {
+  id        String       @id
+  type      ChatType
+  createdAt DateTime     @default(now())
+  members   ChatMember[]
+  messages  Message[]
+}
+
+model ChatMember {
+  chatId    String
+  userId    String
+  joinedAt  DateTime @default(now())
+
+  chat      Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([chatId, userId])
+  @@index([userId])
+}
+
+model Message {
+  id         String        @id @default(uuid())
+  chatId     String
+  senderId   String
+  text       String
+  status     MessageStatus @default(sent)
+  isViewOnce Boolean       @default(false)
+  createdAt  DateTime      @default(now())
+  readAt     DateTime?
+
+  chat       Chat          @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  sender     User          @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@index([chatId, createdAt(sort: Desc)])
+}
+
+model OtpCode {
+  id        String   @id @default(uuid())
+  target    String
+  code      String
+  consumed  Boolean  @default(false)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([target, createdAt(sort: Desc)])
+}
