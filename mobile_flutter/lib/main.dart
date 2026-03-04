@@ -253,6 +253,7 @@ class ChatsPage extends StatelessWidget {
 
   final AuthSession session;
 
+<<<<<<< HEAD
   static final chats = <ChatPreview>[
     ChatPreview(userId: 'jon', name: 'Mr Jon', message: 'Hi', time: '08:23', unread: 2),
     ChatPreview(userId: 'denver', name: 'Denver', message: 'Helo', time: '08:28', unread: 0),
@@ -261,6 +262,8 @@ class ChatsPage extends StatelessWidget {
     ChatPreview(userId: 'junu', name: 'Junu', message: 'say no', time: '06:23', unread: 0),
   ];
 
+=======
+>>>>>>> 1a42523 (chore: connect local repo)
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -275,6 +278,7 @@ class ChatsPage extends StatelessWidget {
           SizedBox(width: 8),
         ],
       ),
+<<<<<<< HEAD
       body: ListView.builder(
         itemCount: chats.length + 1,
         itemBuilder: (context, index) {
@@ -324,6 +328,61 @@ class ChatsPage extends StatelessWidget {
               Navigator.push(
                 context,
                 MaterialPageRoute(builder: (_) => ChatRoomPage(chat: chat, session: session)),
+=======
+      body: FutureBuilder<List<ChatPreview>>(
+        future: ChatApi.fetchChats(session),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          final chats = snapshot.data ?? [];
+          return ListView.builder(
+            itemCount: chats.isEmpty ? 2 : chats.length + 1,
+            itemBuilder: (context, index) {
+              if (index == 0) {
+                return Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
+                  child: TextField(
+                    readOnly: true,
+                    decoration: InputDecoration(
+                      hintText: 'Sohbetlerde ara',
+                      prefixIcon: const Icon(Icons.search),
+                      filled: true,
+                      fillColor: const Color(0xFFEFF1EE),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(24),
+                        borderSide: BorderSide.none,
+                      ),
+                    ),
+                  ),
+                );
+              }
+
+              if (chats.isEmpty) {
+                return const Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Text('Henüz sohbet yok. Başlatmak için başka bir kullanıcıyla giriş yap.'),
+                );
+              }
+
+              final chat = chats[index - 1];
+              return ListTile(
+                leading: CircleAvatar(
+                  radius: 22,
+                  backgroundColor: const Color(0xFFDBEFE2),
+                  child: Text(chat.name.characters.first, style: const TextStyle(color: Color(0xFF1FAA59), fontWeight: FontWeight.w700)),
+                ),
+                title: Text(chat.name, style: const TextStyle(fontWeight: FontWeight.w600)),
+                subtitle: Text(chat.message, maxLines: 1, overflow: TextOverflow.ellipsis),
+                trailing: Text(chat.time, style: const TextStyle(fontSize: 12, color: Color(0xFF777C79))),
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => ChatRoomPage(chat: chat, session: session)),
+                  );
+                },
+>>>>>>> 1a42523 (chore: connect local repo)
               );
             },
           );
@@ -357,7 +416,11 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
   void initState() {
     super.initState();
     _client = TurnaSocketClient(
+<<<<<<< HEAD
       chatId: 'direct_${widget.chat.userId}',
+=======
+      chatId: widget.chat.chatId,
+>>>>>>> 1a42523 (chore: connect local repo)
       senderId: widget.session.userId,
     )..connect();
     _client.addListener(_refresh);
@@ -632,6 +695,7 @@ class PlaceholderPage extends StatelessWidget {
 }
 
 class ChatPreview {
+<<<<<<< HEAD
   ChatPreview({required this.userId, required this.name, required this.message, required this.time, required this.unread});
 
   final String userId;
@@ -639,6 +703,14 @@ class ChatPreview {
   final String message;
   final String time;
   final int unread;
+=======
+  ChatPreview({required this.chatId, required this.name, required this.message, required this.time});
+
+  final String chatId;
+  final String name;
+  final String message;
+  final String time;
+>>>>>>> 1a42523 (chore: connect local repo)
 }
 
 class ChatMessage {
@@ -745,3 +817,54 @@ class AuthSession {
     await prefs.remove(_displayNameKey);
   }
 }
+<<<<<<< HEAD
+=======
+
+class ChatApi {
+  static Future<List<ChatPreview>> fetchChats(AuthSession session) async {
+    final headers = {'Authorization': 'Bearer ${session.token}'};
+
+    final chatsRes = await http.get(Uri.parse('$kBackendBaseUrl/api/chats'), headers: headers);
+    if (chatsRes.statusCode >= 400) return [];
+
+    final chatsMap = jsonDecode(chatsRes.body) as Map<String, dynamic>;
+    final chatsData = (chatsMap['data'] as List<dynamic>? ?? []);
+    if (chatsData.isNotEmpty) {
+      return chatsData.map((item) {
+        final map = item as Map<String, dynamic>;
+        return ChatPreview(
+          chatId: map['chatId'].toString(),
+          name: map['title']?.toString() ?? 'Chat',
+          message: map['lastMessage']?.toString() ?? '',
+          time: _formatTime(map['lastMessageAt']?.toString()),
+        );
+      }).toList();
+    }
+
+    final directoryRes = await http.get(Uri.parse('$kBackendBaseUrl/api/chats/directory/list'), headers: headers);
+    if (directoryRes.statusCode >= 400) return [];
+
+    final directoryMap = jsonDecode(directoryRes.body) as Map<String, dynamic>;
+    final users = (directoryMap['data'] as List<dynamic>? ?? []);
+    return users.map((item) {
+      final map = item as Map<String, dynamic>;
+      final peerId = map['id'].toString();
+      return ChatPreview(
+        chatId: 'direct_$peerId',
+        name: map['displayName']?.toString() ?? 'User',
+        message: 'Sohbet başlat',
+        time: '',
+      );
+    }).toList();
+  }
+
+  static String _formatTime(String? iso) {
+    if (iso == null || iso.isEmpty) return '';
+    final dt = DateTime.tryParse(iso);
+    if (dt == null) return '';
+    final hh = dt.hour.toString().padLeft(2, '0');
+    final mm = dt.minute.toString().padLeft(2, '0');
+    return '$hh:$mm';
+  }
+}
+>>>>>>> 1a42523 (chore: connect local repo)
