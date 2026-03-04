@@ -101,6 +101,46 @@ export class ChatService {
     return toChatMessage(message);
   }
 
+  async markMessagesDelivered(chatId: string, userId: string): Promise<string[]> {
+    const targetRows = await prisma.message.findMany({
+      where: {
+        chatId,
+        senderId: { not: userId },
+        status: MessageStatus.sent
+      },
+      select: { id: true }
+    });
+    const messageIds = targetRows.map((row) => row.id);
+    if (messageIds.length === 0) return [];
+
+    await prisma.message.updateMany({
+      where: { id: { in: messageIds } },
+      data: { status: MessageStatus.delivered }
+    });
+
+    return messageIds;
+  }
+
+  async markMessagesRead(chatId: string, userId: string): Promise<string[]> {
+    const targetRows = await prisma.message.findMany({
+      where: {
+        chatId,
+        senderId: { not: userId },
+        status: { in: [MessageStatus.sent, MessageStatus.delivered] }
+      },
+      select: { id: true }
+    });
+    const messageIds = targetRows.map((row) => row.id);
+    if (messageIds.length === 0) return [];
+
+    await prisma.message.updateMany({
+      where: { id: { in: messageIds } },
+      data: { status: MessageStatus.read, readAt: new Date() }
+    });
+
+    return messageIds;
+  }
+
   async getMessages(chatId: string): Promise<ChatMessage[]> {
     const rows = await prisma.message.findMany({
       where: { chatId },
