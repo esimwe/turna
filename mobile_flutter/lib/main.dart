@@ -248,22 +248,18 @@ class _MainTabsState extends State<MainTabs> {
   }
 }
 
-class ChatsPage extends StatelessWidget {
+class ChatsPage extends StatefulWidget {
   const ChatsPage({super.key, required this.session});
 
   final AuthSession session;
 
-<<<<<<< HEAD
-  static final chats = <ChatPreview>[
-    ChatPreview(userId: 'jon', name: 'Mr Jon', message: 'Hi', time: '08:23', unread: 2),
-    ChatPreview(userId: 'denver', name: 'Denver', message: 'Helo', time: '08:28', unread: 0),
-    ChatPreview(userId: 'reck', name: 'Reck', message: 'Why', time: '07:23', unread: 0),
-    ChatPreview(userId: 'heli', name: 'Heli', message: 'you', time: '08:23', unread: 1),
-    ChatPreview(userId: 'junu', name: 'Junu', message: 'say no', time: '06:23', unread: 0),
-  ];
+  @override
+  State<ChatsPage> createState() => _ChatsPageState();
+}
 
-=======
->>>>>>> 1a42523 (chore: connect local repo)
+class _ChatsPageState extends State<ChatsPage> {
+  int _refreshTick = 0;
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -278,59 +274,8 @@ class ChatsPage extends StatelessWidget {
           SizedBox(width: 8),
         ],
       ),
-<<<<<<< HEAD
-      body: ListView.builder(
-        itemCount: chats.length + 1,
-        itemBuilder: (context, index) {
-          if (index == 0) {
-            return Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
-              child: TextField(
-                readOnly: true,
-                decoration: InputDecoration(
-                  hintText: 'Ask Meta AI Search',
-                  prefixIcon: const Icon(Icons.search),
-                  filled: true,
-                  fillColor: const Color(0xFFEFF1EE),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(24),
-                    borderSide: BorderSide.none,
-                  ),
-                ),
-              ),
-            );
-          }
-
-          final chat = chats[index - 1];
-          return ListTile(
-            leading: CircleAvatar(
-              radius: 22,
-              backgroundColor: const Color(0xFFDBEFE2),
-              child: Text(chat.name.characters.first, style: const TextStyle(color: Color(0xFF1FAA59), fontWeight: FontWeight.w700)),
-            ),
-            title: Text(chat.name, style: const TextStyle(fontWeight: FontWeight.w600)),
-            subtitle: Text(chat.message, maxLines: 1, overflow: TextOverflow.ellipsis),
-            trailing: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text(chat.time, style: const TextStyle(fontSize: 12, color: Color(0xFF777C79))),
-                const SizedBox(height: 6),
-                if (chat.unread > 0)
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                    decoration: const BoxDecoration(color: Color(0xFF1FAA59), shape: BoxShape.circle),
-                    child: Text('${chat.unread}', style: const TextStyle(fontSize: 11, color: Colors.white, fontWeight: FontWeight.w700)),
-                  ),
-              ],
-            ),
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => ChatRoomPage(chat: chat, session: session)),
-=======
       body: FutureBuilder<List<ChatPreview>>(
-        future: ChatApi.fetchChats(session),
+        future: ChatApi.fetchChats(widget.session, refreshTick: _refreshTick),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
@@ -379,10 +324,9 @@ class ChatsPage extends StatelessWidget {
                 onTap: () {
                   Navigator.push(
                     context,
-                    MaterialPageRoute(builder: (_) => ChatRoomPage(chat: chat, session: session)),
+                    MaterialPageRoute(builder: (_) => ChatRoomPage(chat: chat, session: widget.session)),
                   );
                 },
->>>>>>> 1a42523 (chore: connect local repo)
               );
             },
           );
@@ -391,7 +335,15 @@ class ChatsPage extends StatelessWidget {
       floatingActionButton: FloatingActionButton(
         backgroundColor: const Color(0xFF1FAA59),
         foregroundColor: Colors.white,
-        onPressed: () {},
+        onPressed: () async {
+          final created = await Navigator.push<bool>(
+            context,
+            MaterialPageRoute(builder: (_) => NewChatPage(session: widget.session)),
+          );
+          if (created == true && mounted) {
+            setState(() => _refreshTick++);
+          }
+        },
         child: const Icon(Icons.add),
       ),
     );
@@ -416,11 +368,7 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
   void initState() {
     super.initState();
     _client = TurnaSocketClient(
-<<<<<<< HEAD
-      chatId: 'direct_${widget.chat.userId}',
-=======
       chatId: widget.chat.chatId,
->>>>>>> 1a42523 (chore: connect local repo)
       senderId: widget.session.userId,
     )..connect();
     _client.addListener(_refresh);
@@ -504,6 +452,109 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
               ),
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class NewChatPage extends StatefulWidget {
+  const NewChatPage({super.key, required this.session});
+
+  final AuthSession session;
+
+  @override
+  State<NewChatPage> createState() => _NewChatPageState();
+}
+
+class _NewChatPageState extends State<NewChatPage> {
+  final TextEditingController _searchController = TextEditingController();
+  List<ChatUser> _users = const [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadDirectory();
+    _searchController.addListener(() => setState(() {}));
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadDirectory() async {
+    final users = await ChatApi.fetchDirectory(widget.session);
+    if (!mounted) return;
+    setState(() {
+      _users = users;
+      _loading = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final q = _searchController.text.trim().toLowerCase();
+    final filtered = _users.where((u) {
+      if (q.isEmpty) return true;
+      return u.displayName.toLowerCase().contains(q) || u.id.toLowerCase().contains(q);
+    }).toList();
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Yeni Sohbet')),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+            child: TextField(
+              controller: _searchController,
+              decoration: InputDecoration(
+                hintText: 'Username veya isim ara',
+                prefixIcon: const Icon(Icons.search),
+                filled: true,
+                fillColor: const Color(0xFFEFF1EE),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(24),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+            ),
+          ),
+          Expanded(
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : ListView.builder(
+                    itemCount: filtered.length,
+                    itemBuilder: (context, index) {
+                      final user = filtered[index];
+                      return ListTile(
+                        leading: CircleAvatar(
+                          radius: 22,
+                          backgroundColor: const Color(0xFFDBEFE2),
+                          child: Text(user.displayName.characters.first.toUpperCase(), style: const TextStyle(color: Color(0xFF1FAA59), fontWeight: FontWeight.w700)),
+                        ),
+                        title: Text(user.displayName),
+                        subtitle: Text(user.id),
+                        onTap: () async {
+                          final chat = ChatPreview(
+                            chatId: ChatApi.buildDirectChatId(widget.session.userId, user.id),
+                            name: user.displayName,
+                            message: '',
+                            time: '',
+                          );
+                          await Navigator.push(
+                            context,
+                            MaterialPageRoute(builder: (_) => ChatRoomPage(chat: chat, session: widget.session)),
+                          );
+                          if (!mounted) return;
+                          Navigator.pop(context, true);
+                        },
+                      );
+                    },
+                  ),
+          )
         ],
       ),
     );
@@ -695,22 +746,19 @@ class PlaceholderPage extends StatelessWidget {
 }
 
 class ChatPreview {
-<<<<<<< HEAD
-  ChatPreview({required this.userId, required this.name, required this.message, required this.time, required this.unread});
-
-  final String userId;
-  final String name;
-  final String message;
-  final String time;
-  final int unread;
-=======
   ChatPreview({required this.chatId, required this.name, required this.message, required this.time});
 
   final String chatId;
   final String name;
   final String message;
   final String time;
->>>>>>> 1a42523 (chore: connect local repo)
+}
+
+class ChatUser {
+  ChatUser({required this.id, required this.displayName});
+
+  final String id;
+  final String displayName;
 }
 
 class ChatMessage {
@@ -817,11 +865,9 @@ class AuthSession {
     await prefs.remove(_displayNameKey);
   }
 }
-<<<<<<< HEAD
-=======
 
 class ChatApi {
-  static Future<List<ChatPreview>> fetchChats(AuthSession session) async {
+  static Future<List<ChatPreview>> fetchChats(AuthSession session, {int refreshTick = 0}) async {
     final headers = {'Authorization': 'Bearer ${session.token}'};
 
     final chatsRes = await http.get(Uri.parse('$kBackendBaseUrl/api/chats'), headers: headers);
@@ -841,6 +887,19 @@ class ChatApi {
       }).toList();
     }
 
+    final users = await fetchDirectory(session);
+    return users.map((user) {
+      return ChatPreview(
+        chatId: buildDirectChatId(session.userId, user.id),
+        name: user.displayName,
+        message: 'Sohbet başlat',
+        time: '',
+      );
+    }).toList();
+  }
+
+  static Future<List<ChatUser>> fetchDirectory(AuthSession session) async {
+    final headers = {'Authorization': 'Bearer ${session.token}'};
     final directoryRes = await http.get(Uri.parse('$kBackendBaseUrl/api/chats/directory/list'), headers: headers);
     if (directoryRes.statusCode >= 400) return [];
 
@@ -848,14 +907,16 @@ class ChatApi {
     final users = (directoryMap['data'] as List<dynamic>? ?? []);
     return users.map((item) {
       final map = item as Map<String, dynamic>;
-      final peerId = map['id'].toString();
-      return ChatPreview(
-        chatId: 'direct_$peerId',
-        name: map['displayName']?.toString() ?? 'User',
-        message: 'Sohbet başlat',
-        time: '',
+      return ChatUser(
+        id: map['id'].toString(),
+        displayName: map['displayName']?.toString() ?? 'User',
       );
     }).toList();
+  }
+
+  static String buildDirectChatId(String currentUserId, String peerUserId) {
+    final sorted = [currentUserId, peerUserId]..sort();
+    return 'direct_${sorted[0]}_${sorted[1]}';
   }
 
   static String _formatTime(String? iso) {
@@ -867,4 +928,3 @@ class ChatApi {
     return '$hh:$mm';
   }
 }
->>>>>>> 1a42523 (chore: connect local repo)
