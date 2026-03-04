@@ -14,3 +14,13 @@ export interface SendMessagePayload {
   senderId: string;
   text: string;
 }
+<<<<<<< HEAD
+=======
+
+export interface ChatSummary {
+  chatId: string;
+  title: string;
+  lastMessage: string;
+  lastMessageAt: string | null;
+}
+>>>>>>> 1a42523 (chore: connect local repo)
