@@ -1,101 +1,131 @@
+import bcrypt from "bcryptjs";
 import { Router } from "express";
 import { z } from "zod";
-import { prisma } from "../../lib/prisma.js";
 import { signAccessToken } from "../../lib/jwt.js";
+import { prisma } from "../../lib/prisma.js";
 import { requireAuth } from "../../middleware/auth.js";
 
 export const authRouter = Router();
 
-const requestOtpSchema = z.object({
-  target: z.string().min(5)
+const registerSchema = z.object({
+  username: z.string().min(3).max(32).optional(),
+  phone: z.string().min(5).max(20).optional(),
+  displayName: z.string().min(2).max(80),
+  password: z.string().min(4).max(128).optional()
 });
 
-const verifyOtpSchema = z.object({
-  target: z.string().min(5),
-  code: z.string().length(6),
-  displayName: z.string().min(2).max(80)
+const loginSchema = z.object({
+  username: z.string().min(3).max(32).optional(),
+  phone: z.string().min(5).max(20).optional(),
+  password: z.string().min(4).max(128).optional()
 });
 
-function generateOtpCode(): string {
-  return Math.floor(100000 + Math.random() * 900000).toString();
+function pickIdentity(input: { username?: string; phone?: string }): { username?: string; phone?: string } | null {
+  if (input.username) return { username: input.username.toLowerCase() };
+  if (input.phone) return { phone: input.phone };
+  return null;
 }
 
-function splitTarget(target: string): { phone?: string; email?: string } {
-  if (target.includes("@")) {
-    return { email: target.toLowerCase() };
-  }
-
-  return { phone: target };
-}
-
-authRouter.post("/request-otp", async (req, res) => {
-  const parsed = requestOtpSchema.safeParse(req.body);
+authRouter.post("/register", async (req, res) => {
+  const parsed = registerSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
     return;
   }
 
-  const code = generateOtpCode();
-  const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
-
-  await prisma.otpCode.create({
-    data: {
-      target: parsed.data.target,
-      code,
-      expiresAt
-    }
-  });
-
-  res.json({ ok: true, expiresAt: expiresAt.toISOString(), debugCode: code });
-});
-
-authRouter.post("/verify-otp", async (req, res) => {
-  const parsed = verifyOtpSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
+  const identity = pickIdentity(parsed.data);
+  if (!identity) {
+    res.status(400).json({ error: "username_or_phone_required" });
     return;
   }
 
-  const otp = await prisma.otpCode.findFirst({
+  const existing = await prisma.user.findFirst({
     where: {
-      target: parsed.data.target,
-      code: parsed.data.code,
-      consumed: false,
-      expiresAt: { gt: new Date() }
+      OR: [
+        identity.username ? { username: identity.username } : undefined,
+        identity.phone ? { phone: identity.phone } : undefined
+      ].filter(Boolean) as Array<{ username?: string; phone?: string }>
     },
-    orderBy: { createdAt: "desc" }
+    select: { id: true }
   });
 
-  if (!otp) {
-    res.status(401).json({ error: "invalid_or_expired_code" });
+  if (existing) {
+    res.status(409).json({ error: "account_already_exists" });
     return;
   }
 
-  await prisma.otpCode.update({ where: { id: otp.id }, data: { consumed: true } });
+  const passwordHash = parsed.data.password ? await bcrypt.hash(parsed.data.password, 10) : null;
 
-  const target = splitTarget(parsed.data.target);
-
-  const user = await prisma.user.upsert({
-    where: target.email ? { email: target.email } : { phone: target.phone! },
-    create: {
+  const user = await prisma.user.create({
+    data: {
+      username: identity.username,
+      phone: identity.phone,
       displayName: parsed.data.displayName,
-      email: target.email,
-      phone: target.phone
-    },
-    update: {
-      displayName: parsed.data.displayName
+      passwordHash
     }
   });
 
   const accessToken = signAccessToken(user.id);
 
+  res.status(201).json({
+    accessToken,
+    user: {
+      id: user.id,
+      username: user.username,
+      phone: user.phone,
+      displayName: user.displayName
+    }
+  });
+});
+
+authRouter.post("/login", async (req, res) => {
+  const parsed = loginSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
+    return;
+  }
+
+  const identity = pickIdentity(parsed.data);
+  if (!identity) {
+    res.status(400).json({ error: "username_or_phone_required" });
+    return;
+  }
+
+  const user = await prisma.user.findFirst({
+    where: {
+      OR: [
+        identity.username ? { username: identity.username } : undefined,
+        identity.phone ? { phone: identity.phone } : undefined
+      ].filter(Boolean) as Array<{ username?: string; phone?: string }>
+    }
+  });
+
+  if (!user) {
+    res.status(404).json({ error: "account_not_found" });
+    return;
+  }
+
+  if (user.passwordHash) {
+    if (!parsed.data.password) {
+      res.status(401).json({ error: "password_required" });
+      return;
+    }
+
+    const ok = await bcrypt.compare(parsed.data.password, user.passwordHash);
+    if (!ok) {
+      res.status(401).json({ error: "invalid_password" });
+      return;
+    }
+  }
+
+  const accessToken = signAccessToken(user.id);
   res.json({
     accessToken,
     user: {
       id: user.id,
-      displayName: user.displayName,
+      username: user.username,
       phone: user.phone,
-      email: user.email
+      displayName: user.displayName
     }
   });
 });
@@ -103,7 +133,7 @@ authRouter.post("/verify-otp", async (req, res) => {
 authRouter.get("/me", requireAuth, async (req, res) => {
   const user = await prisma.user.findUnique({
     where: { id: req.authUserId! },
-    select: { id: true, displayName: true, phone: true, email: true, createdAt: true }
+    select: { id: true, username: true, displayName: true, phone: true, email: true, createdAt: true }
   });
 
   if (!user) {

@@ -20,6 +20,8 @@ enum MessageStatus {
 
 model User {
   id          String       @id @default(uuid())
+  username    String?      @unique
+  passwordHash String?
   displayName String
   phone       String?      @unique
   email       String?      @unique
