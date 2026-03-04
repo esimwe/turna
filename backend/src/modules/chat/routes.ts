@@ -1,9 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-<<<<<<< HEAD
-=======
 import { requireAuth } from "../../middleware/auth.js";
->>>>>>> 1a42523 (chore: connect local repo)
 import { chatService } from "./chat.service.js";
 
 export const chatRouter = Router();
@@ -20,8 +17,6 @@ chatRouter.get("/:chatId/messages", async (req, res) => {
   res.json({ data: messages });
 });
 
-<<<<<<< HEAD
-=======
 chatRouter.get("/", requireAuth, async (req, res) => {
   const userId = req.authUserId!;
   const chats = await chatService.getChatSummaries(userId);
@@ -34,7 +29,6 @@ chatRouter.get("/directory/list", requireAuth, async (req, res) => {
   res.json({ data: users });
 });
 
->>>>>>> 1a42523 (chore: connect local repo)
 chatRouter.post("/messages", async (req, res) => {
   const parsed = sendMessageSchema.safeParse(req.body);
   if (!parsed.success) {

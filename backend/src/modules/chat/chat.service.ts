@@ -1,10 +1,6 @@
 import { ChatType, MessageStatus } from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
-<<<<<<< HEAD
-import type { ChatMessage, SendMessagePayload } from "./chat.types.js";
-=======
 import type { ChatMessage, ChatSummary, SendMessagePayload } from "./chat.types.js";
->>>>>>> 1a42523 (chore: connect local repo)
 
 function toChatMessage(row: {
   id: string;
@@ -39,13 +35,10 @@ export class ChatService {
 
   async ensureDirectChat(chatId: string, senderId: string): Promise<void> {
     await this.ensureUser(senderId);
-<<<<<<< HEAD
-=======
-    const peerId = this.extractPeerId(chatId);
+    const peerId = this.extractPeerId(chatId, senderId);
     if (peerId) {
       await this.ensureUser(peerId);
     }
->>>>>>> 1a42523 (chore: connect local repo)
 
     await prisma.chat.upsert({
       where: { id: chatId },
@@ -53,24 +46,14 @@ export class ChatService {
         id: chatId,
         type: ChatType.DIRECT,
         members: {
-<<<<<<< HEAD
-          create: [{ userId: senderId }]
-=======
           create: [
             { userId: senderId },
             ...(peerId ? [{ userId: peerId }] : [])
           ]
->>>>>>> 1a42523 (chore: connect local repo)
         }
       },
       update: {
         members: {
-<<<<<<< HEAD
-          connectOrCreate: {
-            where: { chatId_userId: { chatId, userId: senderId } },
-            create: { userId: senderId }
-          }
-=======
           connectOrCreate: [
             {
               where: { chatId_userId: { chatId, userId: senderId } },
@@ -85,21 +68,24 @@ export class ChatService {
                 ]
               : [])
           ]
->>>>>>> 1a42523 (chore: connect local repo)
         }
       }
     });
   }
 
-<<<<<<< HEAD
-=======
-  extractPeerId(chatId: string): string | null {
+  extractPeerId(chatId: string, senderId: string): string | null {
     if (!chatId.startsWith("direct_")) return null;
-    const peerId = chatId.replace("direct_", "").trim();
-    return peerId.length > 0 ? peerId : null;
+    const key = chatId.replace("direct_", "").trim();
+    if (!key) return null;
+
+    const participants = key.split("_").filter(Boolean);
+    if (participants.length === 1) {
+      return participants[0];
+    }
+
+    return participants.find((id) => id !== senderId) ?? null;
   }
 
->>>>>>> 1a42523 (chore: connect local repo)
   async sendMessage(payload: SendMessagePayload): Promise<ChatMessage> {
     await this.ensureDirectChat(payload.chatId, payload.senderId);
 
@@ -123,8 +109,6 @@ export class ChatService {
 
     return rows.map(toChatMessage);
   }
-<<<<<<< HEAD
-=======
 
   async getChatSummaries(userId: string): Promise<ChatSummary[]> {
     const memberships = await prisma.chatMember.findMany({
@@ -166,7 +150,6 @@ export class ChatService {
     });
     return users;
   }
->>>>>>> 1a42523 (chore: connect local repo)
 }
 
 export const chatService = new ChatService();

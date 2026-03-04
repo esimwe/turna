@@ -14,8 +14,6 @@ export interface SendMessagePayload {
   senderId: string;
   text: string;
 }
-<<<<<<< HEAD
-=======
 
 export interface ChatSummary {
   chatId: string;
@@ -23,4 +21,3 @@ export interface ChatSummary {
   lastMessage: string;
   lastMessageAt: string | null;
 }
->>>>>>> 1a42523 (chore: connect local repo)
