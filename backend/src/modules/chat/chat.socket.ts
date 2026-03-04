@@ -16,11 +16,12 @@ const sendMessageSchema = z.object({
 
 export function registerChatSocket(io: Server): void {
   io.on("connection", (socket: Socket) => {
-    logInfo("socket connected", { socketId: socket.id });
+    logInfo("socket connected", { socketId: socket.id, transport: socket.conn.transport.name });
 
     socket.on("chat:join", async (payload) => {
       const parsed = joinChatSchema.safeParse(payload);
       if (!parsed.success) {
+        logInfo("chat:join validation failed", { socketId: socket.id, payload });
         socket.emit("error:validation", parsed.error.flatten());
         return;
       }
@@ -28,31 +29,39 @@ export function registerChatSocket(io: Server): void {
       try {
         socket.join(parsed.data.chatId);
         const history = await chatService.getMessages(parsed.data.chatId);
+        logInfo("chat:join ok", { socketId: socket.id, chatId: parsed.data.chatId, historyCount: history.length });
         socket.emit("chat:history", history);
       } catch (error) {
         socket.emit("error:internal", { message: "failed_to_join_chat" });
-        logInfo("chat:join failed", { error });
+        logInfo("chat:join failed", { socketId: socket.id, chatId: parsed.data.chatId, error });
       }
     });
 
     socket.on("chat:send", async (payload) => {
       const parsed = sendMessageSchema.safeParse(payload);
       if (!parsed.success) {
+        logInfo("chat:send validation failed", { socketId: socket.id, payload });
         socket.emit("error:validation", parsed.error.flatten());
         return;
       }
 
       try {
         const message = await chatService.sendMessage(parsed.data as SendMessagePayload);
+        logInfo("chat:send ok", {
+          socketId: socket.id,
+          chatId: parsed.data.chatId,
+          senderId: parsed.data.senderId,
+          messageId: message.id
+        });
         io.to(parsed.data.chatId).emit("chat:message", message);
       } catch (error) {
         socket.emit("error:internal", { message: "failed_to_send_message" });
-        logInfo("chat:send failed", { error });
+        logInfo("chat:send failed", { socketId: socket.id, chatId: parsed.data.chatId, error });
       }
     });
 
-    socket.on("disconnect", () => {
-      logInfo("socket disconnected", { socketId: socket.id });
+    socket.on("disconnect", (reason) => {
+      logInfo("socket disconnected", { socketId: socket.id, reason });
     });
   });
 }
