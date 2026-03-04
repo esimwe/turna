@@ -6,6 +6,16 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 
 const String kBackendBaseUrl = 'http://178.104.8.155:4000';
+const bool kTurnaDebugLogs = true;
+
+void turnaLog(String message, [Object? data]) {
+  if (!kTurnaDebugLogs) return;
+  if (data != null) {
+    debugPrint('[turna-mobile] $message | $data');
+    return;
+  }
+  debugPrint('[turna-mobile] $message');
+}
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -22,13 +32,26 @@ class TurnaApp extends StatefulWidget {
   State<TurnaApp> createState() => _TurnaAppState();
 }
 
-class _TurnaAppState extends State<TurnaApp> {
+class _TurnaAppState extends State<TurnaApp> with WidgetsBindingObserver {
   AuthSession? _session;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _session = widget.initialSession;
+    turnaLog('app init', {'hasSession': _session != null});
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    turnaLog('app lifecycle', state.name);
   }
 
   @override
@@ -115,6 +138,7 @@ class _AuthPageState extends State<AuthPage> {
 
     try {
       final endpoint = _isRegisterMode ? 'register' : 'login';
+      turnaLog('auth submit', {'mode': endpoint, 'username': username, 'hasPhone': phone.isNotEmpty});
       final payload = <String, dynamic>{
         if (username.isNotEmpty) 'username': username,
         if (phone.isNotEmpty) 'phone': phone,
@@ -129,10 +153,12 @@ class _AuthPageState extends State<AuthPage> {
       );
 
       if (res.statusCode >= 400) {
+        turnaLog('auth failed', {'statusCode': res.statusCode, 'body': res.body});
         final body = jsonDecode(res.body);
         setState(() => _error = 'İşlem başarısız: ${body['error'] ?? res.statusCode}');
         return;
       }
+      turnaLog('auth success', {'statusCode': res.statusCode});
 
       final map = jsonDecode(res.body) as Map<String, dynamic>;
       final token = map['accessToken']?.toString();
@@ -148,6 +174,7 @@ class _AuthPageState extends State<AuthPage> {
       await session.save();
       widget.onAuthenticated(session);
     } catch (_) {
+      turnaLog('auth exception');
       setState(() => _error = 'Sunucuya bağlanılamadı.');
     } finally {
       setState(() => _loading = false);
@@ -367,6 +394,7 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
   @override
   void initState() {
     super.initState();
+    turnaLog('chat room init', {'chatId': widget.chat.chatId, 'senderId': widget.session.userId});
     _client = TurnaSocketClient(
       chatId: widget.chat.chatId,
       senderId: widget.session.userId,
@@ -382,6 +410,7 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
 
   @override
   void dispose() {
+    turnaLog('chat room dispose', {'chatId': widget.chat.chatId});
     _client.removeListener(_refresh);
     _client.dispose();
     _controller.dispose();
@@ -785,17 +814,36 @@ class TurnaSocketClient extends ChangeNotifier {
   io.Socket? _socket;
 
   void connect() {
+    turnaLog('socket connect start', {'chatId': chatId, 'senderId': senderId, 'url': kBackendBaseUrl});
     _socket = io.io(
       kBackendBaseUrl,
       io.OptionBuilder().setTransports(['websocket']).disableAutoConnect().build(),
     );
 
     _socket!.onConnect((_) {
+      turnaLog('socket connected', {'id': _socket?.id, 'chatId': chatId});
       _socket!.emit('chat:join', {'chatId': chatId});
+    });
+
+    _socket!.onConnectError((data) {
+      turnaLog('socket connect_error', data);
+    });
+
+    _socket!.onError((data) {
+      turnaLog('socket error', data);
+    });
+
+    _socket!.on('error:validation', (data) {
+      turnaLog('socket error:validation', data);
+    });
+
+    _socket!.on('error:internal', (data) {
+      turnaLog('socket error:internal', data);
     });
 
     _socket!.on('chat:history', (data) {
       if (data is List) {
+        turnaLog('socket chat:history', {'count': data.length, 'chatId': chatId});
         messages
           ..clear()
           ..addAll(data.whereType<Map>().map((e) => ChatMessage.fromMap(Map<String, dynamic>.from(e))));
@@ -805,15 +853,21 @@ class TurnaSocketClient extends ChangeNotifier {
 
     _socket!.on('chat:message', (data) {
       if (data is Map) {
+        turnaLog('socket chat:message', data);
         messages.add(ChatMessage.fromMap(Map<String, dynamic>.from(data)));
         notifyListeners();
       }
+    });
+
+    _socket!.onDisconnect((reason) {
+      turnaLog('socket disconnected', {'reason': reason, 'chatId': chatId});
     });
 
     _socket!.connect();
   }
 
   void send(String text) {
+    turnaLog('socket chat:send', {'chatId': chatId, 'senderId': senderId, 'textLen': text.length});
     _socket?.emit('chat:send', {
       'chatId': chatId,
       'senderId': senderId,
@@ -823,6 +877,7 @@ class TurnaSocketClient extends ChangeNotifier {
 
   @override
   void dispose() {
+    turnaLog('socket dispose', {'chatId': chatId, 'senderId': senderId});
     _socket?.dispose();
     super.dispose();
   }
@@ -869,9 +924,13 @@ class AuthSession {
 class ChatApi {
   static Future<List<ChatPreview>> fetchChats(AuthSession session, {int refreshTick = 0}) async {
     final headers = {'Authorization': 'Bearer ${session.token}'};
+    turnaLog('api fetchChats', {'refreshTick': refreshTick});
 
     final chatsRes = await http.get(Uri.parse('$kBackendBaseUrl/api/chats'), headers: headers);
-    if (chatsRes.statusCode >= 400) return [];
+    if (chatsRes.statusCode >= 400) {
+      turnaLog('api fetchChats failed', {'statusCode': chatsRes.statusCode});
+      return [];
+    }
 
     final chatsMap = jsonDecode(chatsRes.body) as Map<String, dynamic>;
     final chatsData = (chatsMap['data'] as List<dynamic>? ?? []);
@@ -900,8 +959,12 @@ class ChatApi {
 
   static Future<List<ChatUser>> fetchDirectory(AuthSession session) async {
     final headers = {'Authorization': 'Bearer ${session.token}'};
+    turnaLog('api fetchDirectory');
     final directoryRes = await http.get(Uri.parse('$kBackendBaseUrl/api/chats/directory/list'), headers: headers);
-    if (directoryRes.statusCode >= 400) return [];
+    if (directoryRes.statusCode >= 400) {
+      turnaLog('api fetchDirectory failed', {'statusCode': directoryRes.statusCode});
+      return [];
+    }
 
     final directoryMap = jsonDecode(directoryRes.body) as Map<String, dynamic>;
     final users = (directoryMap['data'] as List<dynamic>? ?? []);
