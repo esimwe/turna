@@ -21,24 +21,45 @@ function toChatMessage(row: {
 }
 
 export class ChatService {
-  async ensureUser(userId: string): Promise<void> {
-    const existing = await prisma.user.findUnique({ where: { id: userId }, select: { id: true } });
-    if (existing) return;
+  private extractDirectParticipants(chatId: string): [string, string] | null {
+    if (!chatId.startsWith("direct_")) return null;
+    const key = chatId.replace("direct_", "").trim();
+    const participants = key.split("_").filter(Boolean);
+    if (participants.length !== 2) return null;
 
-    await prisma.user.create({
-      data: {
-        id: userId,
-        displayName: userId
-      }
-    });
+    const sorted = [...participants].sort();
+    const normalized = `direct_${sorted[0]}_${sorted[1]}`;
+    if (normalized !== chatId) return null;
+
+    return [sorted[0], sorted[1]];
   }
 
-  async ensureDirectChat(chatId: string, senderId: string): Promise<void> {
-    await this.ensureUser(senderId);
-    const peerId = this.extractPeerId(chatId, senderId);
-    if (peerId) {
-      await this.ensureUser(peerId);
-    }
+  getDirectPeerId(chatId: string, userId: string): string | null {
+    const participants = this.extractDirectParticipants(chatId);
+    if (!participants || !participants.includes(userId)) return null;
+    return participants.find((participantId) => participantId !== userId) ?? null;
+  }
+
+  getDirectParticipants(chatId: string): string[] {
+    const participants = this.extractDirectParticipants(chatId);
+    return participants ? [...participants] : [];
+  }
+
+  async ensureChatAccess(chatId: string, userId: string): Promise<boolean> {
+    const member = await prisma.chatMember.findUnique({
+      where: { chatId_userId: { chatId, userId } },
+      select: { chatId: true }
+    });
+    if (member) return true;
+
+    const participants = this.extractDirectParticipants(chatId);
+    if (!participants || !participants.includes(userId)) return false;
+
+    const users = await prisma.user.findMany({
+      where: { id: { in: participants } },
+      select: { id: true }
+    });
+    if (users.length !== 2) return false;
 
     await prisma.chat.upsert({
       where: { id: chatId },
@@ -46,48 +67,27 @@ export class ChatService {
         id: chatId,
         type: ChatType.DIRECT,
         members: {
-          create: [
-            { userId: senderId },
-            ...(peerId ? [{ userId: peerId }] : [])
-          ]
+          create: participants.map((participantId) => ({ userId: participantId }))
         }
       },
       update: {
         members: {
-          connectOrCreate: [
-            {
-              where: { chatId_userId: { chatId, userId: senderId } },
-              create: { userId: senderId }
-            },
-            ...(peerId
-              ? [
-                  {
-                    where: { chatId_userId: { chatId, userId: peerId } },
-                    create: { userId: peerId }
-                  }
-                ]
-              : [])
-          ]
+          connectOrCreate: participants.map((participantId) => ({
+            where: { chatId_userId: { chatId, userId: participantId } },
+            create: { userId: participantId }
+          }))
         }
       }
     });
-  }
 
-  extractPeerId(chatId: string, senderId: string): string | null {
-    if (!chatId.startsWith("direct_")) return null;
-    const key = chatId.replace("direct_", "").trim();
-    if (!key) return null;
-
-    const participants = key.split("_").filter(Boolean);
-    if (participants.length === 1) {
-      return participants[0];
-    }
-
-    return participants.find((id) => id !== senderId) ?? null;
+    return true;
   }
 
   async sendMessage(payload: SendMessagePayload): Promise<ChatMessage> {
-    await this.ensureDirectChat(payload.chatId, payload.senderId);
+    const hasAccess = await this.ensureChatAccess(payload.chatId, payload.senderId);
+    if (!hasAccess) {
+      throw new Error("forbidden_chat_access");
+    }
 
     const message = await prisma.message.create({
       data: {
@@ -169,17 +169,37 @@ export class ChatService {
       orderBy: { joinedAt: "desc" }
     });
 
-    return memberships.map((membership) => {
-      const chat = membership.chat;
-      const peer = chat.members.find((m) => m.userId !== userId)?.user;
-      const last = chat.messages[0];
-      return {
-        chatId: chat.id,
-        title: peer?.displayName ?? "New Chat",
-        lastMessage: last?.text ?? "Sohbet başlat",
-        lastMessageAt: last ? last.createdAt.toISOString() : null
-      };
+    const items = await Promise.all(
+      memberships.map(async (membership) => {
+        const chat = membership.chat;
+        const peer = chat.members.find((m) => m.userId !== userId)?.user;
+        const last = chat.messages[0];
+        const unreadCount = await prisma.message.count({
+          where: {
+            chatId: chat.id,
+            senderId: { not: userId },
+            status: { not: MessageStatus.read }
+          }
+        });
+
+        return {
+          chatId: chat.id,
+          title: peer?.displayName ?? "New Chat",
+          lastMessage: last?.text ?? "Sohbet başlat",
+          lastMessageAt: last ? last.createdAt.toISOString() : null,
+          unreadCount,
+          joinedAt: membership.joinedAt
+        };
+      })
+    );
+
+    items.sort((a, b) => {
+      const aTime = a.lastMessageAt ? new Date(a.lastMessageAt).getTime() : a.joinedAt.getTime();
+      const bTime = b.lastMessageAt ? new Date(b.lastMessageAt).getTime() : b.joinedAt.getTime();
+      return bTime - aTime;
     });
+
+    return items.map(({ joinedAt: _joinedAt, ...summary }) => summary);
   }
 
   async getUserDirectory(userId: string): Promise<Array<{ id: string; displayName: string }>> {

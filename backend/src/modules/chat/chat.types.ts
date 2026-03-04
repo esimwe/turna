@@ -20,4 +20,5 @@ export interface ChatSummary {
   title: string;
   lastMessage: string;
   lastMessageAt: string | null;
+  unreadCount: number;
 }

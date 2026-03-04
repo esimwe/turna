@@ -7,12 +7,24 @@ export const chatRouter = Router();
 
 const sendMessageSchema = z.object({
   chatId: z.string().min(1),
-  senderId: z.string().min(1),
   text: z.string().min(1).max(4000)
 });
 
-chatRouter.get("/:chatId/messages", async (req, res) => {
-  const chatId = req.params.chatId;
+chatRouter.get("/:chatId/messages", requireAuth, async (req, res) => {
+  const rawChatId = req.params.chatId;
+  const chatId = Array.isArray(rawChatId) ? rawChatId[0] : rawChatId;
+  if (!chatId) {
+    res.status(400).json({ error: "chat_id_required" });
+    return;
+  }
+
+  const userId = req.authUserId!;
+  const hasAccess = await chatService.ensureChatAccess(chatId, userId);
+  if (!hasAccess) {
+    res.status(403).json({ error: "forbidden_chat_access" });
+    return;
+  }
+
   const messages = await chatService.getMessages(chatId);
   res.json({ data: messages });
 });
@@ -29,13 +41,18 @@ chatRouter.get("/directory/list", requireAuth, async (req, res) => {
   res.json({ data: users });
 });
 
-chatRouter.post("/messages", async (req, res) => {
+chatRouter.post("/messages", requireAuth, async (req, res) => {
   const parsed = sendMessageSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
     return;
   }
 
-  const message = await chatService.sendMessage(parsed.data);
+  const userId = req.authUserId!;
+  const message = await chatService.sendMessage({
+    chatId: parsed.data.chatId,
+    senderId: userId,
+    text: parsed.data.text
+  });
   res.status(201).json({ data: message });
 });

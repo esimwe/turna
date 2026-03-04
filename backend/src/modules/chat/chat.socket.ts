@@ -1,28 +1,63 @@
 import type { Server, Socket } from "socket.io";
 import { z } from "zod";
 import { chatService } from "./chat.service.js";
-import type { SendMessagePayload } from "./chat.types.js";
 import { logInfo } from "../../lib/logger.js";
+import { verifyAccessToken } from "../../lib/jwt.js";
 
 const joinChatSchema = z.object({
-  chatId: z.string().min(1),
-  userId: z.string().min(1)
+  chatId: z.string().min(1)
 });
 
 const sendMessageSchema = z.object({
   chatId: z.string().min(1),
-  senderId: z.string().min(1),
   text: z.string().min(1).max(4000)
 });
 
 const seenChatSchema = z.object({
-  chatId: z.string().min(1),
-  userId: z.string().min(1)
+  chatId: z.string().min(1)
 });
 
+function userRoom(userId: string): string {
+  return `user:${userId}`;
+}
+
+function emitInboxUpdate(io: Server, userIds: string[]): void {
+  const uniqueUserIds = Array.from(new Set(userIds));
+  for (const userId of uniqueUserIds) {
+    io.to(userRoom(userId)).emit("chat:inbox:update");
+  }
+}
+
 export function registerChatSocket(io: Server): void {
+  io.use((socket, next) => {
+    const authToken = socket.handshake.auth?.token;
+    const headerToken = socket.handshake.headers.authorization;
+    let token: string | null = null;
+
+    if (typeof authToken === "string" && authToken.trim().length > 0) {
+      token = authToken.trim();
+    } else if (typeof headerToken === "string" && headerToken.startsWith("Bearer ")) {
+      token = headerToken.replace("Bearer ", "").trim();
+    }
+
+    if (!token) {
+      next(new Error("unauthorized"));
+      return;
+    }
+
+    try {
+      const claims = verifyAccessToken(token);
+      socket.data.userId = claims.sub;
+      next();
+    } catch {
+      next(new Error("invalid_token"));
+    }
+  });
+
   io.on("connection", (socket: Socket) => {
-    logInfo("socket connected", { socketId: socket.id, transport: socket.conn.transport.name });
+    const userId = socket.data.userId as string;
+    socket.join(userRoom(userId));
+    logInfo("socket connected", { socketId: socket.id, userId, transport: socket.conn.transport.name });
 
     socket.on("chat:join", async (payload) => {
       const parsed = joinChatSchema.safeParse(payload);
@@ -33,12 +68,18 @@ export function registerChatSocket(io: Server): void {
       }
 
       try {
+        const hasAccess = await chatService.ensureChatAccess(parsed.data.chatId, userId);
+        if (!hasAccess) {
+          socket.emit("error:forbidden", { message: "forbidden_chat_access" });
+          return;
+        }
+
         socket.join(parsed.data.chatId);
         const history = await chatService.getMessages(parsed.data.chatId);
         logInfo("chat:join ok", { socketId: socket.id, chatId: parsed.data.chatId, historyCount: history.length });
         socket.emit("chat:history", history);
 
-        const deliveredIds = await chatService.markMessagesDelivered(parsed.data.chatId, parsed.data.userId);
+        const deliveredIds = await chatService.markMessagesDelivered(parsed.data.chatId, userId);
         if (deliveredIds.length > 0) {
           io.to(parsed.data.chatId).emit("chat:status", {
             chatId: parsed.data.chatId,
@@ -61,14 +102,40 @@ export function registerChatSocket(io: Server): void {
       }
 
       try {
-        const message = await chatService.sendMessage(parsed.data as SendMessagePayload);
+        const hasAccess = await chatService.ensureChatAccess(parsed.data.chatId, userId);
+        if (!hasAccess) {
+          socket.emit("error:forbidden", { message: "forbidden_chat_access" });
+          return;
+        }
+
+        const message = await chatService.sendMessage({
+          chatId: parsed.data.chatId,
+          senderId: userId,
+          text: parsed.data.text
+        });
         logInfo("chat:send ok", {
           socketId: socket.id,
           chatId: parsed.data.chatId,
-          senderId: parsed.data.senderId,
+          senderId: userId,
           messageId: message.id
         });
         io.to(parsed.data.chatId).emit("chat:message", message);
+
+        const peerId = chatService.getDirectPeerId(parsed.data.chatId, userId);
+        const peerOnline = peerId ? (io.sockets.adapter.rooms.get(userRoom(peerId))?.size ?? 0) > 0 : false;
+        if (peerId && peerOnline) {
+          const deliveredIds = await chatService.markMessagesDelivered(parsed.data.chatId, peerId);
+          if (deliveredIds.length > 0) {
+            io.to(parsed.data.chatId).emit("chat:status", {
+              chatId: parsed.data.chatId,
+              status: "delivered",
+              messageIds: deliveredIds
+            });
+          }
+        }
+
+        const participants = chatService.getDirectParticipants(parsed.data.chatId);
+        emitInboxUpdate(io, participants.length > 0 ? participants : [userId]);
       } catch (error) {
         socket.emit("error:internal", { message: "failed_to_send_message" });
         logInfo("chat:send failed", { socketId: socket.id, chatId: parsed.data.chatId, error });
@@ -84,13 +151,21 @@ export function registerChatSocket(io: Server): void {
       }
 
       try {
-        const readIds = await chatService.markMessagesRead(parsed.data.chatId, parsed.data.userId);
+        const hasAccess = await chatService.ensureChatAccess(parsed.data.chatId, userId);
+        if (!hasAccess) {
+          socket.emit("error:forbidden", { message: "forbidden_chat_access" });
+          return;
+        }
+
+        const readIds = await chatService.markMessagesRead(parsed.data.chatId, userId);
         if (readIds.length > 0) {
           io.to(parsed.data.chatId).emit("chat:status", {
             chatId: parsed.data.chatId,
             status: "read",
             messageIds: readIds
           });
+          const participants = chatService.getDirectParticipants(parsed.data.chatId);
+          emitInboxUpdate(io, participants.length > 0 ? participants : [userId]);
         }
       } catch (error) {
         socket.emit("error:internal", { message: "failed_to_mark_seen" });
