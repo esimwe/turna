@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:characters/characters.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -76,7 +77,9 @@ class _TurnaAppState extends State<TurnaApp> with WidgetsBindingObserver {
       debugShowCheckedModeBanner: false,
       theme: theme,
       home: _session == null
-          ? AuthPage(onAuthenticated: (session) => setState(() => _session = session))
+          ? AuthPage(
+              onAuthenticated: (session) => setState(() => _session = session),
+            )
           : MainTabs(
               session: _session!,
               onLogout: () async {
@@ -138,7 +141,11 @@ class _AuthPageState extends State<AuthPage> {
 
     try {
       final endpoint = _isRegisterMode ? 'register' : 'login';
-      turnaLog('auth submit', {'mode': endpoint, 'username': username, 'hasPhone': phone.isNotEmpty});
+      turnaLog('auth submit', {
+        'mode': endpoint,
+        'username': username,
+        'hasPhone': phone.isNotEmpty,
+      });
       final payload = <String, dynamic>{
         if (username.isNotEmpty) 'username': username,
         if (phone.isNotEmpty) 'phone': phone,
@@ -153,9 +160,14 @@ class _AuthPageState extends State<AuthPage> {
       );
 
       if (res.statusCode >= 400) {
-        turnaLog('auth failed', {'statusCode': res.statusCode, 'body': res.body});
+        turnaLog('auth failed', {
+          'statusCode': res.statusCode,
+          'body': res.body,
+        });
         final body = jsonDecode(res.body);
-        setState(() => _error = 'İşlem başarısız: ${body['error'] ?? res.statusCode}');
+        setState(
+          () => _error = 'İşlem başarısız: ${body['error'] ?? res.statusCode}',
+        );
         return;
       }
       turnaLog('auth success', {'statusCode': res.statusCode});
@@ -170,7 +182,11 @@ class _AuthPageState extends State<AuthPage> {
         return;
       }
 
-      final session = AuthSession(token: token, userId: userId, displayName: displayName);
+      final session = AuthSession(
+        token: token,
+        userId: userId,
+        displayName: displayName,
+      );
       await session.save();
       widget.onAuthenticated(session);
     } catch (_) {
@@ -188,27 +204,44 @@ class _AuthPageState extends State<AuthPage> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          Text(_isRegisterMode ? 'Username/telefon ile kayıt ol.' : 'Username/telefon ile giriş yap.', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+          Text(
+            _isRegisterMode
+                ? 'Username/telefon ile kayıt ol.'
+                : 'Username/telefon ile giriş yap.',
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+          ),
           const SizedBox(height: 14),
           TextField(
             controller: _usernameController,
-            decoration: const InputDecoration(labelText: 'Username', border: OutlineInputBorder()),
+            decoration: const InputDecoration(
+              labelText: 'Username',
+              border: OutlineInputBorder(),
+            ),
           ),
           const SizedBox(height: 12),
           TextField(
             controller: _phoneController,
-            decoration: const InputDecoration(labelText: 'Telefon (opsiyonel)', border: OutlineInputBorder()),
+            decoration: const InputDecoration(
+              labelText: 'Telefon (opsiyonel)',
+              border: OutlineInputBorder(),
+            ),
           ),
           const SizedBox(height: 12),
           TextField(
             controller: _nameController,
-            decoration: const InputDecoration(labelText: 'Ad Soyad (kayıtta zorunlu)', border: OutlineInputBorder()),
+            decoration: const InputDecoration(
+              labelText: 'Ad Soyad (kayıtta zorunlu)',
+              border: OutlineInputBorder(),
+            ),
           ),
           const SizedBox(height: 12),
           TextField(
             controller: _passwordController,
             obscureText: true,
-            decoration: const InputDecoration(labelText: 'Şifre (opsiyonel)', border: OutlineInputBorder()),
+            decoration: const InputDecoration(
+              labelText: 'Şifre (opsiyonel)',
+              border: OutlineInputBorder(),
+            ),
           ),
           const SizedBox(height: 14),
           if (_error != null)
@@ -218,7 +251,11 @@ class _AuthPageState extends State<AuthPage> {
             ),
           FilledButton(
             onPressed: _loading ? null : _submit,
-            child: Text(_loading ? 'Bekleyin...' : (_isRegisterMode ? 'Kayıt Ol' : 'Giriş Yap')),
+            child: Text(
+              _loading
+                  ? 'Bekleyin...'
+                  : (_isRegisterMode ? 'Kayıt Ol' : 'Giriş Yap'),
+            ),
           ),
           TextButton(
             onPressed: _loading
@@ -229,7 +266,11 @@ class _AuthPageState extends State<AuthPage> {
                       _isRegisterMode = !_isRegisterMode;
                     });
                   },
-            child: Text(_isRegisterMode ? 'Hesabım var, giriş yap' : 'Hesabım yok, kayıt ol'),
+            child: Text(
+              _isRegisterMode
+                  ? 'Hesabım var, giriş yap'
+                  : 'Hesabım yok, kayıt ol',
+            ),
           ),
         ],
       ),
@@ -265,10 +306,19 @@ class _MainTabsState extends State<MainTabs> {
         selectedIndex: _index,
         onDestinationSelected: (index) => setState(() => _index = index),
         destinations: const [
-          NavigationDestination(icon: Icon(Icons.chat_bubble_outline), label: 'Chats'),
+          NavigationDestination(
+            icon: Icon(Icons.chat_bubble_outline),
+            label: 'Chats',
+          ),
           NavigationDestination(icon: Icon(Icons.update), label: 'Updates'),
-          NavigationDestination(icon: Icon(Icons.call_outlined), label: 'Calls'),
-          NavigationDestination(icon: Icon(Icons.settings_outlined), label: 'Settings'),
+          NavigationDestination(
+            icon: Icon(Icons.call_outlined),
+            label: 'Calls',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.settings_outlined),
+            label: 'Settings',
+          ),
         ],
       ),
     );
@@ -291,7 +341,13 @@ class _ChatsPageState extends State<ChatsPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Turna', style: TextStyle(color: Color(0xFF1FAA59), fontWeight: FontWeight.w700)),
+        title: const Text(
+          'Turna',
+          style: TextStyle(
+            color: Color(0xFF1FAA59),
+            fontWeight: FontWeight.w700,
+          ),
+        ),
         actions: const [
           Icon(Icons.qr_code_scanner_outlined),
           SizedBox(width: 12),
@@ -334,7 +390,9 @@ class _ChatsPageState extends State<ChatsPage> {
               if (chats.isEmpty) {
                 return const Padding(
                   padding: EdgeInsets.all(24),
-                  child: Text('Henüz sohbet yok. Başlatmak için başka bir kullanıcıyla giriş yap.'),
+                  child: Text(
+                    'Henüz sohbet yok. Başlatmak için başka bir kullanıcıyla giriş yap.',
+                  ),
                 );
               }
 
@@ -343,15 +401,37 @@ class _ChatsPageState extends State<ChatsPage> {
                 leading: CircleAvatar(
                   radius: 22,
                   backgroundColor: const Color(0xFFDBEFE2),
-                  child: Text(chat.name.characters.first, style: const TextStyle(color: Color(0xFF1FAA59), fontWeight: FontWeight.w700)),
+                  child: Text(
+                    chat.name.characters.first,
+                    style: const TextStyle(
+                      color: Color(0xFF1FAA59),
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
                 ),
-                title: Text(chat.name, style: const TextStyle(fontWeight: FontWeight.w600)),
-                subtitle: Text(chat.message, maxLines: 1, overflow: TextOverflow.ellipsis),
-                trailing: Text(chat.time, style: const TextStyle(fontSize: 12, color: Color(0xFF777C79))),
+                title: Text(
+                  chat.name,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+                subtitle: Text(
+                  chat.message,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                trailing: Text(
+                  chat.time,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF777C79),
+                  ),
+                ),
                 onTap: () {
                   Navigator.push(
                     context,
-                    MaterialPageRoute(builder: (_) => ChatRoomPage(chat: chat, session: widget.session)),
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          ChatRoomPage(chat: chat, session: widget.session),
+                    ),
                   );
                 },
               );
@@ -365,7 +445,9 @@ class _ChatsPageState extends State<ChatsPage> {
         onPressed: () async {
           final created = await Navigator.push<bool>(
             context,
-            MaterialPageRoute(builder: (_) => NewChatPage(session: widget.session)),
+            MaterialPageRoute(
+              builder: (_) => NewChatPage(session: widget.session),
+            ),
           );
           if (created == true && mounted) {
             setState(() => _refreshTick++);
@@ -394,7 +476,10 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
   @override
   void initState() {
     super.initState();
-    turnaLog('chat room init', {'chatId': widget.chat.chatId, 'senderId': widget.session.userId});
+    turnaLog('chat room init', {
+      'chatId': widget.chat.chatId,
+      'senderId': widget.session.userId,
+    });
     _client = TurnaSocketClient(
       chatId: widget.chat.chatId,
       senderId: widget.session.userId,
@@ -429,18 +514,33 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
               padding: const EdgeInsets.all(12),
               itemCount: _client.messages.length,
               itemBuilder: (context, index) {
-                final msg = _client.messages[_client.messages.length - 1 - index];
+                final msg =
+                    _client.messages[_client.messages.length - 1 - index];
                 final mine = msg.senderId == widget.session.userId;
                 return Align(
-                  alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
+                  alignment: mine
+                      ? Alignment.centerRight
+                      : Alignment.centerLeft,
                   child: Container(
                     margin: const EdgeInsets.symmetric(vertical: 4),
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
                     decoration: BoxDecoration(
                       color: mine ? const Color(0xFFDCF5E7) : Colors.white,
                       borderRadius: BorderRadius.circular(14),
                     ),
-                    child: Text(msg.text),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Flexible(child: Text(msg.text)),
+                        if (mine) ...[
+                          const SizedBox(width: 6),
+                          _StatusTick(status: msg.status),
+                        ],
+                      ],
+                    ),
                   ),
                 );
               },
@@ -487,6 +587,27 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
   }
 }
 
+class _StatusTick extends StatelessWidget {
+  const _StatusTick({required this.status});
+
+  final ChatMessageStatus status;
+
+  @override
+  Widget build(BuildContext context) {
+    IconData icon = Icons.done;
+    Color color = const Color(0xFF7D8380);
+
+    if (status == ChatMessageStatus.delivered) {
+      icon = Icons.done_all;
+    } else if (status == ChatMessageStatus.read) {
+      icon = Icons.done_all;
+      color = const Color(0xFF1FA3E0);
+    }
+
+    return Icon(icon, size: 16, color: color);
+  }
+}
+
 class NewChatPage extends StatefulWidget {
   const NewChatPage({super.key, required this.session});
 
@@ -528,7 +649,8 @@ class _NewChatPageState extends State<NewChatPage> {
     final q = _searchController.text.trim().toLowerCase();
     final filtered = _users.where((u) {
       if (q.isEmpty) return true;
-      return u.displayName.toLowerCase().contains(q) || u.id.toLowerCase().contains(q);
+      return u.displayName.toLowerCase().contains(q) ||
+          u.id.toLowerCase().contains(q);
     }).toList();
 
     return Scaffold(
@@ -562,20 +684,34 @@ class _NewChatPageState extends State<NewChatPage> {
                         leading: CircleAvatar(
                           radius: 22,
                           backgroundColor: const Color(0xFFDBEFE2),
-                          child: Text(user.displayName.characters.first.toUpperCase(), style: const TextStyle(color: Color(0xFF1FAA59), fontWeight: FontWeight.w700)),
+                          child: Text(
+                            user.displayName.characters.first.toUpperCase(),
+                            style: const TextStyle(
+                              color: Color(0xFF1FAA59),
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
                         ),
                         title: Text(user.displayName),
                         subtitle: Text(user.id),
                         onTap: () async {
                           final chat = ChatPreview(
-                            chatId: ChatApi.buildDirectChatId(widget.session.userId, user.id),
+                            chatId: ChatApi.buildDirectChatId(
+                              widget.session.userId,
+                              user.id,
+                            ),
                             name: user.displayName,
                             message: '',
                             time: '',
                           );
                           await Navigator.push(
                             context,
-                            MaterialPageRoute(builder: (_) => ChatRoomPage(chat: chat, session: widget.session)),
+                            MaterialPageRoute(
+                              builder: (_) => ChatRoomPage(
+                                chat: chat,
+                                session: widget.session,
+                              ),
+                            ),
                           );
                           if (!mounted) return;
                           Navigator.pop(context, true);
@@ -583,7 +719,7 @@ class _NewChatPageState extends State<NewChatPage> {
                       );
                     },
                   ),
-          )
+          ),
         ],
       ),
     );
@@ -591,7 +727,11 @@ class _NewChatPageState extends State<NewChatPage> {
 }
 
 class SettingsPage extends StatelessWidget {
-  const SettingsPage({super.key, required this.session, required this.onLogout});
+  const SettingsPage({
+    super.key,
+    required this.session,
+    required this.onLogout,
+  });
 
   final AuthSession session;
   final VoidCallback onLogout;
@@ -603,19 +743,64 @@ class SettingsPage extends StatelessWidget {
       body: ListView(
         children: [
           ListTile(
-            leading: const CircleAvatar(radius: 25, backgroundColor: Color(0xFFDBEFE2), child: Icon(Icons.person, color: Color(0xFF1FAA59))),
-            title: Text(session.displayName.toUpperCase(), style: const TextStyle(fontWeight: FontWeight.w700)),
+            leading: const CircleAvatar(
+              radius: 25,
+              backgroundColor: Color(0xFFDBEFE2),
+              child: Icon(Icons.person, color: Color(0xFF1FAA59)),
+            ),
+            title: Text(
+              session.displayName.toUpperCase(),
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
             subtitle: Text(session.userId),
-            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ProfilePage())),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const ProfilePage()),
+            ),
           ),
           const Divider(height: 1),
-          _settingsItem(context, Icons.vpn_key_outlined, 'Account', const AccountPage()),
-          _settingsItem(context, Icons.lock_outline, 'Privacy', const PlaceholderPage(title: 'Privacy')),
-          _settingsItem(context, Icons.face_outlined, 'Avatar', const PlaceholderPage(title: 'Avatar')),
-          _settingsItem(context, Icons.list_alt_outlined, 'Lists', const PlaceholderPage(title: 'Lists')),
-          _settingsItem(context, Icons.chat_bubble_outline, 'Chats', const PlaceholderPage(title: 'Chats')),
-          _settingsItem(context, Icons.notifications_none, 'Notifications', const PlaceholderPage(title: 'Notifications')),
-          _settingsItem(context, Icons.data_saver_off_outlined, 'Storage and data', const PlaceholderPage(title: 'Storage and data')),
+          _settingsItem(
+            context,
+            Icons.vpn_key_outlined,
+            'Account',
+            const AccountPage(),
+          ),
+          _settingsItem(
+            context,
+            Icons.lock_outline,
+            'Privacy',
+            const PlaceholderPage(title: 'Privacy'),
+          ),
+          _settingsItem(
+            context,
+            Icons.face_outlined,
+            'Avatar',
+            const PlaceholderPage(title: 'Avatar'),
+          ),
+          _settingsItem(
+            context,
+            Icons.list_alt_outlined,
+            'Lists',
+            const PlaceholderPage(title: 'Lists'),
+          ),
+          _settingsItem(
+            context,
+            Icons.chat_bubble_outline,
+            'Chats',
+            const PlaceholderPage(title: 'Chats'),
+          ),
+          _settingsItem(
+            context,
+            Icons.notifications_none,
+            'Notifications',
+            const PlaceholderPage(title: 'Notifications'),
+          ),
+          _settingsItem(
+            context,
+            Icons.data_saver_off_outlined,
+            'Storage and data',
+            const PlaceholderPage(title: 'Storage and data'),
+          ),
           ListTile(
             leading: const Icon(Icons.logout, color: Colors.red),
             title: const Text('Çıkış Yap', style: TextStyle(color: Colors.red)),
@@ -626,11 +811,17 @@ class SettingsPage extends StatelessWidget {
     );
   }
 
-  Widget _settingsItem(BuildContext context, IconData icon, String label, Widget page) {
+  Widget _settingsItem(
+    BuildContext context,
+    IconData icon,
+    String label,
+    Widget page,
+  ) {
     return ListTile(
       leading: Icon(icon, color: const Color(0xFF606664)),
       title: Text(label),
-      onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => page)),
+      onTap: () =>
+          Navigator.push(context, MaterialPageRoute(builder: (_) => page)),
     );
   }
 }
@@ -653,9 +844,17 @@ class ProfilePage extends StatelessWidget {
             ),
           ),
           SizedBox(height: 18),
-          _ProfileRow(label: 'Name', value: 'Jon Desuja', icon: Icons.person_outline),
+          _ProfileRow(
+            label: 'Name',
+            value: 'Jon Desuja',
+            icon: Icons.person_outline,
+          ),
           _ProfileRow(label: 'About', value: 'Busy', icon: Icons.info_outline),
-          _ProfileRow(label: 'Phone', value: '+90 555 123 1230', icon: Icons.call_outlined),
+          _ProfileRow(
+            label: 'Phone',
+            value: '+90 555 123 1230',
+            icon: Icons.call_outlined,
+          ),
           _ProfileRow(label: 'Links', value: 'Add links', icon: Icons.link),
         ],
       ),
@@ -664,7 +863,11 @@ class ProfilePage extends StatelessWidget {
 }
 
 class _ProfileRow extends StatelessWidget {
-  const _ProfileRow({required this.label, required this.value, required this.icon});
+  const _ProfileRow({
+    required this.label,
+    required this.value,
+    required this.icon,
+  });
 
   final String label;
   final String value;
@@ -682,12 +885,15 @@ class _ProfileRow extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
+                Text(
+                  label,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
                 const SizedBox(height: 2),
                 Text(value, style: const TextStyle(color: Color(0xFF606664))),
               ],
             ),
-          )
+          ),
         ],
       ),
     );
@@ -706,15 +912,41 @@ class AccountPage extends StatelessWidget {
           ListTile(
             leading: const Icon(Icons.shield_outlined),
             title: const Text('Security notifications'),
-            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SecurityNotificationsPage())),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => const SecurityNotificationsPage(),
+              ),
+            ),
           ),
-          const ListTile(leading: Icon(Icons.key_outlined), title: Text('Passkeys')),
-          const ListTile(leading: Icon(Icons.email_outlined), title: Text('Email address')),
-          const ListTile(leading: Icon(Icons.lock_outline), title: Text('Two-step verification')),
-          const ListTile(leading: Icon(Icons.numbers_outlined), title: Text('Change number')),
-          const ListTile(leading: Icon(Icons.description_outlined), title: Text('Request account info')),
-          const ListTile(leading: Icon(Icons.person_add_alt_outlined), title: Text('Add account')),
-          const ListTile(leading: Icon(Icons.delete_outline), title: Text('Delete account')),
+          const ListTile(
+            leading: Icon(Icons.key_outlined),
+            title: Text('Passkeys'),
+          ),
+          const ListTile(
+            leading: Icon(Icons.email_outlined),
+            title: Text('Email address'),
+          ),
+          const ListTile(
+            leading: Icon(Icons.lock_outline),
+            title: Text('Two-step verification'),
+          ),
+          const ListTile(
+            leading: Icon(Icons.numbers_outlined),
+            title: Text('Change number'),
+          ),
+          const ListTile(
+            leading: Icon(Icons.description_outlined),
+            title: Text('Request account info'),
+          ),
+          const ListTile(
+            leading: Icon(Icons.person_add_alt_outlined),
+            title: Text('Add account'),
+          ),
+          const ListTile(
+            leading: Icon(Icons.delete_outline),
+            title: Text('Delete account'),
+          ),
         ],
       ),
     );
@@ -725,7 +957,8 @@ class SecurityNotificationsPage extends StatefulWidget {
   const SecurityNotificationsPage({super.key});
 
   @override
-  State<SecurityNotificationsPage> createState() => _SecurityNotificationsPageState();
+  State<SecurityNotificationsPage> createState() =>
+      _SecurityNotificationsPageState();
 }
 
 class _SecurityNotificationsPageState extends State<SecurityNotificationsPage> {
@@ -740,15 +973,35 @@ class _SecurityNotificationsPageState extends State<SecurityNotificationsPage> {
         children: [
           const Icon(Icons.lock, size: 54, color: Color(0xFF1FAA59)),
           const SizedBox(height: 12),
-          const Text('Your chats and calls are private', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600)),
+          const Text(
+            'Your chats and calls are private',
+            style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
+          ),
           const SizedBox(height: 8),
-          const Text('End-to-end encryption keeps your personal messages and calls private between you and your contacts.'),
+          const Text(
+            'End-to-end encryption keeps your personal messages and calls private between you and your contacts.',
+          ),
           const SizedBox(height: 16),
-          const ListTile(leading: Icon(Icons.message_outlined), title: Text('Text and voice messages')),
-          const ListTile(leading: Icon(Icons.call_outlined), title: Text('Audio and video calls')),
-          const ListTile(leading: Icon(Icons.photo_outlined), title: Text('photos, videos and documents')),
-          const ListTile(leading: Icon(Icons.location_on_outlined), title: Text('Location sharing')),
-          const ListTile(leading: Icon(Icons.circle_outlined), title: Text('Status updates')),
+          const ListTile(
+            leading: Icon(Icons.message_outlined),
+            title: Text('Text and voice messages'),
+          ),
+          const ListTile(
+            leading: Icon(Icons.call_outlined),
+            title: Text('Audio and video calls'),
+          ),
+          const ListTile(
+            leading: Icon(Icons.photo_outlined),
+            title: Text('photos, videos and documents'),
+          ),
+          const ListTile(
+            leading: Icon(Icons.location_on_outlined),
+            title: Text('Location sharing'),
+          ),
+          const ListTile(
+            leading: Icon(Icons.circle_outlined),
+            title: Text('Status updates'),
+          ),
           SwitchListTile(
             value: enabled,
             onChanged: (v) => setState(() => enabled = v),
@@ -775,7 +1028,12 @@ class PlaceholderPage extends StatelessWidget {
 }
 
 class ChatPreview {
-  ChatPreview({required this.chatId, required this.name, required this.message, required this.time});
+  ChatPreview({
+    required this.chatId,
+    required this.name,
+    required this.message,
+    required this.time,
+  });
 
   final String chatId;
   final String name;
@@ -791,16 +1049,53 @@ class ChatUser {
 }
 
 class ChatMessage {
-  ChatMessage({required this.senderId, required this.text});
+  ChatMessage({
+    required this.id,
+    required this.senderId,
+    required this.text,
+    required this.status,
+    required this.createdAt,
+  });
 
+  final String id;
   final String senderId;
   final String text;
+  final ChatMessageStatus status;
+  final String createdAt;
+
+  ChatMessage copyWith({ChatMessageStatus? status}) {
+    return ChatMessage(
+      id: id,
+      senderId: senderId,
+      text: text,
+      status: status ?? this.status,
+      createdAt: createdAt,
+    );
+  }
 
   factory ChatMessage.fromMap(Map<String, dynamic> map) {
     return ChatMessage(
+      id: (map['id'] ?? '').toString(),
       senderId: (map['senderId'] ?? '').toString(),
       text: (map['text'] ?? '').toString(),
+      status: ChatMessageStatusX.fromWire((map['status'] ?? '').toString()),
+      createdAt: (map['createdAt'] ?? '').toString(),
     );
+  }
+}
+
+enum ChatMessageStatus { sent, delivered, read }
+
+extension ChatMessageStatusX on ChatMessageStatus {
+  static ChatMessageStatus fromWire(String value) {
+    switch (value) {
+      case 'delivered':
+        return ChatMessageStatus.delivered;
+      case 'read':
+        return ChatMessageStatus.read;
+      default:
+        return ChatMessageStatus.sent;
+    }
   }
 }
 
@@ -814,15 +1109,22 @@ class TurnaSocketClient extends ChangeNotifier {
   io.Socket? _socket;
 
   void connect() {
-    turnaLog('socket connect start', {'chatId': chatId, 'senderId': senderId, 'url': kBackendBaseUrl});
+    turnaLog('socket connect start', {
+      'chatId': chatId,
+      'senderId': senderId,
+      'url': kBackendBaseUrl,
+    });
     _socket = io.io(
       kBackendBaseUrl,
-      io.OptionBuilder().setTransports(['websocket']).disableAutoConnect().build(),
+      io.OptionBuilder()
+          .setTransports(['websocket'])
+          .disableAutoConnect()
+          .build(),
     );
 
     _socket!.onConnect((_) {
       turnaLog('socket connected', {'id': _socket?.id, 'chatId': chatId});
-      _socket!.emit('chat:join', {'chatId': chatId});
+      _socket!.emit('chat:join', {'chatId': chatId, 'userId': senderId});
     });
 
     _socket!.onConnectError((data) {
@@ -843,10 +1145,18 @@ class TurnaSocketClient extends ChangeNotifier {
 
     _socket!.on('chat:history', (data) {
       if (data is List) {
-        turnaLog('socket chat:history', {'count': data.length, 'chatId': chatId});
+        turnaLog('socket chat:history', {
+          'count': data.length,
+          'chatId': chatId,
+        });
         messages
           ..clear()
-          ..addAll(data.whereType<Map>().map((e) => ChatMessage.fromMap(Map<String, dynamic>.from(e))));
+          ..addAll(
+            data.whereType<Map>().map(
+              (e) => ChatMessage.fromMap(Map<String, dynamic>.from(e)),
+            ),
+          );
+        _markSeen();
         notifyListeners();
       }
     });
@@ -854,7 +1164,39 @@ class TurnaSocketClient extends ChangeNotifier {
     _socket!.on('chat:message', (data) {
       if (data is Map) {
         turnaLog('socket chat:message', data);
-        messages.add(ChatMessage.fromMap(Map<String, dynamic>.from(data)));
+        final message = ChatMessage.fromMap(Map<String, dynamic>.from(data));
+        messages.add(message);
+        if (message.senderId != senderId) {
+          _markSeen();
+        }
+        notifyListeners();
+      }
+    });
+
+    _socket!.on('chat:status', (data) {
+      if (data is! Map) return;
+      final payload = Map<String, dynamic>.from(data);
+      final messageIds = (payload['messageIds'] as List<dynamic>? ?? [])
+          .map((e) => e.toString())
+          .toSet();
+      if (messageIds.isEmpty) return;
+
+      final status = ChatMessageStatusX.fromWire(
+        (payload['status'] ?? '').toString(),
+      );
+      var changed = false;
+      for (var i = 0; i < messages.length; i++) {
+        final current = messages[i];
+        if (!messageIds.contains(current.id)) continue;
+        if (current.status == status) continue;
+        messages[i] = current.copyWith(status: status);
+        changed = true;
+      }
+      if (changed) {
+        turnaLog('socket chat:status', {
+          'count': messageIds.length,
+          'status': payload['status'],
+        });
         notifyListeners();
       }
     });
@@ -866,8 +1208,16 @@ class TurnaSocketClient extends ChangeNotifier {
     _socket!.connect();
   }
 
+  void _markSeen() {
+    _socket?.emit('chat:seen', {'chatId': chatId, 'userId': senderId});
+  }
+
   void send(String text) {
-    turnaLog('socket chat:send', {'chatId': chatId, 'senderId': senderId, 'textLen': text.length});
+    turnaLog('socket chat:send', {
+      'chatId': chatId,
+      'senderId': senderId,
+      'textLen': text.length,
+    });
     _socket?.emit('chat:send', {
       'chatId': chatId,
       'senderId': senderId,
@@ -884,7 +1234,11 @@ class TurnaSocketClient extends ChangeNotifier {
 }
 
 class AuthSession {
-  AuthSession({required this.token, required this.userId, required this.displayName});
+  AuthSession({
+    required this.token,
+    required this.userId,
+    required this.displayName,
+  });
 
   final String token;
   final String userId;
@@ -922,11 +1276,17 @@ class AuthSession {
 }
 
 class ChatApi {
-  static Future<List<ChatPreview>> fetchChats(AuthSession session, {int refreshTick = 0}) async {
+  static Future<List<ChatPreview>> fetchChats(
+    AuthSession session, {
+    int refreshTick = 0,
+  }) async {
     final headers = {'Authorization': 'Bearer ${session.token}'};
     turnaLog('api fetchChats', {'refreshTick': refreshTick});
 
-    final chatsRes = await http.get(Uri.parse('$kBackendBaseUrl/api/chats'), headers: headers);
+    final chatsRes = await http.get(
+      Uri.parse('$kBackendBaseUrl/api/chats'),
+      headers: headers,
+    );
     if (chatsRes.statusCode >= 400) {
       turnaLog('api fetchChats failed', {'statusCode': chatsRes.statusCode});
       return [];
@@ -960,9 +1320,14 @@ class ChatApi {
   static Future<List<ChatUser>> fetchDirectory(AuthSession session) async {
     final headers = {'Authorization': 'Bearer ${session.token}'};
     turnaLog('api fetchDirectory');
-    final directoryRes = await http.get(Uri.parse('$kBackendBaseUrl/api/chats/directory/list'), headers: headers);
+    final directoryRes = await http.get(
+      Uri.parse('$kBackendBaseUrl/api/chats/directory/list'),
+      headers: headers,
+    );
     if (directoryRes.statusCode >= 400) {
-      turnaLog('api fetchDirectory failed', {'statusCode': directoryRes.statusCode});
+      turnaLog('api fetchDirectory failed', {
+        'statusCode': directoryRes.statusCode,
+      });
       return [];
     }
 
