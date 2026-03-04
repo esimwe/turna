@@ -290,6 +290,19 @@ class MainTabs extends StatefulWidget {
 
 class _MainTabsState extends State<MainTabs> {
   int _index = 0;
+  late final PresenceSocketClient _presenceClient;
+
+  @override
+  void initState() {
+    super.initState();
+    _presenceClient = PresenceSocketClient(token: widget.session.token)..connect();
+  }
+
+  @override
+  void dispose() {
+    _presenceClient.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -336,6 +349,36 @@ class ChatsPage extends StatefulWidget {
 
 class _ChatsPageState extends State<ChatsPage> {
   int _refreshTick = 0;
+  io.Socket? _inboxSocket;
+
+  @override
+  void initState() {
+    super.initState();
+    _connectInboxUpdates();
+  }
+
+  void _connectInboxUpdates() {
+    _inboxSocket = io.io(
+      kBackendBaseUrl,
+      io.OptionBuilder()
+          .setTransports(['websocket'])
+          .setAuth({'token': widget.session.token})
+          .disableAutoConnect()
+          .build(),
+    );
+
+    _inboxSocket!.on('chat:inbox:update', (_) {
+      if (!mounted) return;
+      setState(() => _refreshTick++);
+    });
+    _inboxSocket!.connect();
+  }
+
+  @override
+  void dispose() {
+    _inboxSocket?.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -418,12 +461,41 @@ class _ChatsPageState extends State<ChatsPage> {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
-                trailing: Text(
-                  chat.time,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: Color(0xFF777C79),
-                  ),
+                trailing: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      chat.time,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF777C79),
+                      ),
+                    ),
+                    if (chat.unreadCount > 0) ...[
+                      const SizedBox(height: 6),
+                      Container(
+                        constraints: const BoxConstraints(minWidth: 20),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: const BoxDecoration(
+                          color: Color(0xFF1FAA59),
+                          borderRadius: BorderRadius.all(Radius.circular(999)),
+                        ),
+                        child: Text(
+                          chat.unreadCount > 99 ? '99+' : '${chat.unreadCount}',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
                 onTap: () {
                   Navigator.push(
@@ -483,6 +555,7 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
     _client = TurnaSocketClient(
       chatId: widget.chat.chatId,
       senderId: widget.session.userId,
+      token: widget.session.token,
     )..connect();
     _client.addListener(_refresh);
   }
@@ -1033,12 +1106,14 @@ class ChatPreview {
     required this.name,
     required this.message,
     required this.time,
+    this.unreadCount = 0,
   });
 
   final String chatId;
   final String name;
   final String message;
   final String time;
+  final int unreadCount;
 }
 
 class ChatUser {
@@ -1100,10 +1175,15 @@ extension ChatMessageStatusX on ChatMessageStatus {
 }
 
 class TurnaSocketClient extends ChangeNotifier {
-  TurnaSocketClient({required this.chatId, required this.senderId});
+  TurnaSocketClient({
+    required this.chatId,
+    required this.senderId,
+    required this.token,
+  });
 
   final String chatId;
   final String senderId;
+  final String token;
 
   final List<ChatMessage> messages = [];
   io.Socket? _socket;
@@ -1118,13 +1198,14 @@ class TurnaSocketClient extends ChangeNotifier {
       kBackendBaseUrl,
       io.OptionBuilder()
           .setTransports(['websocket'])
+          .setAuth({'token': token})
           .disableAutoConnect()
           .build(),
     );
 
     _socket!.onConnect((_) {
       turnaLog('socket connected', {'id': _socket?.id, 'chatId': chatId});
-      _socket!.emit('chat:join', {'chatId': chatId, 'userId': senderId});
+      _socket!.emit('chat:join', {'chatId': chatId});
     });
 
     _socket!.onConnectError((data) {
@@ -1141,6 +1222,9 @@ class TurnaSocketClient extends ChangeNotifier {
 
     _socket!.on('error:internal', (data) {
       turnaLog('socket error:internal', data);
+    });
+    _socket!.on('error:forbidden', (data) {
+      turnaLog('socket error:forbidden', data);
     });
 
     _socket!.on('chat:history', (data) {
@@ -1209,7 +1293,7 @@ class TurnaSocketClient extends ChangeNotifier {
   }
 
   void _markSeen() {
-    _socket?.emit('chat:seen', {'chatId': chatId, 'userId': senderId});
+    _socket?.emit('chat:seen', {'chatId': chatId});
   }
 
   void send(String text) {
@@ -1220,7 +1304,6 @@ class TurnaSocketClient extends ChangeNotifier {
     });
     _socket?.emit('chat:send', {
       'chatId': chatId,
-      'senderId': senderId,
       'text': text,
     });
   }
@@ -1230,6 +1313,33 @@ class TurnaSocketClient extends ChangeNotifier {
     turnaLog('socket dispose', {'chatId': chatId, 'senderId': senderId});
     _socket?.dispose();
     super.dispose();
+  }
+}
+
+class PresenceSocketClient {
+  PresenceSocketClient({required this.token});
+
+  final String token;
+  io.Socket? _socket;
+
+  void connect() {
+    _socket = io.io(
+      kBackendBaseUrl,
+      io.OptionBuilder()
+          .setTransports(['websocket'])
+          .setAuth({'token': token})
+          .disableAutoConnect()
+          .build(),
+    );
+
+    _socket!.onConnect((_) => turnaLog('presence connected', {'id': _socket?.id}));
+    _socket!.onDisconnect((reason) => turnaLog('presence disconnected', {'reason': reason}));
+    _socket!.onConnectError((data) => turnaLog('presence connect_error', data));
+    _socket!.connect();
+  }
+
+  void dispose() {
+    _socket?.dispose();
   }
 }
 
@@ -1302,6 +1412,7 @@ class ChatApi {
           name: map['title']?.toString() ?? 'Chat',
           message: map['lastMessage']?.toString() ?? '',
           time: _formatTime(map['lastMessageAt']?.toString()),
+          unreadCount: (map['unreadCount'] as num?)?.toInt() ?? 0,
         );
       }).toList();
     }
@@ -1313,6 +1424,7 @@ class ChatApi {
         name: user.displayName,
         message: 'Sohbet başlat',
         time: '',
+        unreadCount: 0,
       );
     }).toList();
   }
