@@ -1,14 +1,35 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 
-const String kBackendBaseUrl = 'https://turna-production.up.railway.app';
+const String kBackendBaseUrl = 'http://178.104.8.155:4000';
 
-void main() {
-  runApp(const TurnaApp());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final session = await AuthSession.load();
+  runApp(TurnaApp(initialSession: session));
 }
 
-class TurnaApp extends StatelessWidget {
-  const TurnaApp({super.key});
+class TurnaApp extends StatefulWidget {
+  const TurnaApp({super.key, required this.initialSession});
+
+  final AuthSession? initialSession;
+
+  @override
+  State<TurnaApp> createState() => _TurnaAppState();
+}
+
+class _TurnaAppState extends State<TurnaApp> {
+  AuthSession? _session;
+
+  @override
+  void initState() {
+    super.initState();
+    _session = widget.initialSession;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -31,13 +52,169 @@ class TurnaApp extends StatelessWidget {
       title: 'Turna',
       debugShowCheckedModeBanner: false,
       theme: theme,
-      home: const MainTabs(),
+      home: _session == null
+          ? AuthPage(onAuthenticated: (session) => setState(() => _session = session))
+          : MainTabs(
+              session: _session!,
+              onLogout: () async {
+                await AuthSession.clear();
+                setState(() => _session = null);
+              },
+            ),
+    );
+  }
+}
+
+class AuthPage extends StatefulWidget {
+  const AuthPage({super.key, required this.onAuthenticated});
+
+  final void Function(AuthSession session) onAuthenticated;
+
+  @override
+  State<AuthPage> createState() => _AuthPageState();
+}
+
+class _AuthPageState extends State<AuthPage> {
+  final _usernameController = TextEditingController();
+  final _phoneController = TextEditingController();
+  final _nameController = TextEditingController();
+  final _passwordController = TextEditingController();
+
+  bool _loading = false;
+  bool _isRegisterMode = true;
+  String? _error;
+
+  @override
+  void dispose() {
+    _usernameController.dispose();
+    _phoneController.dispose();
+    _nameController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final username = _usernameController.text.trim();
+    final phone = _phoneController.text.trim();
+    final name = _nameController.text.trim();
+    final password = _passwordController.text.trim();
+
+    if (username.isEmpty && phone.isEmpty) {
+      setState(() => _error = 'Username veya telefon gir.');
+      return;
+    }
+    if (_isRegisterMode && name.length < 2) {
+      setState(() => _error = 'Kayıt için ad soyad gir.');
+      return;
+    }
+
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+
+    try {
+      final endpoint = _isRegisterMode ? 'register' : 'login';
+      final payload = <String, dynamic>{
+        if (username.isNotEmpty) 'username': username,
+        if (phone.isNotEmpty) 'phone': phone,
+        if (password.isNotEmpty) 'password': password,
+        if (_isRegisterMode) 'displayName': name,
+      };
+
+      final res = await http.post(
+        Uri.parse('$kBackendBaseUrl/api/auth/$endpoint'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(payload),
+      );
+
+      if (res.statusCode >= 400) {
+        final body = jsonDecode(res.body);
+        setState(() => _error = 'İşlem başarısız: ${body['error'] ?? res.statusCode}');
+        return;
+      }
+
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final token = map['accessToken']?.toString();
+      final user = map['user'] as Map<String, dynamic>?;
+      final userId = user?['id']?.toString();
+      final displayName = user?['displayName']?.toString() ?? username;
+      if (token == null || userId == null) {
+        setState(() => _error = 'Sunucu yanıtı geçersiz.');
+        return;
+      }
+
+      final session = AuthSession(token: token, userId: userId, displayName: displayName);
+      await session.save();
+      widget.onAuthenticated(session);
+    } catch (_) {
+      setState(() => _error = 'Sunucuya bağlanılamadı.');
+    } finally {
+      setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Turna Giriş')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Text(_isRegisterMode ? 'Username/telefon ile kayıt ol.' : 'Username/telefon ile giriş yap.', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 14),
+          TextField(
+            controller: _usernameController,
+            decoration: const InputDecoration(labelText: 'Username', border: OutlineInputBorder()),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _phoneController,
+            decoration: const InputDecoration(labelText: 'Telefon (opsiyonel)', border: OutlineInputBorder()),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _nameController,
+            decoration: const InputDecoration(labelText: 'Ad Soyad (kayıtta zorunlu)', border: OutlineInputBorder()),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _passwordController,
+            obscureText: true,
+            decoration: const InputDecoration(labelText: 'Şifre (opsiyonel)', border: OutlineInputBorder()),
+          ),
+          const SizedBox(height: 14),
+          if (_error != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text(_error!, style: const TextStyle(color: Colors.red)),
+            ),
+          FilledButton(
+            onPressed: _loading ? null : _submit,
+            child: Text(_loading ? 'Bekleyin...' : (_isRegisterMode ? 'Kayıt Ol' : 'Giriş Yap')),
+          ),
+          TextButton(
+            onPressed: _loading
+                ? null
+                : () {
+                    setState(() {
+                      _error = null;
+                      _isRegisterMode = !_isRegisterMode;
+                    });
+                  },
+            child: Text(_isRegisterMode ? 'Hesabım var, giriş yap' : 'Hesabım yok, kayıt ol'),
+          ),
+        ],
+      ),
     );
   }
 }
 
 class MainTabs extends StatefulWidget {
-  const MainTabs({super.key});
+  const MainTabs({super.key, required this.session, required this.onLogout});
+
+  final AuthSession session;
+  final VoidCallback onLogout;
 
   @override
   State<MainTabs> createState() => _MainTabsState();
@@ -49,10 +226,10 @@ class _MainTabsState extends State<MainTabs> {
   @override
   Widget build(BuildContext context) {
     final pages = <Widget>[
-      const ChatsPage(),
+      ChatsPage(session: widget.session),
       const PlaceholderPage(title: 'Updates'),
       const PlaceholderPage(title: 'Calls'),
-      const SettingsPage(),
+      SettingsPage(session: widget.session, onLogout: widget.onLogout),
     ];
 
     return Scaffold(
@@ -72,7 +249,9 @@ class _MainTabsState extends State<MainTabs> {
 }
 
 class ChatsPage extends StatelessWidget {
-  const ChatsPage({super.key});
+  const ChatsPage({super.key, required this.session});
+
+  final AuthSession session;
 
   static final chats = <ChatPreview>[
     ChatPreview(userId: 'jon', name: 'Mr Jon', message: 'Hi', time: '08:23', unread: 2),
@@ -144,7 +323,7 @@ class ChatsPage extends StatelessWidget {
             onTap: () {
               Navigator.push(
                 context,
-                MaterialPageRoute(builder: (_) => ChatRoomPage(chat: chat)),
+                MaterialPageRoute(builder: (_) => ChatRoomPage(chat: chat, session: session)),
               );
             },
           );
@@ -161,9 +340,10 @@ class ChatsPage extends StatelessWidget {
 }
 
 class ChatRoomPage extends StatefulWidget {
-  const ChatRoomPage({super.key, required this.chat});
+  const ChatRoomPage({super.key, required this.chat, required this.session});
 
   final ChatPreview chat;
+  final AuthSession session;
 
   @override
   State<ChatRoomPage> createState() => _ChatRoomPageState();
@@ -177,8 +357,8 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
   void initState() {
     super.initState();
     _client = TurnaSocketClient(
-      chatId: 'direct_me_${widget.chat.userId}',
-      senderId: 'me',
+      chatId: 'direct_${widget.chat.userId}',
+      senderId: widget.session.userId,
     )..connect();
     _client.addListener(_refresh);
   }
@@ -210,7 +390,7 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
               itemCount: _client.messages.length,
               itemBuilder: (context, index) {
                 final msg = _client.messages[_client.messages.length - 1 - index];
-                final mine = msg.senderId == 'me';
+                final mine = msg.senderId == widget.session.userId;
                 return Align(
                   alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
                   child: Container(
@@ -268,7 +448,10 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
 }
 
 class SettingsPage extends StatelessWidget {
-  const SettingsPage({super.key});
+  const SettingsPage({super.key, required this.session, required this.onLogout});
+
+  final AuthSession session;
+  final VoidCallback onLogout;
 
   @override
   Widget build(BuildContext context) {
@@ -278,8 +461,8 @@ class SettingsPage extends StatelessWidget {
         children: [
           ListTile(
             leading: const CircleAvatar(radius: 25, backgroundColor: Color(0xFFDBEFE2), child: Icon(Icons.person, color: Color(0xFF1FAA59))),
-            title: const Text('JON DESUJA', style: TextStyle(fontWeight: FontWeight.w700)),
-            subtitle: const Text('Busy'),
+            title: Text(session.displayName.toUpperCase(), style: const TextStyle(fontWeight: FontWeight.w700)),
+            subtitle: Text(session.userId),
             onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ProfilePage())),
           ),
           const Divider(height: 1),
@@ -290,6 +473,11 @@ class SettingsPage extends StatelessWidget {
           _settingsItem(context, Icons.chat_bubble_outline, 'Chats', const PlaceholderPage(title: 'Chats')),
           _settingsItem(context, Icons.notifications_none, 'Notifications', const PlaceholderPage(title: 'Notifications')),
           _settingsItem(context, Icons.data_saver_off_outlined, 'Storage and data', const PlaceholderPage(title: 'Storage and data')),
+          ListTile(
+            leading: const Icon(Icons.logout, color: Colors.red),
+            title: const Text('Çıkış Yap', style: TextStyle(color: Colors.red)),
+            onTap: onLogout,
+          ),
         ],
       ),
     );
@@ -517,5 +705,43 @@ class TurnaSocketClient extends ChangeNotifier {
   void dispose() {
     _socket?.dispose();
     super.dispose();
+  }
+}
+
+class AuthSession {
+  AuthSession({required this.token, required this.userId, required this.displayName});
+
+  final String token;
+  final String userId;
+  final String displayName;
+
+  static const _tokenKey = 'turna_auth_token';
+  static const _userIdKey = 'turna_auth_user_id';
+  static const _displayNameKey = 'turna_auth_display_name';
+
+  static Future<AuthSession?> load() async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString(_tokenKey);
+    final userId = prefs.getString(_userIdKey);
+    final displayName = prefs.getString(_displayNameKey);
+    if (token == null || userId == null || displayName == null) {
+      return null;
+    }
+
+    return AuthSession(token: token, userId: userId, displayName: displayName);
+  }
+
+  Future<void> save() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_tokenKey, token);
+    await prefs.setString(_userIdKey, userId);
+    await prefs.setString(_displayNameKey, displayName);
+  }
+
+  static Future<void> clear() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_tokenKey);
+    await prefs.remove(_userIdKey);
+    await prefs.remove(_displayNameKey);
   }
 }
