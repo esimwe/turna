@@ -291,23 +291,30 @@ class MainTabs extends StatefulWidget {
 class _MainTabsState extends State<MainTabs> {
   int _index = 0;
   late final PresenceSocketClient _presenceClient;
+  final _inboxUpdateNotifier = ValueNotifier<int>(0);
 
   @override
   void initState() {
     super.initState();
-    _presenceClient = PresenceSocketClient(token: widget.session.token)..connect();
+    _presenceClient = PresenceSocketClient(
+      token: widget.session.token,
+      onInboxUpdate: () {
+        _inboxUpdateNotifier.value++;
+      },
+    )..connect();
   }
 
   @override
   void dispose() {
     _presenceClient.dispose();
+    _inboxUpdateNotifier.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final pages = <Widget>[
-      ChatsPage(session: widget.session),
+      ChatsPage(session: widget.session, inboxUpdateNotifier: _inboxUpdateNotifier),
       const PlaceholderPage(title: 'Updates'),
       const PlaceholderPage(title: 'Calls'),
       SettingsPage(session: widget.session, onLogout: widget.onLogout),
@@ -339,9 +346,10 @@ class _MainTabsState extends State<MainTabs> {
 }
 
 class ChatsPage extends StatefulWidget {
-  const ChatsPage({super.key, required this.session});
+  const ChatsPage({super.key, required this.session, this.inboxUpdateNotifier});
 
   final AuthSession session;
+  final ValueNotifier<int>? inboxUpdateNotifier;
 
   @override
   State<ChatsPage> createState() => _ChatsPageState();
@@ -355,6 +363,12 @@ class _ChatsPageState extends State<ChatsPage> {
   void initState() {
     super.initState();
     _connectInboxUpdates();
+    widget.inboxUpdateNotifier?.addListener(_onInboxUpdate);
+  }
+
+  void _onInboxUpdate() {
+    if (!mounted) return;
+    setState(() => _refreshTick++);
   }
 
   void _connectInboxUpdates() {
@@ -378,6 +392,7 @@ class _ChatsPageState extends State<ChatsPage> {
 
   @override
   void dispose() {
+    widget.inboxUpdateNotifier?.removeListener(_onInboxUpdate);
     _inboxSocket?.dispose();
     super.dispose();
   }
@@ -1384,9 +1399,10 @@ class TurnaSocketClient extends ChangeNotifier {
 }
 
 class PresenceSocketClient {
-  PresenceSocketClient({required this.token});
+  PresenceSocketClient({required this.token, this.onInboxUpdate});
 
   final String token;
+  final VoidCallback? onInboxUpdate;
   io.Socket? _socket;
 
   void connect() {
@@ -1406,10 +1422,17 @@ class PresenceSocketClient {
     // Backend'den gelen mesaj ve status güncellemelerini dinle
     _socket!.on('chat:message', (data) {
       turnaLog('presence chat:message received', data);
+      onInboxUpdate?.call();
     });
     
     _socket!.on('chat:status', (data) {
       turnaLog('presence chat:status received', data);
+      onInboxUpdate?.call();
+    });
+    
+    _socket!.on('chat:inbox:update', (_) {
+      turnaLog('presence inbox:update received');
+      onInboxUpdate?.call();
     });
     
     _socket!.connect();
