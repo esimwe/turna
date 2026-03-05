@@ -1250,6 +1250,10 @@ class TurnaSocketClient extends ChangeNotifier {
       }
     });
 
+    _socket!.on('chat:inbox:update', (_) {
+      _syncMessagesFromHttp();
+    });
+
     _socket!.on('chat:message', (data) {
       if (data is Map) {
         turnaLog('socket chat:message', data);
@@ -1304,27 +1308,40 @@ class TurnaSocketClient extends ChangeNotifier {
       turnaLog('socket disconnected', {'reason': reason, 'chatId': chatId});
     });
 
-    _loadHistoryFromHttp();
+    _syncMessagesFromHttp(onlyIfEmpty: true);
     _socket!.connect();
   }
 
-  Future<void> _loadHistoryFromHttp() async {
+  Future<void> _syncMessagesFromHttp({bool onlyIfEmpty = false}) async {
     try {
       final res = await http.get(
         Uri.parse('$kBackendBaseUrl/api/chats/$chatId/messages'),
         headers: {'Authorization': 'Bearer $token'},
       );
       if (res.statusCode >= 400) return;
-      if (_historyLoadedFromSocket) return;
+      if (_historyLoadedFromSocket && onlyIfEmpty) return;
 
       final map = jsonDecode(res.body) as Map<String, dynamic>;
       final rawData = (map['data'] as List<dynamic>? ?? []);
-      if (messages.isEmpty) {
-        messages.addAll(
-          rawData
-              .whereType<Map>()
-              .map((e) => ChatMessage.fromMap(Map<String, dynamic>.from(e))),
-        );
+      if (messages.isEmpty || !onlyIfEmpty) {
+        final incoming = rawData
+            .whereType<Map>()
+            .map((e) => ChatMessage.fromMap(Map<String, dynamic>.from(e)))
+            .toList();
+
+        final byId = <String, ChatMessage>{};
+        for (final current in messages) {
+          byId[current.id] = current;
+        }
+        for (final serverMessage in incoming) {
+          byId[serverMessage.id] = serverMessage;
+        }
+
+        final merged = byId.values.toList()
+          ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+        messages
+          ..clear()
+          ..addAll(merged);
       }
       _markSeen();
       notifyListeners();
