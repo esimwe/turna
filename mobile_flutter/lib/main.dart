@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 
 import 'package:characters/characters.dart';
@@ -351,16 +350,11 @@ class ChatsPage extends StatefulWidget {
 class _ChatsPageState extends State<ChatsPage> {
   int _refreshTick = 0;
   io.Socket? _inboxSocket;
-  Timer? _pollTimer;
 
   @override
   void initState() {
     super.initState();
     _connectInboxUpdates();
-    _pollTimer = Timer.periodic(const Duration(seconds: 4), (_) {
-      if (!mounted) return;
-      setState(() => _refreshTick++);
-    });
   }
 
   void _connectInboxUpdates() {
@@ -384,7 +378,6 @@ class _ChatsPageState extends State<ChatsPage> {
 
   @override
   void dispose() {
-    _pollTimer?.cancel();
     _inboxSocket?.dispose();
     super.dispose();
   }
@@ -1197,6 +1190,7 @@ class TurnaSocketClient extends ChangeNotifier {
   final List<ChatMessage> messages = [];
   io.Socket? _socket;
   bool _historyLoadedFromSocket = false;
+  int _localMessageSeq = 0;
 
   void connect() {
     turnaLog('socket connect start', {
@@ -1260,7 +1254,17 @@ class TurnaSocketClient extends ChangeNotifier {
       if (data is Map) {
         turnaLog('socket chat:message', data);
         final message = ChatMessage.fromMap(Map<String, dynamic>.from(data));
-        messages.add(message);
+        final index = messages.indexWhere(
+          (m) =>
+              m.senderId == message.senderId &&
+              m.text == message.text &&
+              m.id.startsWith('local_'),
+        );
+        if (index >= 0) {
+          messages[index] = message;
+        } else {
+          messages.add(message);
+        }
         if (message.senderId != senderId) {
           _markSeen();
         }
@@ -1315,13 +1319,13 @@ class TurnaSocketClient extends ChangeNotifier {
 
       final map = jsonDecode(res.body) as Map<String, dynamic>;
       final rawData = (map['data'] as List<dynamic>? ?? []);
-      messages
-        ..clear()
-        ..addAll(
+      if (messages.isEmpty) {
+        messages.addAll(
           rawData
               .whereType<Map>()
               .map((e) => ChatMessage.fromMap(Map<String, dynamic>.from(e))),
         );
+      }
       _markSeen();
       notifyListeners();
     } catch (_) {}
@@ -1332,6 +1336,17 @@ class TurnaSocketClient extends ChangeNotifier {
   }
 
   void send(String text) {
+    final nowIso = DateTime.now().toIso8601String();
+    final localMessage = ChatMessage(
+      id: 'local_${senderId}_${_localMessageSeq++}',
+      senderId: senderId,
+      text: text,
+      status: ChatMessageStatus.sent,
+      createdAt: nowIso,
+    );
+    messages.add(localMessage);
+    notifyListeners();
+
     turnaLog('socket chat:send', {
       'chatId': chatId,
       'senderId': senderId,
