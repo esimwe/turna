@@ -124,13 +124,17 @@ export function registerChatSocket(io: Server): void {
         const participants = await chatService.getChatParticipantIds(parsed.data.chatId);
         const peerId = participants.find((participantId) => participantId !== userId) ?? null;
         if (peerId) {
-          const deliveredIds = await chatService.markMessagesDelivered(parsed.data.chatId, peerId);
-          if (deliveredIds.length > 0) {
-            io.to(parsed.data.chatId).emit("chat:status", {
-              chatId: parsed.data.chatId,
-              status: "delivered",
-              messageIds: deliveredIds
-            });
+          // Sadece karşı kullanıcı online ise (user room'a bağlıysa) mesajı delivered yap
+          const peerSockets = await io.in(userRoom(peerId)).fetchSockets();
+          if (peerSockets.length > 0) {
+            const deliveredIds = await chatService.markMessagesDelivered(parsed.data.chatId, peerId);
+            if (deliveredIds.length > 0) {
+              io.to(parsed.data.chatId).emit("chat:status", {
+                chatId: parsed.data.chatId,
+                status: "delivered",
+                messageIds: deliveredIds
+              });
+            }
           }
         }
 
