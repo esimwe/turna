@@ -227,6 +227,14 @@ export class ChatService {
     });
     return users;
   }
+
+  async getUserChats(userId: string): Promise<string[]> {
+    const memberships = await prisma.chatMember.findMany({
+      where: { userId },
+      select: { chatId: true }
+    });
+    return memberships.map((m) => m.chatId);
+  }
 }
 
 export const chatService = new ChatService();

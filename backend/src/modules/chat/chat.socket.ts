@@ -54,10 +54,27 @@ export function registerChatSocket(io: Server): void {
     }
   });
 
-  io.on("connection", (socket: Socket) => {
+  io.on("connection", async (socket: Socket) => {
     const userId = socket.data.userId as string;
     socket.join(userRoom(userId));
     logInfo("socket connected", { socketId: socket.id, userId, transport: socket.conn.transport.name });
+
+    // Kullanıcı online olduğunda, ona gönderilen tüm "sent" mesajları "delivered" yap
+    try {
+      const userChats = await chatService.getUserChats(userId);
+      for (const chatId of userChats) {
+        const deliveredIds = await chatService.markMessagesDelivered(chatId, userId);
+        if (deliveredIds.length > 0) {
+          io.to(chatId).emit("chat:status", {
+            chatId,
+            status: "delivered",
+            messageIds: deliveredIds
+          });
+        }
+      }
+    } catch (error) {
+      logInfo("auto-deliver on connect failed", { userId, error });
+    }
 
     socket.on("chat:join", async (payload) => {
       const parsed = joinChatSchema.safeParse(payload);
