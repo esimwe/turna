@@ -65,11 +65,20 @@ export function registerChatSocket(io: Server): void {
       for (const chatId of userChats) {
         const deliveredIds = await chatService.markMessagesDelivered(chatId, userId);
         if (deliveredIds.length > 0) {
-          io.to(chatId).emit("chat:status", {
+          const statusPayload = {
             chatId,
             status: "delivered",
             messageIds: deliveredIds
-          });
+          };
+          // Chat room'a emit et (eğer karşı taraf chat'te ise)
+          io.to(chatId).emit("chat:status", statusPayload);
+          
+          // Gönderen kullanıcının user room'una da emit et (chat listesinde olabilir)
+          const participants = await chatService.getChatParticipantIds(chatId);
+          const senderId = participants.find(p => p !== userId);
+          if (senderId) {
+            io.to(userRoom(senderId)).emit("chat:status", statusPayload);
+          }
         }
       }
     } catch (error) {
@@ -98,11 +107,14 @@ export function registerChatSocket(io: Server): void {
 
         const deliveredIds = await chatService.markMessagesDelivered(parsed.data.chatId, userId);
         if (deliveredIds.length > 0) {
-          io.to(parsed.data.chatId).emit("chat:status", {
+          const statusPayload = {
             chatId: parsed.data.chatId,
             status: "delivered",
             messageIds: deliveredIds
-          });
+          };
+          io.to(parsed.data.chatId).emit("chat:status", statusPayload);
+          // Gönderen kullanıcıya da emit et (chat dışında olabilir)
+          socket.emit("chat:status", statusPayload);
         }
       } catch (error) {
         socket.emit("error:internal", { message: "failed_to_join_chat" });
@@ -136,9 +148,15 @@ export function registerChatSocket(io: Server): void {
           senderId: userId,
           messageId: message.id
         });
+        // Mesajı hem chat room'a hem de user room'lara gönder
         io.to(parsed.data.chatId).emit("chat:message", message);
-
+        
         const participants = await chatService.getChatParticipantIds(parsed.data.chatId);
+        // Tüm katılımcıların user room'larına emit et (chat dışında olabilirler)
+        for (const participantId of participants) {
+          io.to(userRoom(participantId)).emit("chat:message", message);
+        }
+
         const peerId = participants.find((participantId) => participantId !== userId) ?? null;
         if (peerId) {
           // Sadece karşı kullanıcı online ise (user room'a bağlıysa) mesajı delivered yap
@@ -146,11 +164,14 @@ export function registerChatSocket(io: Server): void {
           if (peerSockets.length > 0) {
             const deliveredIds = await chatService.markMessagesDelivered(parsed.data.chatId, peerId);
             if (deliveredIds.length > 0) {
-              io.to(parsed.data.chatId).emit("chat:status", {
+              const statusPayload = {
                 chatId: parsed.data.chatId,
                 status: "delivered",
                 messageIds: deliveredIds
-              });
+              };
+              io.to(parsed.data.chatId).emit("chat:status", statusPayload);
+              // Gönderen kullanıcıya da emit et
+              io.to(userRoom(userId)).emit("chat:status", statusPayload);
             }
           }
         }
@@ -179,12 +200,20 @@ export function registerChatSocket(io: Server): void {
 
         const readIds = await chatService.markMessagesRead(parsed.data.chatId, userId);
         if (readIds.length > 0) {
-          io.to(parsed.data.chatId).emit("chat:status", {
+          const statusPayload = {
             chatId: parsed.data.chatId,
             status: "read",
             messageIds: readIds
-          });
+          };
+          io.to(parsed.data.chatId).emit("chat:status", statusPayload);
+          
           const participants = await chatService.getChatParticipantIds(parsed.data.chatId);
+          // Gönderen kullanıcının user room'una da emit et
+          const senderId = participants.find(p => p !== userId);
+          if (senderId) {
+            io.to(userRoom(senderId)).emit("chat:status", statusPayload);
+          }
+          
           emitInboxUpdate(io, participants.length > 0 ? participants : [userId]);
         }
       } catch (error) {
