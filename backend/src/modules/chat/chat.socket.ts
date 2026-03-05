@@ -121,9 +121,9 @@ export function registerChatSocket(io: Server): void {
         });
         io.to(parsed.data.chatId).emit("chat:message", message);
 
-        const peerId = chatService.getDirectPeerId(parsed.data.chatId, userId);
-        const peerOnline = peerId ? (io.sockets.adapter.rooms.get(userRoom(peerId))?.size ?? 0) > 0 : false;
-        if (peerId && peerOnline) {
+        const participants = await chatService.getChatParticipantIds(parsed.data.chatId);
+        const peerId = participants.find((participantId) => participantId !== userId) ?? null;
+        if (peerId) {
           const deliveredIds = await chatService.markMessagesDelivered(parsed.data.chatId, peerId);
           if (deliveredIds.length > 0) {
             io.to(parsed.data.chatId).emit("chat:status", {
@@ -134,7 +134,6 @@ export function registerChatSocket(io: Server): void {
           }
         }
 
-        const participants = chatService.getDirectParticipants(parsed.data.chatId);
         emitInboxUpdate(io, participants.length > 0 ? participants : [userId]);
       } catch (error) {
         socket.emit("error:internal", { message: "failed_to_send_message" });
@@ -164,7 +163,7 @@ export function registerChatSocket(io: Server): void {
             status: "read",
             messageIds: readIds
           });
-          const participants = chatService.getDirectParticipants(parsed.data.chatId);
+          const participants = await chatService.getChatParticipantIds(parsed.data.chatId);
           emitInboxUpdate(io, participants.length > 0 ? participants : [userId]);
         }
       } catch (error) {

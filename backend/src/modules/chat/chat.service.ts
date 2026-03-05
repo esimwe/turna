@@ -45,6 +45,23 @@ export class ChatService {
     return participants ? [...participants] : [];
   }
 
+  async getChatParticipantIds(chatId: string): Promise<string[]> {
+    const members = await prisma.chatMember.findMany({
+      where: { chatId },
+      select: { userId: true }
+    });
+    return members.map((member) => member.userId);
+  }
+
+  async resolvePeerId(chatId: string, userId: string): Promise<string | null> {
+    const directPeer = this.getDirectPeerId(chatId, userId);
+    if (directPeer) return directPeer;
+
+    const participants = await this.getChatParticipantIds(chatId);
+    const peer = participants.find((participantId) => participantId !== userId);
+    return peer ?? null;
+  }
+
   async ensureChatAccess(chatId: string, userId: string): Promise<boolean> {
     const member = await prisma.chatMember.findUnique({
       where: { chatId_userId: { chatId, userId } },
