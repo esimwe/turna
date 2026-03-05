@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:characters/characters.dart';
@@ -350,11 +351,16 @@ class ChatsPage extends StatefulWidget {
 class _ChatsPageState extends State<ChatsPage> {
   int _refreshTick = 0;
   io.Socket? _inboxSocket;
+  Timer? _pollTimer;
 
   @override
   void initState() {
     super.initState();
     _connectInboxUpdates();
+    _pollTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+      if (!mounted) return;
+      setState(() => _refreshTick++);
+    });
   }
 
   void _connectInboxUpdates() {
@@ -371,11 +377,14 @@ class _ChatsPageState extends State<ChatsPage> {
       if (!mounted) return;
       setState(() => _refreshTick++);
     });
+    _inboxSocket!.onConnect((_) => turnaLog('inbox connected', {'id': _inboxSocket?.id}));
+    _inboxSocket!.onConnectError((data) => turnaLog('inbox connect_error', data));
     _inboxSocket!.connect();
   }
 
   @override
   void dispose() {
+    _pollTimer?.cancel();
     _inboxSocket?.dispose();
     super.dispose();
   }
@@ -1187,6 +1196,7 @@ class TurnaSocketClient extends ChangeNotifier {
 
   final List<ChatMessage> messages = [];
   io.Socket? _socket;
+  bool _historyLoadedFromSocket = false;
 
   void connect() {
     turnaLog('socket connect start', {
@@ -1229,6 +1239,7 @@ class TurnaSocketClient extends ChangeNotifier {
 
     _socket!.on('chat:history', (data) {
       if (data is List) {
+        _historyLoadedFromSocket = true;
         turnaLog('socket chat:history', {
           'count': data.length,
           'chatId': chatId,
@@ -1289,7 +1300,31 @@ class TurnaSocketClient extends ChangeNotifier {
       turnaLog('socket disconnected', {'reason': reason, 'chatId': chatId});
     });
 
+    _loadHistoryFromHttp();
     _socket!.connect();
+  }
+
+  Future<void> _loadHistoryFromHttp() async {
+    try {
+      final res = await http.get(
+        Uri.parse('$kBackendBaseUrl/api/chats/$chatId/messages'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      if (res.statusCode >= 400) return;
+      if (_historyLoadedFromSocket) return;
+
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final rawData = (map['data'] as List<dynamic>? ?? []);
+      messages
+        ..clear()
+        ..addAll(
+          rawData
+              .whereType<Map>()
+              .map((e) => ChatMessage.fromMap(Map<String, dynamic>.from(e))),
+        );
+      _markSeen();
+      notifyListeners();
+    } catch (_) {}
   }
 
   void _markSeen() {
