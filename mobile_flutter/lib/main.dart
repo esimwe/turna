@@ -1402,6 +1402,16 @@ class PresenceSocketClient {
     _socket!.onConnect((_) => turnaLog('presence connected', {'id': _socket?.id}));
     _socket!.onDisconnect((reason) => turnaLog('presence disconnected', {'reason': reason}));
     _socket!.onConnectError((data) => turnaLog('presence connect_error', data));
+    
+    // Backend'den gelen mesaj ve status güncellemelerini dinle
+    _socket!.on('chat:message', (data) {
+      turnaLog('presence chat:message received', data);
+    });
+    
+    _socket!.on('chat:status', (data) {
+      turnaLog('presence chat:status received', data);
+    });
+    
     _socket!.connect();
   }
 
