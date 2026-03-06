@@ -13,7 +13,12 @@ const resolvedEnv = {
     process.env.POSTGRES_URL ??
     process.env.POSTGRES_URL_NON_POOLING ??
     process.env.DATABASE_PUBLIC_URL,
-  JWT_SECRET: process.env.JWT_SECRET ?? process.env.AUTH_SECRET
+  JWT_SECRET: process.env.JWT_SECRET ?? process.env.AUTH_SECRET,
+  R2_ACCOUNT_ID: process.env.R2_ACCOUNT_ID,
+  R2_BUCKET: process.env.R2_BUCKET,
+  R2_ENDPOINT: process.env.R2_ENDPOINT,
+  R2_ACCESS_KEY_ID: process.env.R2_ACCESS_KEY_ID,
+  R2_SECRET_ACCESS_KEY: process.env.R2_SECRET_ACCESS_KEY
 };
 
 const envSchema = z.object({
@@ -22,7 +27,12 @@ const envSchema = z.object({
   CORS_ORIGIN: z.string().default("*"),
   REDIS_URL: z.string().default("redis://localhost:6379"),
   DATABASE_URL: z.string().url(),
-  JWT_SECRET: z.string().min(12).default("turna-dev-secret-change-me")
+  JWT_SECRET: z.string().min(12).default("turna-dev-secret-change-me"),
+  R2_ACCOUNT_ID: z.string().min(1).optional(),
+  R2_BUCKET: z.string().min(1).optional(),
+  R2_ENDPOINT: z.string().url().optional(),
+  R2_ACCESS_KEY_ID: z.string().min(1).optional(),
+  R2_SECRET_ACCESS_KEY: z.string().min(1).optional()
 });
 
 export const env = envSchema.parse(resolvedEnv);

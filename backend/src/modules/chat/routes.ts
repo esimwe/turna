@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
+import { logError } from "../../lib/logger.js";
 import { requireAuth } from "../../middleware/auth.js";
 import { chatService } from "./chat.service.js";
 
@@ -49,10 +50,20 @@ chatRouter.post("/messages", requireAuth, async (req, res) => {
   }
 
   const userId = req.authUserId!;
-  const message = await chatService.sendMessage({
-    chatId: parsed.data.chatId,
-    senderId: userId,
-    text: parsed.data.text
-  });
-  res.status(201).json({ data: message });
+  try {
+    const message = await chatService.sendMessage({
+      chatId: parsed.data.chatId,
+      senderId: userId,
+      text: parsed.data.text
+    });
+    res.status(201).json({ data: message });
+  } catch (error) {
+    if (error instanceof Error && error.message === "forbidden_chat_access") {
+      res.status(403).json({ error: "forbidden_chat_access" });
+      return;
+    }
+
+    logError("chat http send failed", error);
+    res.status(500).json({ error: "failed_to_send_message" });
+  }
 });
