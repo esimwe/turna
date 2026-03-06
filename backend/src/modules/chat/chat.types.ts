@@ -21,4 +21,14 @@ export interface ChatSummary {
   lastMessage: string;
   lastMessageAt: string | null;
   unreadCount: number;
+  peerId: string | null;
+  peerAvatarKey: string | null;
+  peerUpdatedAt: string | null;
+}
+
+export interface DirectoryUser {
+  id: string;
+  displayName: string;
+  avatarKey: string | null;
+  updatedAt: string;
 }

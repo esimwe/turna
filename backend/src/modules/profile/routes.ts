@@ -12,6 +12,7 @@ import {
   isStorageConfigured
 } from "../../lib/storage.js";
 import { requireAuth } from "../../middleware/auth.js";
+import { buildAvatarUrl } from "./avatar-url.js";
 
 export const profileRouter = Router();
 
@@ -56,17 +57,6 @@ const avatarUploadInitSchema = z.object({
 const avatarUploadCompleteSchema = z.object({
   objectKey: z.string().trim().min(1).max(512)
 });
-
-function getRequestOrigin(req: Request): string {
-  const forwardedProto = req.header("x-forwarded-proto");
-  const proto = forwardedProto?.split(",")[0]?.trim() || req.protocol;
-  return `${proto}://${req.get("host")}`;
-}
-
-function buildAvatarUrl(req: Request, userId: string, updatedAt: Date): string {
-  const version = encodeURIComponent(updatedAt.toISOString());
-  return `${getRequestOrigin(req)}/api/profile/avatar/${userId}?v=${version}`;
-}
 
 function toProfileDto(
   req: Request,

@@ -1,6 +1,11 @@
 import { ChatType, MessageStatus } from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
-import type { ChatMessage, ChatSummary, SendMessagePayload } from "./chat.types.js";
+import type {
+  ChatMessage,
+  ChatSummary,
+  DirectoryUser,
+  SendMessagePayload
+} from "./chat.types.js";
 
 function toChatMessage(row: {
   id: string;
@@ -205,6 +210,9 @@ export class ChatService {
           lastMessage: last?.text ?? "Sohbet başlat",
           lastMessageAt: last ? last.createdAt.toISOString() : null,
           unreadCount,
+          peerId: peer?.id ?? null,
+          peerAvatarKey: peer?.avatarUrl ?? null,
+          peerUpdatedAt: peer?.updatedAt ? peer.updatedAt.toISOString() : null,
           joinedAt: membership.joinedAt
         };
       })
@@ -219,13 +227,18 @@ export class ChatService {
     return items.map(({ joinedAt: _joinedAt, ...summary }) => summary);
   }
 
-  async getUserDirectory(userId: string): Promise<Array<{ id: string; displayName: string }>> {
+  async getUserDirectory(userId: string): Promise<DirectoryUser[]> {
     const users = await prisma.user.findMany({
       where: { id: { not: userId } },
-      select: { id: true, displayName: true },
+      select: { id: true, displayName: true, avatarUrl: true, updatedAt: true },
       orderBy: { createdAt: "desc" }
     });
-    return users;
+    return users.map((user) => ({
+      id: user.id,
+      displayName: user.displayName,
+      avatarKey: user.avatarUrl,
+      updatedAt: user.updatedAt.toISOString()
+    }));
   }
 
   async getUserChats(userId: string): Promise<string[]> {

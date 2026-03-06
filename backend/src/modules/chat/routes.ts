@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { logError } from "../../lib/logger.js";
 import { requireAuth } from "../../middleware/auth.js";
+import { buildAvatarUrl } from "../profile/avatar-url.js";
 import { chatService } from "./chat.service.js";
 
 export const chatRouter = Router();
@@ -33,13 +34,31 @@ chatRouter.get("/:chatId/messages", requireAuth, async (req, res) => {
 chatRouter.get("/", requireAuth, async (req, res) => {
   const userId = req.authUserId!;
   const chats = await chatService.getChatSummaries(userId);
-  res.json({ data: chats });
+  res.json({
+    data: chats.map((chat) => ({
+      chatId: chat.chatId,
+      title: chat.title,
+      lastMessage: chat.lastMessage,
+      lastMessageAt: chat.lastMessageAt,
+      unreadCount: chat.unreadCount,
+      avatarUrl:
+        chat.peerId && chat.peerAvatarKey && chat.peerUpdatedAt
+          ? buildAvatarUrl(req, chat.peerId, new Date(chat.peerUpdatedAt))
+          : null
+    }))
+  });
 });
 
 chatRouter.get("/directory/list", requireAuth, async (req, res) => {
   const userId = req.authUserId!;
   const users = await chatService.getUserDirectory(userId);
-  res.json({ data: users });
+  res.json({
+    data: users.map((user) => ({
+      id: user.id,
+      displayName: user.displayName,
+      avatarUrl: user.avatarKey ? buildAvatarUrl(req, user.id, new Date(user.updatedAt)) : null
+    }))
+  });
 });
 
 chatRouter.post("/messages", requireAuth, async (req, res) => {
