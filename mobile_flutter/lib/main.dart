@@ -313,7 +313,7 @@ class MainTabs extends StatefulWidget {
   State<MainTabs> createState() => _MainTabsState();
 }
 
-class _MainTabsState extends State<MainTabs> {
+class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
   int _index = 0;
   late final PresenceSocketClient _presenceClient;
   final _inboxUpdateNotifier = ValueNotifier<int>(0);
@@ -321,6 +321,7 @@ class _MainTabsState extends State<MainTabs> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     TurnaPushManager.syncSession(widget.session);
     TurnaAnalytics.logEvent('app_session_started', {
       'user_id': widget.session.userId,
@@ -344,9 +345,17 @@ class _MainTabsState extends State<MainTabs> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _presenceClient.dispose();
     _inboxUpdateNotifier.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    _presenceClient.refreshConnection();
+    _inboxUpdateNotifier.value++;
   }
 
   @override
@@ -649,7 +658,8 @@ class ChatRoomPage extends StatefulWidget {
   State<ChatRoomPage> createState() => _ChatRoomPageState();
 }
 
-class _ChatRoomPageState extends State<ChatRoomPage> {
+class _ChatRoomPageState extends State<ChatRoomPage>
+    with WidgetsBindingObserver {
   late final TurnaSocketClient _client;
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollController = ScrollController();
@@ -664,6 +674,7 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     turnaLog('chat room init', {
       'chatId': widget.chat.chatId,
       'senderId': widget.session.userId,
@@ -1037,6 +1048,7 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     turnaLog('chat room dispose', {'chatId': widget.chat.chatId});
     _client.removeListener(_refresh);
     _client.dispose();
@@ -1044,6 +1056,12 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
     _scrollController.removeListener(_handleScroll);
     _scrollController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    _client.refreshConnection();
   }
 
   @override
@@ -1141,6 +1159,15 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
 
                       final msg = displayMessages[index];
                       final mine = msg.senderId == widget.session.userId;
+                      final hasText = msg.text.trim().isNotEmpty;
+                      final hasError =
+                          msg.errorText != null &&
+                          msg.errorText!.trim().isNotEmpty;
+                      final metaFooter = _MessageMetaFooter(
+                        timeLabel: _formatMessageTime(msg.createdAt),
+                        mine: mine,
+                        status: msg.status,
+                      );
                       return Column(
                         children: [
                           if (_shouldShowDayChip(displayMessages, index))
@@ -1200,12 +1227,51 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.end,
                                   children: [
-                                    if (msg.text.trim().isNotEmpty)
+                                    if (hasError)
+                                      Padding(
+                                        padding: const EdgeInsets.only(
+                                          bottom: 6,
+                                        ),
+                                        child: Text(
+                                          msg.errorText!,
+                                          textAlign: TextAlign.right,
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            color:
+                                                msg.status ==
+                                                    ChatMessageStatus.failed
+                                                ? Colors.red.shade600
+                                                : const Color(0xFF777C79),
+                                          ),
+                                        ),
+                                      ),
+                                    if (hasText &&
+                                        msg.attachments.isEmpty &&
+                                        !hasError)
+                                      SizedBox(
+                                        width: double.infinity,
+                                        child: Stack(
+                                          alignment: Alignment.bottomRight,
+                                          children: [
+                                            Padding(
+                                              padding: EdgeInsets.only(
+                                                right: mine ? 56 : 40,
+                                              ),
+                                              child: Align(
+                                                alignment: Alignment.centerLeft,
+                                                child: Text(msg.text),
+                                              ),
+                                            ),
+                                            metaFooter,
+                                          ],
+                                        ),
+                                      )
+                                    else if (hasText)
                                       Align(
                                         alignment: Alignment.centerLeft,
                                         child: Text(msg.text),
                                       ),
-                                    if (msg.text.trim().isNotEmpty &&
+                                    if (hasText &&
                                         msg.attachments.isNotEmpty)
                                       const SizedBox(height: 10),
                                     if (msg.attachments.isNotEmpty) ...[
@@ -1219,42 +1285,8 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
                                       ),
                                       const SizedBox(height: 8),
                                     ],
-                                    Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        if (msg.errorText != null &&
-                                            msg.errorText!
-                                                .trim()
-                                                .isNotEmpty) ...[
-                                          Flexible(
-                                            child: Text(
-                                              msg.errorText!,
-                                              textAlign: TextAlign.right,
-                                              style: TextStyle(
-                                                fontSize: 11,
-                                                color:
-                                                    msg.status ==
-                                                        ChatMessageStatus.failed
-                                                    ? Colors.red.shade600
-                                                    : const Color(0xFF777C79),
-                                              ),
-                                            ),
-                                          ),
-                                          const SizedBox(width: 6),
-                                        ],
-                                        Text(
-                                          _formatMessageTime(msg.createdAt),
-                                          style: const TextStyle(
-                                            fontSize: 11,
-                                            color: Color(0xFF777C79),
-                                          ),
-                                        ),
-                                        if (mine) ...[
-                                          const SizedBox(width: 6),
-                                          _StatusTick(status: msg.status),
-                                        ],
-                                      ],
-                                    ),
+                                    if (msg.attachments.isNotEmpty || hasError)
+                                      metaFooter,
                                   ],
                                 ),
                               ),
@@ -1334,6 +1366,35 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _MessageMetaFooter extends StatelessWidget {
+  const _MessageMetaFooter({
+    required this.timeLabel,
+    required this.mine,
+    required this.status,
+  });
+
+  final String timeLabel;
+  final bool mine;
+  final ChatMessageStatus status;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          timeLabel,
+          style: const TextStyle(fontSize: 11, color: Color(0xFF777C79)),
+        ),
+        if (mine) ...[
+          const SizedBox(width: 6),
+          _StatusTick(status: status),
+        ],
+      ],
     );
   }
 }
@@ -2939,6 +3000,7 @@ class TurnaSocketClient extends ChangeNotifier {
   static const int _pageSize = 30;
   final List<ChatMessage> messages = [];
   final Map<String, Timer> _messageTimeouts = {};
+  final Map<String, ChatMessageStatus> _pendingStatusByMessageId = {};
   io.Socket? _socket;
   bool _historyLoadedFromSocket = false;
   bool _restoredPendingMessages = false;
@@ -2964,6 +3026,8 @@ class TurnaSocketClient extends ChangeNotifier {
       io.OptionBuilder()
           .setTransports(['websocket'])
           .setAuth({'token': token})
+          .enableForceNew()
+          .disableMultiplex()
           .disableAutoConnect()
           .build(),
     );
@@ -3019,7 +3083,9 @@ class TurnaSocketClient extends ChangeNotifier {
           ..clear()
           ..addAll(
             data.whereType<Map>().map(
-              (e) => ChatMessage.fromMap(Map<String, dynamic>.from(e)),
+              (e) => _applyPendingStatus(
+                ChatMessage.fromMap(Map<String, dynamic>.from(e)),
+              ),
             ),
           );
         _sortMessages();
@@ -3041,26 +3107,27 @@ class TurnaSocketClient extends ChangeNotifier {
       if (data is Map) {
         turnaLog('socket chat:message', data);
         final message = ChatMessage.fromMap(Map<String, dynamic>.from(data));
+        final resolvedMessage = _applyPendingStatus(message);
         final existingIndex = messages.indexWhere((m) => m.id == message.id);
         if (existingIndex >= 0) {
-          messages[existingIndex] = message;
+          messages[existingIndex] = resolvedMessage;
         } else {
           final index = messages.indexWhere(
             (m) =>
-                m.senderId == message.senderId &&
-                m.text == message.text &&
+                m.senderId == resolvedMessage.senderId &&
+                m.text == resolvedMessage.text &&
                 m.id.startsWith('local_'),
           );
           if (index >= 0) {
             _cancelMessageTimeout(messages[index].id);
-            messages[index] = message;
+            messages[index] = resolvedMessage;
           } else {
-            messages.add(message);
+            messages.add(resolvedMessage);
           }
         }
         _sortMessages();
         _persistPendingMessages();
-        if (message.senderId != senderId) {
+        if (resolvedMessage.senderId != senderId) {
           _markSeen();
         }
         notifyListeners();
@@ -3079,12 +3146,24 @@ class TurnaSocketClient extends ChangeNotifier {
         (payload['status'] ?? '').toString(),
       );
       var changed = false;
+      final unresolvedIds = <String>{};
       for (var i = 0; i < messages.length; i++) {
         final current = messages[i];
         if (!messageIds.contains(current.id)) continue;
-        if (current.status == status) continue;
-        messages[i] = current.copyWith(status: status);
+        final nextStatus = _pickHigherStatus(current.status, status);
+        if (current.status == nextStatus) continue;
+        messages[i] = current.copyWith(status: nextStatus);
         changed = true;
+      }
+      for (final messageId in messageIds) {
+        if (messages.any((message) => message.id == messageId)) continue;
+        unresolvedIds.add(messageId);
+      }
+      for (final messageId in unresolvedIds) {
+        _pendingStatusByMessageId[messageId] = _pickHigherStatus(
+          _pendingStatusByMessageId[messageId] ?? ChatMessageStatus.sent,
+          status,
+        );
       }
       if (changed) {
         turnaLog('socket chat:status', {
@@ -3120,7 +3199,7 @@ class TurnaSocketClient extends ChangeNotifier {
         byId[current.id] = current;
       }
       for (final serverMessage in page.items) {
-        byId[serverMessage.id] = serverMessage;
+        byId[serverMessage.id] = _applyPendingStatus(serverMessage);
       }
 
       final merged = byId.values.toList()
@@ -3170,7 +3249,7 @@ class TurnaSocketClient extends ChangeNotifier {
         byId[current.id] = current;
       }
       for (final serverMessage in page.items) {
-        byId[serverMessage.id] = serverMessage;
+        byId[serverMessage.id] = _applyPendingStatus(serverMessage);
       }
       final merged = byId.values.toList()
         ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
@@ -3195,15 +3274,31 @@ class TurnaSocketClient extends ChangeNotifier {
   }
 
   void mergeServerMessage(ChatMessage message) {
+    final resolvedMessage = _applyPendingStatus(message);
     final existingIndex = messages.indexWhere((item) => item.id == message.id);
     if (existingIndex >= 0) {
-      messages[existingIndex] = message;
+      messages[existingIndex] = resolvedMessage;
     } else {
-      messages.add(message);
+      messages.add(resolvedMessage);
     }
     _sortMessages();
     _persistPendingMessages();
     notifyListeners();
+  }
+
+  void refreshConnection() {
+    final socket = _socket;
+    if (socket == null) return;
+    turnaLog('socket refresh requested', {
+      'chatId': chatId,
+      'connected': socket.connected,
+    });
+    if (socket.connected) {
+      socket.emit('chat:join', {'chatId': chatId});
+      _syncMessagesFromHttp();
+      return;
+    }
+    socket.connect();
   }
 
   Future<void> send(String text) async {
@@ -3357,6 +3452,38 @@ class TurnaSocketClient extends ChangeNotifier {
     _messageTimeouts.remove(localId)?.cancel();
   }
 
+  ChatMessage _applyPendingStatus(ChatMessage message) {
+    final pendingStatus = _pendingStatusByMessageId.remove(message.id);
+    if (pendingStatus == null) return message;
+    final mergedStatus = _pickHigherStatus(message.status, pendingStatus);
+    if (mergedStatus == message.status) return message;
+    return message.copyWith(status: mergedStatus);
+  }
+
+  ChatMessageStatus _pickHigherStatus(
+    ChatMessageStatus current,
+    ChatMessageStatus incoming,
+  ) {
+    return _statusRank(incoming) > _statusRank(current) ? incoming : current;
+  }
+
+  int _statusRank(ChatMessageStatus status) {
+    switch (status) {
+      case ChatMessageStatus.sending:
+        return 0;
+      case ChatMessageStatus.queued:
+        return 1;
+      case ChatMessageStatus.failed:
+        return 2;
+      case ChatMessageStatus.sent:
+        return 3;
+      case ChatMessageStatus.delivered:
+        return 4;
+      case ChatMessageStatus.read:
+        return 5;
+    }
+  }
+
   void _sortMessages() {
     messages.sort((a, b) => a.createdAt.compareTo(b.createdAt));
   }
@@ -3379,6 +3506,7 @@ class PresenceSocketClient {
   final String token;
   final VoidCallback? onInboxUpdate;
   io.Socket? _socket;
+  Timer? _refreshDebounce;
 
   void connect() {
     _socket = io.io(
@@ -3386,6 +3514,8 @@ class PresenceSocketClient {
       io.OptionBuilder()
           .setTransports(['websocket'])
           .setAuth({'token': token})
+          .enableForceNew()
+          .disableMultiplex()
           .disableAutoConnect()
           .build(),
     );
@@ -3400,13 +3530,41 @@ class PresenceSocketClient {
 
     _socket!.on('chat:inbox:update', (_) {
       turnaLog('presence inbox:update received');
-      onInboxUpdate?.call();
+      _scheduleInboxRefresh();
+    });
+    _socket!.on('chat:message', (_) {
+      turnaLog('presence chat:message received');
+      _scheduleInboxRefresh();
+    });
+    _socket!.on('chat:status', (_) {
+      turnaLog('presence chat:status received');
+      _scheduleInboxRefresh();
     });
 
     _socket!.connect();
   }
 
+  void refreshConnection() {
+    final socket = _socket;
+    if (socket == null) return;
+    turnaLog('presence refresh requested', {'connected': socket.connected});
+    if (socket.connected) {
+      _scheduleInboxRefresh();
+      return;
+    }
+    socket.connect();
+    _scheduleInboxRefresh();
+  }
+
+  void _scheduleInboxRefresh() {
+    _refreshDebounce?.cancel();
+    _refreshDebounce = Timer(const Duration(milliseconds: 120), () {
+      onInboxUpdate?.call();
+    });
+  }
+
   void dispose() {
+    _refreshDebounce?.cancel();
     _socket?.dispose();
   }
 }
