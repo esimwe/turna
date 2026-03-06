@@ -4,6 +4,7 @@ import { env } from "../config/env.js";
 import { logError } from "./logger.js";
 import { prisma } from "./prisma.js";
 import type { ChatMessage } from "../modules/chat/chat.types.js";
+import type { AppCallType } from "../modules/calls/call.types.js";
 
 function hasFirebaseCredentials(): boolean {
   return Boolean(
@@ -153,5 +154,69 @@ export async function sendChatMessagePush(params: {
     }
   } catch (error) {
     logError("send chat push failed", error);
+  }
+}
+
+export async function sendIncomingCallPush(params: {
+  callId: string;
+  type: AppCallType;
+  callerDisplayName: string;
+  recipientUserIds: string[];
+}): Promise<void> {
+  if (!hasFirebaseCredentials() || params.recipientUserIds.length === 0) {
+    return;
+  }
+
+  const app = ensureFirebaseApp();
+  if (!app) return;
+
+  const devices = await prisma.deviceToken.findMany({
+    where: {
+      userId: { in: params.recipientUserIds },
+      isActive: true
+    },
+    select: {
+      id: true,
+      token: true
+    }
+  });
+  if (devices.length === 0) return;
+
+  try {
+    const response = await getMessaging(app).sendEachForMulticast({
+      tokens: devices.map((device) => device.token),
+      notification: {
+        title: params.callerDisplayName,
+        body: params.type === "audio" ? "Seni sesli ariyor" : "Seni goruntulu ariyor"
+      },
+      data: {
+        type: "incoming_call",
+        callId: params.callId,
+        callType: params.type
+      }
+    });
+
+    const invalidTokenIds = response.responses
+      .map((result, index) => ({
+        ok: result.success,
+        id: devices[index]?.id,
+        code: result.error?.code ?? ""
+      }))
+      .filter((result) =>
+        !result.ok &&
+        result.id &&
+        (result.code === "messaging/registration-token-not-registered" ||
+          result.code === "messaging/invalid-registration-token")
+      )
+      .map((result) => result.id!);
+
+    if (invalidTokenIds.length > 0) {
+      await prisma.deviceToken.updateMany({
+        where: { id: { in: invalidTokenIds } },
+        data: { isActive: false }
+      });
+    }
+  } catch (error) {
+    logError("send incoming call push failed", error);
   }
 }

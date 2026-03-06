@@ -12,12 +12,16 @@ export function userRoom(userId: string): string {
   return `user:${userId}`;
 }
 
-export function emitInboxUpdate(userIds: string[]): void {
+export function emitUserEvent<T>(userIds: string[], eventName: string, payload: T): void {
   if (!chatIo) return;
   const uniqueUserIds = Array.from(new Set(userIds));
   for (const userId of uniqueUserIds) {
-    chatIo.to(userRoom(userId)).emit("chat:inbox:update");
+    chatIo.to(userRoom(userId)).emit(eventName, payload);
   }
+}
+
+export function emitInboxUpdate(userIds: string[]): void {
+  emitUserEvent(userIds, "chat:inbox:update", undefined);
 }
 
 export function emitChatMessage(chatId: string, message: ChatMessage, participantIds: string[]): void {
@@ -51,9 +55,7 @@ export function emitChatStatus(params: {
   chatIo.to(params.chatId).emit("chat:status", payload);
 
   const userIds = params.userIds ?? params.participantIds ?? [];
-  for (const userId of userIds) {
-    chatIo.to(userRoom(userId)).emit("chat:status", payload);
-  }
+  emitUserEvent(userIds, "chat:status", payload);
 }
 
 export function logRealtimeUnavailable(context: string): void {

@@ -29,6 +29,24 @@ enum PushPlatform {
   ANDROID
 }
 
+enum CallType {
+  AUDIO
+  VIDEO
+}
+
+enum CallStatus {
+  RINGING
+  ACCEPTED
+  DECLINED
+  MISSED
+  ENDED
+  CANCELLED
+}
+
+enum CallProvider {
+  LIVEKIT
+}
+
 model User {
   id           String        @id @default(uuid())
   username     String?       @unique
@@ -43,6 +61,8 @@ model User {
   messages     Message[]
   memberships  ChatMember[]
   devices      DeviceToken[]
+  outgoingCalls Call[]       @relation("OutgoingCalls")
+  incomingCalls Call[]       @relation("IncomingCalls")
 }
 
 model Chat {
@@ -113,6 +133,40 @@ model DeviceToken {
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, isActive])
+}
+
+model Call {
+  id                String        @id @default(uuid())
+  callerId          String
+  calleeId          String
+  type              CallType
+  status            CallStatus    @default(RINGING)
+  provider          CallProvider  @default(LIVEKIT)
+  providerSessionId String?
+  roomName          String?
+  acceptedAt        DateTime?
+  endedAt           DateTime?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  caller            User          @relation("OutgoingCalls", fields: [callerId], references: [id], onDelete: Cascade)
+  callee            User          @relation("IncomingCalls", fields: [calleeId], references: [id], onDelete: Cascade)
+  events            CallEvent[]
+
+  @@index([callerId, createdAt(sort: Desc)])
+  @@index([calleeId, createdAt(sort: Desc)])
+  @@index([status, createdAt(sort: Desc)])
+}
+
+model CallEvent {
+  id          String   @id @default(uuid())
+  callId      String
+  actorUserId String?
+  type        String
+  payload     Json?
+  createdAt   DateTime @default(now())
+  call        Call     @relation(fields: [callId], references: [id], onDelete: Cascade)
+
+  @@index([callId, createdAt(sort: Asc)])
 }
 
 model OtpCode {

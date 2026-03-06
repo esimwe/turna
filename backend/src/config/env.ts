@@ -22,7 +22,11 @@ const resolvedEnv = {
   FIREBASE_PROJECT_ID: process.env.FIREBASE_PROJECT_ID,
   FIREBASE_CLIENT_EMAIL: process.env.FIREBASE_CLIENT_EMAIL,
   FIREBASE_PRIVATE_KEY: process.env.FIREBASE_PRIVATE_KEY,
-  FIREBASE_SERVICE_ACCOUNT_JSON: process.env.FIREBASE_SERVICE_ACCOUNT_JSON
+  FIREBASE_SERVICE_ACCOUNT_JSON: process.env.FIREBASE_SERVICE_ACCOUNT_JSON,
+  LIVEKIT_HOST: process.env.LIVEKIT_HOST,
+  LIVEKIT_WS_URL: process.env.LIVEKIT_WS_URL,
+  LIVEKIT_API_KEY: process.env.LIVEKIT_API_KEY,
+  LIVEKIT_API_SECRET: process.env.LIVEKIT_API_SECRET
 };
 
 const envSchema = z.object({
@@ -40,7 +44,11 @@ const envSchema = z.object({
   FIREBASE_PROJECT_ID: z.string().min(1).optional(),
   FIREBASE_CLIENT_EMAIL: z.string().min(1).optional(),
   FIREBASE_PRIVATE_KEY: z.string().min(1).optional(),
-  FIREBASE_SERVICE_ACCOUNT_JSON: z.string().min(1).optional()
+  FIREBASE_SERVICE_ACCOUNT_JSON: z.string().min(1).optional(),
+  LIVEKIT_HOST: z.string().url().optional(),
+  LIVEKIT_WS_URL: z.string().url().optional(),
+  LIVEKIT_API_KEY: z.string().min(1).optional(),
+  LIVEKIT_API_SECRET: z.string().min(1).optional()
 });
 
 export const env = envSchema.parse(resolvedEnv);
