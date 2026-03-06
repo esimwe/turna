@@ -35,6 +35,10 @@
 	</dict>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Profil fotoğrafı seçebilmek için galeri erişimi gerekiyor.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Fotograf ve video cekebilmek icin kamera erisimi gerekiyor.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Video cekerken ses kaydi icin mikrofon erisimi gerekiyor.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
