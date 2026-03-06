@@ -1,10 +1,17 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
+import 'package:firebase_analytics/firebase_analytics.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
+import 'package:url_launcher/url_launcher.dart';
 
 const String kBackendBaseUrl = 'http://178.104.8.155:4000';
 const bool kTurnaDebugLogs = true;
@@ -18,8 +25,15 @@ void turnaLog(String message, [Object? data]) {
   debugPrint('[turna-mobile] $message');
 }
 
+@pragma('vm:entry-point')
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  await TurnaFirebase.ensureInitialized();
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await TurnaFirebase.ensureInitialized();
+  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
   final session = await AuthSession.load();
   runApp(TurnaApp(initialSession: session));
 }
@@ -307,12 +321,25 @@ class _MainTabsState extends State<MainTabs> {
   @override
   void initState() {
     super.initState();
+    TurnaPushManager.syncSession(widget.session);
+    TurnaAnalytics.logEvent('app_session_started', {
+      'user_id': widget.session.userId,
+    });
     _presenceClient = PresenceSocketClient(
       token: widget.session.token,
       onInboxUpdate: () {
         _inboxUpdateNotifier.value++;
       },
     )..connect();
+  }
+
+  @override
+  void didUpdateWidget(covariant MainTabs oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.session.token != widget.session.token ||
+        oldWidget.session.userId != widget.session.userId) {
+      TurnaPushManager.syncSession(widget.session);
+    }
   }
 
   @override
@@ -328,6 +355,7 @@ class _MainTabsState extends State<MainTabs> {
       ChatsPage(
         session: widget.session,
         inboxUpdateNotifier: _inboxUpdateNotifier,
+        onSessionExpired: widget.onLogout,
       ),
       const PlaceholderPage(title: 'Updates'),
       const PlaceholderPage(title: 'Calls'),
@@ -364,9 +392,15 @@ class _MainTabsState extends State<MainTabs> {
 }
 
 class ChatsPage extends StatefulWidget {
-  const ChatsPage({super.key, required this.session, this.inboxUpdateNotifier});
+  const ChatsPage({
+    super.key,
+    required this.session,
+    required this.onSessionExpired,
+    this.inboxUpdateNotifier,
+  });
 
   final AuthSession session;
+  final VoidCallback onSessionExpired;
   final ValueNotifier<int>? inboxUpdateNotifier;
 
   @override
@@ -375,11 +409,13 @@ class ChatsPage extends StatefulWidget {
 
 class _ChatsPageState extends State<ChatsPage> {
   int _refreshTick = 0;
+  final TextEditingController _searchController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     widget.inboxUpdateNotifier?.addListener(_onInboxUpdate);
+    _searchController.addListener(_onSearchChanged);
   }
 
   void _onInboxUpdate() {
@@ -387,9 +423,16 @@ class _ChatsPageState extends State<ChatsPage> {
     setState(() => _refreshTick++);
   }
 
+  void _onSearchChanged() {
+    if (!mounted) return;
+    setState(() {});
+  }
+
   @override
   void dispose() {
     widget.inboxUpdateNotifier?.removeListener(_onInboxUpdate);
+    _searchController.removeListener(_onSearchChanged);
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -420,102 +463,150 @@ class _ChatsPageState extends State<ChatsPage> {
             return const Center(child: CircularProgressIndicator());
           }
 
+          if (snapshot.hasError) {
+            final error = snapshot.error;
+            final isAuthError = error is TurnaUnauthorizedException;
+            return _CenteredState(
+              icon: isAuthError ? Icons.lock_outline : Icons.cloud_off_outlined,
+              title: isAuthError
+                  ? 'Oturumun suresi doldu'
+                  : 'Sohbetler yuklenemedi',
+              message: error.toString(),
+              primaryLabel: isAuthError ? 'Yeniden giris yap' : 'Tekrar dene',
+              onPrimary: isAuthError
+                  ? widget.onSessionExpired
+                  : () => setState(() => _refreshTick++),
+            );
+          }
+
           final chats = snapshot.data ?? [];
-          return ListView.builder(
-            itemCount: chats.isEmpty ? 2 : chats.length + 1,
-            itemBuilder: (context, index) {
-              if (index == 0) {
-                return Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
-                  child: TextField(
-                    readOnly: true,
-                    decoration: InputDecoration(
-                      hintText: 'Sohbetlerde ara',
-                      prefixIcon: const Icon(Icons.search),
-                      filled: true,
-                      fillColor: const Color(0xFFEFF1EE),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(24),
-                        borderSide: BorderSide.none,
-                      ),
-                    ),
-                  ),
-                );
-              }
+          final query = _searchController.text.trim().toLowerCase();
+          final filteredChats = chats.where((chat) {
+            if (query.isEmpty) return true;
+            return chat.name.toLowerCase().contains(query) ||
+                chat.message.toLowerCase().contains(query);
+          }).toList();
 
-              if (chats.isEmpty) {
-                return const Padding(
-                  padding: EdgeInsets.all(24),
-                  child: Text(
-                    'Henüz sohbet yok. Başlatmak için başka bir kullanıcıyla giriş yap.',
-                  ),
-                );
-              }
-
-              final chat = chats[index - 1];
-              return ListTile(
-                leading: _ProfileAvatar(
-                  label: chat.name,
-                  avatarUrl: chat.avatarUrl,
-                  authToken: widget.session.token,
-                  radius: 22,
-                ),
-                title: Text(
-                  chat.name,
-                  style: const TextStyle(fontWeight: FontWeight.w600),
-                ),
-                subtitle: Text(
-                  chat.message,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                trailing: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Text(
-                      chat.time,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: Color(0xFF777C79),
-                      ),
-                    ),
-                    if (chat.unreadCount > 0) ...[
-                      const SizedBox(height: 6),
-                      Container(
-                        constraints: const BoxConstraints(minWidth: 20),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 2,
-                        ),
-                        decoration: const BoxDecoration(
-                          color: Color(0xFF1FAA59),
-                          borderRadius: BorderRadius.all(Radius.circular(999)),
-                        ),
-                        child: Text(
-                          chat.unreadCount > 99 ? '99+' : '${chat.unreadCount}',
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w700,
-                          ),
+          return RefreshIndicator(
+            onRefresh: () async => setState(() => _refreshTick++),
+            child: ListView.builder(
+              physics: const AlwaysScrollableScrollPhysics(),
+              itemCount: filteredChats.isEmpty ? 2 : filteredChats.length + 1,
+              itemBuilder: (context, index) {
+                if (index == 0) {
+                  return Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
+                    child: TextField(
+                      controller: _searchController,
+                      decoration: InputDecoration(
+                        hintText: 'Sohbetlerde ara',
+                        prefixIcon: const Icon(Icons.search),
+                        suffixIcon: query.isEmpty
+                            ? null
+                            : IconButton(
+                                onPressed: () => _searchController.clear(),
+                                icon: const Icon(Icons.close),
+                              ),
+                        filled: true,
+                        fillColor: const Color(0xFFEFF1EE),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(24),
+                          borderSide: BorderSide.none,
                         ),
                       ),
-                    ],
-                  ],
-                ),
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) =>
-                          ChatRoomPage(chat: chat, session: widget.session),
                     ),
                   );
-                },
-              );
-            },
+                }
+
+                if (filteredChats.isEmpty) {
+                  if (chats.isEmpty) {
+                    return const _CenteredListState(
+                      icon: Icons.chat_bubble_outline,
+                      title: 'Henuz sohbet yok',
+                      message:
+                          'Ilk konusmayi baslatmak icin sag alttaki butondan kisi sec.',
+                    );
+                  }
+                  return _CenteredListState(
+                    icon: Icons.search_off,
+                    title: 'Sonuc bulunamadi',
+                    message:
+                        '"${_searchController.text.trim()}" icin eslesen sohbet yok.',
+                  );
+                }
+
+                final chat = filteredChats[index - 1];
+                return ListTile(
+                  leading: _ProfileAvatar(
+                    label: chat.name,
+                    avatarUrl: chat.avatarUrl,
+                    authToken: widget.session.token,
+                    radius: 22,
+                  ),
+                  title: Text(
+                    chat.name,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: Text(
+                    chat.message,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  trailing: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(
+                        chat.time,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFF777C79),
+                        ),
+                      ),
+                      if (chat.unreadCount > 0) ...[
+                        const SizedBox(height: 6),
+                        Container(
+                          constraints: const BoxConstraints(minWidth: 20),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
+                          decoration: const BoxDecoration(
+                            color: Color(0xFF1FAA59),
+                            borderRadius: BorderRadius.all(
+                              Radius.circular(999),
+                            ),
+                          ),
+                          child: Text(
+                            chat.unreadCount > 99
+                                ? '99+'
+                                : '${chat.unreadCount}',
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => ChatRoomPage(
+                          chat: chat,
+                          session: widget.session,
+                          onSessionExpired: widget.onSessionExpired,
+                        ),
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
           );
         },
       ),
@@ -526,7 +617,10 @@ class _ChatsPageState extends State<ChatsPage> {
           final created = await Navigator.push<bool>(
             context,
             MaterialPageRoute(
-              builder: (_) => NewChatPage(session: widget.session),
+              builder: (_) => NewChatPage(
+                session: widget.session,
+                onSessionExpired: widget.onSessionExpired,
+              ),
             ),
           );
           if (created == true && mounted) {
@@ -540,10 +634,16 @@ class _ChatsPageState extends State<ChatsPage> {
 }
 
 class ChatRoomPage extends StatefulWidget {
-  const ChatRoomPage({super.key, required this.chat, required this.session});
+  const ChatRoomPage({
+    super.key,
+    required this.chat,
+    required this.session,
+    required this.onSessionExpired,
+  });
 
   final ChatPreview chat;
   final AuthSession session;
+  final VoidCallback onSessionExpired;
 
   @override
   State<ChatRoomPage> createState() => _ChatRoomPageState();
@@ -552,6 +652,14 @@ class ChatRoomPage extends StatefulWidget {
 class _ChatRoomPageState extends State<ChatRoomPage> {
   late final TurnaSocketClient _client;
   final TextEditingController _controller = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
+  final ImagePicker _mediaPicker = ImagePicker();
+  bool _showScrollToBottom = false;
+  bool _attachmentBusy = false;
+  int _lastRenderedMessageCount = 0;
+
+  String? get _peerUserId =>
+      ChatApi.extractPeerUserId(widget.chat.chatId, widget.session.userId);
 
   @override
   void initState() {
@@ -560,17 +668,370 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
       'chatId': widget.chat.chatId,
       'senderId': widget.session.userId,
     });
+    TurnaAnalytics.logEvent('chat_opened', {'chat_id': widget.chat.chatId});
     _client = TurnaSocketClient(
       chatId: widget.chat.chatId,
       senderId: widget.session.userId,
       token: widget.session.token,
+      onSessionExpired: widget.onSessionExpired,
     )..connect();
     _client.addListener(_refresh);
+    _scrollController.addListener(_handleScroll);
   }
 
   void _refresh() {
+    final shouldSnapToBottom =
+        !_scrollController.hasClients || _scrollController.offset < 120;
     if (mounted) {
       setState(() {});
+    }
+    if (_client.messages.length != _lastRenderedMessageCount) {
+      _lastRenderedMessageCount = _client.messages.length;
+      if (shouldSnapToBottom) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
+      }
+    }
+  }
+
+  Future<void> _openPeerProfile() async {
+    final peerUserId = _peerUserId;
+    if (peerUserId == null) return;
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => UserProfilePage(
+          session: widget.session,
+          userId: peerUserId,
+          fallbackName: widget.chat.name,
+          fallbackAvatarUrl: widget.chat.avatarUrl,
+        ),
+      ),
+    );
+  }
+
+  void _handleScroll() {
+    if (!_scrollController.hasClients) return;
+    final shouldShow = _scrollController.offset > 180;
+    if (shouldShow != _showScrollToBottom && mounted) {
+      setState(() => _showScrollToBottom = shouldShow);
+    }
+
+    final position = _scrollController.position;
+    if (position.maxScrollExtent - position.pixels < 220) {
+      _client.loadOlderMessages();
+    }
+  }
+
+  void _jumpToBottom() {
+    if (!_scrollController.hasClients) return;
+    _scrollController.animateTo(
+      0,
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOut,
+    );
+  }
+
+  String _formatMessageTime(String iso) {
+    final dt = DateTime.tryParse(iso);
+    if (dt == null) return '';
+    final hh = dt.hour.toString().padLeft(2, '0');
+    final mm = dt.minute.toString().padLeft(2, '0');
+    return '$hh:$mm';
+  }
+
+  String _formatDayLabel(String iso) {
+    final dt = DateTime.tryParse(iso);
+    if (dt == null) return '';
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final messageDay = DateTime(dt.year, dt.month, dt.day);
+    final diffDays = today.difference(messageDay).inDays;
+    if (diffDays == 0) return 'Bugun';
+    if (diffDays == 1) return 'Dun';
+    final dd = dt.day.toString().padLeft(2, '0');
+    final mm = dt.month.toString().padLeft(2, '0');
+    return '$dd.$mm.${dt.year}';
+  }
+
+  bool _shouldShowDayChip(List<ChatMessage> displayMessages, int index) {
+    if (index == displayMessages.length - 1) return true;
+    final current = DateTime.tryParse(displayMessages[index].createdAt);
+    final older = DateTime.tryParse(displayMessages[index + 1].createdAt);
+    if (current == null || older == null) return false;
+    return current.year != older.year ||
+        current.month != older.month ||
+        current.day != older.day;
+  }
+
+  String? _guessContentType(String fileName) {
+    final lower = fileName.toLowerCase();
+    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+    if (lower.endsWith('.png')) return 'image/png';
+    if (lower.endsWith('.webp')) return 'image/webp';
+    if (lower.endsWith('.gif')) return 'image/gif';
+    if (lower.endsWith('.heic')) return 'image/heic';
+    if (lower.endsWith('.heif')) return 'image/heif';
+    if (lower.endsWith('.mp4')) return 'video/mp4';
+    if (lower.endsWith('.mov')) return 'video/quicktime';
+    if (lower.endsWith('.m4v')) return 'video/x-m4v';
+    if (lower.endsWith('.webm')) return 'video/webm';
+    if (lower.endsWith('.pdf')) return 'application/pdf';
+    if (lower.endsWith('.txt')) return 'text/plain';
+    if (lower.endsWith('.doc')) return 'application/msword';
+    if (lower.endsWith('.docx')) {
+      return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    }
+    if (lower.endsWith('.xls')) return 'application/vnd.ms-excel';
+    if (lower.endsWith('.xlsx')) {
+      return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    }
+    if (lower.endsWith('.zip')) return 'application/zip';
+    return 'application/octet-stream';
+  }
+
+  String _formatFileSize(int bytes) {
+    if (bytes <= 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    var value = bytes.toDouble();
+    var unitIndex = 0;
+    while (value >= 1024 && unitIndex < units.length - 1) {
+      value /= 1024;
+      unitIndex++;
+    }
+    final display = value >= 10 || unitIndex == 0
+        ? value.toStringAsFixed(0)
+        : value.toStringAsFixed(1);
+    return '$display ${units[unitIndex]}';
+  }
+
+  Future<void> _sendPickedAttachment({
+    required ChatAttachmentKind kind,
+    required String fileName,
+    required String contentType,
+    required Future<List<int>> Function() readBytes,
+    int? sizeBytes,
+  }) async {
+    setState(() => _attachmentBusy = true);
+
+    try {
+      final upload = await ChatApi.createAttachmentUpload(
+        widget.session,
+        chatId: widget.chat.chatId,
+        kind: kind,
+        contentType: contentType,
+        fileName: fileName,
+      );
+
+      final bytes = await readBytes();
+      final uploadRes = await http.put(
+        Uri.parse(upload.uploadUrl),
+        headers: upload.headers,
+        body: bytes,
+      );
+      if (uploadRes.statusCode >= 400) {
+        throw TurnaApiException('Dosya yuklenemedi.');
+      }
+
+      final message = await ChatApi.sendMessage(
+        widget.session,
+        chatId: widget.chat.chatId,
+        text: _controller.text.trim().isEmpty ? null : _controller.text.trim(),
+        attachments: [
+          OutgoingAttachmentDraft(
+            objectKey: upload.objectKey,
+            kind: kind,
+            fileName: fileName,
+            contentType: contentType,
+            sizeBytes: sizeBytes ?? bytes.length,
+          ),
+        ],
+      );
+
+      if (!mounted) return;
+      _client.mergeServerMessage(message);
+      _controller.clear();
+      _jumpToBottom();
+      await TurnaAnalytics.logEvent('attachment_sent', {
+        'chat_id': widget.chat.chatId,
+        'kind': kind.name,
+      });
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    } finally {
+      if (mounted) {
+        setState(() => _attachmentBusy = false);
+      }
+    }
+  }
+
+  Future<void> _pickImage(ImageSource source) async {
+    final file = await _mediaPicker.pickImage(
+      source: source,
+      imageQuality: 90,
+      maxWidth: 1800,
+    );
+    if (file == null) return;
+
+    final contentType = _guessContentType(file.name);
+    if (contentType == null || !contentType.startsWith('image/')) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Desteklenmeyen gorsel formati.')),
+      );
+      return;
+    }
+
+    await _sendPickedAttachment(
+      kind: ChatAttachmentKind.image,
+      fileName: file.name,
+      contentType: contentType,
+      readBytes: file.readAsBytes,
+      sizeBytes: await file.length(),
+    );
+  }
+
+  Future<void> _pickVideo(ImageSource source) async {
+    final file = await _mediaPicker.pickVideo(source: source);
+    if (file == null) return;
+
+    final contentType = _guessContentType(file.name);
+    if (contentType == null || !contentType.startsWith('video/')) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Desteklenmeyen video formati.')),
+      );
+      return;
+    }
+
+    await _sendPickedAttachment(
+      kind: ChatAttachmentKind.video,
+      fileName: file.name,
+      contentType: contentType,
+      readBytes: file.readAsBytes,
+      sizeBytes: await file.length(),
+    );
+  }
+
+  Future<void> _pickFile() async {
+    final result = await FilePicker.platform.pickFiles();
+    if (result == null || result.files.isEmpty) return;
+
+    final file = result.files.single;
+    final filePath = file.path;
+    if (filePath == null || filePath.trim().isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Secilen dosya okunamadi.')));
+      return;
+    }
+
+    final fileName = file.name.trim().isEmpty
+        ? filePath.split('/').last
+        : file.name.trim();
+    await _sendPickedAttachment(
+      kind: ChatAttachmentKind.file,
+      fileName: fileName,
+      contentType: _guessContentType(fileName) ?? 'application/octet-stream',
+      readBytes: () => File(filePath).readAsBytes(),
+      sizeBytes: file.size,
+    );
+  }
+
+  Future<void> _showAttachmentSheet() async {
+    if (_attachmentBusy) return;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.photo_library_outlined),
+                title: const Text('Galeriden foto'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _pickImage(ImageSource.gallery);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_camera_outlined),
+                title: const Text('Kameradan foto'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _pickImage(ImageSource.camera);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.video_library_outlined),
+                title: const Text('Galeriden video'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _pickVideo(ImageSource.gallery);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.videocam_outlined),
+                title: const Text('Kameradan video'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _pickVideo(ImageSource.camera);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.attach_file_outlined),
+                title: const Text('Dosya sec'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _pickFile();
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _openAttachment(ChatAttachment attachment) async {
+    final url = attachment.url?.trim() ?? '';
+    if (url.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Dosya linki hazir degil.')));
+      return;
+    }
+
+    if (attachment.kind == ChatAttachmentKind.image) {
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => ChatAttachmentViewerPage(
+            imageUrl: url,
+            title: attachment.fileName ?? 'Gorsel',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final opened = await launchUrl(
+      Uri.parse(url),
+      mode: LaunchMode.externalApplication,
+    );
+    if (!opened && mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Dosya acilamadi.')));
     }
   }
 
@@ -580,64 +1041,241 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
     _client.removeListener(_refresh);
     _client.dispose();
     _controller.dispose();
+    _scrollController.removeListener(_handleScroll);
+    _scrollController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    final displayMessages = _client.messages.reversed.toList();
+
     return Scaffold(
       appBar: AppBar(
-        title: Row(
-          children: [
-            _ProfileAvatar(
-              label: widget.chat.name,
-              avatarUrl: widget.chat.avatarUrl,
-              authToken: widget.session.token,
-              radius: 18,
-            ),
-            const SizedBox(width: 10),
-            Expanded(child: Text(widget.chat.name)),
-          ],
+        title: GestureDetector(
+          onTap: _peerUserId == null ? null : _openPeerProfile,
+          child: Row(
+            children: [
+              _ProfileAvatar(
+                label: widget.chat.name,
+                avatarUrl: widget.chat.avatarUrl,
+                authToken: widget.session.token,
+                radius: 18,
+              ),
+              const SizedBox(width: 10),
+              Expanded(child: Text(widget.chat.name)),
+            ],
+          ),
         ),
       ),
       body: Column(
         children: [
+          if (_client.error != null)
+            Container(
+              width: double.infinity,
+              color: const Color(0xFFFFF1E6),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              child: Text(
+                _client.error!,
+                style: const TextStyle(color: Color(0xFF7A4B00)),
+              ),
+            ),
+          if (!_client.isConnected)
+            Container(
+              width: double.infinity,
+              color: const Color(0xFFEAF2FF),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              child: const Text(
+                'Canli baglanti yok. Yazdiklarin siraya alinip tekrar denenecek.',
+                style: TextStyle(color: Color(0xFF234B8F)),
+              ),
+            ),
+          if (_attachmentBusy)
+            Container(
+              width: double.infinity,
+              color: const Color(0xFFEAF6EE),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              child: const Text(
+                'Medya yukleniyor. Mesaj hazirlaniyor...',
+                style: TextStyle(color: Color(0xFF1E6B3C)),
+              ),
+            ),
           Expanded(
-            child: ListView.builder(
-              reverse: true,
-              padding: const EdgeInsets.all(12),
-              itemCount: _client.messages.length,
-              itemBuilder: (context, index) {
-                final msg =
-                    _client.messages[_client.messages.length - 1 - index];
-                final mine = msg.senderId == widget.session.userId;
-                return Align(
-                  alignment: mine
-                      ? Alignment.centerRight
-                      : Alignment.centerLeft,
-                  child: Container(
-                    margin: const EdgeInsets.symmetric(vertical: 4),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 10,
-                    ),
-                    decoration: BoxDecoration(
-                      color: mine ? const Color(0xFFDCF5E7) : Colors.white,
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Flexible(child: Text(msg.text)),
-                        if (mine) ...[
-                          const SizedBox(width: 6),
-                          _StatusTick(status: msg.status),
+            child: Stack(
+              children: [
+                if (_client.loadingInitial && displayMessages.isEmpty)
+                  const Center(child: CircularProgressIndicator())
+                else if (displayMessages.isEmpty)
+                  const _CenteredState(
+                    icon: Icons.chat_bubble_outline,
+                    title: 'Henuz mesaj yok',
+                    message: 'Ilk mesaji gondererek sohbeti baslat.',
+                  )
+                else
+                  ListView.builder(
+                    controller: _scrollController,
+                    reverse: true,
+                    padding: const EdgeInsets.all(12),
+                    itemCount: displayMessages.length + 1,
+                    itemBuilder: (context, index) {
+                      if (index == displayMessages.length) {
+                        if (_client.loadingMore) {
+                          return const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 12),
+                            child: Center(child: CircularProgressIndicator()),
+                          );
+                        }
+                        if (_client.hasMore) {
+                          return const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 12),
+                            child: Center(
+                              child: Text(
+                                'Eski mesajlar yukleniyor...',
+                                style: TextStyle(color: Color(0xFF777C79)),
+                              ),
+                            ),
+                          );
+                        }
+                        return const SizedBox(height: 24);
+                      }
+
+                      final msg = displayMessages[index];
+                      final mine = msg.senderId == widget.session.userId;
+                      return Column(
+                        children: [
+                          if (_shouldShowDayChip(displayMessages, index))
+                            Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 10),
+                              child: DecoratedBox(
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFE8ECE8),
+                                  borderRadius: BorderRadius.circular(999),
+                                ),
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 6,
+                                  ),
+                                  child: Text(
+                                    _formatDayLabel(msg.createdAt),
+                                    style: const TextStyle(
+                                      color: Color(0xFF5C625F),
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          Align(
+                            alignment: mine
+                                ? Alignment.centerRight
+                                : Alignment.centerLeft,
+                            child: GestureDetector(
+                              onTap:
+                                  mine &&
+                                      (msg.status == ChatMessageStatus.failed ||
+                                          msg.status ==
+                                              ChatMessageStatus.queued)
+                                  ? () => _client.retryMessage(msg)
+                                  : null,
+                              child: Container(
+                                constraints: const BoxConstraints(
+                                  maxWidth: 320,
+                                ),
+                                margin: const EdgeInsets.symmetric(vertical: 4),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 10,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: mine
+                                      ? const Color(0xFFDCF5E7)
+                                      : Colors.white,
+                                  borderRadius: BorderRadius.circular(14),
+                                  border: msg.status == ChatMessageStatus.failed
+                                      ? Border.all(color: Colors.red.shade200)
+                                      : null,
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.end,
+                                  children: [
+                                    if (msg.text.trim().isNotEmpty)
+                                      Align(
+                                        alignment: Alignment.centerLeft,
+                                        child: Text(msg.text),
+                                      ),
+                                    if (msg.text.trim().isNotEmpty &&
+                                        msg.attachments.isNotEmpty)
+                                      const SizedBox(height: 10),
+                                    if (msg.attachments.isNotEmpty) ...[
+                                      Align(
+                                        alignment: Alignment.centerLeft,
+                                        child: _ChatAttachmentList(
+                                          attachments: msg.attachments,
+                                          onTap: _openAttachment,
+                                          formatFileSize: _formatFileSize,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 8),
+                                    ],
+                                    Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        if (msg.errorText != null &&
+                                            msg.errorText!
+                                                .trim()
+                                                .isNotEmpty) ...[
+                                          Flexible(
+                                            child: Text(
+                                              msg.errorText!,
+                                              textAlign: TextAlign.right,
+                                              style: TextStyle(
+                                                fontSize: 11,
+                                                color:
+                                                    msg.status ==
+                                                        ChatMessageStatus.failed
+                                                    ? Colors.red.shade600
+                                                    : const Color(0xFF777C79),
+                                              ),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 6),
+                                        ],
+                                        Text(
+                                          _formatMessageTime(msg.createdAt),
+                                          style: const TextStyle(
+                                            fontSize: 11,
+                                            color: Color(0xFF777C79),
+                                          ),
+                                        ),
+                                        if (mine) ...[
+                                          const SizedBox(width: 6),
+                                          _StatusTick(status: msg.status),
+                                        ],
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
                         ],
-                      ],
+                      );
+                    },
+                  ),
+                if (_showScrollToBottom)
+                  Positioned(
+                    right: 16,
+                    bottom: 16,
+                    child: FloatingActionButton.small(
+                      backgroundColor: Colors.white,
+                      foregroundColor: const Color(0xFF1FAA59),
+                      onPressed: _jumpToBottom,
+                      child: const Icon(Icons.keyboard_arrow_down),
                     ),
                   ),
-                );
-              },
+              ],
             ),
           ),
           SafeArea(
@@ -646,9 +1284,21 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
               padding: const EdgeInsets.fromLTRB(10, 6, 10, 8),
               child: Row(
                 children: [
+                  IconButton(
+                    onPressed: _attachmentBusy ? null : _showAttachmentSheet,
+                    icon: _attachmentBusy
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.attach_file_outlined),
+                  ),
                   Expanded(
                     child: TextField(
                       controller: _controller,
+                      minLines: 1,
+                      maxLines: 5,
                       decoration: InputDecoration(
                         hintText: 'Mesaj',
                         filled: true,
@@ -663,12 +1313,19 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
                   const SizedBox(width: 8),
                   FloatingActionButton.small(
                     backgroundColor: const Color(0xFF1FAA59),
-                    onPressed: () {
-                      final text = _controller.text.trim();
-                      if (text.isEmpty) return;
-                      _client.send(text);
-                      _controller.clear();
-                    },
+                    onPressed: _attachmentBusy
+                        ? null
+                        : () {
+                            final text = _controller.text.trim();
+                            if (text.isEmpty) return;
+                            _client.send(text);
+                            TurnaAnalytics.logEvent('message_sent', {
+                              'chat_id': widget.chat.chatId,
+                              'kind': 'text',
+                            });
+                            _controller.clear();
+                            _jumpToBottom();
+                          },
                     child: const Icon(Icons.send, color: Colors.white),
                   ),
                 ],
@@ -691,7 +1348,14 @@ class _StatusTick extends StatelessWidget {
     IconData icon = Icons.done;
     Color color = const Color(0xFF7D8380);
 
-    if (status == ChatMessageStatus.delivered) {
+    if (status == ChatMessageStatus.sending) {
+      icon = Icons.schedule;
+    } else if (status == ChatMessageStatus.queued) {
+      icon = Icons.cloud_off_outlined;
+    } else if (status == ChatMessageStatus.failed) {
+      icon = Icons.error_outline;
+      color = Colors.red.shade400;
+    } else if (status == ChatMessageStatus.delivered) {
       icon = Icons.done_all;
     } else if (status == ChatMessageStatus.read) {
       icon = Icons.done_all;
@@ -702,10 +1366,161 @@ class _StatusTick extends StatelessWidget {
   }
 }
 
+class _ChatAttachmentList extends StatelessWidget {
+  const _ChatAttachmentList({
+    required this.attachments,
+    required this.onTap,
+    required this.formatFileSize,
+  });
+
+  final List<ChatAttachment> attachments;
+  final Future<void> Function(ChatAttachment attachment) onTap;
+  final String Function(int bytes) formatFileSize;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: attachments.map((attachment) {
+        if (attachment.kind == ChatAttachmentKind.image) {
+          final imageUrl = attachment.url?.trim() ?? '';
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(14),
+              onTap: () => onTap(attachment),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(14),
+                child: Container(
+                  width: 220,
+                  height: 220,
+                  color: const Color(0xFFE8ECE8),
+                  child: imageUrl.isEmpty
+                      ? const Center(
+                          child: Icon(Icons.image_not_supported_outlined),
+                        )
+                      : Image.network(
+                          imageUrl,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, _, _) => const Center(
+                            child: Icon(Icons.broken_image_outlined),
+                          ),
+                        ),
+                ),
+              ),
+            ),
+          );
+        }
+
+        final isVideo = attachment.kind == ChatAttachmentKind.video;
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: InkWell(
+            onTap: () => onTap(attachment),
+            borderRadius: BorderRadius.circular(14),
+            child: Container(
+              width: 220,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF3F5F3),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 42,
+                    height: 42,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(
+                      isVideo
+                          ? Icons.play_circle_outline
+                          : Icons.insert_drive_file_outlined,
+                      color: const Color(0xFF1FAA59),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          attachment.fileName ?? (isVideo ? 'Video' : 'Dosya'),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '${isVideo ? 'Video' : 'Dosya'} • ${formatFileSize(attachment.sizeBytes)}',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Color(0xFF777C79),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+}
+
+class ChatAttachmentViewerPage extends StatelessWidget {
+  const ChatAttachmentViewerPage({
+    super.key,
+    required this.imageUrl,
+    required this.title,
+  });
+
+  final String imageUrl;
+  final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+        title: Text(title),
+      ),
+      body: InteractiveViewer(
+        minScale: 0.8,
+        maxScale: 4,
+        child: Center(
+          child: Image.network(
+            imageUrl,
+            fit: BoxFit.contain,
+            errorBuilder: (_, _, _) => const Padding(
+              padding: EdgeInsets.all(24),
+              child: Text(
+                'Gorsel yuklenemedi.',
+                style: TextStyle(color: Colors.white),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class NewChatPage extends StatefulWidget {
-  const NewChatPage({super.key, required this.session});
+  const NewChatPage({
+    super.key,
+    required this.session,
+    required this.onSessionExpired,
+  });
 
   final AuthSession session;
+  final VoidCallback onSessionExpired;
 
   @override
   State<NewChatPage> createState() => _NewChatPageState();
@@ -715,6 +1530,7 @@ class _NewChatPageState extends State<NewChatPage> {
   final TextEditingController _searchController = TextEditingController();
   List<ChatUser> _users = const [];
   bool _loading = true;
+  String? _error;
 
   @override
   void initState() {
@@ -730,12 +1546,25 @@ class _NewChatPageState extends State<NewChatPage> {
   }
 
   Future<void> _loadDirectory() async {
-    final users = await ChatApi.fetchDirectory(widget.session);
-    if (!mounted) return;
     setState(() {
-      _users = users;
-      _loading = false;
+      _loading = true;
+      _error = null;
     });
+
+    try {
+      final users = await ChatApi.fetchDirectory(widget.session);
+      if (!mounted) return;
+      setState(() {
+        _users = users;
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = error.toString();
+      });
+    }
   }
 
   @override
@@ -756,8 +1585,14 @@ class _NewChatPageState extends State<NewChatPage> {
             child: TextField(
               controller: _searchController,
               decoration: InputDecoration(
-                hintText: 'Username veya isim ara',
+                hintText: 'Isim veya kullanici ID ara',
                 prefixIcon: const Icon(Icons.search),
+                suffixIcon: q.isEmpty
+                    ? null
+                    : IconButton(
+                        onPressed: () => _searchController.clear(),
+                        icon: const Icon(Icons.close),
+                      ),
                 filled: true,
                 fillColor: const Color(0xFFEFF1EE),
                 border: OutlineInputBorder(
@@ -770,6 +1605,38 @@ class _NewChatPageState extends State<NewChatPage> {
           Expanded(
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
+                : _error != null
+                ? _CenteredState(
+                    icon: _error!.contains('Oturum')
+                        ? Icons.lock_outline
+                        : Icons.person_search_outlined,
+                    title: _error!.contains('Oturum')
+                        ? 'Oturumun suresi doldu'
+                        : 'Kisi listesi yuklenemedi',
+                    message: _error!,
+                    primaryLabel: _error!.contains('Oturum')
+                        ? 'Yeniden giris yap'
+                        : 'Tekrar dene',
+                    onPrimary: _error!.contains('Oturum')
+                        ? widget.onSessionExpired
+                        : _loadDirectory,
+                  )
+                : filtered.isEmpty
+                ? _CenteredState(
+                    icon: _users.isEmpty
+                        ? Icons.group_outlined
+                        : Icons.search_off,
+                    title: _users.isEmpty
+                        ? 'Henuz baska kullanici yok'
+                        : 'Sonuc bulunamadi',
+                    message: _users.isEmpty
+                        ? 'Diger kullanicilar kayit oldukca burada listelenecek.'
+                        : '"${_searchController.text.trim()}" icin eslesen kisi yok.',
+                    primaryLabel: _users.isEmpty ? 'Yenile' : 'Aramayi temizle',
+                    onPrimary: _users.isEmpty
+                        ? _loadDirectory
+                        : _searchController.clear,
+                  )
                 : ListView.builder(
                     itemCount: filtered.length,
                     itemBuilder: (context, index) {
@@ -800,6 +1667,7 @@ class _NewChatPageState extends State<NewChatPage> {
                               builder: (_) => ChatRoomPage(
                                 chat: chat,
                                 session: widget.session,
+                                onSessionExpired: widget.onSessionExpired,
                               ),
                             ),
                           );
@@ -983,6 +1851,67 @@ class _ProfileAvatar extends StatelessWidget {
   }
 }
 
+Future<void> _openAvatarViewer(
+  BuildContext context, {
+  required String imageUrl,
+  required String title,
+  required String token,
+}) async {
+  final trimmedUrl = imageUrl.trim();
+  if (trimmedUrl.isEmpty) return;
+
+  await Navigator.push(
+    context,
+    MaterialPageRoute(
+      builder: (_) =>
+          AvatarViewerPage(imageUrl: trimmedUrl, title: title, token: token),
+    ),
+  );
+}
+
+class AvatarViewerPage extends StatelessWidget {
+  const AvatarViewerPage({
+    super.key,
+    required this.imageUrl,
+    required this.title,
+    required this.token,
+  });
+
+  final String imageUrl;
+  final String title;
+  final String token;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+        title: Text(title),
+      ),
+      body: InteractiveViewer(
+        minScale: 0.8,
+        maxScale: 4,
+        child: Center(
+          child: Image.network(
+            imageUrl,
+            headers: {'Authorization': 'Bearer $token'},
+            fit: BoxFit.contain,
+            errorBuilder: (_, _, _) => const Padding(
+              padding: EdgeInsets.all(24),
+              child: Text(
+                'Gorsel yuklenemedi.',
+                style: TextStyle(color: Colors.white),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class ProfilePage extends StatefulWidget {
   const ProfilePage({
     super.key,
@@ -1085,6 +2014,9 @@ class _ProfilePageState extends State<ProfilePage> {
     );
     await updatedSession.save();
     widget.onProfileUpdated(updatedSession);
+    await TurnaAnalytics.logEvent('profile_updated', {
+      'user_id': updatedSession.userId,
+    });
 
     if (!mounted || successMessage == null) return;
     ScaffoldMessenger.of(
@@ -1256,13 +2188,27 @@ class _ProfilePageState extends State<ProfilePage> {
         padding: const EdgeInsets.all(16),
         children: [
           Center(
-            child: _ProfileAvatar(
-              label: _displayNameController.text.trim().isEmpty
-                  ? widget.session.displayName
-                  : _displayNameController.text.trim(),
-              avatarUrl: profile.avatarUrl ?? widget.session.avatarUrl,
-              authToken: widget.session.token,
-              radius: 58,
+            child: GestureDetector(
+              onTap: () {
+                final avatarUrl = profile.avatarUrl ?? widget.session.avatarUrl;
+                if (avatarUrl == null || avatarUrl.trim().isEmpty) return;
+                _openAvatarViewer(
+                  context,
+                  imageUrl: avatarUrl,
+                  title: _displayNameController.text.trim().isEmpty
+                      ? widget.session.displayName
+                      : _displayNameController.text.trim(),
+                  token: widget.session.token,
+                );
+              },
+              child: _ProfileAvatar(
+                label: _displayNameController.text.trim().isEmpty
+                    ? widget.session.displayName
+                    : _displayNameController.text.trim(),
+                avatarUrl: profile.avatarUrl ?? widget.session.avatarUrl,
+                authToken: widget.session.token,
+                radius: 58,
+              ),
             ),
           ),
           const SizedBox(height: 18),
@@ -1342,6 +2288,162 @@ class _ProfilePageState extends State<ProfilePage> {
           const SizedBox(height: 8),
           OutlinedButton(
             onPressed: (_saving || _avatarBusy) ? null : _loadProfile,
+            child: const Text('Sunucudan yenile'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class UserProfilePage extends StatefulWidget {
+  const UserProfilePage({
+    super.key,
+    required this.session,
+    required this.userId,
+    required this.fallbackName,
+    this.fallbackAvatarUrl,
+  });
+
+  final AuthSession session;
+  final String userId;
+  final String fallbackName;
+  final String? fallbackAvatarUrl;
+
+  @override
+  State<UserProfilePage> createState() => _UserProfilePageState();
+}
+
+class _UserProfilePageState extends State<UserProfilePage> {
+  TurnaUserProfile? _profile;
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadProfile();
+  }
+
+  Future<void> _loadProfile() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+
+    try {
+      final profile = await ProfileApi.fetchUser(widget.session, widget.userId);
+      if (!mounted) return;
+      setState(() {
+        _profile = profile;
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = error.toString();
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final profile = _profile;
+    final name = profile?.displayName ?? widget.fallbackName;
+    final avatarUrl = profile?.avatarUrl ?? widget.fallbackAvatarUrl;
+
+    if (_loading && profile == null) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Kullanici Profili')),
+        body: const Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    if (profile == null) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Kullanici Profili')),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(_error ?? 'Kullanici profili yuklenemedi.'),
+                const SizedBox(height: 12),
+                FilledButton(
+                  onPressed: _loadProfile,
+                  child: const Text('Tekrar dene'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    final about = profile.about?.trim();
+    final phone = profile.phone?.trim();
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Kullanici Profili')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Center(
+            child: GestureDetector(
+              onTap: avatarUrl == null || avatarUrl.trim().isEmpty
+                  ? null
+                  : () => _openAvatarViewer(
+                      context,
+                      imageUrl: avatarUrl,
+                      title: name,
+                      token: widget.session.token,
+                    ),
+              child: _ProfileAvatar(
+                label: name,
+                avatarUrl: avatarUrl,
+                authToken: widget.session.token,
+                radius: 58,
+              ),
+            ),
+          ),
+          const SizedBox(height: 18),
+          Center(
+            child: Text(
+              name,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
+            ),
+          ),
+          const SizedBox(height: 18),
+          if (about != null && about.isNotEmpty)
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.info_outline),
+                title: const Text('Hakkinda'),
+                subtitle: Text(about),
+              ),
+            ),
+          if (phone != null && phone.isNotEmpty)
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.phone_outlined),
+                title: const Text('Telefon'),
+                subtitle: Text(phone),
+              ),
+            ),
+          if ((about == null || about.isEmpty) &&
+              (phone == null || phone.isEmpty))
+            const Card(
+              child: ListTile(
+                leading: Icon(Icons.person_outline),
+                title: Text('Bu kullanici henuz profil detayi eklememis.'),
+              ),
+            ),
+          const SizedBox(height: 8),
+          OutlinedButton(
+            onPressed: _loadProfile,
             child: const Text('Sunucudan yenile'),
           ),
         ],
@@ -1477,6 +2579,89 @@ class PlaceholderPage extends StatelessWidget {
   }
 }
 
+class _CenteredState extends StatelessWidget {
+  const _CenteredState({
+    required this.icon,
+    required this.title,
+    required this.message,
+    this.primaryLabel,
+    this.onPrimary,
+  });
+
+  final IconData icon;
+  final String title;
+  final String message;
+  final String? primaryLabel;
+  final VoidCallback? onPrimary;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 42, color: const Color(0xFF7D8380)),
+            const SizedBox(height: 12),
+            Text(
+              title,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Color(0xFF5C625F)),
+            ),
+            if (primaryLabel != null && onPrimary != null) ...[
+              const SizedBox(height: 16),
+              FilledButton(onPressed: onPrimary, child: Text(primaryLabel!)),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CenteredListState extends StatelessWidget {
+  const _CenteredListState({
+    required this.icon,
+    required this.title,
+    required this.message,
+  });
+
+  final IconData icon;
+  final String title;
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 48, 24, 24),
+      child: Column(
+        children: [
+          Icon(icon, size: 42, color: const Color(0xFF7D8380)),
+          const SizedBox(height: 12),
+          Text(
+            title,
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Color(0xFF5C625F)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class ChatPreview {
   ChatPreview({
     required this.chatId,
@@ -1541,6 +2726,71 @@ class TurnaUserProfile {
   }
 }
 
+enum ChatAttachmentKind { image, video, file }
+
+class ChatAttachment {
+  ChatAttachment({
+    required this.id,
+    required this.objectKey,
+    required this.kind,
+    required this.contentType,
+    required this.sizeBytes,
+    this.fileName,
+    this.width,
+    this.height,
+    this.durationSeconds,
+    this.url,
+  });
+
+  final String id;
+  final String objectKey;
+  final ChatAttachmentKind kind;
+  final String? fileName;
+  final String contentType;
+  final int sizeBytes;
+  final int? width;
+  final int? height;
+  final int? durationSeconds;
+  final String? url;
+
+  factory ChatAttachment.fromMap(Map<String, dynamic> map) {
+    final kindText = (map['kind'] ?? '').toString().toLowerCase();
+    final kind = switch (kindText) {
+      'image' => ChatAttachmentKind.image,
+      'video' => ChatAttachmentKind.video,
+      _ => ChatAttachmentKind.file,
+    };
+
+    return ChatAttachment(
+      id: (map['id'] ?? '').toString(),
+      objectKey: (map['objectKey'] ?? '').toString(),
+      kind: kind,
+      fileName: TurnaUserProfile._nullableString(map['fileName']),
+      contentType: (map['contentType'] ?? '').toString(),
+      sizeBytes: (map['sizeBytes'] as num?)?.toInt() ?? 0,
+      width: (map['width'] as num?)?.toInt(),
+      height: (map['height'] as num?)?.toInt(),
+      durationSeconds: (map['durationSeconds'] as num?)?.toInt(),
+      url: TurnaUserProfile._nullableString(map['url']),
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'objectKey': objectKey,
+      'kind': kind.name,
+      'fileName': fileName,
+      'contentType': contentType,
+      'sizeBytes': sizeBytes,
+      'width': width,
+      'height': height,
+      'durationSeconds': durationSeconds,
+      'url': url,
+    };
+  }
+}
+
 class ChatMessage {
   ChatMessage({
     required this.id,
@@ -1548,6 +2798,8 @@ class ChatMessage {
     required this.text,
     required this.status,
     required this.createdAt,
+    this.attachments = const [],
+    this.errorText,
   });
 
   final String id;
@@ -1555,14 +2807,27 @@ class ChatMessage {
   final String text;
   final ChatMessageStatus status;
   final String createdAt;
+  final List<ChatAttachment> attachments;
+  final String? errorText;
 
-  ChatMessage copyWith({ChatMessageStatus? status}) {
+  ChatMessage copyWith({
+    String? id,
+    String? senderId,
+    String? text,
+    ChatMessageStatus? status,
+    String? createdAt,
+    List<ChatAttachment>? attachments,
+    String? errorText,
+    bool clearErrorText = false,
+  }) {
     return ChatMessage(
-      id: id,
-      senderId: senderId,
-      text: text,
+      id: id ?? this.id,
+      senderId: senderId ?? this.senderId,
+      text: text ?? this.text,
       status: status ?? this.status,
-      createdAt: createdAt,
+      createdAt: createdAt ?? this.createdAt,
+      attachments: attachments ?? this.attachments,
+      errorText: clearErrorText ? null : (errorText ?? this.errorText),
     );
   }
 
@@ -1573,11 +2838,48 @@ class ChatMessage {
       text: (map['text'] ?? '').toString(),
       status: ChatMessageStatusX.fromWire((map['status'] ?? '').toString()),
       createdAt: (map['createdAt'] ?? '').toString(),
+      attachments: (map['attachments'] as List<dynamic>? ?? const [])
+          .whereType<Map>()
+          .map(
+            (item) => ChatAttachment.fromMap(Map<String, dynamic>.from(item)),
+          )
+          .toList(),
+    );
+  }
+
+  Map<String, dynamic> toPendingMap() {
+    return {
+      'id': id,
+      'senderId': senderId,
+      'text': text,
+      'status': status.name,
+      'createdAt': createdAt,
+      'attachments': attachments
+          .map((attachment) => attachment.toMap())
+          .toList(),
+      'errorText': errorText,
+    };
+  }
+
+  factory ChatMessage.fromPendingMap(Map<String, dynamic> map) {
+    return ChatMessage(
+      id: (map['id'] ?? '').toString(),
+      senderId: (map['senderId'] ?? '').toString(),
+      text: (map['text'] ?? '').toString(),
+      status: ChatMessageStatusX.fromLocal((map['status'] ?? '').toString()),
+      createdAt: (map['createdAt'] ?? '').toString(),
+      attachments: (map['attachments'] as List<dynamic>? ?? const [])
+          .whereType<Map>()
+          .map(
+            (item) => ChatAttachment.fromMap(Map<String, dynamic>.from(item)),
+          )
+          .toList(),
+      errorText: TurnaUserProfile._nullableString(map['errorText']),
     );
   }
 }
 
-enum ChatMessageStatus { sent, delivered, read }
+enum ChatMessageStatus { sending, queued, failed, sent, delivered, read }
 
 extension ChatMessageStatusX on ChatMessageStatus {
   static ChatMessageStatus fromWire(String value) {
@@ -1590,6 +2892,35 @@ extension ChatMessageStatusX on ChatMessageStatus {
         return ChatMessageStatus.sent;
     }
   }
+
+  static ChatMessageStatus fromLocal(String value) {
+    switch (value) {
+      case 'sending':
+        return ChatMessageStatus.sending;
+      case 'queued':
+        return ChatMessageStatus.queued;
+      case 'failed':
+        return ChatMessageStatus.failed;
+      case 'delivered':
+        return ChatMessageStatus.delivered;
+      case 'read':
+        return ChatMessageStatus.read;
+      default:
+        return ChatMessageStatus.sent;
+    }
+  }
+}
+
+class ChatMessagesPage {
+  ChatMessagesPage({
+    required this.items,
+    required this.hasMore,
+    required this.nextBefore,
+  });
+
+  final List<ChatMessage> items;
+  final bool hasMore;
+  final String? nextBefore;
 }
 
 class TurnaSocketClient extends ChangeNotifier {
@@ -1597,18 +2928,32 @@ class TurnaSocketClient extends ChangeNotifier {
     required this.chatId,
     required this.senderId,
     required this.token,
+    this.onSessionExpired,
   });
 
   final String chatId;
   final String senderId;
   final String token;
+  final VoidCallback? onSessionExpired;
 
+  static const int _pageSize = 30;
   final List<ChatMessage> messages = [];
+  final Map<String, Timer> _messageTimeouts = {};
   io.Socket? _socket;
   bool _historyLoadedFromSocket = false;
+  bool _restoredPendingMessages = false;
+  bool _isFlushingQueue = false;
   int _localMessageSeq = 0;
+  bool isConnected = false;
+  bool loadingInitial = true;
+  bool loadingMore = false;
+  bool hasMore = true;
+  String? nextBefore;
+  String? error;
 
   void connect() {
+    loadingInitial = true;
+    error = null;
     turnaLog('socket connect start', {
       'chatId': chatId,
       'senderId': senderId,
@@ -1624,12 +2969,28 @@ class TurnaSocketClient extends ChangeNotifier {
     );
 
     _socket!.onConnect((_) {
+      isConnected = true;
       turnaLog('socket connected', {'id': _socket?.id, 'chatId': chatId});
       _socket!.emit('chat:join', {'chatId': chatId});
+      _flushQueuedMessages();
+      notifyListeners();
     });
 
     _socket!.onConnectError((data) {
+      isConnected = false;
       turnaLog('socket connect_error', data);
+      final raw = '$data';
+      if (raw.contains('invalid_token') || raw.contains('unauthorized')) {
+        error = 'Oturumun suresi doldu.';
+        notifyListeners();
+        onSessionExpired?.call();
+        return;
+      }
+      if (messages.isEmpty) {
+        error = 'Canli baglanti kurulamadi.';
+        loadingInitial = false;
+        notifyListeners();
+      }
     });
 
     _socket!.onError((data) {
@@ -1661,7 +3022,13 @@ class TurnaSocketClient extends ChangeNotifier {
               (e) => ChatMessage.fromMap(Map<String, dynamic>.from(e)),
             ),
           );
+        _sortMessages();
+        hasMore = data.length >= _pageSize;
+        nextBefore = messages.isEmpty ? null : messages.first.createdAt;
+        loadingInitial = false;
+        error = null;
         _markSeen();
+        _persistPendingMessages();
         notifyListeners();
       }
     });
@@ -1674,17 +3041,25 @@ class TurnaSocketClient extends ChangeNotifier {
       if (data is Map) {
         turnaLog('socket chat:message', data);
         final message = ChatMessage.fromMap(Map<String, dynamic>.from(data));
-        final index = messages.indexWhere(
-          (m) =>
-              m.senderId == message.senderId &&
-              m.text == message.text &&
-              m.id.startsWith('local_'),
-        );
-        if (index >= 0) {
-          messages[index] = message;
+        final existingIndex = messages.indexWhere((m) => m.id == message.id);
+        if (existingIndex >= 0) {
+          messages[existingIndex] = message;
         } else {
-          messages.add(message);
+          final index = messages.indexWhere(
+            (m) =>
+                m.senderId == message.senderId &&
+                m.text == message.text &&
+                m.id.startsWith('local_'),
+          );
+          if (index >= 0) {
+            _cancelMessageTimeout(messages[index].id);
+            messages[index] = message;
+          } else {
+            messages.add(message);
+          }
         }
+        _sortMessages();
+        _persistPendingMessages();
         if (message.senderId != senderId) {
           _markSeen();
         }
@@ -1721,63 +3096,133 @@ class TurnaSocketClient extends ChangeNotifier {
     });
 
     _socket!.onDisconnect((reason) {
+      isConnected = false;
       turnaLog('socket disconnected', {'reason': reason, 'chatId': chatId});
+      notifyListeners();
     });
 
+    _restorePendingMessages();
     _syncMessagesFromHttp(onlyIfEmpty: true);
     _socket!.connect();
   }
 
   Future<void> _syncMessagesFromHttp({bool onlyIfEmpty = false}) async {
     try {
-      final res = await http.get(
-        Uri.parse('$kBackendBaseUrl/api/chats/$chatId/messages'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-      if (res.statusCode >= 400) return;
       if (_historyLoadedFromSocket && onlyIfEmpty) return;
+      final page = await ChatApi.fetchMessagesPage(
+        token,
+        chatId,
+        limit: _pageSize,
+      );
 
-      final map = jsonDecode(res.body) as Map<String, dynamic>;
-      final rawData = (map['data'] as List<dynamic>? ?? []);
-      if (messages.isEmpty || !onlyIfEmpty) {
-        final incoming = rawData
-            .whereType<Map>()
-            .map((e) => ChatMessage.fromMap(Map<String, dynamic>.from(e)))
-            .toList();
-
-        final byId = <String, ChatMessage>{};
-        for (final current in messages) {
-          byId[current.id] = current;
-        }
-        for (final serverMessage in incoming) {
-          byId[serverMessage.id] = serverMessage;
-        }
-
-        final merged = byId.values.toList()
-          ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
-        messages
-          ..clear()
-          ..addAll(merged);
+      final byId = <String, ChatMessage>{};
+      for (final current in messages) {
+        byId[current.id] = current;
       }
+      for (final serverMessage in page.items) {
+        byId[serverMessage.id] = serverMessage;
+      }
+
+      final merged = byId.values.toList()
+        ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+      messages
+        ..clear()
+        ..addAll(merged);
+      hasMore = page.hasMore;
+      nextBefore =
+          page.nextBefore ??
+          (messages.isEmpty ? null : messages.first.createdAt);
+      loadingInitial = false;
+      error = null;
       _markSeen();
+      _persistPendingMessages();
       notifyListeners();
-    } catch (_) {}
+    } on TurnaUnauthorizedException catch (authError) {
+      loadingInitial = false;
+      error = authError.toString();
+      notifyListeners();
+      onSessionExpired?.call();
+    } catch (_) {
+      loadingInitial = false;
+      if (messages.isEmpty) {
+        error = 'Mesajlar yuklenemedi.';
+      }
+      notifyListeners();
+    }
+  }
+
+  Future<void> loadOlderMessages() async {
+    if (loadingMore || !hasMore || messages.isEmpty) return;
+
+    loadingMore = true;
+    notifyListeners();
+
+    try {
+      final page = await ChatApi.fetchMessagesPage(
+        token,
+        chatId,
+        before: nextBefore ?? messages.first.createdAt,
+        limit: _pageSize,
+      );
+
+      final byId = <String, ChatMessage>{};
+      for (final current in messages) {
+        byId[current.id] = current;
+      }
+      for (final serverMessage in page.items) {
+        byId[serverMessage.id] = serverMessage;
+      }
+      final merged = byId.values.toList()
+        ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+      messages
+        ..clear()
+        ..addAll(merged);
+      hasMore = page.hasMore;
+      nextBefore = page.nextBefore;
+    } on TurnaUnauthorizedException catch (authError) {
+      error = authError.toString();
+      onSessionExpired?.call();
+    } catch (_) {
+      error = 'Eski mesajlar yuklenemedi.';
+    } finally {
+      loadingMore = false;
+      notifyListeners();
+    }
   }
 
   void _markSeen() {
     _socket?.emit('chat:seen', {'chatId': chatId});
   }
 
-  void send(String text) {
+  void mergeServerMessage(ChatMessage message) {
+    final existingIndex = messages.indexWhere((item) => item.id == message.id);
+    if (existingIndex >= 0) {
+      messages[existingIndex] = message;
+    } else {
+      messages.add(message);
+    }
+    _sortMessages();
+    _persistPendingMessages();
+    notifyListeners();
+  }
+
+  Future<void> send(String text) async {
     final nowIso = DateTime.now().toIso8601String();
     final localMessage = ChatMessage(
       id: 'local_${senderId}_${_localMessageSeq++}',
       senderId: senderId,
       text: text,
-      status: ChatMessageStatus.sent,
+      status: isConnected
+          ? ChatMessageStatus.sending
+          : ChatMessageStatus.queued,
       createdAt: nowIso,
+      errorText: isConnected
+          ? null
+          : 'Baglanti yok. Geri gelince otomatik gonderilecek.',
     );
     messages.add(localMessage);
+    _sortMessages();
+    await _persistPendingMessages();
     notifyListeners();
 
     turnaLog('socket chat:send', {
@@ -1785,12 +3230,144 @@ class TurnaSocketClient extends ChangeNotifier {
       'senderId': senderId,
       'textLen': text.length,
     });
-    _socket?.emit('chat:send', {'chatId': chatId, 'text': text});
+    if (isConnected) {
+      _emitQueuedMessage(localMessage.id);
+    }
+  }
+
+  Future<void> retryMessage(ChatMessage message) async {
+    final index = messages.indexWhere((item) => item.id == message.id);
+    if (index < 0 || !messages[index].id.startsWith('local_')) return;
+
+    messages[index] = messages[index].copyWith(
+      status: isConnected
+          ? ChatMessageStatus.sending
+          : ChatMessageStatus.queued,
+      errorText: isConnected
+          ? null
+          : 'Baglanti yok. Geri gelince otomatik gonderilecek.',
+      clearErrorText: isConnected,
+    );
+    await _persistPendingMessages();
+    notifyListeners();
+
+    if (isConnected) {
+      _emitQueuedMessage(messages[index].id);
+    }
+  }
+
+  String _pendingMessagesKey() => 'turna_pending_chat_${senderId}_$chatId';
+
+  Future<void> _restorePendingMessages() async {
+    if (_restoredPendingMessages) return;
+    _restoredPendingMessages = true;
+
+    final prefs = await SharedPreferences.getInstance();
+    final rawList = prefs.getStringList(_pendingMessagesKey()) ?? const [];
+    if (rawList.isEmpty) return;
+
+    for (final raw in rawList) {
+      try {
+        final decoded = jsonDecode(raw) as Map<String, dynamic>;
+        final pending = ChatMessage.fromPendingMap(decoded);
+        if (messages.any((message) => message.id == pending.id)) continue;
+        messages.add(pending);
+      } catch (_) {}
+    }
+
+    _sortMessages();
+    notifyListeners();
+    _flushQueuedMessages();
+  }
+
+  Future<void> _persistPendingMessages() async {
+    final prefs = await SharedPreferences.getInstance();
+    final pending = messages
+        .where(
+          (message) =>
+              message.id.startsWith('local_') &&
+              (message.status == ChatMessageStatus.queued ||
+                  message.status == ChatMessageStatus.failed ||
+                  message.status == ChatMessageStatus.sending),
+        )
+        .map((message) => jsonEncode(message.toPendingMap()))
+        .toList();
+    await prefs.setStringList(_pendingMessagesKey(), pending);
+  }
+
+  void _emitQueuedMessage(String localId) {
+    final index = messages.indexWhere((message) => message.id == localId);
+    if (index < 0) return;
+    final message = messages[index];
+    if (!message.id.startsWith('local_')) return;
+
+    _cancelMessageTimeout(localId);
+    _socket?.emit('chat:send', {'chatId': chatId, 'text': message.text});
+    _messageTimeouts[localId] = Timer(const Duration(seconds: 12), () async {
+      final currentIndex = messages.indexWhere((item) => item.id == localId);
+      if (currentIndex < 0) return;
+      final current = messages[currentIndex];
+      if (current.status != ChatMessageStatus.sending) return;
+
+      messages[currentIndex] = current.copyWith(
+        status: isConnected
+            ? ChatMessageStatus.failed
+            : ChatMessageStatus.queued,
+        errorText: isConnected
+            ? 'Mesaj gonderilemedi. Tekrar dene.'
+            : 'Baglanti yok. Geri gelince otomatik gonderilecek.',
+      );
+      await _persistPendingMessages();
+      notifyListeners();
+    });
+  }
+
+  Future<void> _flushQueuedMessages() async {
+    if (_isFlushingQueue || !isConnected) return;
+    _isFlushingQueue = true;
+    try {
+      final pendingIds = messages
+          .where(
+            (message) =>
+                message.id.startsWith('local_') &&
+                (message.status == ChatMessageStatus.queued ||
+                    message.status == ChatMessageStatus.failed),
+          )
+          .map((message) => message.id)
+          .toList();
+
+      for (final pendingId in pendingIds) {
+        final index = messages.indexWhere((message) => message.id == pendingId);
+        if (index < 0) continue;
+        messages[index] = messages[index].copyWith(
+          status: ChatMessageStatus.sending,
+          clearErrorText: true,
+        );
+        notifyListeners();
+        _emitQueuedMessage(pendingId);
+        await Future<void>.delayed(const Duration(milliseconds: 120));
+      }
+      await _persistPendingMessages();
+    } finally {
+      _isFlushingQueue = false;
+    }
+  }
+
+  void _cancelMessageTimeout(String localId) {
+    _messageTimeouts.remove(localId)?.cancel();
+  }
+
+  void _sortMessages() {
+    messages.sort((a, b) => a.createdAt.compareTo(b.createdAt));
   }
 
   @override
   void dispose() {
     turnaLog('socket dispose', {'chatId': chatId, 'senderId': senderId});
+    for (final timer in _messageTimeouts.values) {
+      timer.cancel();
+    }
+    _messageTimeouts.clear();
     _socket?.dispose();
     super.dispose();
   }
@@ -1915,6 +3492,163 @@ class TurnaApiException implements Exception {
   String toString() => message;
 }
 
+class TurnaUnauthorizedException extends TurnaApiException {
+  TurnaUnauthorizedException([super.message = 'Oturumun suresi doldu.']);
+}
+
+class TurnaFirebase {
+  static bool _attempted = false;
+  static bool _enabled = false;
+  static FirebaseAnalytics? _analytics;
+
+  static Future<bool> ensureInitialized() async {
+    if (_attempted) return _enabled;
+    _attempted = true;
+
+    try {
+      await Firebase.initializeApp();
+      _analytics = FirebaseAnalytics.instance;
+      _enabled = true;
+    } catch (error) {
+      turnaLog('firebase init skipped', error);
+      _enabled = false;
+    }
+
+    return _enabled;
+  }
+
+  static FirebaseAnalytics? get analytics => _enabled ? _analytics : null;
+}
+
+class TurnaAnalytics {
+  static Future<void> logEvent(
+    String name, [
+    Map<String, Object?> parameters = const {},
+  ]) async {
+    final ready = await TurnaFirebase.ensureInitialized();
+    if (!ready) return;
+
+    try {
+      await TurnaFirebase.analytics?.logEvent(
+        name: name,
+        parameters: parameters.map(
+          (key, value) => MapEntry<String, Object>(
+            key,
+            value is String || value is num || value is bool
+                ? value as Object
+                : (value?.toString() ?? ''),
+          ),
+        ),
+      );
+    } catch (error) {
+      turnaLog('analytics log skipped', error);
+    }
+  }
+}
+
+class PushApi {
+  static Future<void> registerDevice(
+    AuthSession session, {
+    required String token,
+    required String platform,
+    String? deviceLabel,
+  }) async {
+    final res = await http.post(
+      Uri.parse('$kBackendBaseUrl/api/push/devices'),
+      headers: {
+        'Authorization': 'Bearer ${session.token}',
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode({
+        'token': token,
+        'platform': platform,
+        'deviceLabel': deviceLabel,
+      }),
+    );
+    if (res.statusCode >= 400) {
+      throw TurnaApiException(
+        ProfileApi._extractApiError(res.body, res.statusCode),
+      );
+    }
+  }
+
+  static Future<void> unregisterDevice(
+    AuthSession session, {
+    required String token,
+  }) async {
+    final res = await http.delete(
+      Uri.parse('$kBackendBaseUrl/api/push/devices'),
+      headers: {
+        'Authorization': 'Bearer ${session.token}',
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode({'token': token}),
+    );
+    if (res.statusCode >= 400) {
+      throw TurnaApiException(
+        ProfileApi._extractApiError(res.body, res.statusCode),
+      );
+    }
+  }
+}
+
+class TurnaPushManager {
+  static const _lastPushTokenKey = 'turna_last_push_token';
+  static bool _listenersAttached = false;
+
+  static Future<void> syncSession(AuthSession session) async {
+    final ready = await TurnaFirebase.ensureInitialized();
+    if (!ready) return;
+    if (!Platform.isIOS && !Platform.isAndroid) return;
+
+    try {
+      final messaging = FirebaseMessaging.instance;
+      await messaging.requestPermission(alert: true, badge: true, sound: true);
+      final token = await messaging.getToken();
+      if (token == null || token.trim().isEmpty) return;
+
+      final prefs = await SharedPreferences.getInstance();
+      final previousToken = prefs.getString(_lastPushTokenKey);
+      if (previousToken != token) {
+        await PushApi.registerDevice(
+          session,
+          token: token,
+          platform: Platform.isIOS ? 'ios' : 'android',
+          deviceLabel: Platform.isIOS ? 'ios-device' : 'android-device',
+        );
+        await prefs.setString(_lastPushTokenKey, token);
+      }
+
+      if (!_listenersAttached) {
+        _listenersAttached = true;
+        FirebaseMessaging.onMessage.listen((message) {
+          turnaLog('push foreground', message.data);
+        });
+        FirebaseMessaging.onMessageOpenedApp.listen((message) {
+          turnaLog('push opened', message.data);
+        });
+        messaging.onTokenRefresh.listen((freshToken) async {
+          if (freshToken.trim().isEmpty) return;
+          try {
+            await PushApi.registerDevice(
+              session,
+              token: freshToken,
+              platform: Platform.isIOS ? 'ios' : 'android',
+              deviceLabel: Platform.isIOS ? 'ios-device' : 'android-device',
+            );
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setString(_lastPushTokenKey, freshToken);
+          } catch (error) {
+            turnaLog('push token refresh register failed', error);
+          }
+        });
+      }
+    } catch (error) {
+      turnaLog('push sync skipped', error);
+    }
+  }
+}
+
 class AvatarUploadTicket {
   AvatarUploadTicket({
     required this.objectKey,
@@ -1938,10 +3672,85 @@ class AvatarUploadTicket {
   }
 }
 
+class ChatAttachmentUploadTicket {
+  ChatAttachmentUploadTicket({
+    required this.objectKey,
+    required this.uploadUrl,
+    required this.headers,
+  });
+
+  final String objectKey;
+  final String uploadUrl;
+  final Map<String, String> headers;
+
+  factory ChatAttachmentUploadTicket.fromMap(Map<String, dynamic> map) {
+    final rawHeaders = map['headers'] as Map<String, dynamic>? ?? const {};
+    return ChatAttachmentUploadTicket(
+      objectKey: (map['objectKey'] ?? '').toString(),
+      uploadUrl: (map['uploadUrl'] ?? '').toString(),
+      headers: rawHeaders.map(
+        (key, value) => MapEntry(key.toString(), value.toString()),
+      ),
+    );
+  }
+}
+
+class OutgoingAttachmentDraft {
+  OutgoingAttachmentDraft({
+    required this.objectKey,
+    required this.kind,
+    required this.contentType,
+    required this.sizeBytes,
+    this.fileName,
+    this.width,
+    this.height,
+    this.durationSeconds,
+  });
+
+  final String objectKey;
+  final ChatAttachmentKind kind;
+  final String? fileName;
+  final String contentType;
+  final int sizeBytes;
+  final int? width;
+  final int? height;
+  final int? durationSeconds;
+
+  Map<String, dynamic> toMap() {
+    return {
+      'objectKey': objectKey,
+      'kind': kind.name,
+      'fileName': fileName,
+      'contentType': contentType,
+      'sizeBytes': sizeBytes,
+      'width': width,
+      'height': height,
+      'durationSeconds': durationSeconds,
+    };
+  }
+}
+
 class ProfileApi {
   static Future<TurnaUserProfile> fetchMe(AuthSession session) async {
     final res = await http.get(
       Uri.parse('$kBackendBaseUrl/api/profile/me'),
+      headers: {'Authorization': 'Bearer ${session.token}'},
+    );
+    if (res.statusCode >= 400) {
+      throw TurnaApiException(_extractApiError(res.body, res.statusCode));
+    }
+
+    final map = jsonDecode(res.body) as Map<String, dynamic>;
+    final data = map['data'] as Map<String, dynamic>? ?? const {};
+    return TurnaUserProfile.fromMap(data);
+  }
+
+  static Future<TurnaUserProfile> fetchUser(
+    AuthSession session,
+    String userId,
+  ) async {
+    final res = await http.get(
+      Uri.parse('$kBackendBaseUrl/api/profile/users/$userId'),
       headers: {'Authorization': 'Bearer ${session.token}'},
     );
     if (res.statusCode >= 400) {
@@ -2056,10 +3865,14 @@ class ProfileApi {
           return 'Dosya depolama servisi hazır değil.';
         case 'invalid_avatar_key':
           return 'Avatar yüklemesi doğrulanamadı.';
+        case 'invalid_attachment_key':
+          return 'Medya yüklemesi doğrulanamadı.';
         case 'uploaded_file_not_found':
           return 'Yüklenen dosya bulunamadı.';
         case 'avatar_not_found':
           return 'Avatar bulunamadı.';
+        case 'text_or_attachment_required':
+          return 'Mesaj veya ek secmelisin.';
         default:
           return error ?? 'İşlem başarısız ($statusCode)';
       }
@@ -2074,21 +3887,18 @@ class ChatApi {
     AuthSession session, {
     int refreshTick = 0,
   }) async {
-    final headers = {'Authorization': 'Bearer ${session.token}'};
-    turnaLog('api fetchChats', {'refreshTick': refreshTick});
+    try {
+      final headers = {'Authorization': 'Bearer ${session.token}'};
+      turnaLog('api fetchChats', {'refreshTick': refreshTick});
 
-    final chatsRes = await http.get(
-      Uri.parse('$kBackendBaseUrl/api/chats'),
-      headers: headers,
-    );
-    if (chatsRes.statusCode >= 400) {
-      turnaLog('api fetchChats failed', {'statusCode': chatsRes.statusCode});
-      return [];
-    }
+      final chatsRes = await http.get(
+        Uri.parse('$kBackendBaseUrl/api/chats'),
+        headers: headers,
+      );
+      _throwIfApiError(chatsRes);
 
-    final chatsMap = jsonDecode(chatsRes.body) as Map<String, dynamic>;
-    final chatsData = (chatsMap['data'] as List<dynamic>? ?? []);
-    if (chatsData.isNotEmpty) {
+      final chatsMap = jsonDecode(chatsRes.body) as Map<String, dynamic>;
+      final chatsData = (chatsMap['data'] as List<dynamic>? ?? []);
       return chatsData.map((item) {
         final map = item as Map<String, dynamic>;
         return ChatPreview(
@@ -2100,45 +3910,39 @@ class ChatApi {
           unreadCount: (map['unreadCount'] as num?)?.toInt() ?? 0,
         );
       }).toList();
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Sunucuya baglanilamadi.');
     }
-
-    final users = await fetchDirectory(session);
-    return users.map((user) {
-      return ChatPreview(
-        chatId: buildDirectChatId(session.userId, user.id),
-        name: user.displayName,
-        message: 'Sohbet başlat',
-        time: '',
-        avatarUrl: user.avatarUrl,
-        unreadCount: 0,
-      );
-    }).toList();
   }
 
   static Future<List<ChatUser>> fetchDirectory(AuthSession session) async {
-    final headers = {'Authorization': 'Bearer ${session.token}'};
-    turnaLog('api fetchDirectory');
-    final directoryRes = await http.get(
-      Uri.parse('$kBackendBaseUrl/api/chats/directory/list'),
-      headers: headers,
-    );
-    if (directoryRes.statusCode >= 400) {
-      turnaLog('api fetchDirectory failed', {
-        'statusCode': directoryRes.statusCode,
-      });
-      return [];
-    }
-
-    final directoryMap = jsonDecode(directoryRes.body) as Map<String, dynamic>;
-    final users = (directoryMap['data'] as List<dynamic>? ?? []);
-    return users.map((item) {
-      final map = item as Map<String, dynamic>;
-      return ChatUser(
-        id: map['id'].toString(),
-        displayName: map['displayName']?.toString() ?? 'User',
-        avatarUrl: _nullableString(map['avatarUrl']),
+    try {
+      final headers = {'Authorization': 'Bearer ${session.token}'};
+      turnaLog('api fetchDirectory');
+      final directoryRes = await http.get(
+        Uri.parse('$kBackendBaseUrl/api/chats/directory/list'),
+        headers: headers,
       );
-    }).toList();
+      _throwIfApiError(directoryRes);
+
+      final directoryMap =
+          jsonDecode(directoryRes.body) as Map<String, dynamic>;
+      final users = (directoryMap['data'] as List<dynamic>? ?? []);
+      return users.map((item) {
+        final map = item as Map<String, dynamic>;
+        return ChatUser(
+          id: map['id'].toString(),
+          displayName: map['displayName']?.toString() ?? 'User',
+          avatarUrl: _nullableString(map['avatarUrl']),
+        );
+      }).toList();
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Kisi listesine ulasilamadi.');
+    }
   }
 
   static String buildDirectChatId(String currentUserId, String peerUserId) {
@@ -2146,10 +3950,145 @@ class ChatApi {
     return 'direct_${sorted[0]}_${sorted[1]}';
   }
 
+  static String? extractPeerUserId(String chatId, String currentUserId) {
+    if (!chatId.startsWith('direct_')) return null;
+    final parts = chatId
+        .replaceFirst('direct_', '')
+        .split('_')
+        .where((part) => part.isNotEmpty)
+        .toList();
+    if (parts.length != 2) return null;
+    if (!parts.contains(currentUserId)) return null;
+    return parts.firstWhere((part) => part != currentUserId);
+  }
+
+  static Future<ChatMessagesPage> fetchMessagesPage(
+    String token,
+    String chatId, {
+    String? before,
+    int limit = 30,
+  }) async {
+    try {
+      final uri = Uri.parse('$kBackendBaseUrl/api/chats/$chatId/messages')
+          .replace(
+            queryParameters: {
+              'limit': '$limit',
+              if (before != null && before.isNotEmpty) 'before': before,
+            },
+          );
+
+      final res = await http.get(
+        uri,
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      _throwIfApiError(res);
+
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final items = (map['data'] as List<dynamic>? ?? [])
+          .whereType<Map>()
+          .map((e) => ChatMessage.fromMap(Map<String, dynamic>.from(e)))
+          .toList();
+      final pageInfo = map['pageInfo'] as Map<String, dynamic>? ?? const {};
+
+      return ChatMessagesPage(
+        items: items,
+        hasMore: pageInfo['hasMore'] == true,
+        nextBefore: _nullableString(pageInfo['nextBefore']),
+      );
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Mesajlar yuklenemedi.');
+    }
+  }
+
+  static Future<ChatAttachmentUploadTicket> createAttachmentUpload(
+    AuthSession session, {
+    required String chatId,
+    required ChatAttachmentKind kind,
+    required String contentType,
+    required String fileName,
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse('$kBackendBaseUrl/api/chats/attachments/upload-url'),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'chatId': chatId,
+          'kind': kind.name,
+          'contentType': contentType,
+          'fileName': fileName,
+        }),
+      );
+      _throwIfApiError(res);
+
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = map['data'] as Map<String, dynamic>? ?? const {};
+      return ChatAttachmentUploadTicket.fromMap(data);
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Dosya yukleme hazirligi basarisiz oldu.');
+    }
+  }
+
+  static Future<ChatMessage> sendMessage(
+    AuthSession session, {
+    required String chatId,
+    String? text,
+    List<OutgoingAttachmentDraft> attachments = const [],
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse('$kBackendBaseUrl/api/chats/messages'),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'chatId': chatId,
+          'text': text?.trim(),
+          'attachments': attachments
+              .map((attachment) => attachment.toMap())
+              .toList(),
+        }),
+      );
+      _throwIfApiError(res);
+
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = map['data'] as Map<String, dynamic>? ?? const {};
+      return ChatMessage.fromMap(data);
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Mesaj gonderilemedi.');
+    }
+  }
+
   static String? _nullableString(Object? value) {
     final text = value?.toString().trim();
     if (text == null || text.isEmpty) return null;
     return text;
+  }
+
+  static void _throwIfApiError(http.Response response) {
+    if (response.statusCode < 400) return;
+
+    turnaLog('chat api failed', {
+      'statusCode': response.statusCode,
+      'body': response.body,
+    });
+    final message = ProfileApi._extractApiError(
+      response.body,
+      response.statusCode,
+    );
+    if (response.statusCode == 401 || response.statusCode == 403) {
+      throw TurnaUnauthorizedException(message);
+    }
+    throw TurnaApiException(message);
   }
 
   static String _formatTime(String? iso) {
