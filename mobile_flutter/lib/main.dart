@@ -9,6 +9,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
+import 'package:livekit_client/livekit_client.dart' as lk;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'package:url_launcher/url_launcher.dart';
@@ -317,6 +318,8 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
   int _index = 0;
   late final PresenceSocketClient _presenceClient;
   final _inboxUpdateNotifier = ValueNotifier<int>(0);
+  final _callCoordinator = TurnaCallCoordinator();
+  String? _activeIncomingCallId;
 
   @override
   void initState() {
@@ -331,7 +334,12 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
       onInboxUpdate: () {
         _inboxUpdateNotifier.value++;
       },
+      onIncomingCall: _callCoordinator.handleIncoming,
+      onCallAccepted: _callCoordinator.handleAccepted,
+      onCallDeclined: _callCoordinator.handleDeclined,
+      onCallEnded: _callCoordinator.handleEnded,
     )..connect();
+    _callCoordinator.addListener(_handleCallCoordinator);
   }
 
   @override
@@ -346,7 +354,9 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _callCoordinator.removeListener(_handleCallCoordinator);
     _presenceClient.dispose();
+    _callCoordinator.dispose();
     _inboxUpdateNotifier.dispose();
     super.dispose();
   }
@@ -358,16 +368,45 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
     _inboxUpdateNotifier.value++;
   }
 
+  void _handleCallCoordinator() {
+    final incoming = _callCoordinator.takeIncomingCall();
+    if (incoming == null) return;
+    if (_activeIncomingCallId == incoming.call.id) return;
+
+    _activeIncomingCallId = incoming.call.id;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => IncomingCallPage(
+            session: widget.session,
+            coordinator: _callCoordinator,
+            incoming: incoming,
+            onSessionExpired: widget.onLogout,
+          ),
+        ),
+      );
+      if (mounted) {
+        _activeIncomingCallId = null;
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final pages = <Widget>[
       ChatsPage(
         session: widget.session,
         inboxUpdateNotifier: _inboxUpdateNotifier,
+        callCoordinator: _callCoordinator,
         onSessionExpired: widget.onLogout,
       ),
       const PlaceholderPage(title: 'Updates'),
-      const PlaceholderPage(title: 'Calls'),
+      CallsPage(
+        session: widget.session,
+        callCoordinator: _callCoordinator,
+        onSessionExpired: widget.onLogout,
+      ),
       SettingsPage(
         session: widget.session,
         onSessionUpdated: widget.onSessionUpdated,
@@ -405,11 +444,13 @@ class ChatsPage extends StatefulWidget {
     super.key,
     required this.session,
     required this.onSessionExpired,
+    required this.callCoordinator,
     this.inboxUpdateNotifier,
   });
 
   final AuthSession session;
   final VoidCallback onSessionExpired;
+  final TurnaCallCoordinator callCoordinator;
   final ValueNotifier<int>? inboxUpdateNotifier;
 
   @override
@@ -608,6 +649,7 @@ class _ChatsPageState extends State<ChatsPage> {
                         builder: (_) => ChatRoomPage(
                           chat: chat,
                           session: widget.session,
+                          callCoordinator: widget.callCoordinator,
                           onSessionExpired: widget.onSessionExpired,
                         ),
                       ),
@@ -628,6 +670,7 @@ class _ChatsPageState extends State<ChatsPage> {
             MaterialPageRoute(
               builder: (_) => NewChatPage(
                 session: widget.session,
+                callCoordinator: widget.callCoordinator,
                 onSessionExpired: widget.onSessionExpired,
               ),
             ),
@@ -647,11 +690,13 @@ class ChatRoomPage extends StatefulWidget {
     super.key,
     required this.chat,
     required this.session,
+    required this.callCoordinator,
     required this.onSessionExpired,
   });
 
   final ChatPreview chat;
   final AuthSession session;
+  final TurnaCallCoordinator callCoordinator;
   final VoidCallback onSessionExpired;
 
   @override
@@ -719,6 +764,40 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         ),
       ),
     );
+  }
+
+  Future<void> _startCall(TurnaCallType type) async {
+    final peerUserId = _peerUserId;
+    if (peerUserId == null) return;
+
+    try {
+      final started = await CallApi.startCall(
+        widget.session,
+        calleeId: peerUserId,
+        type: type,
+      );
+      if (!mounted) return;
+
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => OutgoingCallPage(
+            session: widget.session,
+            coordinator: widget.callCoordinator,
+            initialCall: started,
+            onSessionExpired: widget.onSessionExpired,
+          ),
+        ),
+      );
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
   }
 
   void _handleScroll() {
@@ -1085,6 +1164,22 @@ class _ChatRoomPageState extends State<ChatRoomPage>
             ],
           ),
         ),
+        actions: [
+          IconButton(
+            tooltip: 'Sesli ara',
+            onPressed: _peerUserId == null
+                ? null
+                : () => _startCall(TurnaCallType.audio),
+            icon: const Icon(Icons.call_outlined),
+          ),
+          IconButton(
+            tooltip: 'Goruntulu ara',
+            onPressed: _peerUserId == null
+                ? null
+                : () => _startCall(TurnaCallType.video),
+            icon: const Icon(Icons.videocam_outlined),
+          ),
+        ],
       ),
       body: Column(
         children: [
@@ -1271,8 +1366,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                                         alignment: Alignment.centerLeft,
                                         child: Text(msg.text),
                                       ),
-                                    if (hasText &&
-                                        msg.attachments.isNotEmpty)
+                                    if (hasText && msg.attachments.isNotEmpty)
                                       const SizedBox(height: 10),
                                     if (msg.attachments.isNotEmpty) ...[
                                       Align(
@@ -1390,10 +1484,7 @@ class _MessageMetaFooter extends StatelessWidget {
           timeLabel,
           style: const TextStyle(fontSize: 11, color: Color(0xFF777C79)),
         ),
-        if (mine) ...[
-          const SizedBox(width: 6),
-          _StatusTick(status: status),
-        ],
+        if (mine) ...[const SizedBox(width: 6), _StatusTick(status: status)],
       ],
     );
   }
@@ -1577,10 +1668,12 @@ class NewChatPage extends StatefulWidget {
   const NewChatPage({
     super.key,
     required this.session,
+    required this.callCoordinator,
     required this.onSessionExpired,
   });
 
   final AuthSession session;
+  final TurnaCallCoordinator callCoordinator;
   final VoidCallback onSessionExpired;
 
   @override
@@ -1728,6 +1821,7 @@ class _NewChatPageState extends State<NewChatPage> {
                               builder: (_) => ChatRoomPage(
                                 chat: chat,
                                 session: widget.session,
+                                callCoordinator: widget.callCoordinator,
                                 onSessionExpired: widget.onSessionExpired,
                               ),
                             ),
@@ -3501,12 +3595,30 @@ class TurnaSocketClient extends ChangeNotifier {
 }
 
 class PresenceSocketClient {
-  PresenceSocketClient({required this.token, this.onInboxUpdate});
+  PresenceSocketClient({
+    required this.token,
+    this.onInboxUpdate,
+    this.onIncomingCall,
+    this.onCallAccepted,
+    this.onCallDeclined,
+    this.onCallEnded,
+  });
 
   final String token;
   final VoidCallback? onInboxUpdate;
+  final void Function(Map<String, dynamic> payload)? onIncomingCall;
+  final void Function(Map<String, dynamic> payload)? onCallAccepted;
+  final void Function(Map<String, dynamic> payload)? onCallDeclined;
+  final void Function(Map<String, dynamic> payload)? onCallEnded;
   io.Socket? _socket;
   Timer? _refreshDebounce;
+
+  Map<String, dynamic>? _asMap(Object? data) {
+    if (data is Map) {
+      return Map<String, dynamic>.from(data);
+    }
+    return null;
+  }
 
   void connect() {
     _socket = io.io(
@@ -3539,6 +3651,30 @@ class PresenceSocketClient {
     _socket!.on('chat:status', (_) {
       turnaLog('presence chat:status received');
       _scheduleInboxRefresh();
+    });
+    _socket!.on('call:incoming', (data) {
+      final map = _asMap(data);
+      if (map == null) return;
+      turnaLog('presence call:incoming received', map);
+      onIncomingCall?.call(map);
+    });
+    _socket!.on('call:accepted', (data) {
+      final map = _asMap(data);
+      if (map == null) return;
+      turnaLog('presence call:accepted received', map);
+      onCallAccepted?.call(map);
+    });
+    _socket!.on('call:declined', (data) {
+      final map = _asMap(data);
+      if (map == null) return;
+      turnaLog('presence call:declined received', map);
+      onCallDeclined?.call(map);
+    });
+    _socket!.on('call:ended', (data) {
+      final map = _asMap(data);
+      if (map == null) return;
+      turnaLog('presence call:ended received', map);
+      onCallEnded?.call(map);
     });
 
     _socket!.connect();
@@ -4031,6 +4167,18 @@ class ProfileApi {
           return 'Avatar bulunamadı.';
         case 'text_or_attachment_required':
           return 'Mesaj veya ek secmelisin.';
+        case 'call_provider_not_configured':
+          return 'Arama servisi henuz hazir degil.';
+        case 'call_conflict':
+          return 'Kullanicilardan biri baska bir aramada.';
+        case 'invalid_call_target':
+          return 'Bu kullanici aranamaz.';
+        case 'call_not_found':
+          return 'Arama kaydi bulunamadi.';
+        case 'call_not_ringing':
+          return 'Bu arama artik cevaplanamaz.';
+        case 'call_not_active':
+          return 'Arama zaten sonlanmis.';
         default:
           return error ?? 'İşlem başarısız ($statusCode)';
       }
@@ -4256,5 +4404,1214 @@ class ChatApi {
     final hh = dt.hour.toString().padLeft(2, '0');
     final mm = dt.minute.toString().padLeft(2, '0');
     return '$hh:$mm';
+  }
+}
+
+enum TurnaCallType { audio, video }
+
+enum TurnaCallStatus { ringing, accepted, declined, missed, ended, cancelled }
+
+class TurnaCallPeer {
+  TurnaCallPeer({required this.id, required this.displayName, this.avatarUrl});
+
+  final String id;
+  final String displayName;
+  final String? avatarUrl;
+
+  factory TurnaCallPeer.fromMap(Map<String, dynamic> map) {
+    return TurnaCallPeer(
+      id: (map['id'] ?? '').toString(),
+      displayName: (map['displayName'] ?? '').toString(),
+      avatarUrl: TurnaUserProfile._nullableString(map['avatarUrl']),
+    );
+  }
+}
+
+class TurnaCallSummary {
+  TurnaCallSummary({
+    required this.id,
+    required this.callerId,
+    required this.calleeId,
+    required this.type,
+    required this.status,
+    required this.provider,
+    required this.direction,
+    required this.peer,
+    required this.caller,
+    required this.callee,
+    this.roomName,
+    this.createdAt,
+    this.acceptedAt,
+    this.endedAt,
+  });
+
+  final String id;
+  final String callerId;
+  final String calleeId;
+  final TurnaCallType type;
+  final TurnaCallStatus status;
+  final String provider;
+  final String direction;
+  final String? roomName;
+  final String? createdAt;
+  final String? acceptedAt;
+  final String? endedAt;
+  final TurnaCallPeer peer;
+  final TurnaCallPeer caller;
+  final TurnaCallPeer callee;
+
+  factory TurnaCallSummary.fromMap(Map<String, dynamic> map) {
+    return TurnaCallSummary(
+      id: (map['id'] ?? '').toString(),
+      callerId: (map['callerId'] ?? '').toString(),
+      calleeId: (map['calleeId'] ?? '').toString(),
+      type: ((map['type'] ?? '').toString().toLowerCase() == 'video')
+          ? TurnaCallType.video
+          : TurnaCallType.audio,
+      status: switch ((map['status'] ?? '').toString().toLowerCase()) {
+        'accepted' => TurnaCallStatus.accepted,
+        'declined' => TurnaCallStatus.declined,
+        'missed' => TurnaCallStatus.missed,
+        'ended' => TurnaCallStatus.ended,
+        'cancelled' => TurnaCallStatus.cancelled,
+        _ => TurnaCallStatus.ringing,
+      },
+      provider: (map['provider'] ?? '').toString(),
+      direction: (map['direction'] ?? 'outgoing').toString(),
+      roomName: TurnaUserProfile._nullableString(map['roomName']),
+      createdAt: TurnaUserProfile._nullableString(map['createdAt']),
+      acceptedAt: TurnaUserProfile._nullableString(map['acceptedAt']),
+      endedAt: TurnaUserProfile._nullableString(map['endedAt']),
+      peer: TurnaCallPeer.fromMap(
+        Map<String, dynamic>.from(map['peer'] as Map? ?? const {}),
+      ),
+      caller: TurnaCallPeer.fromMap(
+        Map<String, dynamic>.from(map['caller'] as Map? ?? const {}),
+      ),
+      callee: TurnaCallPeer.fromMap(
+        Map<String, dynamic>.from(map['callee'] as Map? ?? const {}),
+      ),
+    );
+  }
+}
+
+class TurnaCallHistoryItem {
+  TurnaCallHistoryItem({
+    required this.id,
+    required this.type,
+    required this.status,
+    required this.direction,
+    required this.peer,
+    this.createdAt,
+    this.acceptedAt,
+    this.endedAt,
+    this.durationSeconds,
+  });
+
+  final String id;
+  final TurnaCallType type;
+  final TurnaCallStatus status;
+  final String direction;
+  final String? createdAt;
+  final String? acceptedAt;
+  final String? endedAt;
+  final int? durationSeconds;
+  final TurnaCallPeer peer;
+
+  factory TurnaCallHistoryItem.fromMap(Map<String, dynamic> map) {
+    return TurnaCallHistoryItem(
+      id: (map['id'] ?? '').toString(),
+      type: ((map['type'] ?? '').toString().toLowerCase() == 'video')
+          ? TurnaCallType.video
+          : TurnaCallType.audio,
+      status: switch ((map['status'] ?? '').toString().toLowerCase()) {
+        'accepted' => TurnaCallStatus.accepted,
+        'declined' => TurnaCallStatus.declined,
+        'missed' => TurnaCallStatus.missed,
+        'ended' => TurnaCallStatus.ended,
+        'cancelled' => TurnaCallStatus.cancelled,
+        _ => TurnaCallStatus.ringing,
+      },
+      direction: (map['direction'] ?? 'outgoing').toString(),
+      createdAt: TurnaUserProfile._nullableString(map['createdAt']),
+      acceptedAt: TurnaUserProfile._nullableString(map['acceptedAt']),
+      endedAt: TurnaUserProfile._nullableString(map['endedAt']),
+      durationSeconds: (map['durationSeconds'] as num?)?.toInt(),
+      peer: TurnaCallPeer.fromMap(
+        Map<String, dynamic>.from(map['peer'] as Map? ?? const {}),
+      ),
+    );
+  }
+}
+
+class TurnaCallConnectPayload {
+  TurnaCallConnectPayload({
+    required this.provider,
+    required this.url,
+    required this.roomName,
+    required this.token,
+    required this.callId,
+    required this.type,
+  });
+
+  final String provider;
+  final String url;
+  final String roomName;
+  final String token;
+  final String callId;
+  final TurnaCallType type;
+
+  factory TurnaCallConnectPayload.fromMap(Map<String, dynamic> map) {
+    return TurnaCallConnectPayload(
+      provider: (map['provider'] ?? '').toString(),
+      url: (map['url'] ?? '').toString(),
+      roomName: (map['roomName'] ?? '').toString(),
+      token: (map['token'] ?? '').toString(),
+      callId: (map['callId'] ?? '').toString(),
+      type: ((map['type'] ?? '').toString().toLowerCase() == 'video')
+          ? TurnaCallType.video
+          : TurnaCallType.audio,
+    );
+  }
+}
+
+class TurnaAcceptedCallEvent {
+  TurnaAcceptedCallEvent({required this.call, required this.connect});
+
+  final TurnaCallSummary call;
+  final TurnaCallConnectPayload connect;
+
+  factory TurnaAcceptedCallEvent.fromMap(Map<String, dynamic> map) {
+    return TurnaAcceptedCallEvent(
+      call: TurnaCallSummary.fromMap(
+        Map<String, dynamic>.from(map['call'] as Map? ?? const {}),
+      ),
+      connect: TurnaCallConnectPayload.fromMap(
+        Map<String, dynamic>.from(map['connect'] as Map? ?? const {}),
+      ),
+    );
+  }
+}
+
+class TurnaIncomingCallEvent {
+  TurnaIncomingCallEvent({required this.call});
+
+  final TurnaCallSummary call;
+
+  factory TurnaIncomingCallEvent.fromMap(Map<String, dynamic> map) {
+    return TurnaIncomingCallEvent(
+      call: TurnaCallSummary.fromMap(
+        Map<String, dynamic>.from(map['call'] as Map? ?? const {}),
+      ),
+    );
+  }
+}
+
+class TurnaTerminalCallEvent {
+  TurnaTerminalCallEvent({required this.kind, required this.call});
+
+  final String kind;
+  final TurnaCallSummary call;
+
+  factory TurnaTerminalCallEvent.fromMap(
+    String kind,
+    Map<String, dynamic> map,
+  ) {
+    return TurnaTerminalCallEvent(
+      kind: kind,
+      call: TurnaCallSummary.fromMap(
+        Map<String, dynamic>.from(map['call'] as Map? ?? const {}),
+      ),
+    );
+  }
+}
+
+class TurnaCallCoordinator extends ChangeNotifier {
+  TurnaIncomingCallEvent? _pendingIncoming;
+  final Map<String, TurnaAcceptedCallEvent> _acceptedEvents = {};
+  final Map<String, TurnaTerminalCallEvent> _terminalEvents = {};
+
+  void handleIncoming(Map<String, dynamic> payload) {
+    _pendingIncoming = TurnaIncomingCallEvent.fromMap(payload);
+    notifyListeners();
+  }
+
+  void handleAccepted(Map<String, dynamic> payload) {
+    final event = TurnaAcceptedCallEvent.fromMap(payload);
+    _acceptedEvents[event.call.id] = event;
+    notifyListeners();
+  }
+
+  void handleDeclined(Map<String, dynamic> payload) {
+    final event = TurnaTerminalCallEvent.fromMap('declined', payload);
+    _terminalEvents[event.call.id] = event;
+    notifyListeners();
+  }
+
+  void handleEnded(Map<String, dynamic> payload) {
+    final event = TurnaTerminalCallEvent.fromMap('ended', payload);
+    _terminalEvents[event.call.id] = event;
+    notifyListeners();
+  }
+
+  TurnaIncomingCallEvent? takeIncomingCall() {
+    final event = _pendingIncoming;
+    _pendingIncoming = null;
+    return event;
+  }
+
+  TurnaAcceptedCallEvent? consumeAccepted(String callId) {
+    return _acceptedEvents.remove(callId);
+  }
+
+  TurnaTerminalCallEvent? consumeTerminal(String callId) {
+    return _terminalEvents.remove(callId);
+  }
+
+  void clearCall(String callId) {
+    if (_pendingIncoming?.call.id == callId) {
+      _pendingIncoming = null;
+    }
+    _acceptedEvents.remove(callId);
+    _terminalEvents.remove(callId);
+  }
+}
+
+class CallsPage extends StatefulWidget {
+  const CallsPage({
+    super.key,
+    required this.session,
+    required this.callCoordinator,
+    required this.onSessionExpired,
+  });
+
+  final AuthSession session;
+  final TurnaCallCoordinator callCoordinator;
+  final VoidCallback onSessionExpired;
+
+  @override
+  State<CallsPage> createState() => _CallsPageState();
+}
+
+class _CallsPageState extends State<CallsPage> {
+  int _refreshTick = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.callCoordinator.addListener(_onCallUpdate);
+  }
+
+  @override
+  void dispose() {
+    widget.callCoordinator.removeListener(_onCallUpdate);
+    super.dispose();
+  }
+
+  void _onCallUpdate() {
+    if (!mounted) return;
+    setState(() => _refreshTick++);
+  }
+
+  String _formatTime(String? iso) {
+    if (iso == null || iso.isEmpty) return '';
+    final dt = DateTime.tryParse(iso);
+    if (dt == null) return '';
+    final hh = dt.hour.toString().padLeft(2, '0');
+    final mm = dt.minute.toString().padLeft(2, '0');
+    return '$hh:$mm';
+  }
+
+  String _statusLabel(TurnaCallHistoryItem item) {
+    switch (item.status) {
+      case TurnaCallStatus.accepted:
+        if (item.durationSeconds != null && item.durationSeconds! > 0) {
+          final minutes = item.durationSeconds! ~/ 60;
+          final seconds = item.durationSeconds! % 60;
+          return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+        }
+        return 'Baglandi';
+      case TurnaCallStatus.declined:
+        return 'Reddedildi';
+      case TurnaCallStatus.missed:
+        return 'Cevapsiz';
+      case TurnaCallStatus.cancelled:
+        return 'Iptal edildi';
+      case TurnaCallStatus.ended:
+        return 'Sonlandi';
+      case TurnaCallStatus.ringing:
+        return 'Caliyor';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Calls')),
+      body: FutureBuilder<List<TurnaCallHistoryItem>>(
+        future: CallApi.fetchCalls(widget.session, refreshTick: _refreshTick),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          if (snapshot.hasError) {
+            final error = snapshot.error;
+            final isAuthError = error is TurnaUnauthorizedException;
+            return _CenteredState(
+              icon: isAuthError
+                  ? Icons.lock_outline
+                  : Icons.call_missed_outgoing,
+              title: isAuthError
+                  ? 'Oturumun suresi doldu'
+                  : 'Aramalar yuklenemedi',
+              message: error.toString(),
+              primaryLabel: isAuthError ? 'Yeniden giris yap' : 'Tekrar dene',
+              onPrimary: isAuthError
+                  ? widget.onSessionExpired
+                  : () => setState(() => _refreshTick++),
+            );
+          }
+
+          final calls = snapshot.data ?? const [];
+          if (calls.isEmpty) {
+            return const _CenteredState(
+              icon: Icons.call_outlined,
+              title: 'Henuz arama yok',
+              message: 'Yaptigin ve aldigin aramalar burada listelenecek.',
+            );
+          }
+
+          return RefreshIndicator(
+            onRefresh: () async => setState(() => _refreshTick++),
+            child: ListView.builder(
+              physics: const AlwaysScrollableScrollPhysics(),
+              itemCount: calls.length,
+              itemBuilder: (context, index) {
+                final item = calls[index];
+                final isMissed =
+                    item.status == TurnaCallStatus.missed ||
+                    item.status == TurnaCallStatus.declined;
+                return ListTile(
+                  leading: _ProfileAvatar(
+                    label: item.peer.displayName,
+                    avatarUrl: item.peer.avatarUrl,
+                    authToken: widget.session.token,
+                    radius: 22,
+                  ),
+                  title: Text(
+                    item.peer.displayName,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: Row(
+                    children: [
+                      Icon(
+                        item.direction == 'incoming'
+                            ? Icons.call_received
+                            : Icons.call_made,
+                        size: 16,
+                        color: isMissed
+                            ? Colors.red.shade400
+                            : const Color(0xFF1FAA59),
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          _statusLabel(item),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                  trailing: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(
+                        _formatTime(item.createdAt),
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFF777C79),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Icon(
+                        item.type == TurnaCallType.video
+                            ? Icons.videocam_outlined
+                            : Icons.call_outlined,
+                        color: const Color(0xFF777C79),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class IncomingCallPage extends StatefulWidget {
+  const IncomingCallPage({
+    super.key,
+    required this.session,
+    required this.coordinator,
+    required this.incoming,
+    required this.onSessionExpired,
+  });
+
+  final AuthSession session;
+  final TurnaCallCoordinator coordinator;
+  final TurnaIncomingCallEvent incoming;
+  final VoidCallback onSessionExpired;
+
+  @override
+  State<IncomingCallPage> createState() => _IncomingCallPageState();
+}
+
+class _IncomingCallPageState extends State<IncomingCallPage> {
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.coordinator.addListener(_handleCoordinator);
+  }
+
+  @override
+  void dispose() {
+    widget.coordinator.removeListener(_handleCoordinator);
+    super.dispose();
+  }
+
+  void _handleCoordinator() {
+    final terminal = widget.coordinator.consumeTerminal(
+      widget.incoming.call.id,
+    );
+    if (terminal == null || !mounted) return;
+    Navigator.of(context).pop();
+  }
+
+  Future<void> _accept() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final accepted = await CallApi.acceptCall(
+        widget.session,
+        callId: widget.incoming.call.id,
+      );
+      widget.coordinator.clearCall(widget.incoming.call.id);
+      if (!mounted) return;
+      await Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => ActiveCallPage(
+            session: widget.session,
+            coordinator: widget.coordinator,
+            call: accepted.call,
+            connect: accepted.connect,
+            onSessionExpired: widget.onSessionExpired,
+          ),
+        ),
+      );
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+      setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _decline() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await CallApi.declineCall(
+        widget.session,
+        callId: widget.incoming.call.id,
+      );
+    } on TurnaUnauthorizedException {
+      if (mounted) {
+        widget.onSessionExpired();
+      }
+    } catch (_) {}
+
+    widget.coordinator.clearCall(widget.incoming.call.id);
+    if (mounted) {
+      Navigator.of(context).pop();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final call = widget.incoming.call;
+    final isVideo = call.type == TurnaCallType.video;
+    return PopScope(
+      canPop: false,
+      child: Scaffold(
+        backgroundColor: const Color(0xFF0F1112),
+        body: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              children: [
+                const Spacer(),
+                _ProfileAvatar(
+                  label: call.peer.displayName,
+                  avatarUrl: call.peer.avatarUrl,
+                  authToken: widget.session.token,
+                  radius: 48,
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  call.peer.displayName,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 28,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  isVideo ? 'Goruntulu arama' : 'Sesli arama',
+                  style: const TextStyle(
+                    color: Color(0xFFB7BCB9),
+                    fontSize: 16,
+                  ),
+                ),
+                const Spacer(),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    FloatingActionButton(
+                      heroTag: 'decline_${call.id}',
+                      backgroundColor: Colors.red.shade400,
+                      onPressed: _busy ? null : _decline,
+                      child: const Icon(Icons.call_end, color: Colors.white),
+                    ),
+                    FloatingActionButton(
+                      heroTag: 'accept_${call.id}',
+                      backgroundColor: const Color(0xFF1FAA59),
+                      onPressed: _busy ? null : _accept,
+                      child: Icon(
+                        isVideo ? Icons.videocam : Icons.call,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 24),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class OutgoingCallPage extends StatefulWidget {
+  const OutgoingCallPage({
+    super.key,
+    required this.session,
+    required this.coordinator,
+    required this.initialCall,
+    required this.onSessionExpired,
+  });
+
+  final AuthSession session;
+  final TurnaCallCoordinator coordinator;
+  final TurnaCallSummary initialCall;
+  final VoidCallback onSessionExpired;
+
+  @override
+  State<OutgoingCallPage> createState() => _OutgoingCallPageState();
+}
+
+class _OutgoingCallPageState extends State<OutgoingCallPage> {
+  bool _ending = false;
+  bool _navigatedToActive = false;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.coordinator.addListener(_handleCoordinator);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _handleCoordinator());
+  }
+
+  @override
+  void dispose() {
+    widget.coordinator.removeListener(_handleCoordinator);
+    super.dispose();
+  }
+
+  void _handleCoordinator() {
+    if (!mounted || _navigatedToActive) return;
+    final accepted = widget.coordinator.consumeAccepted(widget.initialCall.id);
+    if (accepted != null) {
+      _navigatedToActive = true;
+      widget.coordinator.clearCall(widget.initialCall.id);
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => ActiveCallPage(
+            session: widget.session,
+            coordinator: widget.coordinator,
+            call: accepted.call,
+            connect: accepted.connect,
+            onSessionExpired: widget.onSessionExpired,
+          ),
+        ),
+      );
+      return;
+    }
+
+    final terminal = widget.coordinator.consumeTerminal(widget.initialCall.id);
+    if (terminal == null) return;
+
+    final message = terminal.kind == 'declined'
+        ? 'Arama reddedildi.'
+        : 'Arama sonlandi.';
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+    Navigator.of(context).pop();
+  }
+
+  Future<void> _cancelCall() async {
+    if (_ending) return;
+    setState(() => _ending = true);
+    try {
+      await CallApi.endCall(widget.session, callId: widget.initialCall.id);
+    } on TurnaUnauthorizedException {
+      if (mounted) {
+        widget.onSessionExpired();
+      }
+    } catch (_) {}
+
+    widget.coordinator.clearCall(widget.initialCall.id);
+    if (mounted) {
+      Navigator.of(context).pop();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final call = widget.initialCall;
+    return Scaffold(
+      backgroundColor: const Color(0xFF0F1112),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            children: [
+              const Spacer(),
+              _ProfileAvatar(
+                label: call.peer.displayName,
+                avatarUrl: call.peer.avatarUrl,
+                authToken: widget.session.token,
+                radius: 48,
+              ),
+              const SizedBox(height: 20),
+              Text(
+                call.peer.displayName,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 28,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                call.type == TurnaCallType.video
+                    ? 'Goruntulu arama caliyor...'
+                    : 'Sesli arama caliyor...',
+                style: const TextStyle(color: Color(0xFFB7BCB9), fontSize: 16),
+              ),
+              const Spacer(),
+              FloatingActionButton(
+                backgroundColor: Colors.red.shade400,
+                onPressed: _ending ? null : _cancelCall,
+                child: const Icon(Icons.call_end, color: Colors.white),
+              ),
+              const SizedBox(height: 24),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+abstract class CallProviderAdapter {
+  Future<void> connect();
+  Future<void> disconnect();
+}
+
+class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
+  LiveKitCallAdapter({
+    required this.connectPayload,
+    required this.videoEnabled,
+  });
+
+  final TurnaCallConnectPayload connectPayload;
+  final bool videoEnabled;
+  final lk.Room room = lk.Room(
+    roomOptions: const lk.RoomOptions(adaptiveStream: true, dynacast: true),
+  );
+  lk.EventsListener<lk.RoomEvent>? _listener;
+  bool connecting = false;
+  bool connected = false;
+  bool microphoneEnabled = true;
+  bool cameraEnabled = false;
+  String? error;
+
+  Iterable<lk.RemoteParticipant> get remoteParticipants =>
+      room.remoteParticipants.values;
+
+  lk.VideoTrack? get primaryRemoteVideoTrack {
+    for (final participant in room.remoteParticipants.values) {
+      for (final publication in participant.videoTrackPublications) {
+        final track = publication.track;
+        if (track is lk.VideoTrack && publication.subscribed) {
+          return track;
+        }
+      }
+    }
+    return null;
+  }
+
+  lk.VideoTrack? get localVideoTrack {
+    final localParticipant = room.localParticipant;
+    if (localParticipant == null) return null;
+    for (final publication in localParticipant.videoTrackPublications) {
+      final track = publication.track;
+      if (track is lk.VideoTrack) {
+        return track;
+      }
+    }
+    return null;
+  }
+
+  @override
+  Future<void> connect() async {
+    if (connecting || connected) return;
+
+    connecting = true;
+    error = null;
+    notifyListeners();
+
+    _listener = room.createListener()
+      ..on<lk.RoomDisconnectedEvent>((_) {
+        connected = false;
+        connecting = false;
+        notifyListeners();
+      })
+      ..on<lk.ParticipantConnectedEvent>((_) => notifyListeners())
+      ..on<lk.ParticipantDisconnectedEvent>((_) => notifyListeners())
+      ..on<lk.TrackSubscribedEvent>((_) => notifyListeners())
+      ..on<lk.TrackUnsubscribedEvent>((_) => notifyListeners())
+      ..on<lk.LocalTrackPublishedEvent>((_) => notifyListeners())
+      ..on<lk.LocalTrackUnpublishedEvent>((_) => notifyListeners());
+
+    try {
+      await room.prepareConnection(connectPayload.url, connectPayload.token);
+      await room.connect(connectPayload.url, connectPayload.token);
+      final localParticipant = room.localParticipant;
+      if (localParticipant == null) {
+        throw StateError('local_participant_missing');
+      }
+      await localParticipant.setMicrophoneEnabled(true);
+      microphoneEnabled = true;
+
+      if (videoEnabled) {
+        await localParticipant.setCameraEnabled(true);
+        cameraEnabled = true;
+      }
+
+      connected = true;
+      connecting = false;
+      notifyListeners();
+    } catch (err) {
+      connecting = false;
+      error = 'Cagri baglantisi kurulamadi.';
+      turnaLog('livekit connect failed', err);
+      notifyListeners();
+    }
+  }
+
+  Future<void> toggleMicrophone() async {
+    final next = !microphoneEnabled;
+    final localParticipant = room.localParticipant;
+    if (localParticipant == null) return;
+    await localParticipant.setMicrophoneEnabled(next);
+    microphoneEnabled = next;
+    notifyListeners();
+  }
+
+  Future<void> toggleCamera() async {
+    final next = !cameraEnabled;
+    final localParticipant = room.localParticipant;
+    if (localParticipant == null) return;
+    await localParticipant.setCameraEnabled(next);
+    cameraEnabled = next;
+    notifyListeners();
+  }
+
+  @override
+  Future<void> disconnect() async {
+    try {
+      await room.disconnect();
+    } catch (_) {}
+    connected = false;
+    connecting = false;
+    notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _listener?.dispose();
+    room.disconnect();
+    super.dispose();
+  }
+}
+
+class ActiveCallPage extends StatefulWidget {
+  const ActiveCallPage({
+    super.key,
+    required this.session,
+    required this.coordinator,
+    required this.call,
+    required this.connect,
+    required this.onSessionExpired,
+  });
+
+  final AuthSession session;
+  final TurnaCallCoordinator coordinator;
+  final TurnaCallSummary call;
+  final TurnaCallConnectPayload connect;
+  final VoidCallback onSessionExpired;
+
+  @override
+  State<ActiveCallPage> createState() => _ActiveCallPageState();
+}
+
+class _ActiveCallPageState extends State<ActiveCallPage> {
+  late final LiveKitCallAdapter _adapter;
+  bool _ending = false;
+  Timer? _durationTicker;
+  int _durationSeconds = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _adapter =
+        LiveKitCallAdapter(
+            connectPayload: widget.connect,
+            videoEnabled: widget.call.type == TurnaCallType.video,
+          )
+          ..addListener(_refresh)
+          ..connect();
+    widget.coordinator.addListener(_handleCoordinator);
+    _durationTicker = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted || !_adapter.connected) return;
+      setState(() => _durationSeconds++);
+    });
+  }
+
+  @override
+  void dispose() {
+    widget.coordinator.removeListener(_handleCoordinator);
+    _durationTicker?.cancel();
+    _adapter.removeListener(_refresh);
+    _adapter.dispose();
+    super.dispose();
+  }
+
+  void _refresh() {
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  void _handleCoordinator() {
+    final terminal = widget.coordinator.consumeTerminal(widget.call.id);
+    if (terminal == null || !mounted) return;
+    Navigator.of(context).pop();
+  }
+
+  Future<void> _endCall() async {
+    if (_ending) return;
+    setState(() => _ending = true);
+    try {
+      await CallApi.endCall(widget.session, callId: widget.call.id);
+    } on TurnaUnauthorizedException {
+      if (mounted) {
+        widget.onSessionExpired();
+      }
+    } catch (_) {}
+
+    widget.coordinator.clearCall(widget.call.id);
+    await _adapter.disconnect();
+    if (mounted) {
+      Navigator.of(context).pop();
+    }
+  }
+
+  String _formatDuration() {
+    final minutes = (_durationSeconds ~/ 60).toString().padLeft(2, '0');
+    final seconds = (_durationSeconds % 60).toString().padLeft(2, '0');
+    return '$minutes:$seconds';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final remoteVideo = _adapter.primaryRemoteVideoTrack;
+    final localVideo = _adapter.localVideoTrack;
+    final isVideo = widget.call.type == TurnaCallType.video;
+
+    return Scaffold(
+      backgroundColor: const Color(0xFF101314),
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        foregroundColor: Colors.white,
+        title: Text(widget.call.peer.displayName),
+      ),
+      body: SafeArea(
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: remoteVideo != null && isVideo
+                  ? lk.VideoTrackRenderer(remoteVideo)
+                  : Container(
+                      color: const Color(0xFF101314),
+                      child: Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            _ProfileAvatar(
+                              label: widget.call.peer.displayName,
+                              avatarUrl: widget.call.peer.avatarUrl,
+                              authToken: widget.session.token,
+                              radius: 48,
+                            ),
+                            const SizedBox(height: 16),
+                            Text(
+                              widget.call.peer.displayName,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 24,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              _adapter.connecting
+                                  ? 'Baglaniyor...'
+                                  : (_adapter.connected
+                                        ? _formatDuration()
+                                        : (_adapter.error ??
+                                              'Arama hazirlaniyor')),
+                              style: const TextStyle(
+                                color: Color(0xFFB7BCB9),
+                                fontSize: 16,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+            ),
+            if (localVideo != null && isVideo)
+              Positioned(
+                right: 16,
+                top: 16,
+                width: 110,
+                height: 160,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(16),
+                  child: ColoredBox(
+                    color: Colors.black,
+                    child: lk.VideoTrackRenderer(localVideo),
+                  ),
+                ),
+              ),
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 24,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  FloatingActionButton(
+                    heroTag: 'mute_${widget.call.id}',
+                    backgroundColor: Colors.white12,
+                    onPressed: _adapter.connecting
+                        ? null
+                        : () => _adapter.toggleMicrophone(),
+                    child: Icon(
+                      _adapter.microphoneEnabled ? Icons.mic : Icons.mic_off,
+                      color: Colors.white,
+                    ),
+                  ),
+                  if (isVideo)
+                    FloatingActionButton(
+                      heroTag: 'camera_${widget.call.id}',
+                      backgroundColor: Colors.white12,
+                      onPressed: _adapter.connecting
+                          ? null
+                          : () => _adapter.toggleCamera(),
+                      child: Icon(
+                        _adapter.cameraEnabled
+                            ? Icons.videocam
+                            : Icons.videocam_off,
+                        color: Colors.white,
+                      ),
+                    ),
+                  FloatingActionButton(
+                    heroTag: 'end_${widget.call.id}',
+                    backgroundColor: Colors.red.shade400,
+                    onPressed: _ending ? null : _endCall,
+                    child: const Icon(Icons.call_end, color: Colors.white),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class CallApi {
+  static Future<List<TurnaCallHistoryItem>> fetchCalls(
+    AuthSession session, {
+    int refreshTick = 0,
+  }) async {
+    try {
+      turnaLog('api fetchCalls', {'refreshTick': refreshTick});
+      final res = await http.get(
+        Uri.parse('$kBackendBaseUrl/api/calls'),
+        headers: {'Authorization': 'Bearer ${session.token}'},
+      );
+      ChatApi._throwIfApiError(res);
+
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final items = (map['data'] as List<dynamic>? ?? [])
+          .whereType<Map>()
+          .map(
+            (item) =>
+                TurnaCallHistoryItem.fromMap(Map<String, dynamic>.from(item)),
+          )
+          .toList();
+      return items;
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Arama gecmisi yuklenemedi.');
+    }
+  }
+
+  static Future<TurnaCallSummary> startCall(
+    AuthSession session, {
+    required String calleeId,
+    required TurnaCallType type,
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse('$kBackendBaseUrl/api/calls/start'),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'calleeId': calleeId, 'type': type.name}),
+      );
+      ChatApi._throwIfApiError(res);
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = Map<String, dynamic>.from(map['data'] as Map? ?? const {});
+      return TurnaCallSummary.fromMap(
+        Map<String, dynamic>.from(data['call'] as Map? ?? const {}),
+      );
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Arama baslatilamadi.');
+    }
+  }
+
+  static Future<TurnaAcceptedCallEvent> acceptCall(
+    AuthSession session, {
+    required String callId,
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse('$kBackendBaseUrl/api/calls/$callId/accept'),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+      );
+      ChatApi._throwIfApiError(res);
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = Map<String, dynamic>.from(map['data'] as Map? ?? const {});
+      return TurnaAcceptedCallEvent(
+        call: TurnaCallSummary.fromMap(
+          Map<String, dynamic>.from(data['call'] as Map? ?? const {}),
+        ),
+        connect: TurnaCallConnectPayload.fromMap(
+          Map<String, dynamic>.from(data['connect'] as Map? ?? const {}),
+        ),
+      );
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Arama kabul edilemedi.');
+    }
+  }
+
+  static Future<void> declineCall(
+    AuthSession session, {
+    required String callId,
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse('$kBackendBaseUrl/api/calls/$callId/decline'),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+      );
+      ChatApi._throwIfApiError(res);
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Arama reddedilemedi.');
+    }
+  }
+
+  static Future<void> endCall(
+    AuthSession session, {
+    required String callId,
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse('$kBackendBaseUrl/api/calls/$callId/end'),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+      );
+      ChatApi._throwIfApiError(res);
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Arama sonlandirilamadi.');
+    }
   }
 }
