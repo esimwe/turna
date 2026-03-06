@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "349650085807",
+    "project_id": "turna-25f4c",
+    "storage_bucket": "turna-25f4c.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:349650085807:android:5e5b7dc843f29fbceef15a",
+        "android_client_info": {
+          "package_name": "com.turna.chat"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDlAnDZSOiyHicG6c6FmRMUeRem0YFAz-Y"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
