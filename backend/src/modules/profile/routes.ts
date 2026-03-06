@@ -83,6 +83,29 @@ function toProfileDto(
   };
 }
 
+function toPublicProfileDto(
+  req: Request,
+  user: {
+    id: string;
+    displayName: string;
+    phone: string | null;
+    about: string | null;
+    avatarUrl: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+  }
+) {
+  return {
+    id: user.id,
+    displayName: user.displayName,
+    phone: user.phone,
+    about: user.about,
+    avatarUrl: user.avatarUrl ? buildAvatarUrl(req, user.id, user.updatedAt) : null,
+    createdAt: user.createdAt.toISOString(),
+    updatedAt: user.updatedAt.toISOString()
+  };
+}
+
 profileRouter.get("/me", requireAuth, async (req, res) => {
   const user = await prisma.user.findUnique({
     where: { id: req.authUserId! },
@@ -104,6 +127,35 @@ profileRouter.get("/me", requireAuth, async (req, res) => {
   }
 
   res.json({ data: toProfileDto(req, user) });
+});
+
+profileRouter.get("/users/:userId", requireAuth, async (req, res) => {
+  const rawUserId = req.params.userId;
+  const userId = Array.isArray(rawUserId) ? rawUserId[0] : rawUserId;
+  if (!userId) {
+    res.status(400).json({ error: "user_id_required" });
+    return;
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: {
+      id: true,
+      displayName: true,
+      phone: true,
+      about: true,
+      avatarUrl: true,
+      createdAt: true,
+      updatedAt: true
+    }
+  });
+
+  if (!user) {
+    res.status(404).json({ error: "user_not_found" });
+    return;
+  }
+
+  res.json({ data: toPublicProfileDto(req, user) });
 });
 
 profileRouter.put("/me", requireAuth, async (req, res) => {

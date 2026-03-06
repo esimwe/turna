@@ -1,27 +1,114 @@
-import { ChatType, MessageStatus } from "@prisma/client";
+import { AttachmentKind, ChatType, MessageStatus } from "@prisma/client";
+import { logError } from "../../lib/logger.js";
 import { prisma } from "../../lib/prisma.js";
+import { createObjectReadUrl, getObjectHead } from "../../lib/storage.js";
 import type {
+  ChatAttachment,
   ChatMessage,
+  ChatMessagePage,
   ChatSummary,
   DirectoryUser,
+  SendMessageAttachmentInput,
   SendMessagePayload
 } from "./chat.types.js";
 
-function toChatMessage(row: {
+type MessageRow = {
   id: string;
   chatId: string;
   senderId: string;
-  text: string;
+  text: string | null;
   createdAt: Date;
   status: MessageStatus;
-}): ChatMessage {
+  attachments: Array<{
+    id: string;
+    objectKey: string;
+    kind: AttachmentKind;
+    fileName: string | null;
+    contentType: string;
+    sizeBytes: number;
+    width: number | null;
+    height: number | null;
+    durationSeconds: number | null;
+  }>;
+};
+
+function toAttachmentKind(kind: AttachmentKind): ChatAttachment["kind"] {
+  switch (kind) {
+    case AttachmentKind.IMAGE:
+      return "image";
+    case AttachmentKind.VIDEO:
+      return "video";
+    default:
+      return "file";
+  }
+}
+
+function fromAttachmentKind(kind: SendMessageAttachmentInput["kind"]): AttachmentKind {
+  switch (kind) {
+    case "image":
+      return AttachmentKind.IMAGE;
+    case "video":
+      return AttachmentKind.VIDEO;
+    default:
+      return AttachmentKind.FILE;
+  }
+}
+
+function summarizeMessage(row: {
+  text: string | null;
+  attachments?: Array<{ kind: AttachmentKind }>;
+}): string {
+  const text = row.text?.trim();
+  if (text) return text;
+
+  const attachments = row.attachments ?? [];
+  if (attachments.length === 0) return "Sohbet baslat";
+  if (attachments.length > 1) return `${attachments.length} ek gonderildi`;
+
+  switch (attachments[0].kind) {
+    case AttachmentKind.IMAGE:
+      return "Fotograf";
+    case AttachmentKind.VIDEO:
+      return "Video";
+    default:
+      return "Dosya";
+  }
+}
+
+async function toChatAttachment(
+  row: MessageRow["attachments"][number]
+): Promise<ChatAttachment> {
+  let url: string | null = null;
+  try {
+    url = await createObjectReadUrl(row.objectKey);
+  } catch (error) {
+    logError("attachment read url create failed", error);
+  }
+
+  return {
+    id: row.id,
+    objectKey: row.objectKey,
+    kind: toAttachmentKind(row.kind),
+    fileName: row.fileName,
+    contentType: row.contentType,
+    sizeBytes: row.sizeBytes,
+    width: row.width,
+    height: row.height,
+    durationSeconds: row.durationSeconds,
+    url
+  };
+}
+
+async function toChatMessage(row: MessageRow): Promise<ChatMessage> {
+  const attachments = await Promise.all(row.attachments.map((attachment) => toChatAttachment(attachment)));
   return {
     id: row.id,
     chatId: row.chatId,
     senderId: row.senderId,
-    text: row.text,
+    text: row.text ?? "",
     createdAt: row.createdAt.toISOString(),
-    status: row.status
+    status: row.status,
+    attachments
   };
 }
 
@@ -111,12 +198,37 @@ export class ChatService {
       throw new Error("forbidden_chat_access");
     }
 
+    const preparedAttachments = await this.prepareAttachments(
+      payload.chatId,
+      payload.senderId,
+      payload.attachments ?? []
+    );
+
     const message = await prisma.message.create({
       data: {
         chatId: payload.chatId,
         senderId: payload.senderId,
-        text: payload.text,
-        status: MessageStatus.sent
+        text: payload.text?.trim() ? payload.text.trim() : null,
+        status: MessageStatus.sent,
+        attachments: preparedAttachments.length
+          ? {
+              create: preparedAttachments.map((attachment) => ({
+                objectKey: attachment.objectKey,
+                kind: attachment.kind,
+                fileName: attachment.fileName,
+                contentType: attachment.contentType,
+                sizeBytes: attachment.sizeBytes,
+                width: attachment.width,
+                height: attachment.height,
+                durationSeconds: attachment.durationSeconds
+              }))
+            }
+          : undefined
+      },
+      include: {
+        attachments: {
+          orderBy: { createdAt: "asc" }
+        }
       }
     });
 
@@ -164,12 +276,45 @@ export class ChatService {
   }
 
   async getMessages(chatId: string): Promise<ChatMessage[]> {
+    const page = await this.getMessagePage(chatId, { limit: 30 });
+    return page.items;
+  }
+
+  async getMessagePage(
+    chatId: string,
+    options: {
+      before?: string | null;
+      limit?: number;
+    } = {}
+  ): Promise<ChatMessagePage> {
+    const limit = Math.min(Math.max(options.limit ?? 30, 1), 100);
+    const beforeDate =
+      options.before && !Number.isNaN(Date.parse(options.before))
+        ? new Date(options.before)
+        : null;
+
     const rows = await prisma.message.findMany({
-      where: { chatId },
-      orderBy: { createdAt: "asc" }
+      where: {
+        chatId,
+        ...(beforeDate ? { createdAt: { lt: beforeDate } } : {})
+      },
+      include: {
+        attachments: {
+          orderBy: { createdAt: "asc" }
+        }
+      },
+      orderBy: { createdAt: "desc" },
+      take: limit + 1
     });
 
-    return rows.map(toChatMessage);
+    const hasMore = rows.length > limit;
+    const pageRows = rows.slice(0, limit).reverse();
+
+    return {
+      items: await Promise.all(pageRows.map((row) => toChatMessage(row))),
+      hasMore,
+      nextBefore: hasMore && pageRows.length > 0 ? pageRows[0].createdAt.toISOString() : null
+    };
   }
 
   async getChatSummaries(userId: string): Promise<ChatSummary[]> {
@@ -183,7 +328,13 @@ export class ChatService {
             },
             messages: {
               orderBy: { createdAt: "desc" },
-              take: 1
+              take: 1,
+              include: {
+                attachments: {
+                  orderBy: { createdAt: "asc" },
+                  take: 3
+                }
+              }
             }
           }
         }
@@ -207,7 +358,7 @@ export class ChatService {
         return {
           chatId: chat.id,
           title: peer?.displayName ?? "New Chat",
-          lastMessage: last?.text ?? "Sohbet başlat",
+          lastMessage: last ? summarizeMessage(last) : "Sohbet baslat",
           lastMessageAt: last ? last.createdAt.toISOString() : null,
           unreadCount,
           peerId: peer?.id ?? null,
@@ -247,6 +398,50 @@ export class ChatService {
       select: { chatId: true }
     });
     return memberships.map((m) => m.chatId);
+  }
+
+  async getUserDisplayName(userId: string): Promise<string> {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { displayName: true }
+    });
+    return user?.displayName ?? "Turna";
+  }
+
+  private async prepareAttachments(
+    chatId: string,
+    senderId: string,
+    attachments: SendMessageAttachmentInput[]
+  ) {
+    if (attachments.length === 0) return [];
+
+    return Promise.all(
+      attachments.map(async (attachment) => {
+        if (!attachment.objectKey.startsWith(`chat-media/${chatId}/${senderId}/`)) {
+          throw new Error("invalid_attachment_key");
+        }
+
+        const head = await getObjectHead(attachment.objectKey);
+        return {
+          objectKey: attachment.objectKey,
+          kind: fromAttachmentKind(attachment.kind),
+          fileName: attachment.fileName?.trim() || null,
+          contentType: head.contentType ?? attachment.contentType,
+          sizeBytes:
+            head.contentLength != null
+              ? Number(head.contentLength)
+              : Math.max(0, Math.trunc(attachment.sizeBytes ?? 0)),
+          width:
+            attachment.width != null ? Math.max(0, Math.trunc(attachment.width)) : null,
+          height:
+            attachment.height != null ? Math.max(0, Math.trunc(attachment.height)) : null,
+          durationSeconds:
+            attachment.durationSeconds != null
+              ? Math.max(0, Math.trunc(attachment.durationSeconds))
+              : null
+        };
+      })
+    );
   }
 }
 

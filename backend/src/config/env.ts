@@ -18,7 +18,11 @@ const resolvedEnv = {
   R2_BUCKET: process.env.R2_BUCKET,
   R2_ENDPOINT: process.env.R2_ENDPOINT,
   R2_ACCESS_KEY_ID: process.env.R2_ACCESS_KEY_ID,
-  R2_SECRET_ACCESS_KEY: process.env.R2_SECRET_ACCESS_KEY
+  R2_SECRET_ACCESS_KEY: process.env.R2_SECRET_ACCESS_KEY,
+  FIREBASE_PROJECT_ID: process.env.FIREBASE_PROJECT_ID,
+  FIREBASE_CLIENT_EMAIL: process.env.FIREBASE_CLIENT_EMAIL,
+  FIREBASE_PRIVATE_KEY: process.env.FIREBASE_PRIVATE_KEY,
+  FIREBASE_SERVICE_ACCOUNT_JSON: process.env.FIREBASE_SERVICE_ACCOUNT_JSON
 };
 
 const envSchema = z.object({
@@ -32,7 +36,11 @@ const envSchema = z.object({
   R2_BUCKET: z.string().min(1).optional(),
   R2_ENDPOINT: z.string().url().optional(),
   R2_ACCESS_KEY_ID: z.string().min(1).optional(),
-  R2_SECRET_ACCESS_KEY: z.string().min(1).optional()
+  R2_SECRET_ACCESS_KEY: z.string().min(1).optional(),
+  FIREBASE_PROJECT_ID: z.string().min(1).optional(),
+  FIREBASE_CLIENT_EMAIL: z.string().min(1).optional(),
+  FIREBASE_PRIVATE_KEY: z.string().min(1).optional(),
+  FIREBASE_SERVICE_ACCOUNT_JSON: z.string().min(1).optional()
 });
 
 export const env = envSchema.parse(resolvedEnv);

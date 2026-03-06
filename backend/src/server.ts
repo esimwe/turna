@@ -4,6 +4,7 @@ import { Server } from "socket.io";
 import { createApp } from "./app.js";
 import { env } from "./config/env.js";
 import { logError, logInfo } from "./lib/logger.js";
+import { attachChatRealtime } from "./modules/chat/chat.realtime.js";
 import { registerChatSocket } from "./modules/chat/chat.socket.js";
 
 const app = createApp();
@@ -16,6 +17,7 @@ const io = new Server(httpServer, {
   }
 });
 
+attachChatRealtime(io);
 registerChatSocket(io);
 
 const redis = new Redis(env.REDIS_URL, { lazyConnect: true, maxRetriesPerRequest: 1 });

@@ -6,6 +6,7 @@ import { authRouter } from "./modules/auth/routes.js";
 import { chatRouter } from "./modules/chat/routes.js";
 import { healthRouter } from "./modules/health/routes.js";
 import { profileRouter } from "./modules/profile/routes.js";
+import { pushRouter } from "./modules/push/routes.js";
 
 export function createApp() {
   const app = express();
@@ -18,6 +19,7 @@ export function createApp() {
   app.use("/api/auth", authRouter);
   app.use("/api/profile", profileRouter);
   app.use("/api/chats", chatRouter);
+  app.use("/api/push", pushRouter);
 
   return app;
 }

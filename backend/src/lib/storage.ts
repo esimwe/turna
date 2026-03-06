@@ -19,6 +19,15 @@ const IMAGE_EXTENSION_BY_CONTENT_TYPE: Record<string, string> = {
   "image/webp": "webp"
 };
 
+const VIDEO_EXTENSION_BY_CONTENT_TYPE: Record<string, string> = {
+  "video/mp4": "mp4",
+  "video/quicktime": "mov",
+  "video/webm": "webm",
+  "video/x-m4v": "m4v"
+};
+
+export type ChatUploadKind = "image" | "video" | "file";
+
 let storageClient: S3Client | null = null;
 
 function hasStorageConfig(): boolean {
@@ -68,7 +77,11 @@ function extractFileExtension(fileName?: string | null): string | null {
 function inferExtension(contentType: string, fileName?: string | null): string {
   const fromName = extractFileExtension(fileName);
   if (fromName) return fromName;
-  return IMAGE_EXTENSION_BY_CONTENT_TYPE[contentType] ?? "bin";
+  return (
+    IMAGE_EXTENSION_BY_CONTENT_TYPE[contentType] ??
+    VIDEO_EXTENSION_BY_CONTENT_TYPE[contentType] ??
+    "bin"
+  );
 }
 
 export function isStorageConfigured(): boolean {
@@ -86,6 +99,25 @@ export function buildAvatarObjectKey(
 
 export function isAvatarKeyOwnedByUser(userId: string, objectKey: string): boolean {
   return objectKey.startsWith(`avatars/${userId}/`);
+}
+
+export function buildChatAttachmentObjectKey(params: {
+  chatId: string;
+  userId: string;
+  kind: ChatUploadKind;
+  contentType: string;
+  fileName?: string | null;
+}): string {
+  const extension = inferExtension(params.contentType, params.fileName);
+  return `chat-media/${params.chatId}/${params.userId}/${params.kind}/${Date.now()}-${randomUUID()}.${extension}`;
+}
+
+export function isChatAttachmentKeyOwnedByUser(params: {
+  chatId: string;
+  userId: string;
+  objectKey: string;
+}): boolean {
+  return params.objectKey.startsWith(`chat-media/${params.chatId}/${params.userId}/`);
 }
 
 export async function createAvatarUploadUrl(params: {
@@ -117,6 +149,37 @@ export async function createAvatarUploadUrl(params: {
   };
 }
 
+export async function createChatAttachmentUploadUrl(params: {
+  chatId: string;
+  userId: string;
+  kind: ChatUploadKind;
+  contentType: string;
+  fileName?: string | null;
+}): Promise<{
+  objectKey: string;
+  uploadUrl: string;
+  headers: Record<string, string>;
+}> {
+  const client = getStorageClient();
+  const objectKey = buildChatAttachmentObjectKey(params);
+  const command = new PutObjectCommand({
+    Bucket: env.R2_BUCKET!,
+    Key: objectKey,
+    ContentType: params.contentType,
+    CacheControl: "private, max-age=31536000"
+  });
+
+  const uploadUrl = await getSignedUrl(client, command, { expiresIn: 60 * 5 });
+
+  return {
+    objectKey,
+    uploadUrl,
+    headers: {
+      "Content-Type": params.contentType
+    }
+  };
+}
+
 export async function assertObjectExists(objectKey: string): Promise<void> {
   const client = getStorageClient();
   await client.send(
@@ -125,6 +188,24 @@ export async function assertObjectExists(objectKey: string): Promise<void> {
       Key: objectKey
     })
   );
+}
+
+export async function getObjectHead(objectKey: string): Promise<{
+  contentType: string | null;
+  contentLength: number | null;
+}> {
+  const client = getStorageClient();
+  const response = await client.send(
+    new HeadObjectCommand({
+      Bucket: env.R2_BUCKET!,
+      Key: objectKey
+    })
+  );
+
+  return {
+    contentType: response.ContentType ?? null,
+    contentLength: response.ContentLength ?? null
+  };
 }
 
 export async function getObjectBytes(objectKey: string): Promise<{
@@ -156,5 +237,17 @@ export async function deleteObject(objectKey: string): Promise<void> {
       Bucket: env.R2_BUCKET!,
       Key: objectKey
     })
+  );
+}
+
+export async function createObjectReadUrl(objectKey: string): Promise<string> {
+  const client = getStorageClient();
+  return getSignedUrl(
+    client,
+    new GetObjectCommand({
+      Bucket: env.R2_BUCKET!,
+      Key: objectKey
+    }),
+    { expiresIn: 60 * 60 * 12 }
   );
 }

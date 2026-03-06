@@ -18,19 +18,31 @@ enum MessageStatus {
   read
 }
 
+enum AttachmentKind {
+  IMAGE
+  VIDEO
+  FILE
+}
+
+enum PushPlatform {
+  IOS
+  ANDROID
+}
+
 model User {
-  id          String       @id @default(uuid())
-  username    String?      @unique
+  id           String        @id @default(uuid())
+  username     String?       @unique
   passwordHash String?
-  displayName String
-  phone       String?      @unique
-  email       String?      @unique
-  avatarUrl   String?
-  about       String?
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
-  messages    Message[]
-  memberships ChatMember[]
+  displayName  String
+  phone        String?       @unique
+  email        String?       @unique
+  avatarUrl    String?
+  about        String?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  messages     Message[]
+  memberships  ChatMember[]
+  devices      DeviceToken[]
 }
 
 model Chat {
@@ -54,19 +66,53 @@ model ChatMember {
 }
 
 model Message {
-  id         String        @id @default(uuid())
-  chatId     String
-  senderId   String
-  text       String
-  status     MessageStatus @default(sent)
-  isViewOnce Boolean       @default(false)
-  createdAt  DateTime      @default(now())
-  readAt     DateTime?
+  id          String              @id @default(uuid())
+  chatId       String
+  senderId     String
+  text         String?
+  status       MessageStatus      @default(sent)
+  isViewOnce   Boolean            @default(false)
+  createdAt    DateTime           @default(now())
+  readAt       DateTime?
 
-  chat       Chat          @relation(fields: [chatId], references: [id], onDelete: Cascade)
-  sender     User          @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  chat         Chat               @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  sender       User               @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  attachments  MessageAttachment[]
 
   @@index([chatId, createdAt(sort: Desc)])
+}
+
+model MessageAttachment {
+  id              String         @id @default(uuid())
+  messageId        String
+  objectKey        String         @unique
+  kind             AttachmentKind
+  fileName         String?
+  contentType      String
+  sizeBytes        Int
+  width            Int?
+  height           Int?
+  durationSeconds  Int?
+  createdAt        DateTime       @default(now())
+
+  message          Message        @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([messageId, createdAt(sort: Asc)])
+}
+
+model DeviceToken {
+  id          String       @id @default(uuid())
+  userId       String
+  token        String       @unique
+  platform     PushPlatform
+  deviceLabel  String?
+  isActive     Boolean      @default(true)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isActive])
 }
 
 model OtpCode {

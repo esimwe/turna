@@ -1,8 +1,16 @@
 import type { Server, Socket } from "socket.io";
 import { z } from "zod";
-import { chatService } from "./chat.service.js";
-import { logInfo } from "../../lib/logger.js";
+import { logError, logInfo } from "../../lib/logger.js";
 import { verifyAccessToken } from "../../lib/jwt.js";
+import { sendChatMessagePush } from "../../lib/push.js";
+import {
+  emitChatMessage,
+  emitChatStatus,
+  emitInboxUpdate,
+  getSocketsInUserRoom,
+  userRoom
+} from "./chat.realtime.js";
+import { chatService } from "./chat.service.js";
 
 const joinChatSchema = z.object({
   chatId: z.string().min(1)
@@ -16,17 +24,6 @@ const sendMessageSchema = z.object({
 const seenChatSchema = z.object({
   chatId: z.string().min(1)
 });
-
-function userRoom(userId: string): string {
-  return `user:${userId}`;
-}
-
-function emitInboxUpdate(io: Server, userIds: string[]): void {
-  const uniqueUserIds = Array.from(new Set(userIds));
-  for (const userId of uniqueUserIds) {
-    io.to(userRoom(userId)).emit("chat:inbox:update");
-  }
-}
 
 export function registerChatSocket(io: Server): void {
   io.use((socket, next) => {
@@ -65,19 +62,15 @@ export function registerChatSocket(io: Server): void {
       for (const chatId of userChats) {
         const deliveredIds = await chatService.markMessagesDelivered(chatId, userId);
         if (deliveredIds.length > 0) {
-          const statusPayload = {
-            chatId,
-            status: "delivered",
-            messageIds: deliveredIds
-          };
-          // Chat room'a emit et (eğer karşı taraf chat'te ise)
-          io.to(chatId).emit("chat:status", statusPayload);
-          
-          // Gönderen kullanıcının user room'una da emit et (chat listesinde olabilir)
           const participants = await chatService.getChatParticipantIds(chatId);
           const senderId = participants.find(p => p !== userId);
           if (senderId) {
-            io.to(userRoom(senderId)).emit("chat:status", statusPayload);
+            emitChatStatus({
+              chatId,
+              status: "delivered",
+              messageIds: deliveredIds,
+              userIds: [senderId]
+            });
           }
         }
       }
@@ -101,20 +94,24 @@ export function registerChatSocket(io: Server): void {
         }
 
         socket.join(parsed.data.chatId);
-        const history = await chatService.getMessages(parsed.data.chatId);
-        logInfo("chat:join ok", { socketId: socket.id, chatId: parsed.data.chatId, historyCount: history.length });
-        socket.emit("chat:history", history);
+        const historyPage = await chatService.getMessagePage(parsed.data.chatId, { limit: 30 });
+        logInfo("chat:join ok", {
+          socketId: socket.id,
+          chatId: parsed.data.chatId,
+          historyCount: historyPage.items.length
+        });
+        socket.emit("chat:history", historyPage.items);
 
         const deliveredIds = await chatService.markMessagesDelivered(parsed.data.chatId, userId);
         if (deliveredIds.length > 0) {
-          const statusPayload = {
+          const participants = await chatService.getChatParticipantIds(parsed.data.chatId);
+          const senderIds = participants.filter((participantId) => participantId !== userId);
+          emitChatStatus({
             chatId: parsed.data.chatId,
             status: "delivered",
-            messageIds: deliveredIds
-          };
-          io.to(parsed.data.chatId).emit("chat:status", statusPayload);
-          // Gönderen kullanıcıya da emit et (chat dışında olabilir)
-          socket.emit("chat:status", statusPayload);
+            messageIds: deliveredIds,
+            userIds: senderIds
+          });
         }
       } catch (error) {
         socket.emit("error:internal", { message: "failed_to_join_chat" });
@@ -148,35 +145,43 @@ export function registerChatSocket(io: Server): void {
           senderId: userId,
           messageId: message.id
         });
-        // Mesajı hem chat room'a hem de user room'lara gönder
-        io.to(parsed.data.chatId).emit("chat:message", message);
-        
         const participants = await chatService.getChatParticipantIds(parsed.data.chatId);
-        // Tüm katılımcıların user room'larına emit et (chat dışında olabilirler)
-        for (const participantId of participants) {
-          io.to(userRoom(participantId)).emit("chat:message", message);
+        emitChatMessage(parsed.data.chatId, message, participants);
+        const recipientIds = participants.filter(
+          (participantId) => participantId !== userId
+        );
+        if (recipientIds.length > 0) {
+          chatService
+            .getUserDisplayName(userId)
+            .then((senderDisplayName) =>
+              sendChatMessagePush({
+                message,
+                senderDisplayName,
+                recipientUserIds: recipientIds
+              })
+            )
+            .catch((error: unknown) => {
+              logError("chat push after socket send failed", error);
+            });
         }
 
-        const peerId = participants.find((participantId) => participantId !== userId) ?? null;
+        const peerId = recipientIds[0] ?? null;
         if (peerId) {
-          // Sadece karşı kullanıcı online ise (user room'a bağlıysa) mesajı delivered yap
-          const peerSockets = await io.in(userRoom(peerId)).fetchSockets();
+          const peerSockets = await getSocketsInUserRoom(peerId);
           if (peerSockets.length > 0) {
             const deliveredIds = await chatService.markMessagesDelivered(parsed.data.chatId, peerId);
             if (deliveredIds.length > 0) {
-              const statusPayload = {
+              emitChatStatus({
                 chatId: parsed.data.chatId,
                 status: "delivered",
-                messageIds: deliveredIds
-              };
-              io.to(parsed.data.chatId).emit("chat:status", statusPayload);
-              // Gönderen kullanıcıya da emit et
-              io.to(userRoom(userId)).emit("chat:status", statusPayload);
+                messageIds: deliveredIds,
+                userIds: [userId]
+              });
             }
           }
         }
 
-        emitInboxUpdate(io, participants.length > 0 ? participants : [userId]);
+        emitInboxUpdate(participants.length > 0 ? participants : [userId]);
       } catch (error) {
         socket.emit("error:internal", { message: "failed_to_send_message" });
         logInfo("chat:send failed", { socketId: socket.id, chatId: parsed.data.chatId, error });
@@ -200,21 +205,16 @@ export function registerChatSocket(io: Server): void {
 
         const readIds = await chatService.markMessagesRead(parsed.data.chatId, userId);
         if (readIds.length > 0) {
-          const statusPayload = {
+          const participants = await chatService.getChatParticipantIds(parsed.data.chatId);
+          const senderId = participants.find((p) => p !== userId);
+          emitChatStatus({
             chatId: parsed.data.chatId,
             status: "read",
-            messageIds: readIds
-          };
-          io.to(parsed.data.chatId).emit("chat:status", statusPayload);
-          
-          const participants = await chatService.getChatParticipantIds(parsed.data.chatId);
-          // Gönderen kullanıcının user room'una da emit et
-          const senderId = participants.find(p => p !== userId);
-          if (senderId) {
-            io.to(userRoom(senderId)).emit("chat:status", statusPayload);
-          }
-          
-          emitInboxUpdate(io, participants.length > 0 ? participants : [userId]);
+            messageIds: readIds,
+            userIds: senderId ? [senderId] : []
+          });
+
+          emitInboxUpdate(participants.length > 0 ? participants : [userId]);
         }
       } catch (error) {
         socket.emit("error:internal", { message: "failed_to_mark_seen" });
