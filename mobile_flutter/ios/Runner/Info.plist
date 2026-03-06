@@ -39,6 +39,10 @@
 	<string>Fotograf ve video cekebilmek icin kamera erisimi gerekiyor.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Video cekerken ses kaydi icin mikrofon erisimi gerekiyor.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
