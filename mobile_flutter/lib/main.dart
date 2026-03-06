@@ -1,8 +1,8 @@
 import 'dart:convert';
 
-import 'package:characters/characters.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 
@@ -82,6 +82,9 @@ class _TurnaAppState extends State<TurnaApp> with WidgetsBindingObserver {
             )
           : MainTabs(
               session: _session!,
+              onSessionUpdated: (session) {
+                setState(() => _session = session);
+              },
               onLogout: () async {
                 await AuthSession.clear();
                 setState(() => _session = null);
@@ -177,6 +180,7 @@ class _AuthPageState extends State<AuthPage> {
       final user = map['user'] as Map<String, dynamic>?;
       final userId = user?['id']?.toString();
       final displayName = user?['displayName']?.toString() ?? username;
+      final avatarUrl = user?['avatarUrl']?.toString();
       if (token == null || userId == null) {
         setState(() => _error = 'Sunucu yanıtı geçersiz.');
         return;
@@ -186,6 +190,7 @@ class _AuthPageState extends State<AuthPage> {
         token: token,
         userId: userId,
         displayName: displayName,
+        avatarUrl: avatarUrl,
       );
       await session.save();
       widget.onAuthenticated(session);
@@ -279,9 +284,15 @@ class _AuthPageState extends State<AuthPage> {
 }
 
 class MainTabs extends StatefulWidget {
-  const MainTabs({super.key, required this.session, required this.onLogout});
+  const MainTabs({
+    super.key,
+    required this.session,
+    required this.onSessionUpdated,
+    required this.onLogout,
+  });
 
   final AuthSession session;
+  final void Function(AuthSession session) onSessionUpdated;
   final VoidCallback onLogout;
 
   @override
@@ -314,10 +325,17 @@ class _MainTabsState extends State<MainTabs> {
   @override
   Widget build(BuildContext context) {
     final pages = <Widget>[
-      ChatsPage(session: widget.session, inboxUpdateNotifier: _inboxUpdateNotifier),
+      ChatsPage(
+        session: widget.session,
+        inboxUpdateNotifier: _inboxUpdateNotifier,
+      ),
       const PlaceholderPage(title: 'Updates'),
       const PlaceholderPage(title: 'Calls'),
-      SettingsPage(session: widget.session, onLogout: widget.onLogout),
+      SettingsPage(
+        session: widget.session,
+        onSessionUpdated: widget.onSessionUpdated,
+        onLogout: widget.onLogout,
+      ),
     ];
 
     return Scaffold(
@@ -357,12 +375,10 @@ class ChatsPage extends StatefulWidget {
 
 class _ChatsPageState extends State<ChatsPage> {
   int _refreshTick = 0;
-  io.Socket? _inboxSocket;
 
   @override
   void initState() {
     super.initState();
-    _connectInboxUpdates();
     widget.inboxUpdateNotifier?.addListener(_onInboxUpdate);
   }
 
@@ -371,29 +387,9 @@ class _ChatsPageState extends State<ChatsPage> {
     setState(() => _refreshTick++);
   }
 
-  void _connectInboxUpdates() {
-    _inboxSocket = io.io(
-      kBackendBaseUrl,
-      io.OptionBuilder()
-          .setTransports(['websocket'])
-          .setAuth({'token': widget.session.token})
-          .disableAutoConnect()
-          .build(),
-    );
-
-    _inboxSocket!.on('chat:inbox:update', (_) {
-      if (!mounted) return;
-      setState(() => _refreshTick++);
-    });
-    _inboxSocket!.onConnect((_) => turnaLog('inbox connected', {'id': _inboxSocket?.id}));
-    _inboxSocket!.onConnectError((data) => turnaLog('inbox connect_error', data));
-    _inboxSocket!.connect();
-  }
-
   @override
   void dispose() {
     widget.inboxUpdateNotifier?.removeListener(_onInboxUpdate);
-    _inboxSocket?.dispose();
     super.dispose();
   }
 
@@ -804,7 +800,7 @@ class _NewChatPageState extends State<NewChatPage> {
                             ),
                           );
                           if (!mounted) return;
-                          Navigator.pop(context, true);
+                          Navigator.of(this.context).pop(true);
                         },
                       );
                     },
@@ -820,10 +816,12 @@ class SettingsPage extends StatelessWidget {
   const SettingsPage({
     super.key,
     required this.session,
+    required this.onSessionUpdated,
     required this.onLogout,
   });
 
   final AuthSession session;
+  final void Function(AuthSession session) onSessionUpdated;
   final VoidCallback onLogout;
 
   @override
@@ -833,19 +831,20 @@ class SettingsPage extends StatelessWidget {
       body: ListView(
         children: [
           ListTile(
-            leading: const CircleAvatar(
-              radius: 25,
-              backgroundColor: Color(0xFFDBEFE2),
-              child: Icon(Icons.person, color: Color(0xFF1FAA59)),
-            ),
+            leading: _SessionAvatar(session: session),
             title: Text(
-              session.displayName.toUpperCase(),
+              session.displayName,
               style: const TextStyle(fontWeight: FontWeight.w700),
             ),
             subtitle: Text(session.userId),
             onTap: () => Navigator.push(
               context,
-              MaterialPageRoute(builder: (_) => const ProfilePage()),
+              MaterialPageRoute(
+                builder: (_) => ProfilePage(
+                  session: session,
+                  onProfileUpdated: onSessionUpdated,
+                ),
+              ),
             ),
           ),
           const Divider(height: 1),
@@ -865,7 +864,7 @@ class SettingsPage extends StatelessWidget {
             context,
             Icons.face_outlined,
             'Avatar',
-            const PlaceholderPage(title: 'Avatar'),
+            ProfilePage(session: session, onProfileUpdated: onSessionUpdated),
           ),
           _settingsItem(
             context,
@@ -916,73 +915,430 @@ class SettingsPage extends StatelessWidget {
   }
 }
 
-class ProfilePage extends StatelessWidget {
-  const ProfilePage({super.key});
+class _SessionAvatar extends StatelessWidget {
+  const _SessionAvatar({required this.session});
+
+  final AuthSession session;
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('profile')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: const [
-          Center(
-            child: CircleAvatar(
-              radius: 58,
-              backgroundColor: Color(0xFFDBEFE2),
-              child: Icon(Icons.person, size: 52, color: Color(0xFF1FAA59)),
-            ),
-          ),
-          SizedBox(height: 18),
-          _ProfileRow(
-            label: 'Name',
-            value: 'Jon Desuja',
-            icon: Icons.person_outline,
-          ),
-          _ProfileRow(label: 'About', value: 'Busy', icon: Icons.info_outline),
-          _ProfileRow(
-            label: 'Phone',
-            value: '+90 555 123 1230',
-            icon: Icons.call_outlined,
-          ),
-          _ProfileRow(label: 'Links', value: 'Add links', icon: Icons.link),
-        ],
+    return _ProfileAvatar(
+      label: session.displayName,
+      avatarUrl: session.avatarUrl,
+      authToken: session.token,
+      radius: 25,
+    );
+  }
+}
+
+class _ProfileAvatar extends StatelessWidget {
+  const _ProfileAvatar({
+    required this.label,
+    required this.radius,
+    this.avatarUrl,
+    this.authToken,
+  });
+
+  final String label;
+  final String? avatarUrl;
+  final String? authToken;
+  final double radius;
+
+  @override
+  Widget build(BuildContext context) {
+    final trimmedUrl = avatarUrl?.trim() ?? '';
+    if (trimmedUrl.isNotEmpty) {
+      return CircleAvatar(
+        radius: radius,
+        backgroundColor: const Color(0xFFDBEFE2),
+        backgroundImage: NetworkImage(
+          trimmedUrl,
+          headers: authToken == null || authToken!.trim().isEmpty
+              ? null
+              : {'Authorization': 'Bearer ${authToken!.trim()}'},
+        ),
+      );
+    }
+
+    final safeLabel = label.trim();
+    final initial = safeLabel.isEmpty
+        ? '?'
+        : safeLabel.characters.first.toUpperCase();
+    return CircleAvatar(
+      radius: radius,
+      backgroundColor: const Color(0xFFDBEFE2),
+      child: Text(
+        initial,
+        style: TextStyle(
+          color: const Color(0xFF1FAA59),
+          fontWeight: FontWeight.w700,
+          fontSize: radius * 0.65,
+        ),
       ),
     );
   }
 }
 
-class _ProfileRow extends StatelessWidget {
-  const _ProfileRow({
-    required this.label,
-    required this.value,
-    required this.icon,
+class ProfilePage extends StatefulWidget {
+  const ProfilePage({
+    super.key,
+    required this.session,
+    required this.onProfileUpdated,
   });
 
-  final String label;
-  final String value;
-  final IconData icon;
+  final AuthSession session;
+  final void Function(AuthSession session) onProfileUpdated;
+
+  @override
+  State<ProfilePage> createState() => _ProfilePageState();
+}
+
+class _ProfilePageState extends State<ProfilePage> {
+  final _displayNameController = TextEditingController();
+  final _aboutController = TextEditingController();
+  final _phoneController = TextEditingController();
+  final _emailController = TextEditingController();
+  final ImagePicker _imagePicker = ImagePicker();
+
+  TurnaUserProfile? _profile;
+  bool _loading = true;
+  bool _saving = false;
+  bool _avatarBusy = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _displayNameController.addListener(_refreshPreview);
+    _loadProfile();
+  }
+
+  @override
+  void dispose() {
+    _displayNameController.removeListener(_refreshPreview);
+    _displayNameController.dispose();
+    _aboutController.dispose();
+    _phoneController.dispose();
+    _emailController.dispose();
+    super.dispose();
+  }
+
+  void _refreshPreview() {
+    if (!mounted) return;
+    setState(() {});
+  }
+
+  Future<void> _loadProfile() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+
+    try {
+      final profile = await ProfileApi.fetchMe(widget.session);
+      final updatedSession = widget.session.copyWith(
+        displayName: profile.displayName,
+        avatarUrl: profile.avatarUrl,
+        clearAvatarUrl: profile.avatarUrl == null,
+      );
+      await updatedSession.save();
+      if (!mounted) return;
+      _applyProfile(profile);
+      setState(() {
+        _profile = profile;
+        _loading = false;
+      });
+      widget.onProfileUpdated(updatedSession);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = error.toString();
+      });
+    }
+  }
+
+  void _applyProfile(TurnaUserProfile profile) {
+    _displayNameController.text = profile.displayName;
+    _aboutController.text = profile.about ?? '';
+    _phoneController.text = profile.phone ?? '';
+    _emailController.text = profile.email ?? '';
+  }
+
+  Future<void> _commitProfile(
+    TurnaUserProfile updatedProfile, {
+    String? successMessage,
+  }) async {
+    _applyProfile(updatedProfile);
+    setState(() {
+      _profile = updatedProfile;
+    });
+
+    final updatedSession = widget.session.copyWith(
+      displayName: updatedProfile.displayName,
+      avatarUrl: updatedProfile.avatarUrl,
+      clearAvatarUrl: updatedProfile.avatarUrl == null,
+    );
+    await updatedSession.save();
+    widget.onProfileUpdated(updatedSession);
+
+    if (!mounted || successMessage == null) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(successMessage)));
+  }
+
+  String? _guessImageContentType(String fileName) {
+    final lower = fileName.toLowerCase();
+    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+    if (lower.endsWith('.png')) return 'image/png';
+    if (lower.endsWith('.webp')) return 'image/webp';
+    if (lower.endsWith('.gif')) return 'image/gif';
+    if (lower.endsWith('.heic')) return 'image/heic';
+    if (lower.endsWith('.heif')) return 'image/heif';
+    return null;
+  }
+
+  Future<void> _pickAvatar() async {
+    final file = await _imagePicker.pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 88,
+      maxWidth: 1400,
+    );
+    if (file == null) return;
+
+    final contentType = _guessImageContentType(file.name);
+    if (contentType == null) {
+      setState(() => _error = 'Desteklenmeyen görsel formatı.');
+      return;
+    }
+
+    setState(() {
+      _avatarBusy = true;
+      _error = null;
+    });
+
+    try {
+      final upload = await ProfileApi.createAvatarUpload(
+        widget.session,
+        contentType: contentType,
+        fileName: file.name,
+      );
+
+      final bytes = await file.readAsBytes();
+      final uploadRes = await http.put(
+        Uri.parse(upload.uploadUrl),
+        headers: upload.headers,
+        body: bytes,
+      );
+      if (uploadRes.statusCode >= 400) {
+        throw TurnaApiException('Avatar yüklenemedi.');
+      }
+
+      final updatedProfile = await ProfileApi.completeAvatarUpload(
+        widget.session,
+        objectKey: upload.objectKey,
+      );
+      if (!mounted) return;
+      await _commitProfile(
+        updatedProfile,
+        successMessage: 'Avatar güncellendi.',
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = error.toString());
+    } finally {
+      if (mounted) {
+        setState(() => _avatarBusy = false);
+      }
+    }
+  }
+
+  Future<void> _removeAvatar() async {
+    setState(() {
+      _avatarBusy = true;
+      _error = null;
+    });
+
+    try {
+      final updatedProfile = await ProfileApi.deleteAvatar(widget.session);
+      if (!mounted) return;
+      await _commitProfile(
+        updatedProfile,
+        successMessage: 'Avatar kaldırıldı.',
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = error.toString());
+    } finally {
+      if (mounted) {
+        setState(() => _avatarBusy = false);
+      }
+    }
+  }
+
+  Future<void> _saveProfile() async {
+    final displayName = _displayNameController.text.trim();
+    if (displayName.length < 2) {
+      setState(() => _error = 'Ad en az 2 karakter olmalı.');
+      return;
+    }
+
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+
+    try {
+      final updatedProfile = await ProfileApi.updateMe(
+        widget.session,
+        displayName: displayName,
+        about: _aboutController.text,
+        phone: _phoneController.text,
+        email: _emailController.text,
+      );
+      if (!mounted) return;
+
+      await _commitProfile(
+        updatedProfile,
+        successMessage: 'Profil güncellendi.',
+      );
+      if (!mounted) return;
+      setState(() => _saving = false);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _error = error.toString();
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 10),
-      child: Row(
-        children: [
-          Icon(icon, color: const Color(0xFF606664)),
-          const SizedBox(width: 12),
-          Expanded(
+    final profile = _profile;
+    if (_loading && profile == null) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Profil')),
+        body: const Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    if (profile == null) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Profil')),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Text(
-                  label,
-                  style: const TextStyle(fontWeight: FontWeight.w600),
+                Text(_error ?? 'Profil yüklenemedi.'),
+                const SizedBox(height: 12),
+                FilledButton(
+                  onPressed: _loadProfile,
+                  child: const Text('Tekrar dene'),
                 ),
-                const SizedBox(height: 2),
-                Text(value, style: const TextStyle(color: Color(0xFF606664))),
               ],
             ),
+          ),
+        ),
+      );
+    }
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Profil')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Center(
+            child: _ProfileAvatar(
+              label: _displayNameController.text.trim().isEmpty
+                  ? widget.session.displayName
+                  : _displayNameController.text.trim(),
+              avatarUrl: profile.avatarUrl ?? widget.session.avatarUrl,
+              authToken: widget.session.token,
+              radius: 58,
+            ),
+          ),
+          const SizedBox(height: 18),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            alignment: WrapAlignment.center,
+            children: [
+              FilledButton.icon(
+                onPressed: (_saving || _avatarBusy) ? null : _pickAvatar,
+                icon: _avatarBusy
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.photo_library_outlined),
+                label: Text(_avatarBusy ? 'Yükleniyor...' : 'Galeriden seç'),
+              ),
+              if ((profile.avatarUrl ?? widget.session.avatarUrl) != null)
+                OutlinedButton.icon(
+                  onPressed: (_saving || _avatarBusy) ? null : _removeAvatar,
+                  icon: const Icon(Icons.delete_outline),
+                  label: const Text('Fotoğrafı kaldır'),
+                ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _displayNameController,
+            textInputAction: TextInputAction.next,
+            decoration: const InputDecoration(
+              labelText: 'Ad',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _aboutController,
+            maxLines: 3,
+            textInputAction: TextInputAction.newline,
+            decoration: const InputDecoration(
+              labelText: 'Hakkında',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _phoneController,
+            keyboardType: TextInputType.phone,
+            textInputAction: TextInputAction.next,
+            decoration: const InputDecoration(
+              labelText: 'Telefon',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _emailController,
+            keyboardType: TextInputType.emailAddress,
+            textInputAction: TextInputAction.next,
+            decoration: const InputDecoration(
+              labelText: 'Email',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 16),
+          if (_error != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text(_error!, style: const TextStyle(color: Colors.red)),
+            ),
+          FilledButton(
+            onPressed: (_saving || _avatarBusy) ? null : _saveProfile,
+            child: Text(_saving ? 'Kaydediliyor...' : 'Kaydet'),
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton(
+            onPressed: (_saving || _avatarBusy) ? null : _loadProfile,
+            child: const Text('Sunucudan yenile'),
           ),
         ],
       ),
@@ -1138,6 +1494,44 @@ class ChatUser {
 
   final String id;
   final String displayName;
+}
+
+class TurnaUserProfile {
+  TurnaUserProfile({
+    required this.id,
+    required this.displayName,
+    this.phone,
+    this.email,
+    this.about,
+    this.avatarUrl,
+    this.createdAt,
+  });
+
+  final String id;
+  final String displayName;
+  final String? phone;
+  final String? email;
+  final String? about;
+  final String? avatarUrl;
+  final String? createdAt;
+
+  factory TurnaUserProfile.fromMap(Map<String, dynamic> map) {
+    return TurnaUserProfile(
+      id: (map['id'] ?? '').toString(),
+      displayName: (map['displayName'] ?? '').toString(),
+      phone: _nullableString(map['phone']),
+      email: _nullableString(map['email']),
+      about: _nullableString(map['about']),
+      avatarUrl: _nullableString(map['avatarUrl']),
+      createdAt: _nullableString(map['createdAt']),
+    );
+  }
+
+  static String? _nullableString(Object? value) {
+    final text = value?.toString().trim();
+    if (text == null || text.isEmpty) return null;
+    return text;
+  }
 }
 
 class ChatMessage {
@@ -1384,10 +1778,7 @@ class TurnaSocketClient extends ChangeNotifier {
       'senderId': senderId,
       'textLen': text.length,
     });
-    _socket?.emit('chat:send', {
-      'chatId': chatId,
-      'text': text,
-    });
+    _socket?.emit('chat:send', {'chatId': chatId, 'text': text});
   }
 
   @override
@@ -1415,26 +1806,19 @@ class PresenceSocketClient {
           .build(),
     );
 
-    _socket!.onConnect((_) => turnaLog('presence connected', {'id': _socket?.id}));
-    _socket!.onDisconnect((reason) => turnaLog('presence disconnected', {'reason': reason}));
+    _socket!.onConnect(
+      (_) => turnaLog('presence connected', {'id': _socket?.id}),
+    );
+    _socket!.onDisconnect(
+      (reason) => turnaLog('presence disconnected', {'reason': reason}),
+    );
     _socket!.onConnectError((data) => turnaLog('presence connect_error', data));
-    
-    // Backend'den gelen mesaj ve status güncellemelerini dinle
-    _socket!.on('chat:message', (data) {
-      turnaLog('presence chat:message received', data);
-      onInboxUpdate?.call();
-    });
-    
-    _socket!.on('chat:status', (data) {
-      turnaLog('presence chat:status received', data);
-      onInboxUpdate?.call();
-    });
-    
+
     _socket!.on('chat:inbox:update', (_) {
       turnaLog('presence inbox:update received');
       onInboxUpdate?.call();
     });
-    
+
     _socket!.connect();
   }
 
@@ -1448,26 +1832,50 @@ class AuthSession {
     required this.token,
     required this.userId,
     required this.displayName,
+    this.avatarUrl,
   });
 
   final String token;
   final String userId;
   final String displayName;
+  final String? avatarUrl;
 
   static const _tokenKey = 'turna_auth_token';
   static const _userIdKey = 'turna_auth_user_id';
   static const _displayNameKey = 'turna_auth_display_name';
+  static const _avatarUrlKey = 'turna_auth_avatar_url';
 
   static Future<AuthSession?> load() async {
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString(_tokenKey);
     final userId = prefs.getString(_userIdKey);
     final displayName = prefs.getString(_displayNameKey);
+    final avatarUrl = prefs.getString(_avatarUrlKey);
     if (token == null || userId == null || displayName == null) {
       return null;
     }
 
-    return AuthSession(token: token, userId: userId, displayName: displayName);
+    return AuthSession(
+      token: token,
+      userId: userId,
+      displayName: displayName,
+      avatarUrl: avatarUrl,
+    );
+  }
+
+  AuthSession copyWith({
+    String? token,
+    String? userId,
+    String? displayName,
+    String? avatarUrl,
+    bool clearAvatarUrl = false,
+  }) {
+    return AuthSession(
+      token: token ?? this.token,
+      userId: userId ?? this.userId,
+      displayName: displayName ?? this.displayName,
+      avatarUrl: clearAvatarUrl ? null : (avatarUrl ?? this.avatarUrl),
+    );
   }
 
   Future<void> save() async {
@@ -1475,6 +1883,11 @@ class AuthSession {
     await prefs.setString(_tokenKey, token);
     await prefs.setString(_userIdKey, userId);
     await prefs.setString(_displayNameKey, displayName);
+    if (avatarUrl == null || avatarUrl!.trim().isEmpty) {
+      await prefs.remove(_avatarUrlKey);
+    } else {
+      await prefs.setString(_avatarUrlKey, avatarUrl!);
+    }
   }
 
   static Future<void> clear() async {
@@ -1482,6 +1895,170 @@ class AuthSession {
     await prefs.remove(_tokenKey);
     await prefs.remove(_userIdKey);
     await prefs.remove(_displayNameKey);
+    await prefs.remove(_avatarUrlKey);
+  }
+}
+
+class TurnaApiException implements Exception {
+  TurnaApiException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
+class AvatarUploadTicket {
+  AvatarUploadTicket({
+    required this.objectKey,
+    required this.uploadUrl,
+    required this.headers,
+  });
+
+  final String objectKey;
+  final String uploadUrl;
+  final Map<String, String> headers;
+
+  factory AvatarUploadTicket.fromMap(Map<String, dynamic> map) {
+    final rawHeaders = map['headers'] as Map<String, dynamic>? ?? const {};
+    return AvatarUploadTicket(
+      objectKey: (map['objectKey'] ?? '').toString(),
+      uploadUrl: (map['uploadUrl'] ?? '').toString(),
+      headers: rawHeaders.map(
+        (key, value) => MapEntry(key.toString(), value.toString()),
+      ),
+    );
+  }
+}
+
+class ProfileApi {
+  static Future<TurnaUserProfile> fetchMe(AuthSession session) async {
+    final res = await http.get(
+      Uri.parse('$kBackendBaseUrl/api/profile/me'),
+      headers: {'Authorization': 'Bearer ${session.token}'},
+    );
+    if (res.statusCode >= 400) {
+      throw TurnaApiException(_extractApiError(res.body, res.statusCode));
+    }
+
+    final map = jsonDecode(res.body) as Map<String, dynamic>;
+    final data = map['data'] as Map<String, dynamic>? ?? const {};
+    return TurnaUserProfile.fromMap(data);
+  }
+
+  static Future<TurnaUserProfile> updateMe(
+    AuthSession session, {
+    required String displayName,
+    required String about,
+    required String phone,
+    required String email,
+  }) async {
+    final res = await http.put(
+      Uri.parse('$kBackendBaseUrl/api/profile/me'),
+      headers: {
+        'Authorization': 'Bearer ${session.token}',
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode({
+        'displayName': displayName,
+        'about': about.trim(),
+        'phone': phone.trim(),
+        'email': email.trim(),
+      }),
+    );
+    if (res.statusCode >= 400) {
+      throw TurnaApiException(_extractApiError(res.body, res.statusCode));
+    }
+
+    final map = jsonDecode(res.body) as Map<String, dynamic>;
+    final data = map['data'] as Map<String, dynamic>? ?? const {};
+    return TurnaUserProfile.fromMap(data);
+  }
+
+  static Future<AvatarUploadTicket> createAvatarUpload(
+    AuthSession session, {
+    required String contentType,
+    required String fileName,
+  }) async {
+    final res = await http.post(
+      Uri.parse('$kBackendBaseUrl/api/profile/avatar/upload-url'),
+      headers: {
+        'Authorization': 'Bearer ${session.token}',
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode({'contentType': contentType, 'fileName': fileName}),
+    );
+    if (res.statusCode >= 400) {
+      throw TurnaApiException(_extractApiError(res.body, res.statusCode));
+    }
+
+    final map = jsonDecode(res.body) as Map<String, dynamic>;
+    final data = map['data'] as Map<String, dynamic>? ?? const {};
+    return AvatarUploadTicket.fromMap(data);
+  }
+
+  static Future<TurnaUserProfile> completeAvatarUpload(
+    AuthSession session, {
+    required String objectKey,
+  }) async {
+    final res = await http.post(
+      Uri.parse('$kBackendBaseUrl/api/profile/avatar/complete'),
+      headers: {
+        'Authorization': 'Bearer ${session.token}',
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode({'objectKey': objectKey}),
+    );
+    if (res.statusCode >= 400) {
+      throw TurnaApiException(_extractApiError(res.body, res.statusCode));
+    }
+
+    final map = jsonDecode(res.body) as Map<String, dynamic>;
+    final data = map['data'] as Map<String, dynamic>? ?? const {};
+    return TurnaUserProfile.fromMap(data);
+  }
+
+  static Future<TurnaUserProfile> deleteAvatar(AuthSession session) async {
+    final res = await http.delete(
+      Uri.parse('$kBackendBaseUrl/api/profile/avatar'),
+      headers: {'Authorization': 'Bearer ${session.token}'},
+    );
+    if (res.statusCode >= 400) {
+      throw TurnaApiException(_extractApiError(res.body, res.statusCode));
+    }
+
+    final map = jsonDecode(res.body) as Map<String, dynamic>;
+    final data = map['data'] as Map<String, dynamic>? ?? const {};
+    return TurnaUserProfile.fromMap(data);
+  }
+
+  static String _extractApiError(String body, int statusCode) {
+    try {
+      final map = jsonDecode(body) as Map<String, dynamic>;
+      final error = map['error']?.toString();
+      switch (error) {
+        case 'phone_already_in_use':
+          return 'Bu telefon başka bir hesapta kullanılıyor.';
+        case 'email_already_in_use':
+          return 'Bu email başka bir hesapta kullanılıyor.';
+        case 'validation_error':
+          return 'Girilen bilgiler geçersiz.';
+        case 'user_not_found':
+          return 'Kullanıcı bulunamadı.';
+        case 'storage_not_configured':
+          return 'Dosya depolama servisi hazır değil.';
+        case 'invalid_avatar_key':
+          return 'Avatar yüklemesi doğrulanamadı.';
+        case 'uploaded_file_not_found':
+          return 'Yüklenen dosya bulunamadı.';
+        case 'avatar_not_found':
+          return 'Avatar bulunamadı.';
+        default:
+          return error ?? 'İşlem başarısız ($statusCode)';
+      }
+    } catch (_) {
+      return 'İşlem başarısız ($statusCode)';
+    }
   }
 }
 
