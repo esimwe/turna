@@ -454,16 +454,11 @@ class _ChatsPageState extends State<ChatsPage> {
 
               final chat = chats[index - 1];
               return ListTile(
-                leading: CircleAvatar(
+                leading: _ProfileAvatar(
+                  label: chat.name,
+                  avatarUrl: chat.avatarUrl,
+                  authToken: widget.session.token,
                   radius: 22,
-                  backgroundColor: const Color(0xFFDBEFE2),
-                  child: Text(
-                    chat.name.characters.first,
-                    style: const TextStyle(
-                      color: Color(0xFF1FAA59),
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
                 ),
                 title: Text(
                   chat.name,
@@ -591,7 +586,20 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(widget.chat.name)),
+      appBar: AppBar(
+        title: Row(
+          children: [
+            _ProfileAvatar(
+              label: widget.chat.name,
+              avatarUrl: widget.chat.avatarUrl,
+              authToken: widget.session.token,
+              radius: 18,
+            ),
+            const SizedBox(width: 10),
+            Expanded(child: Text(widget.chat.name)),
+          ],
+        ),
+      ),
       body: Column(
         children: [
           Expanded(
@@ -767,16 +775,11 @@ class _NewChatPageState extends State<NewChatPage> {
                     itemBuilder: (context, index) {
                       final user = filtered[index];
                       return ListTile(
-                        leading: CircleAvatar(
+                        leading: _ProfileAvatar(
+                          label: user.displayName,
+                          avatarUrl: user.avatarUrl,
+                          authToken: widget.session.token,
                           radius: 22,
-                          backgroundColor: const Color(0xFFDBEFE2),
-                          child: Text(
-                            user.displayName.characters.first.toUpperCase(),
-                            style: const TextStyle(
-                              color: Color(0xFF1FAA59),
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
                         ),
                         title: Text(user.displayName),
                         subtitle: Text(user.id),
@@ -789,6 +792,7 @@ class _NewChatPageState extends State<NewChatPage> {
                             name: user.displayName,
                             message: '',
                             time: '',
+                            avatarUrl: user.avatarUrl,
                           );
                           await Navigator.push(
                             context,
@@ -1479,6 +1483,7 @@ class ChatPreview {
     required this.name,
     required this.message,
     required this.time,
+    this.avatarUrl,
     this.unreadCount = 0,
   });
 
@@ -1486,14 +1491,16 @@ class ChatPreview {
   final String name;
   final String message;
   final String time;
+  final String? avatarUrl;
   final int unreadCount;
 }
 
 class ChatUser {
-  ChatUser({required this.id, required this.displayName});
+  ChatUser({required this.id, required this.displayName, this.avatarUrl});
 
   final String id;
   final String displayName;
+  final String? avatarUrl;
 }
 
 class TurnaUserProfile {
@@ -2089,6 +2096,7 @@ class ChatApi {
           name: map['title']?.toString() ?? 'Chat',
           message: map['lastMessage']?.toString() ?? '',
           time: _formatTime(map['lastMessageAt']?.toString()),
+          avatarUrl: _nullableString(map['avatarUrl']),
           unreadCount: (map['unreadCount'] as num?)?.toInt() ?? 0,
         );
       }).toList();
@@ -2101,6 +2109,7 @@ class ChatApi {
         name: user.displayName,
         message: 'Sohbet başlat',
         time: '',
+        avatarUrl: user.avatarUrl,
         unreadCount: 0,
       );
     }).toList();
@@ -2127,6 +2136,7 @@ class ChatApi {
       return ChatUser(
         id: map['id'].toString(),
         displayName: map['displayName']?.toString() ?? 'User',
+        avatarUrl: _nullableString(map['avatarUrl']),
       );
     }).toList();
   }
@@ -2134,6 +2144,12 @@ class ChatApi {
   static String buildDirectChatId(String currentUserId, String peerUserId) {
     final sorted = [currentUserId, peerUserId]..sort();
     return 'direct_${sorted[0]}_${sorted[1]}';
+  }
+
+  static String? _nullableString(Object? value) {
+    final text = value?.toString().trim();
+    if (text == null || text.isEmpty) return null;
+    return text;
   }
 
   static String _formatTime(String? iso) {
