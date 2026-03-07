@@ -6833,6 +6833,7 @@ class TurnaNativeCallManager {
       await _requestAndroidPermissions();
     }
     await syncVoipToken(session);
+    await _reconcileStaleCalls(session);
     await _consumePendingAction();
     await _recoverAcceptedNativeCall();
   }
@@ -6845,8 +6846,23 @@ class TurnaNativeCallManager {
   }
 
   static Future<void> handleAppResumed() async {
+    final session = _session;
+    if (session != null) {
+      await _reconcileStaleCalls(session);
+    }
     await _consumePendingAction();
     await _recoverAcceptedNativeCall();
+  }
+
+  static Future<void> _reconcileStaleCalls(AuthSession session) async {
+    try {
+      final reconciledCallIds = await CallApi.reconcileCalls(session);
+      for (final callId in reconciledCallIds) {
+        await endCallUi(callId);
+      }
+    } catch (error) {
+      turnaLog('call reconcile skipped', error);
+    }
   }
 
   static Future<void> handleBackgroundRemoteMessage(
@@ -9277,6 +9293,31 @@ class CallApi {
       rethrow;
     } catch (_) {
       throw TurnaApiException('Arama sonlandirilamadi.');
+    }
+  }
+
+  static Future<List<String>> reconcileCalls(AuthSession session) async {
+    try {
+      final res = await http.post(
+        Uri.parse('$kBackendBaseUrl/api/calls/reconcile'),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+      );
+      ChatApi._throwIfApiError(res);
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = Map<String, dynamic>.from(map['data'] as Map? ?? const {});
+      final calls = (data['calls'] as List<dynamic>? ?? const []);
+      return calls
+          .whereType<Map>()
+          .map((item) => (item['id'] ?? '').toString())
+          .where((id) => id.isNotEmpty)
+          .toList();
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Arama durumu esitlenemedi.');
     }
   }
 }
