@@ -23,6 +23,12 @@ const resolvedEnv = {
   FIREBASE_CLIENT_EMAIL: process.env.FIREBASE_CLIENT_EMAIL,
   FIREBASE_PRIVATE_KEY: process.env.FIREBASE_PRIVATE_KEY,
   FIREBASE_SERVICE_ACCOUNT_JSON: process.env.FIREBASE_SERVICE_ACCOUNT_JSON,
+  APNS_TEAM_ID: process.env.APNS_TEAM_ID,
+  APNS_KEY_ID: process.env.APNS_KEY_ID,
+  APNS_BUNDLE_ID: process.env.APNS_BUNDLE_ID,
+  APNS_USE_SANDBOX: process.env.APNS_USE_SANDBOX,
+  APNS_VOIP_PRIVATE_KEY: process.env.APNS_VOIP_PRIVATE_KEY,
+  APNS_VOIP_PRIVATE_KEY_BASE64: process.env.APNS_VOIP_PRIVATE_KEY_BASE64,
   LIVEKIT_HOST: process.env.LIVEKIT_HOST,
   LIVEKIT_WS_URL: process.env.LIVEKIT_WS_URL,
   LIVEKIT_API_KEY: process.env.LIVEKIT_API_KEY,
@@ -45,6 +51,15 @@ const envSchema = z.object({
   FIREBASE_CLIENT_EMAIL: z.string().min(1).optional(),
   FIREBASE_PRIVATE_KEY: z.string().min(1).optional(),
   FIREBASE_SERVICE_ACCOUNT_JSON: z.string().min(1).optional(),
+  APNS_TEAM_ID: z.string().min(1).optional(),
+  APNS_KEY_ID: z.string().min(1).optional(),
+  APNS_BUNDLE_ID: z.string().min(1).optional(),
+  APNS_USE_SANDBOX: z
+    .string()
+    .optional()
+    .transform((value) => (value == null ? undefined : value === "true")),
+  APNS_VOIP_PRIVATE_KEY: z.string().min(1).optional(),
+  APNS_VOIP_PRIVATE_KEY_BASE64: z.string().min(1).optional(),
   LIVEKIT_HOST: z.string().url().optional(),
   LIVEKIT_WS_URL: z.string().url().optional(),
   LIVEKIT_API_KEY: z.string().min(1).optional(),

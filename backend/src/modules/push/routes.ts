@@ -5,10 +5,12 @@ import { prisma } from "../../lib/prisma.js";
 import { requireAuth } from "../../middleware/auth.js";
 
 export const pushRouter = Router();
+const prismaDeviceToken = (prisma as unknown as { deviceToken: any }).deviceToken;
 
 const registerDeviceSchema = z.object({
   token: z.string().trim().min(1).max(512),
   platform: z.enum(["ios", "android"]),
+  tokenKind: z.enum(["standard", "voip"]).default("standard"),
   deviceLabel: z.string().trim().max(120).optional()
 });
 
@@ -23,18 +25,20 @@ pushRouter.post("/devices", requireAuth, async (req, res) => {
     return;
   }
 
-  const device = await prisma.deviceToken.upsert({
+  const device = await prismaDeviceToken.upsert({
     where: { token: parsed.data.token },
     create: {
       userId: req.authUserId!,
       token: parsed.data.token,
       platform: parsed.data.platform === "ios" ? PushPlatform.IOS : PushPlatform.ANDROID,
+      tokenKind: parsed.data.tokenKind === "voip" ? "VOIP" : "STANDARD",
       deviceLabel: parsed.data.deviceLabel?.trim() || null,
       isActive: true
     },
     update: {
       userId: req.authUserId!,
       platform: parsed.data.platform === "ios" ? PushPlatform.IOS : PushPlatform.ANDROID,
+      tokenKind: parsed.data.tokenKind === "voip" ? "VOIP" : "STANDARD",
       deviceLabel: parsed.data.deviceLabel?.trim() || null,
       isActive: true
     },
@@ -42,6 +46,7 @@ pushRouter.post("/devices", requireAuth, async (req, res) => {
       id: true,
       token: true,
       platform: true,
+      tokenKind: true,
       deviceLabel: true,
       isActive: true
     }
@@ -52,6 +57,7 @@ pushRouter.post("/devices", requireAuth, async (req, res) => {
       id: device.id,
       token: device.token,
       platform: device.platform.toLowerCase(),
+      tokenKind: device.tokenKind.toLowerCase(),
       deviceLabel: device.deviceLabel,
       isActive: device.isActive
     }
@@ -65,7 +71,7 @@ pushRouter.delete("/devices", requireAuth, async (req, res) => {
     return;
   }
 
-  await prisma.deviceToken.updateMany({
+  await prismaDeviceToken.updateMany({
     where: {
       userId: req.authUserId!,
       token: parsed.data.token

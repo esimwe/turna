@@ -1,11 +1,12 @@
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import { logError } from "../../lib/logger.js";
-import { sendIncomingCallPush } from "../../lib/push.js";
+import { sendCallEndedPush, sendIncomingCallPush } from "../../lib/push.js";
 import { requireAuth } from "../../middleware/auth.js";
-import { getSocketsInUserRoom, emitUserEvent } from "../chat/chat.realtime.js";
+import { emitUserEvent } from "../chat/chat.realtime.js";
 import { buildAvatarUrl } from "../profile/avatar-url.js";
 import { callService } from "./call.service.js";
+import { cancelCallTimeout, scheduleCallTimeout } from "./call.timeout.js";
 import type { CallHistoryItem, CallRecord, CallUser } from "./call.types.js";
 
 export const callRouter = Router();
@@ -136,15 +137,35 @@ callRouter.post("/start", requireAuth, async (req, res) => {
     emitUserEvent([call.callerId], "call:ringing", { call: callerPayload });
     emitUserEvent([call.calleeId], "call:incoming", { call: calleePayload });
 
-    const calleeSockets = await getSocketsInUserRoom(call.calleeId);
-    if (calleeSockets.length === 0) {
-      await sendIncomingCallPush({
-        callId: call.id,
-        type: call.type,
-        callerDisplayName: call.caller.displayName,
-        recipientUserIds: [call.calleeId]
-      });
-    }
+    await sendIncomingCallPush({
+      callId: call.id,
+      type: call.type,
+      callerId: call.callerId,
+      callerDisplayName: call.caller.displayName,
+      recipientUserIds: [call.calleeId]
+    });
+
+    scheduleCallTimeout(call.id, async () => {
+      try {
+        const missedCall = await callService.timeoutCall(call.id);
+        emitUserEvent([missedCall.callerId], "call:missed", {
+          call: serializeCallForViewer(req, missedCall, missedCall.callerId)
+        });
+        emitUserEvent([missedCall.calleeId], "call:missed", {
+          call: serializeCallForViewer(req, missedCall, missedCall.calleeId)
+        });
+        await sendCallEndedPush({
+          callId: missedCall.id,
+          reason: "missed",
+          recipientUserIds: [missedCall.callerId, missedCall.calleeId]
+        });
+      } catch (error) {
+        if (error instanceof Error && error.message === "call_not_ringing") {
+          return;
+        }
+        logError("call timeout failed", error);
+      }
+    });
 
     res.status(201).json({ data: { call: callerPayload } });
   } catch (error) {
@@ -156,6 +177,7 @@ callRouter.post("/start", requireAuth, async (req, res) => {
 
 callRouter.post("/:callId/accept", requireAuth, async (req, res) => {
   try {
+    cancelCallTimeout(getRouteParam(req, "callId"));
     const result = await callService.acceptCall({
       callId: getRouteParam(req, "callId"),
       userId: req.authUserId!
@@ -188,6 +210,7 @@ callRouter.post("/:callId/accept", requireAuth, async (req, res) => {
 
 callRouter.post("/:callId/decline", requireAuth, async (req, res) => {
   try {
+    cancelCallTimeout(getRouteParam(req, "callId"));
     const call = await callService.declineCall({
       callId: getRouteParam(req, "callId"),
       userId: req.authUserId!
@@ -198,6 +221,11 @@ callRouter.post("/:callId/decline", requireAuth, async (req, res) => {
     });
     emitUserEvent([call.calleeId], "call:declined", {
       call: serializeCallForViewer(req, call, call.calleeId)
+    });
+    await sendCallEndedPush({
+      callId: call.id,
+      reason: "declined",
+      recipientUserIds: [call.callerId, call.calleeId]
     });
 
     res.json({
@@ -214,6 +242,7 @@ callRouter.post("/:callId/decline", requireAuth, async (req, res) => {
 
 callRouter.post("/:callId/end", requireAuth, async (req, res) => {
   try {
+    cancelCallTimeout(getRouteParam(req, "callId"));
     const call = await callService.endCall({
       callId: getRouteParam(req, "callId"),
       userId: req.authUserId!
@@ -224,6 +253,11 @@ callRouter.post("/:callId/end", requireAuth, async (req, res) => {
     });
     emitUserEvent([call.calleeId], "call:ended", {
       call: serializeCallForViewer(req, call, call.calleeId)
+    });
+    await sendCallEndedPush({
+      callId: call.id,
+      reason: call.status,
+      recipientUserIds: [call.callerId, call.calleeId]
     });
 
     res.json({

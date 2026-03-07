@@ -275,8 +275,34 @@ export class CallService {
     const row = await this.getCallRowById(params.callId);
     if (!row) throw new Error("call_not_found");
     if (row.calleeId !== params.userId) throw new Error("forbidden_call_access");
-    if (row.status !== "RINGING") throw new Error("call_not_ringing");
     if (!row.roomName) throw new Error("call_room_missing");
+
+    if (row.status === "ACCEPTED") {
+      const callerToken = await this.provider.createParticipantToken({
+        callId: row.id,
+        roomName: row.roomName,
+        type: toAppCallType(row.type),
+        userId: row.caller.id,
+        participantName: row.caller.displayName
+      });
+      const calleeToken = await this.provider.createParticipantToken({
+        callId: row.id,
+        roomName: row.roomName,
+        type: toAppCallType(row.type),
+        userId: row.callee.id,
+        participantName: row.callee.displayName
+      });
+
+      return {
+        call: await this.getCallByIdForUser(params.callId, params.userId),
+        joinByUserId: {
+          [row.callerId]: callerToken,
+          [row.calleeId]: calleeToken
+        }
+      };
+    }
+
+    if (row.status !== "RINGING") throw new Error("call_not_ringing");
 
     const updated = await prismaCall.update({
       where: { id: params.callId },
@@ -373,6 +399,28 @@ export class CallService {
     });
 
     return this.getCallByIdForUser(params.callId, params.userId);
+  }
+
+  async timeoutCall(callId: string): Promise<CallRecord> {
+    const row = await this.getCallRowById(callId);
+    if (!row) throw new Error("call_not_found");
+    if (row.status !== "RINGING") throw new Error("call_not_ringing");
+
+    await prismaCall.update({
+      where: { id: callId },
+      data: {
+        status: "MISSED",
+        endedAt: new Date()
+      }
+    });
+    await this.recordEvent(callId, "missed", row.calleeId);
+    await this.provider.closeSession({
+      callId,
+      sessionId: row.providerSessionId,
+      roomName: row.roomName
+    });
+
+    return this.getCallByIdForUser(callId, row.calleeId);
   }
 }
 

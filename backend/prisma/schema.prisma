@@ -29,6 +29,11 @@ enum PushPlatform {
   ANDROID
 }
 
+enum PushTokenKind {
+  STANDARD
+  VOIP
+}
+
 enum CallType {
   AUDIO
   VIDEO
@@ -125,6 +130,7 @@ model DeviceToken {
   userId       String
   token        String       @unique
   platform     PushPlatform
+  tokenKind    PushTokenKind @default(STANDARD)
   deviceLabel  String?
   isActive     Boolean      @default(true)
   createdAt    DateTime     @default(now())
