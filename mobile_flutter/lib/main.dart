@@ -409,10 +409,18 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state != AppLifecycleState.resumed) return;
-    _presenceClient.refreshConnection();
-    TurnaNativeCallManager.handleAppResumed();
-    _inboxUpdateNotifier.value++;
+    if (state == AppLifecycleState.resumed) {
+      _presenceClient.refreshConnection();
+      TurnaNativeCallManager.handleAppResumed();
+      _inboxUpdateNotifier.value++;
+      return;
+    }
+
+    if (state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      _presenceClient.disconnectForBackground();
+    }
   }
 
   void _handleCallCoordinator() {
@@ -655,7 +663,10 @@ class _ChatsPageState extends State<ChatsPage> {
                   ),
                   title: Text(
                     chat.name,
-                    style: const TextStyle(fontWeight: FontWeight.w600),
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                   subtitle: Text(
                     chat.message,
@@ -1302,8 +1313,16 @@ class _ChatRoomPageState extends State<ChatRoomPage>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state != AppLifecycleState.resumed) return;
-    _client.refreshConnection();
+    if (state == AppLifecycleState.resumed) {
+      _client.refreshConnection();
+      return;
+    }
+
+    if (state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      _client.disconnectForBackground();
+    }
   }
 
   @override
@@ -1333,6 +1352,10 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                       widget.chat.name,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                     if (peerStatusText != null)
                       Text(
@@ -1346,7 +1369,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                               : const Color(0xFF6E7572),
                           fontWeight: _client.peerTyping
                               ? FontWeight.w600
-                              : FontWeight.w400,
+                              : FontWeight.w500,
                         ),
                       ),
                   ],
@@ -3677,6 +3700,30 @@ class TurnaSocketClient extends ChangeNotifier {
     socket.connect();
   }
 
+  void disconnectForBackground() {
+    final socket = _socket;
+    _typingPauseTimer?.cancel();
+    if (_localTyping && socket?.connected == true) {
+      _emitTyping(false);
+    }
+    _localTyping = false;
+    if (socket == null) return;
+
+    turnaLog('socket background disconnect', {
+      'chatId': chatId,
+      'connected': socket.connected,
+    });
+    if (socket.connected) {
+      socket.disconnect();
+    }
+    if (isConnected || peerTyping) {
+      isConnected = false;
+      _cancelPeerTypingTimeout();
+      peerTyping = false;
+      notifyListeners();
+    }
+  }
+
   Future<void> send(String text) async {
     final nowIso = DateTime.now().toIso8601String();
     final localMessage = ChatMessage(
@@ -4010,6 +4057,15 @@ class PresenceSocketClient {
     }
     socket.connect();
     _scheduleInboxRefresh();
+  }
+
+  void disconnectForBackground() {
+    final socket = _socket;
+    if (socket == null) return;
+    turnaLog('presence background disconnect', {'connected': socket.connected});
+    if (socket.connected) {
+      socket.disconnect();
+    }
   }
 
   void _scheduleInboxRefresh() {
