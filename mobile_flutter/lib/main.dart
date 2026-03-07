@@ -28,6 +28,19 @@ const int kInlineImagePickerQuality = 82;
 const double kInlineImagePickerMaxDimension = 2200;
 const double kInlineImageSdMaxDimension = 1280;
 const double kInlineImageHdMaxDimension = 2200;
+const Offset kComposerOverlayDefaultPosition = Offset(0.5, 0.5);
+const List<Color> kComposerPaletteStops = [
+  Color(0xFFFFFFFF),
+  Color(0xFFFF3B30),
+  Color(0xFFFF9500),
+  Color(0xFFFFD60A),
+  Color(0xFF34C759),
+  Color(0xFF00C7BE),
+  Color(0xFF0A84FF),
+  Color(0xFF5E5CE6),
+  Color(0xFFBF5AF2),
+  Color(0xFFFF2D55),
+];
 
 final GlobalKey<NavigatorState> kTurnaNavigatorKey =
     GlobalKey<NavigatorState>();
@@ -90,6 +103,21 @@ String replaceFileExtension(String fileName, String extension) {
   final dotIndex = fileName.lastIndexOf('.');
   final base = dotIndex <= 0 ? fileName : fileName.substring(0, dotIndex);
   return '$base.$extension';
+}
+
+Color composerColorForValue(double value) {
+  final clamped = value.clamp(0.0, 1.0).toDouble();
+  if (kComposerPaletteStops.length == 1) return kComposerPaletteStops.first;
+  final scaled = clamped * (kComposerPaletteStops.length - 1);
+  final lowerIndex = scaled.floor();
+  final upperIndex = math.min(lowerIndex + 1, kComposerPaletteStops.length - 1);
+  final t = scaled - lowerIndex;
+  return Color.lerp(
+        kComposerPaletteStops[lowerIndex],
+        kComposerPaletteStops[upperIndex],
+        t,
+      ) ??
+      kComposerPaletteStops[lowerIndex];
 }
 
 class TurnaActiveChatRegistry extends ChangeNotifier {
@@ -1995,6 +2023,7 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
   bool _sending = false;
   String? _sendingLabel;
   MediaComposerQuality _quality = MediaComposerQuality.sd;
+  double _overlayInteractionBaseScale = 1;
 
   _MediaComposerItem get _currentItem => _items[_selectedIndex];
 
@@ -2092,6 +2121,8 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
       if (selectedEmoji == null || !mounted) return;
       setState(() {
         _currentItem.overlayText = selectedEmoji;
+        _currentItem.overlayPosition ??= kComposerOverlayDefaultPosition;
+        _currentItem.overlayScale = 1;
       });
       return;
     }
@@ -2126,6 +2157,12 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
     if (!mounted || result == null) return;
     setState(() {
       _currentItem.overlayText = result.isEmpty ? null : result;
+      if (_currentItem.overlayText != null) {
+        _currentItem.overlayPosition ??= kComposerOverlayDefaultPosition;
+        _currentItem.overlayScale = _currentItem.overlayScale
+            .clamp(0.7, 3.2)
+            .toDouble();
+      }
     });
   }
 
@@ -2162,11 +2199,50 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
     return Offset(dx, dy);
   }
 
+  Offset _clampOverlayPosition(Offset position) {
+    return Offset(
+      position.dx.clamp(0.14, 0.86).toDouble(),
+      position.dy.clamp(0.12, 0.88).toDouble(),
+    );
+  }
+
+  void _setMarkupColor(double value) {
+    if (!_currentItem.isImage) return;
+    setState(() {
+      _currentItem.markupColorValue = value.clamp(0.0, 1.0).toDouble();
+    });
+  }
+
+  void _handleOverlayScaleStart() {
+    _overlayInteractionBaseScale = _currentItem.overlayScale;
+  }
+
+  void _handleOverlayScaleUpdate(ScaleUpdateDetails details, Size size) {
+    final currentPosition =
+        _currentItem.overlayPosition ?? kComposerOverlayDefaultPosition;
+    final safeWidth = size.width <= 0 ? 1.0 : size.width;
+    final safeHeight = size.height <= 0 ? 1.0 : size.height;
+    final movedPosition = Offset(
+      currentPosition.dx + (details.focalPointDelta.dx / safeWidth),
+      currentPosition.dy + (details.focalPointDelta.dy / safeHeight),
+    );
+
+    setState(() {
+      _currentItem.overlayPosition = _clampOverlayPosition(movedPosition);
+      _currentItem.overlayScale = (_overlayInteractionBaseScale * details.scale)
+          .clamp(0.7, 3.2)
+          .toDouble();
+    });
+  }
+
   void _startStroke(Offset point, Size size) {
     if (!_drawMode || !_currentItem.isImage) return;
     setState(() {
       _currentItem.strokes.add(
-        _MediaComposerStroke(points: [_normalizePoint(point, size)]),
+        _MediaComposerStroke(
+          color: _currentItem.markupColor,
+          points: [_normalizePoint(point, size)],
+        ),
       );
     });
   }
@@ -2376,6 +2452,9 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
       canvas,
       size: Size(outputWidth.toDouble(), outputHeight.toDouble()),
       text: item.overlayText,
+      position: item.overlayPosition,
+      scale: item.overlayScale,
+      color: item.markupColor,
     );
 
     final rendered = await recorder.endRecording().toImage(
@@ -2522,7 +2601,7 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
                             const SizedBox(width: 8),
                             const Expanded(
                               child: Text(
-                                'Cizmek icin gorselin uzerinde surukle. Son cizgiyi geri almak icin tekrar ciz ikonuna bas.',
+                                'Cizmek icin gorselin uzerinde surukle. Sagdaki renk cetvelinden renk sec, son cizgiyi geri almak icin tekrar ciz ikonuna bas.',
                                 style: TextStyle(
                                   color: Color(0xFFB8BFBC),
                                   fontSize: 12,
@@ -2556,7 +2635,7 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
                     Align(
                       alignment: Alignment.centerLeft,
                       child: Text(
-                        _buildQualityNote(),
+                        '${_buildQualityNote()} Metni surukleyebilir, iki parmakla buyutup kucultebilirsin.',
                         style: const TextStyle(
                           color: Color(0xFFB8BFBC),
                           fontSize: 12,
@@ -2770,27 +2849,51 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
                     if (item.overlayText != null &&
                         item.overlayText!.trim().isNotEmpty)
                       Align(
-                        alignment: Alignment.bottomCenter,
-                        child: Padding(
-                          padding: EdgeInsets.only(
-                            left: width * 0.08,
-                            right: width * 0.08,
-                            bottom: math.max(18, height * 0.07),
-                          ),
-                          child: Text(
-                            item.overlayText!,
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w700,
-                              fontSize: math.max(18, width * 0.06),
-                              shadows: const [
-                                Shadow(
-                                  color: Colors.black54,
-                                  blurRadius: 10,
-                                  offset: Offset(0, 2),
+                        alignment: Alignment(
+                          ((item.overlayPosition ??
+                                          kComposerOverlayDefaultPosition)
+                                      .dx *
+                                  2) -
+                              1,
+                          ((item.overlayPosition ??
+                                          kComposerOverlayDefaultPosition)
+                                      .dy *
+                                  2) -
+                              1,
+                        ),
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.translucent,
+                          onTap: _drawMode
+                              ? null
+                              : () => _editOverlayText(emojiMode: false),
+                          onScaleStart: _drawMode
+                              ? null
+                              : (_) => _handleOverlayScaleStart(),
+                          onScaleUpdate: _drawMode
+                              ? null
+                              : (details) => _handleOverlayScaleUpdate(
+                                  details,
+                                  canvasSize,
                                 ),
-                              ],
+                          child: ConstrainedBox(
+                            constraints: BoxConstraints(maxWidth: width * 0.82),
+                            child: Text(
+                              item.overlayText!,
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: item.markupColor,
+                                fontWeight: FontWeight.w700,
+                                fontSize:
+                                    math.max(18, width * 0.06) *
+                                    item.overlayScale,
+                                shadows: const [
+                                  Shadow(
+                                    color: Colors.black54,
+                                    blurRadius: 10,
+                                    offset: Offset(0, 2),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
                         ),
@@ -2802,9 +2905,96 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
                         ),
                       ),
                     ),
+                    Positioned(
+                      right: 12,
+                      top: 16,
+                      bottom: 16,
+                      child: _ComposerColorSlider(
+                        value: item.markupColorValue,
+                        color: item.markupColor,
+                        onChanged: _setMarkupColor,
+                      ),
+                    ),
                   ],
                 ),
               ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _ComposerColorSlider extends StatelessWidget {
+  const _ComposerColorSlider({
+    required this.value,
+    required this.color,
+    required this.onChanged,
+  });
+
+  final double value;
+  final Color color;
+  final ValueChanged<double> onChanged;
+
+  void _updateFromOffset(Offset localPosition, double height) {
+    final safeHeight = height <= 0 ? 1.0 : height;
+    onChanged((localPosition.dy / safeHeight).clamp(0.0, 1.0).toDouble());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final trackHeight = constraints.maxHeight;
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTapDown: (details) =>
+              _updateFromOffset(details.localPosition, trackHeight),
+          onVerticalDragStart: (details) =>
+              _updateFromOffset(details.localPosition, trackHeight),
+          onVerticalDragUpdate: (details) =>
+              _updateFromOffset(details.localPosition, trackHeight),
+          child: SizedBox(
+            width: 34,
+            child: Stack(
+              alignment: Alignment.topCenter,
+              children: [
+                Container(
+                  width: 16,
+                  margin: const EdgeInsets.symmetric(vertical: 6),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(999),
+                    gradient: const LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: kComposerPaletteStops,
+                    ),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.24),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  top: (trackHeight - 24) * value.clamp(0.0, 1.0).toDouble(),
+                  child: Container(
+                    width: 24,
+                    height: 24,
+                    decoration: BoxDecoration(
+                      color: color,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 2.5),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Colors.black45,
+                          blurRadius: 10,
+                          offset: Offset(0, 3),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
         );
@@ -2839,10 +3029,15 @@ class _MediaComposerItem {
   final int sizeBytes;
   final List<_MediaComposerStroke> strokes = [];
   String? overlayText;
+  Offset? overlayPosition;
+  double overlayScale = 1;
+  double markupColorValue = 0;
   int rotationTurns = 0;
   Size? sourceSize;
 
   bool get isImage => kind == ChatAttachmentKind.image;
+
+  Color get markupColor => composerColorForValue(markupColorValue);
 
   bool get hasMarkup =>
       rotationTurns != 0 ||
@@ -2858,8 +3053,9 @@ class _MediaComposerItem {
 }
 
 class _MediaComposerStroke {
-  _MediaComposerStroke({required this.points});
+  _MediaComposerStroke({required this.color, required this.points});
 
+  final Color color;
   final List<Offset> points;
 }
 
@@ -2902,14 +3098,13 @@ void _paintComposerStrokes(
   required Size size,
   required List<_MediaComposerStroke> strokes,
 }) {
-  final paint = Paint()
-    ..color = Colors.white
-    ..strokeCap = StrokeCap.round
-    ..strokeJoin = StrokeJoin.round
-    ..style = PaintingStyle.stroke
-    ..strokeWidth = math.max(3, size.shortestSide * 0.011);
-
   for (final stroke in strokes) {
+    final paint = Paint()
+      ..color = stroke.color
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = math.max(3, size.shortestSide * 0.011);
     if (stroke.points.isEmpty) continue;
     if (stroke.points.length == 1) {
       final point = Offset(
@@ -2934,6 +3129,9 @@ void _paintComposerOverlayText(
   Canvas canvas, {
   required Size size,
   required String? text,
+  Offset? position,
+  required double scale,
+  required Color color,
 }) {
   final value = text?.trim() ?? '';
   if (value.isEmpty) return;
@@ -2944,9 +3142,9 @@ void _paintComposerOverlayText(
     text: TextSpan(
       text: value,
       style: TextStyle(
-        color: Colors.white,
+        color: color,
         fontWeight: FontWeight.w700,
-        fontSize: math.max(28, size.width * 0.06),
+        fontSize: math.max(28, size.width * 0.06) * scale,
         shadows: const [
           Shadow(color: Colors.black54, blurRadius: 12, offset: Offset(0, 2)),
         ],
@@ -2954,11 +3152,17 @@ void _paintComposerOverlayText(
     ),
   )..layout(maxWidth: size.width * 0.82);
 
+  final center = position ?? kComposerOverlayDefaultPosition;
+  final marginX = size.width * 0.04;
+  final marginY = size.height * 0.04;
+  final left = (size.width * center.dx) - (painter.width / 2);
+  final top = (size.height * center.dy) - (painter.height / 2);
+
   painter.paint(
     canvas,
     Offset(
-      (size.width - painter.width) / 2,
-      size.height - painter.height - math.max(18, size.height * 0.07),
+      left.clamp(marginX, size.width - painter.width - marginX).toDouble(),
+      top.clamp(marginY, size.height - painter.height - marginY).toDouble(),
     ),
   );
 }
