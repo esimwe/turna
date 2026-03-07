@@ -1,7 +1,11 @@
 import { prisma } from "../../lib/prisma.js";
 import type { CallProvider } from "./call.provider.js";
 import { livekitCallProvider } from "./livekit.provider.js";
-import { CALL_RING_TIMEOUT_MS } from "./call.timeout.js";
+import {
+  CALL_RECONNECT_GRACE_MS,
+  CALL_RING_TIMEOUT_MS,
+  cancelCallReconnectGrace
+} from "./call.timeout.js";
 import type {
   AppCallStatus,
   AppCallType,
@@ -17,7 +21,7 @@ type PrismaCallType = "AUDIO" | "VIDEO";
 
 const prismaCall = (prisma as unknown as { call: any }).call;
 const prismaCallEvent = (prisma as unknown as { callEvent: any }).callEvent;
-const ACTIVE_CALL_STALE_GRACE_MS = 15_000;
+const ACTIVE_CALL_STALE_GRACE_MS = CALL_RECONNECT_GRACE_MS;
 
 function toAppCallType(type: PrismaCallType): AppCallType {
   return type === "AUDIO" ? "audio" : "video";
@@ -134,6 +138,31 @@ export class CallService {
     });
   }
 
+  private async getCallRowByRoomName(roomName: string) {
+    return prismaCall.findFirst({
+      where: { roomName },
+      include: {
+        caller: {
+          select: {
+            id: true,
+            displayName: true,
+            avatarUrl: true,
+            updatedAt: true
+          }
+        },
+        callee: {
+          select: {
+            id: true,
+            displayName: true,
+            avatarUrl: true,
+            updatedAt: true
+          }
+        }
+      },
+      orderBy: { createdAt: "desc" }
+    });
+  }
+
   async getCallByIdForUser(callId: string, userId: string): Promise<CallRecord> {
     const row = await this.getCallRowById(callId);
     if (!row) {
@@ -141,6 +170,21 @@ export class CallService {
     }
     if (row.callerId !== userId && row.calleeId !== userId) {
       throw new Error("forbidden_call_access");
+    }
+    return toCallRecord(row);
+  }
+
+  async findCallByRoomName(roomName: string): Promise<CallRecord | null> {
+    if (!roomName) return null;
+    const row = await this.getCallRowByRoomName(roomName);
+    return row ? toCallRecord(row) : null;
+  }
+
+  async findActiveCallByRoomName(roomName: string): Promise<CallRecord | null> {
+    if (!roomName) return null;
+    const row = await this.getCallRowByRoomName(roomName);
+    if (!row || !["RINGING", "ACCEPTED"].includes(row.status)) {
+      return null;
     }
     return toCallRecord(row);
   }
@@ -234,6 +278,7 @@ export class CallService {
       return null;
     }
 
+    cancelCallReconnectGrace(row.id);
     await this.recordEvent(row.id, toAppCallStatus(nextStatus), actorUserId, payload);
     await this.provider.closeSession({
       callId: row.id,
@@ -242,6 +287,37 @@ export class CallService {
     });
 
     return this.getCallByIdForUser(row.id, row.callerId);
+  }
+
+  async endAcceptedCallByRoomName(params: {
+    roomName: string;
+    reason: string;
+    actorUserId?: string;
+    minParticipantCount?: number;
+  }): Promise<CallRecord | null> {
+    if (!params.roomName) return null;
+
+    const row = await this.getCallRowByRoomName(params.roomName);
+    if (!row || row.status !== "ACCEPTED") {
+      return null;
+    }
+
+    let participantCount: number | null = null;
+    if (typeof params.minParticipantCount === "number") {
+      participantCount = await this.provider.getParticipantCount({
+        callId: row.id,
+        sessionId: row.providerSessionId,
+        roomName: row.roomName
+      });
+      if (participantCount !== null && participantCount >= params.minParticipantCount) {
+        return null;
+      }
+    }
+
+    return this.finalizeReconciledCall(row, "ENDED", params.actorUserId, {
+      reason: params.reason,
+      ...(participantCount !== null ? { participantCount } : {})
+    });
   }
 
   async reconcileActiveCallsForUsers(userIds: string[]): Promise<CallRecord[]> {
@@ -453,6 +529,7 @@ export class CallService {
         endedAt: new Date()
       }
     });
+    cancelCallReconnectGrace(params.callId);
     await this.recordEvent(params.callId, "declined", params.userId);
     await this.provider.closeSession({
       callId: params.callId,
@@ -490,6 +567,7 @@ export class CallService {
         endedAt: new Date()
       }
     });
+    cancelCallReconnectGrace(params.callId);
     await this.recordEvent(params.callId, toAppCallStatus(nextStatus), params.userId);
     await this.provider.closeSession({
       callId: params.callId,
@@ -512,6 +590,7 @@ export class CallService {
         endedAt: new Date()
       }
     });
+    cancelCallReconnectGrace(callId);
     await this.recordEvent(callId, "missed", row.calleeId);
     await this.provider.closeSession({
       callId,

@@ -14,6 +14,7 @@ export function createApp() {
 
   app.use(helmet());
   app.use(cors({ origin: env.CORS_ORIGIN === "*" ? true : env.CORS_ORIGIN }));
+  app.use("/api/calls/livekit/webhook", express.text({ type: "*/*", limit: "256kb" }));
   app.use(express.json({ limit: "2mb" }));
 
   app.use("/api", healthRouter);

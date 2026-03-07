@@ -6,7 +6,11 @@ function getRequestOrigin(req: Request): string {
   return `${proto}://${req.get("host")}`;
 }
 
-export function buildAvatarUrl(req: Request, userId: string, updatedAt: Date): string {
+export function buildAvatarUrlFromOrigin(origin: string, userId: string, updatedAt: Date): string {
   const version = encodeURIComponent(updatedAt.toISOString());
-  return `${getRequestOrigin(req)}/api/profile/avatar/${userId}?v=${version}`;
+  return `${origin}/api/profile/avatar/${userId}?v=${version}`;
+}
+
+export function buildAvatarUrl(req: Request, userId: string, updatedAt: Date): string {
+  return buildAvatarUrlFromOrigin(getRequestOrigin(req), userId, updatedAt);
 }

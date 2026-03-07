@@ -1,15 +1,26 @@
 import { Router, type Request, type Response } from "express";
+import { WebhookReceiver } from "livekit-server-sdk";
 import { z } from "zod";
-import { logError } from "../../lib/logger.js";
+import { env } from "../../config/env.js";
+import { logError, logInfo } from "../../lib/logger.js";
 import { sendCallEndedPush, sendIncomingCallPush } from "../../lib/push.js";
 import { requireAuth } from "../../middleware/auth.js";
 import { emitUserEvent } from "../chat/chat.realtime.js";
-import { buildAvatarUrl } from "../profile/avatar-url.js";
+import { buildAvatarUrlFromOrigin } from "../profile/avatar-url.js";
 import { callService } from "./call.service.js";
-import { cancelCallTimeout, scheduleCallTimeout } from "./call.timeout.js";
+import {
+  cancelCallReconnectGrace,
+  cancelCallTimeout,
+  scheduleCallReconnectGrace,
+  scheduleCallTimeout
+} from "./call.timeout.js";
 import type { CallHistoryItem, CallRecord, CallUser } from "./call.types.js";
 
 export const callRouter = Router();
+const liveKitWebhookReceiver =
+  env.LIVEKIT_API_KEY && env.LIVEKIT_API_SECRET
+    ? new WebhookReceiver(env.LIVEKIT_API_KEY, env.LIVEKIT_API_SECRET)
+    : null;
 
 const startCallSchema = z.object({
   calleeId: z.string().trim().min(1),
@@ -25,15 +36,23 @@ function getRouteParam(req: Request, key: string): string {
   return Array.isArray(value) ? value[0] ?? "" : value ?? "";
 }
 
-function withAvatarUrl(req: Request, user: CallUser) {
+function getRequestOrigin(req: Request): string {
+  const forwardedProto = req.header("x-forwarded-proto");
+  const proto = forwardedProto?.split(",")[0]?.trim() || req.protocol;
+  return `${proto}://${req.get("host")}`;
+}
+
+function withAvatarUrl(origin: string, user: CallUser) {
   return {
     id: user.id,
     displayName: user.displayName,
-    avatarUrl: user.avatarKey ? buildAvatarUrl(req, user.id, new Date(user.updatedAt)) : null
+    avatarUrl: user.avatarKey
+      ? buildAvatarUrlFromOrigin(origin, user.id, new Date(user.updatedAt))
+      : null
   };
 }
 
-function serializeCallForViewer(req: Request, call: CallRecord, viewerId: string) {
+function serializeCallForViewer(origin: string, call: CallRecord, viewerId: string) {
   const outgoing = call.callerId === viewerId;
   const peer = outgoing ? call.callee : call.caller;
   return {
@@ -48,13 +67,13 @@ function serializeCallForViewer(req: Request, call: CallRecord, viewerId: string
     acceptedAt: call.acceptedAt,
     endedAt: call.endedAt,
     direction: outgoing ? "outgoing" : "incoming",
-    peer: withAvatarUrl(req, peer),
-    caller: withAvatarUrl(req, call.caller),
-    callee: withAvatarUrl(req, call.callee)
+    peer: withAvatarUrl(origin, peer),
+    caller: withAvatarUrl(origin, call.caller),
+    callee: withAvatarUrl(origin, call.callee)
   };
 }
 
-function serializeHistoryItem(req: Request, item: CallHistoryItem) {
+function serializeHistoryItem(origin: string, item: CallHistoryItem) {
   return {
     id: item.id,
     type: item.type,
@@ -64,8 +83,33 @@ function serializeHistoryItem(req: Request, item: CallHistoryItem) {
     acceptedAt: item.acceptedAt,
     endedAt: item.endedAt,
     durationSeconds: item.durationSeconds,
-    peer: withAvatarUrl(req, item.peer)
+    peer: withAvatarUrl(origin, item.peer)
   };
+}
+
+async function emitResolvedCall(
+  origin: string,
+  call: CallRecord,
+  eventName: "call:missed" | "call:declined" | "call:ended",
+  pushReason = call.status
+): Promise<void> {
+  emitUserEvent([call.callerId], eventName, {
+    call: serializeCallForViewer(origin, call, call.callerId)
+  });
+  emitUserEvent([call.calleeId], eventName, {
+    call: serializeCallForViewer(origin, call, call.calleeId)
+  });
+  await sendCallEndedPush({
+    callId: call.id,
+    reason: pushReason,
+    recipientUserIds: [call.callerId, call.calleeId]
+  });
+}
+
+function getWebhookAuthToken(req: Request): string | undefined {
+  const rawHeader = req.get("authorization") ?? req.get("authorize") ?? undefined;
+  if (!rawHeader) return undefined;
+  return rawHeader.startsWith("Bearer ") ? rawHeader.slice(7) : rawHeader;
 }
 
 function respondCallError(res: Response, error: unknown): boolean {
@@ -104,6 +148,7 @@ function respondCallError(res: Response, error: unknown): boolean {
 }
 
 callRouter.get("/", requireAuth, async (req, res) => {
+  const origin = getRequestOrigin(req);
   const parsed = listCallsQuerySchema.safeParse(req.query);
   if (!parsed.success) {
     res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
@@ -112,32 +157,102 @@ callRouter.get("/", requireAuth, async (req, res) => {
 
   const calls = await callService.listCalls(req.authUserId!, parsed.data.limit);
   res.json({
-    data: calls.map((item) => serializeHistoryItem(req, item))
+    data: calls.map((item) => serializeHistoryItem(origin, item))
   });
 });
 
+callRouter.post("/livekit/webhook", async (req, res) => {
+  if (!liveKitWebhookReceiver) {
+    res.status(503).json({ error: "call_provider_not_configured" });
+    return;
+  }
+
+  const origin = getRequestOrigin(req);
+  const rawBody =
+    typeof req.body === "string" ? req.body : JSON.stringify(req.body ?? {});
+
+  try {
+    const event = await liveKitWebhookReceiver.receive(rawBody, getWebhookAuthToken(req));
+    const roomName = event.room?.name?.trim() ?? "";
+
+    if (!roomName) {
+      res.status(204).end();
+      return;
+    }
+
+    switch (event.event) {
+      case "participant_joined": {
+        const call = await callService.findActiveCallByRoomName(roomName);
+        if (call) {
+          cancelCallReconnectGrace(call.id);
+          logInfo("call reconnect grace cleared", {
+            callId: call.id,
+            event: event.event,
+            participantIdentity: event.participant?.identity || null,
+            roomName
+          });
+        }
+        break;
+      }
+      case "participant_left":
+      case "participant_connection_aborted": {
+        const call = await callService.findActiveCallByRoomName(roomName);
+        if (call?.status === "accepted") {
+          scheduleCallReconnectGrace(call.id, async () => {
+            const endedCall = await callService.endAcceptedCallByRoomName({
+              roomName,
+              reason: "reconnect_grace_expired",
+              minParticipantCount: 2
+            });
+            if (!endedCall) return;
+            await emitResolvedCall(origin, endedCall, "call:ended", "ended");
+          });
+          logInfo("call reconnect grace scheduled", {
+            callId: call.id,
+            event: event.event,
+            participantIdentity: event.participant?.identity || null,
+            roomName
+          });
+        }
+        break;
+      }
+      case "room_finished": {
+        const call = await callService.endAcceptedCallByRoomName({
+          roomName,
+          reason: "room_finished_webhook"
+        });
+        if (call) {
+          await emitResolvedCall(origin, call, "call:ended", "ended");
+          logInfo("call ended from room_finished webhook", { callId: call.id, roomName });
+        }
+        break;
+      }
+      default:
+        break;
+    }
+
+    res.status(204).end();
+  } catch (error) {
+    logError("livekit webhook failed", error);
+    const message = error instanceof Error ? error.message : "";
+    const status = /authorization|checksum|jwt/i.test(message) ? 401 : 500;
+    res.status(status).json({ error: "failed_to_process_livekit_webhook" });
+  }
+});
+
 callRouter.post("/reconcile", requireAuth, async (req, res) => {
+  const origin = getRequestOrigin(req);
   try {
     const calls = await callService.reconcileActiveCallsForUsers([req.authUserId!]);
 
     for (const call of calls) {
-      const callerPayload = serializeCallForViewer(req, call, call.callerId);
-      const calleePayload = serializeCallForViewer(req, call, call.calleeId);
       const eventName = call.status === "missed" ? "call:missed" : "call:ended";
-
-      emitUserEvent([call.callerId], eventName, { call: callerPayload });
-      emitUserEvent([call.calleeId], eventName, { call: calleePayload });
-
-      await sendCallEndedPush({
-        callId: call.id,
-        reason: call.status,
-        recipientUserIds: [call.callerId, call.calleeId]
-      });
+      await emitResolvedCall(origin, call, eventName, call.status);
     }
 
     res.json({
       data: {
-        calls: calls.map((call) => serializeCallForViewer(req, call, req.authUserId!))
+        calls: calls.map((call) => serializeCallForViewer(origin, call, req.authUserId!))
       }
     });
   } catch (error) {
@@ -147,6 +262,7 @@ callRouter.post("/reconcile", requireAuth, async (req, res) => {
 });
 
 callRouter.post("/start", requireAuth, async (req, res) => {
+  const origin = getRequestOrigin(req);
   const parsed = startCallSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
@@ -161,8 +277,8 @@ callRouter.post("/start", requireAuth, async (req, res) => {
       type: parsed.data.type
     });
 
-    const callerPayload = serializeCallForViewer(req, call, call.callerId);
-    const calleePayload = serializeCallForViewer(req, call, call.calleeId);
+    const callerPayload = serializeCallForViewer(origin, call, call.callerId);
+    const calleePayload = serializeCallForViewer(origin, call, call.calleeId);
 
     emitUserEvent([call.callerId], "call:ringing", { call: callerPayload });
     emitUserEvent([call.calleeId], "call:incoming", { call: calleePayload });
@@ -178,17 +294,7 @@ callRouter.post("/start", requireAuth, async (req, res) => {
     scheduleCallTimeout(call.id, async () => {
       try {
         const missedCall = await callService.timeoutCall(call.id);
-        emitUserEvent([missedCall.callerId], "call:missed", {
-          call: serializeCallForViewer(req, missedCall, missedCall.callerId)
-        });
-        emitUserEvent([missedCall.calleeId], "call:missed", {
-          call: serializeCallForViewer(req, missedCall, missedCall.calleeId)
-        });
-        await sendCallEndedPush({
-          callId: missedCall.id,
-          reason: "missed",
-          recipientUserIds: [missedCall.callerId, missedCall.calleeId]
-        });
+        await emitResolvedCall(origin, missedCall, "call:missed", "missed");
       } catch (error) {
         if (error instanceof Error && error.message === "call_not_ringing") {
           return;
@@ -206,6 +312,7 @@ callRouter.post("/start", requireAuth, async (req, res) => {
 });
 
 callRouter.post("/:callId/accept", requireAuth, async (req, res) => {
+  const origin = getRequestOrigin(req);
   try {
     cancelCallTimeout(getRouteParam(req, "callId"));
     const result = await callService.acceptCall({
@@ -213,8 +320,8 @@ callRouter.post("/:callId/accept", requireAuth, async (req, res) => {
       userId: req.authUserId!
     });
 
-    const callerPayload = serializeCallForViewer(req, result.call, result.call.callerId);
-    const calleePayload = serializeCallForViewer(req, result.call, result.call.calleeId);
+    const callerPayload = serializeCallForViewer(origin, result.call, result.call.callerId);
+    const calleePayload = serializeCallForViewer(origin, result.call, result.call.calleeId);
 
     emitUserEvent([result.call.callerId], "call:accepted", {
       call: callerPayload,
@@ -239,6 +346,7 @@ callRouter.post("/:callId/accept", requireAuth, async (req, res) => {
 });
 
 callRouter.post("/:callId/decline", requireAuth, async (req, res) => {
+  const origin = getRequestOrigin(req);
   try {
     cancelCallTimeout(getRouteParam(req, "callId"));
     const call = await callService.declineCall({
@@ -246,21 +354,11 @@ callRouter.post("/:callId/decline", requireAuth, async (req, res) => {
       userId: req.authUserId!
     });
 
-    emitUserEvent([call.callerId], "call:declined", {
-      call: serializeCallForViewer(req, call, call.callerId)
-    });
-    emitUserEvent([call.calleeId], "call:declined", {
-      call: serializeCallForViewer(req, call, call.calleeId)
-    });
-    await sendCallEndedPush({
-      callId: call.id,
-      reason: "declined",
-      recipientUserIds: [call.callerId, call.calleeId]
-    });
+    await emitResolvedCall(origin, call, "call:declined", "declined");
 
     res.json({
       data: {
-        call: serializeCallForViewer(req, call, req.authUserId!)
+        call: serializeCallForViewer(origin, call, req.authUserId!)
       }
     });
   } catch (error) {
@@ -271,6 +369,7 @@ callRouter.post("/:callId/decline", requireAuth, async (req, res) => {
 });
 
 callRouter.post("/:callId/end", requireAuth, async (req, res) => {
+  const origin = getRequestOrigin(req);
   try {
     cancelCallTimeout(getRouteParam(req, "callId"));
     const call = await callService.endCall({
@@ -278,21 +377,11 @@ callRouter.post("/:callId/end", requireAuth, async (req, res) => {
       userId: req.authUserId!
     });
 
-    emitUserEvent([call.callerId], "call:ended", {
-      call: serializeCallForViewer(req, call, call.callerId)
-    });
-    emitUserEvent([call.calleeId], "call:ended", {
-      call: serializeCallForViewer(req, call, call.calleeId)
-    });
-    await sendCallEndedPush({
-      callId: call.id,
-      reason: call.status,
-      recipientUserIds: [call.callerId, call.calleeId]
-    });
+    await emitResolvedCall(origin, call, "call:ended", call.status);
 
     res.json({
       data: {
-        call: serializeCallForViewer(req, call, req.authUserId!)
+        call: serializeCallForViewer(origin, call, req.authUserId!)
       }
     });
   } catch (error) {
