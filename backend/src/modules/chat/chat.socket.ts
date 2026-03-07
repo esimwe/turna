@@ -4,10 +4,14 @@ import { logError, logInfo } from "../../lib/logger.js";
 import { verifyAccessToken } from "../../lib/jwt.js";
 import { sendChatMessagePush } from "../../lib/push.js";
 import {
+  buildUserPresencePayload,
   emitChatMessage,
+  emitPresenceUpdate,
   emitChatStatus,
   emitInboxUpdate,
   getSocketsInUserRoom,
+  registerUserSocket,
+  unregisterUserSocket,
   userRoom
 } from "./chat.realtime.js";
 import { chatService } from "./chat.service.js";
@@ -24,6 +28,27 @@ const sendMessageSchema = z.object({
 const seenChatSchema = z.object({
   chatId: z.string().min(1)
 });
+
+const typingChatSchema = z.object({
+  chatId: z.string().min(1),
+  isTyping: z.boolean()
+});
+
+async function notifyPresenceAudience(userId: string): Promise<void> {
+  const audienceUserIds = await chatService.getPresenceAudienceUserIds(userId);
+  if (audienceUserIds.length === 0) return;
+
+  const lastSeenAt = await chatService.getUserLastSeenAt(userId);
+  emitPresenceUpdate(audienceUserIds, buildUserPresencePayload(userId, lastSeenAt));
+}
+
+async function sendDirectPeerPresenceSnapshot(socket: Socket, chatId: string, userId: string): Promise<void> {
+  const peerUserId = chatService.getDirectPeerId(chatId, userId);
+  if (!peerUserId) return;
+
+  const lastSeenAt = await chatService.getUserLastSeenAt(peerUserId);
+  socket.emit("user:presence", buildUserPresencePayload(peerUserId, lastSeenAt));
+}
 
 export function registerChatSocket(io: Server): void {
   io.use((socket, next) => {
@@ -54,7 +79,16 @@ export function registerChatSocket(io: Server): void {
   io.on("connection", async (socket: Socket) => {
     const userId = socket.data.userId as string;
     socket.join(userRoom(userId));
+    const becameOnline = registerUserSocket(userId, socket.id);
     logInfo("socket connected", { socketId: socket.id, userId, transport: socket.conn.transport.name });
+
+    if (becameOnline) {
+      try {
+        await notifyPresenceAudience(userId);
+      } catch (error) {
+        logError("presence announce on connect failed", error);
+      }
+    }
 
     // Kullanıcı online olduğunda, ona gönderilen tüm "sent" mesajları "delivered" yap
     try {
@@ -101,6 +135,7 @@ export function registerChatSocket(io: Server): void {
           historyCount: historyPage.items.length
         });
         socket.emit("chat:history", historyPage.items);
+        await sendDirectPeerPresenceSnapshot(socket, parsed.data.chatId, userId);
 
         const deliveredIds = await chatService.markMessagesDelivered(parsed.data.chatId, userId);
         if (deliveredIds.length > 0) {
@@ -222,8 +257,46 @@ export function registerChatSocket(io: Server): void {
       }
     });
 
-    socket.on("disconnect", (reason) => {
+    socket.on("chat:typing", async (payload) => {
+      const parsed = typingChatSchema.safeParse(payload);
+      if (!parsed.success) {
+        logInfo("chat:typing validation failed", { socketId: socket.id, payload });
+        socket.emit("error:validation", parsed.error.flatten());
+        return;
+      }
+
+      try {
+        const hasAccess = await chatService.ensureChatAccess(parsed.data.chatId, userId);
+        if (!hasAccess) {
+          socket.emit("error:forbidden", { message: "forbidden_chat_access" });
+          return;
+        }
+
+        socket.to(parsed.data.chatId).emit("chat:typing", {
+          chatId: parsed.data.chatId,
+          userId,
+          isTyping: parsed.data.isTyping
+        });
+      } catch (error) {
+        socket.emit("error:internal", { message: "failed_to_publish_typing" });
+        logInfo("chat:typing failed", { socketId: socket.id, chatId: parsed.data.chatId, error });
+      }
+    });
+
+    socket.on("disconnect", async (reason) => {
       logInfo("socket disconnected", { socketId: socket.id, reason });
+      const becameOffline = unregisterUserSocket(userId, socket.id);
+      if (!becameOffline) return;
+
+      try {
+        const lastSeenAt = await chatService.updateUserLastSeen(userId);
+        const audienceUserIds = await chatService.getPresenceAudienceUserIds(userId);
+        if (audienceUserIds.length === 0) return;
+
+        emitPresenceUpdate(audienceUserIds, buildUserPresencePayload(userId, lastSeenAt));
+      } catch (error) {
+        logError("presence announce on disconnect failed", error);
+      }
     });
   });
 }

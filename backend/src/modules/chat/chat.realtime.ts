@@ -3,9 +3,57 @@ import { logInfo } from "../../lib/logger.js";
 import type { ChatMessage } from "./chat.types.js";
 
 let chatIo: Server | null = null;
+const socketIdsByUserId = new Map<string, Set<string>>();
+
+export interface UserPresencePayload {
+  userId: string;
+  online: boolean;
+  lastSeenAt: string | null;
+}
 
 export function attachChatRealtime(io: Server): void {
   chatIo = io;
+}
+
+export function registerUserSocket(userId: string, socketId: string): boolean {
+  const socketIds = socketIdsByUserId.get(userId) ?? new Set<string>();
+  const wasOnline = socketIds.size > 0;
+  socketIds.add(socketId);
+  socketIdsByUserId.set(userId, socketIds);
+  return !wasOnline;
+}
+
+export function unregisterUserSocket(userId: string, socketId: string): boolean {
+  const socketIds = socketIdsByUserId.get(userId);
+  if (!socketIds) return false;
+
+  const wasOnline = socketIds.size > 0;
+  socketIds.delete(socketId);
+  if (socketIds.size === 0) {
+    socketIdsByUserId.delete(userId);
+  }
+
+  return wasOnline && !isUserOnline(userId);
+}
+
+export function isUserOnline(userId: string): boolean {
+  return (socketIdsByUserId.get(userId)?.size ?? 0) > 0;
+}
+
+export function buildUserPresencePayload(
+  userId: string,
+  lastSeenAt: Date | string | null | undefined
+): UserPresencePayload {
+  return {
+    userId,
+    online: isUserOnline(userId),
+    lastSeenAt:
+      lastSeenAt instanceof Date
+        ? lastSeenAt.toISOString()
+        : typeof lastSeenAt === "string"
+          ? lastSeenAt
+          : null
+  };
 }
 
 export function userRoom(userId: string): string {
@@ -22,6 +70,10 @@ export function emitUserEvent<T>(userIds: string[], eventName: string, payload: 
 
 export function emitInboxUpdate(userIds: string[]): void {
   emitUserEvent(userIds, "chat:inbox:update", undefined);
+}
+
+export function emitPresenceUpdate(userIds: string[], payload: UserPresencePayload): void {
+  emitUserEvent(userIds, "user:presence", payload);
 }
 
 export function emitChatMessage(chatId: string, message: ChatMessage, participantIds: string[]): void {

@@ -12,6 +12,8 @@ import type {
   SendMessagePayload
 } from "./chat.types.js";
 
+const prismaUser = (prisma as unknown as { user: any }).user;
+
 type MessageRow = {
   id: string;
   chatId: string;
@@ -398,6 +400,38 @@ export class ChatService {
       select: { chatId: true }
     });
     return memberships.map((m) => m.chatId);
+  }
+
+  async getPresenceAudienceUserIds(userId: string): Promise<string[]> {
+    const chatIds = await this.getUserChats(userId);
+    if (chatIds.length === 0) return [];
+
+    const relatedMembers = await prisma.chatMember.findMany({
+      where: {
+        chatId: { in: chatIds },
+        userId: { not: userId }
+      },
+      select: { userId: true }
+    });
+
+    return Array.from(new Set(relatedMembers.map((member) => member.userId)));
+  }
+
+  async getUserLastSeenAt(userId: string): Promise<Date | null> {
+    const user = await prismaUser.findUnique({
+      where: { id: userId },
+      select: { lastSeenAt: true }
+    });
+    return user?.lastSeenAt ?? null;
+  }
+
+  async updateUserLastSeen(userId: string, seenAt = new Date()): Promise<Date> {
+    const user = await prismaUser.update({
+      where: { id: userId },
+      data: { lastSeenAt: seenAt },
+      select: { lastSeenAt: true }
+    });
+    return user.lastSeenAt ?? seenAt;
   }
 
   async getUserDisplayName(userId: string): Promise<string> {

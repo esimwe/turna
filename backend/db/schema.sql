@@ -8,7 +8,8 @@ CREATE TABLE IF NOT EXISTS users (
   avatar_url TEXT,
   about TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_seen_at TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS chats (
