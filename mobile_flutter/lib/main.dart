@@ -29,6 +29,9 @@ const double kInlineImagePickerMaxDimension = 2200;
 const double kInlineImageSdMaxDimension = 1280;
 const double kInlineImageHdMaxDimension = 2200;
 const Offset kComposerOverlayDefaultPosition = Offset(0.5, 0.5);
+const Rect kComposerFullCropRectNormalized = Rect.fromLTWH(0, 0, 1, 1);
+const double kComposerCropInitialInset = 0.08;
+const double kComposerCropMinSide = 0.18;
 const List<Color> kComposerPaletteStops = [
   Color(0xFFFFFFFF),
   Color(0xFFFF3B30),
@@ -40,6 +43,17 @@ const List<Color> kComposerPaletteStops = [
   Color(0xFF5E5CE6),
   Color(0xFFBF5AF2),
   Color(0xFFFF2D55),
+];
+const List<_MediaCropPreset> _kComposerCropPresets = [
+  _MediaCropPreset(id: 'fit', label: 'Sigdir', fullImage: true),
+  _MediaCropPreset(id: 'original', label: 'Orijinal', useOriginalAspect: true),
+  _MediaCropPreset(id: 'square', label: 'Kare', aspectRatio: 1),
+  _MediaCropPreset(id: '2x3', label: '2:3', aspectRatio: 2 / 3),
+  _MediaCropPreset(id: '3x5', label: '3:5', aspectRatio: 3 / 5),
+  _MediaCropPreset(id: '3x4', label: '3:4', aspectRatio: 3 / 4),
+  _MediaCropPreset(id: '4x5', label: '4:5', aspectRatio: 4 / 5),
+  _MediaCropPreset(id: '5x7', label: '5:7', aspectRatio: 5 / 7),
+  _MediaCropPreset(id: '9x16', label: '9:16', aspectRatio: 9 / 16),
 ];
 
 final GlobalKey<NavigatorState> kTurnaNavigatorKey =
@@ -1996,6 +2010,22 @@ class MediaComposerSeed {
   final int sizeBytes;
 }
 
+class _MediaCropPreset {
+  const _MediaCropPreset({
+    required this.id,
+    required this.label,
+    this.aspectRatio,
+    this.useOriginalAspect = false,
+    this.fullImage = false,
+  });
+
+  final String id;
+  final String label;
+  final double? aspectRatio;
+  final bool useOriginalAspect;
+  final bool fullImage;
+}
+
 class MediaComposerPage extends StatefulWidget {
   const MediaComposerPage({
     super.key,
@@ -2021,6 +2051,7 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
   late final PageController _pageController;
   late final List<_MediaComposerItem> _items;
   int _selectedIndex = 0;
+  bool _cropMode = false;
   bool _drawMode = false;
   bool _sending = false;
   String? _sendingLabel;
@@ -2076,6 +2107,211 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
+  Rect _displayCropRectFor(_MediaComposerItem item) {
+    if (identical(item, _currentItem) && _cropMode) {
+      return kComposerFullCropRectNormalized;
+    }
+    return item.cropRectNormalized ?? kComposerFullCropRectNormalized;
+  }
+
+  double _effectiveAspectRatioFor(_MediaComposerItem item, Rect displayCrop) {
+    final base = item.sourceSize ?? const Size(1, 1);
+    final rotatedWidth = item.rotationTurns.isOdd ? base.height : base.width;
+    final rotatedHeight = item.rotationTurns.isOdd ? base.width : base.height;
+    return math.max(
+      0.1,
+      (rotatedWidth * displayCrop.width) /
+          math.max(0.1, rotatedHeight * displayCrop.height),
+    );
+  }
+
+  Size _rotatedSourceSize(_MediaComposerItem item) {
+    final base = item.sourceSize ?? const Size(1, 1);
+    return item.rotationTurns.isOdd
+        ? Size(base.height, base.width)
+        : Size(base.width, base.height);
+  }
+
+  _MediaCropPreset _cropPresetForId(String id) {
+    return _kComposerCropPresets.firstWhere(
+      (preset) => preset.id == id,
+      orElse: () => _kComposerCropPresets[1],
+    );
+  }
+
+  double _resolvedCropAspectRatio(
+    _MediaComposerItem item,
+    _MediaCropPreset preset,
+  ) {
+    if (preset.useOriginalAspect) {
+      final size = _rotatedSourceSize(item);
+      return size.width / math.max(0.1, size.height);
+    }
+    return preset.aspectRatio ?? 1;
+  }
+
+  Rect _cropRectForPreset(
+    _MediaComposerItem item,
+    _MediaCropPreset preset, {
+    Offset? center,
+  }) {
+    if (preset.fullImage) return kComposerFullCropRectNormalized;
+
+    final imageSize = _rotatedSourceSize(item);
+    final imageAspect = imageSize.width / math.max(0.1, imageSize.height);
+    final targetAspect = _resolvedCropAspectRatio(item, preset);
+    final normalizedAspect = targetAspect / math.max(0.1, imageAspect);
+    final available = 1 - (kComposerCropInitialInset * 2);
+
+    var width = available;
+    var height = width / math.max(0.1, normalizedAspect);
+    if (height > available) {
+      height = available;
+      width = height * normalizedAspect;
+    }
+
+    width = width.clamp(kComposerCropMinSide, 1.0).toDouble();
+    height = height.clamp(kComposerCropMinSide, 1.0).toDouble();
+
+    final anchor =
+        center ?? item.cropRectNormalized?.center ?? const Offset(0.5, 0.5);
+    return _clampCropRect(
+      Rect.fromCenter(center: anchor, width: width, height: height),
+    );
+  }
+
+  double _cropAspectRatioForRect(_MediaComposerItem item, Rect cropRect) {
+    final size = _rotatedSourceSize(item);
+    return math.max(
+      0.1,
+      (size.width * cropRect.width) /
+          math.max(0.1, size.height * cropRect.height),
+    );
+  }
+
+  Rect _normalizedCropToRect(Rect normalizedCrop, Size size) {
+    return Rect.fromLTWH(
+      normalizedCrop.left * size.width,
+      normalizedCrop.top * size.height,
+      normalizedCrop.width * size.width,
+      normalizedCrop.height * size.height,
+    );
+  }
+
+  Rect _clampCropRect(Rect rect) {
+    final minSide = kComposerCropMinSide;
+    var left = rect.left;
+    var top = rect.top;
+    var right = rect.right;
+    var bottom = rect.bottom;
+
+    if ((right - left) < minSide) {
+      right = left + minSide;
+    }
+    if ((bottom - top) < minSide) {
+      bottom = top + minSide;
+    }
+
+    if (left < 0) {
+      right -= left;
+      left = 0;
+    }
+    if (top < 0) {
+      bottom -= top;
+      top = 0;
+    }
+    if (right > 1) {
+      left -= right - 1;
+      right = 1;
+    }
+    if (bottom > 1) {
+      top -= bottom - 1;
+      bottom = 1;
+    }
+
+    left = left.clamp(0.0, 1.0 - minSide).toDouble();
+    top = top.clamp(0.0, 1.0 - minSide).toDouble();
+    right = right.clamp(left + minSide, 1.0).toDouble();
+    bottom = bottom.clamp(top + minSide, 1.0).toDouble();
+
+    return Rect.fromLTRB(left, top, right, bottom);
+  }
+
+  Rect _defaultCropRectFor(_MediaComposerItem item) {
+    return _cropRectForPreset(item, _cropPresetForId(item.cropPresetId));
+  }
+
+  Rect _cropViewportRectFor(
+    Size canvasSize,
+    _MediaComposerItem item,
+    Rect cropRect,
+  ) {
+    final targetAspect = _cropAspectRatioForRect(item, cropRect);
+    final horizontalPadding = math.min(24.0, canvasSize.width * 0.08);
+    final topPadding = math.min(24.0, canvasSize.height * 0.08);
+    final bottomPadding = math.min(92.0, canvasSize.height * 0.22);
+    final maxWidth = math.max(40.0, canvasSize.width - (horizontalPadding * 2));
+    final maxHeight = math.max(
+      40.0,
+      canvasSize.height - topPadding - bottomPadding,
+    );
+
+    var width = maxWidth;
+    var height = width / targetAspect;
+    if (height > maxHeight) {
+      height = maxHeight;
+      width = height * targetAspect;
+    }
+
+    return Rect.fromCenter(
+      center: Offset(
+        canvasSize.width / 2,
+        (canvasSize.height - bottomPadding + topPadding) / 2,
+      ),
+      width: width,
+      height: height,
+    );
+  }
+
+  void _applyCropPreset(_MediaCropPreset preset) {
+    if (!_currentItem.isImage) return;
+    final currentCenter = _currentItem.cropRectNormalized?.center;
+    setState(() {
+      _currentItem.cropPresetId = preset.id;
+      _currentItem.cropRectNormalized = _cropRectForPreset(
+        _currentItem,
+        preset,
+        center: currentCenter,
+      );
+    });
+  }
+
+  void _toggleQuality() {
+    setState(() {
+      _quality = _quality == MediaComposerQuality.sd
+          ? MediaComposerQuality.hd
+          : MediaComposerQuality.sd;
+    });
+  }
+
+  Future<void> _toggleCropMode() async {
+    if (_currentItem.kind == ChatAttachmentKind.video) {
+      await _showComingSoon(
+        'Kirpma su an sadece fotograflarda acik. Video kirpmaya sonra gececegiz.',
+      );
+      return;
+    }
+
+    _finishTextEditing();
+    setState(() {
+      _drawMode = false;
+      if (!_cropMode) {
+        _currentItem.cropRectNormalized ??= _defaultCropRectFor(_currentItem);
+      }
+      _cropMode = !_cropMode;
+    });
+  }
+
   String _nextTextOverlayId() {
     return '${DateTime.now().microsecondsSinceEpoch}-${_currentItem.textOverlays.length + 1}';
   }
@@ -2117,6 +2353,7 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
   void _beginNewTextOverlay({
     required String initialText,
     required bool requestKeyboard,
+    bool activateOverlay = true,
   }) {
     if (!_currentItem.isImage) return;
     _finishTextEditing();
@@ -2130,16 +2367,19 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
     );
 
     setState(() {
+      _cropMode = false;
       _drawMode = false;
       _currentItem.textOverlays.add(overlay);
-      _activeTextOverlayId = overlay.id;
-      _inlineTextController.value = TextEditingValue(
-        text: initialText,
-        selection: TextSelection.collapsed(offset: initialText.length),
-      );
+      _activeTextOverlayId = activateOverlay ? overlay.id : null;
+      _inlineTextController.value = activateOverlay
+          ? TextEditingValue(
+              text: initialText,
+              selection: TextSelection.collapsed(offset: initialText.length),
+            )
+          : const TextEditingValue();
     });
 
-    if (requestKeyboard) {
+    if (requestKeyboard && activateOverlay) {
       _requestInlineTextFocus();
     } else {
       _inlineTextFocusNode.unfocus();
@@ -2152,6 +2392,7 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
   }) {
     if (!_currentItem.isImage) return;
     setState(() {
+      _cropMode = false;
       _drawMode = false;
       _activeTextOverlayId = overlay.id;
       _inlineTextController.value = TextEditingValue(
@@ -2224,7 +2465,11 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
         },
       );
       if (selectedEmoji == null || !mounted) return;
-      _beginNewTextOverlay(initialText: selectedEmoji, requestKeyboard: false);
+      _beginNewTextOverlay(
+        initialText: selectedEmoji,
+        requestKeyboard: false,
+        activateOverlay: false,
+      );
       return;
     }
 
@@ -2245,7 +2490,10 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
       return;
     }
     _finishTextEditing();
-    setState(() => _drawMode = !_drawMode);
+    setState(() {
+      _cropMode = false;
+      _drawMode = !_drawMode;
+    });
   }
 
   void _rotateCurrent() {
@@ -2256,6 +2504,14 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
     _finishTextEditing();
     setState(() {
       _currentItem.rotationTurns = (_currentItem.rotationTurns + 1) % 4;
+      final preset = _cropPresetForId(_currentItem.cropPresetId);
+      _currentItem.cropRectNormalized = _cropMode
+          ? _cropRectForPreset(
+              _currentItem,
+              preset,
+              center: _currentItem.cropRectNormalized?.center,
+            )
+          : null;
     });
   }
 
@@ -2266,18 +2522,32 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
     });
   }
 
-  Offset _normalizePoint(Offset point, Size size) {
+  Offset _normalizePoint(Offset point, Size size, Rect displayCrop) {
     final safeWidth = size.width <= 0 ? 1.0 : size.width;
     final safeHeight = size.height <= 0 ? 1.0 : size.height;
-    final dx = point.dx.clamp(0.0, safeWidth) / safeWidth;
-    final dy = point.dy.clamp(0.0, safeHeight) / safeHeight;
+    final dx =
+        displayCrop.left +
+        ((point.dx.clamp(0.0, safeWidth) / safeWidth) * displayCrop.width);
+    final dy =
+        displayCrop.top +
+        ((point.dy.clamp(0.0, safeHeight) / safeHeight) * displayCrop.height);
     return Offset(dx, dy);
   }
 
-  Offset _clampOverlayPosition(Offset position) {
+  Offset _projectPointToDisplay(Offset point, Rect displayCrop) {
     return Offset(
-      position.dx.clamp(0.14, 0.86).toDouble(),
-      position.dy.clamp(0.12, 0.88).toDouble(),
+      ((point.dx - displayCrop.left) / displayCrop.width).toDouble(),
+      ((point.dy - displayCrop.top) / displayCrop.height).toDouble(),
+    );
+  }
+
+  Offset _clampOverlayPosition(Offset position, {Rect? bounds}) {
+    final rect = bounds ?? kComposerFullCropRectNormalized;
+    final marginX = math.min(0.14, rect.width * 0.14);
+    final marginY = math.min(0.12, rect.height * 0.12);
+    return Offset(
+      position.dx.clamp(rect.left + marginX, rect.right - marginX).toDouble(),
+      position.dy.clamp(rect.top + marginY, rect.bottom - marginY).toDouble(),
     );
   }
 
@@ -2301,40 +2571,67 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
     _MediaComposerTextOverlay overlay,
     ScaleUpdateDetails details,
     Size size,
+    Rect displayCrop,
   ) {
     final safeWidth = size.width <= 0 ? 1.0 : size.width;
     final safeHeight = size.height <= 0 ? 1.0 : size.height;
     final movedPosition = Offset(
-      overlay.position.dx + (details.focalPointDelta.dx / safeWidth),
-      overlay.position.dy + (details.focalPointDelta.dy / safeHeight),
+      overlay.position.dx +
+          ((details.focalPointDelta.dx / safeWidth) * displayCrop.width),
+      overlay.position.dy +
+          ((details.focalPointDelta.dy / safeHeight) * displayCrop.height),
     );
 
     setState(() {
-      overlay.position = _clampOverlayPosition(movedPosition);
+      overlay.position = _clampOverlayPosition(
+        movedPosition,
+        bounds: displayCrop,
+      );
       overlay.scale = (_overlayInteractionBaseScale * details.scale)
           .clamp(0.7, 3.2)
           .toDouble();
     });
   }
 
-  void _startStroke(Offset point, Size size) {
+  void _startStroke(Offset point, Size size, Rect displayCrop) {
     if (!_drawMode || !_currentItem.isImage) return;
     setState(() {
       _currentItem.strokes.add(
         _MediaComposerStroke(
           color: _currentItem.markupColor,
-          points: [_normalizePoint(point, size)],
+          points: [_normalizePoint(point, size, displayCrop)],
         ),
       );
     });
   }
 
-  void _appendStroke(Offset point, Size size) {
+  void _appendStroke(Offset point, Size size, Rect displayCrop) {
     if (!_drawMode || !_currentItem.isImage || _currentItem.strokes.isEmpty) {
       return;
     }
     setState(() {
-      _currentItem.strokes.last.points.add(_normalizePoint(point, size));
+      _currentItem.strokes.last.points.add(
+        _normalizePoint(point, size, displayCrop),
+      );
+    });
+  }
+
+  void _panCropSelection(DragUpdateDetails details, Rect viewportFrame) {
+    final currentCrop = _currentItem.cropRectNormalized;
+    if (!_cropMode || currentCrop == null) return;
+    final safeViewportWidth = viewportFrame.width <= 0
+        ? 1.0
+        : viewportFrame.width;
+    final safeViewportHeight = viewportFrame.height <= 0
+        ? 1.0
+        : viewportFrame.height;
+    final dx = -(details.delta.dx / safeViewportWidth) * currentCrop.width;
+    final dy = -(details.delta.dy / safeViewportHeight) * currentCrop.height;
+
+    setState(() {
+      _currentItem.cropRectNormalized = _clampCropRect(
+        currentCrop.shift(Offset(dx, dy)),
+      );
     });
   }
 
@@ -2454,6 +2751,114 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
     return _renderImageAttachment(item, sourceBytes);
   }
 
+  List<_MediaComposerStroke> _transformStrokesForCrop(
+    List<_MediaComposerStroke> strokes,
+    Rect cropRect,
+  ) {
+    if (cropRect == kComposerFullCropRectNormalized) return strokes;
+    return strokes
+        .map(
+          (stroke) => _MediaComposerStroke(
+            color: stroke.color,
+            points: stroke.points
+                .map(
+                  (point) => Offset(
+                    (point.dx - cropRect.left) / cropRect.width,
+                    (point.dy - cropRect.top) / cropRect.height,
+                  ),
+                )
+                .toList(),
+          ),
+        )
+        .toList();
+  }
+
+  List<_MediaComposerTextOverlay> _transformTextOverlaysForCrop(
+    List<_MediaComposerTextOverlay> overlays,
+    Rect cropRect,
+  ) {
+    if (cropRect == kComposerFullCropRectNormalized) return overlays;
+    return overlays
+        .map(
+          (overlay) => _MediaComposerTextOverlay(
+            id: overlay.id,
+            text: overlay.text,
+            position: Offset(
+              (overlay.position.dx - cropRect.left) / cropRect.width,
+              (overlay.position.dy - cropRect.top) / cropRect.height,
+            ),
+            scale: overlay.scale,
+            colorValue: overlay.colorValue,
+          ),
+        )
+        .toList();
+  }
+
+  Future<ui.Image> _renderRotatedImage(
+    ui.Image sourceImage, {
+    required int rotationTurns,
+    required int width,
+    required int height,
+  }) async {
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    final srcRect = Rect.fromLTWH(
+      0,
+      0,
+      sourceImage.width.toDouble(),
+      sourceImage.height.toDouble(),
+    );
+    final paint = Paint()..isAntiAlias = true;
+
+    switch (rotationTurns % 4) {
+      case 1:
+        canvas.save();
+        canvas.translate(width.toDouble(), 0);
+        canvas.rotate(math.pi / 2);
+        canvas.drawImageRect(
+          sourceImage,
+          srcRect,
+          Rect.fromLTWH(0, 0, height.toDouble(), width.toDouble()),
+          paint,
+        );
+        canvas.restore();
+        break;
+      case 2:
+        canvas.save();
+        canvas.translate(width.toDouble(), height.toDouble());
+        canvas.rotate(math.pi);
+        canvas.drawImageRect(
+          sourceImage,
+          srcRect,
+          Rect.fromLTWH(0, 0, width.toDouble(), height.toDouble()),
+          paint,
+        );
+        canvas.restore();
+        break;
+      case 3:
+        canvas.save();
+        canvas.translate(0, height.toDouble());
+        canvas.rotate(-math.pi / 2);
+        canvas.drawImageRect(
+          sourceImage,
+          srcRect,
+          Rect.fromLTWH(0, 0, height.toDouble(), width.toDouble()),
+          paint,
+        );
+        canvas.restore();
+        break;
+      default:
+        canvas.drawImageRect(
+          sourceImage,
+          srcRect,
+          Rect.fromLTWH(0, 0, width.toDouble(), height.toDouble()),
+          paint,
+        );
+    }
+
+    return recorder.endRecording().toImage(width, height);
+  }
+
   Future<_PreparedComposerAttachment> _renderImageAttachment(
     _MediaComposerItem item,
     Uint8List sourceBytes,
@@ -2468,8 +2873,23 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
     final rotatedInputSize = item.rotationTurns.isOdd
         ? Size(inputSize.height, inputSize.width)
         : inputSize;
+    final rotatedWidth = math.max(1, rotatedInputSize.width.round());
+    final rotatedHeight = math.max(1, rotatedInputSize.height.round());
+    final rotatedImage = await _renderRotatedImage(
+      sourceImage,
+      rotationTurns: item.rotationTurns,
+      width: rotatedWidth,
+      height: rotatedHeight,
+    );
+    final cropRect = item.cropRectNormalized ?? kComposerFullCropRectNormalized;
+    final cropSrcRect = Rect.fromLTWH(
+      cropRect.left * rotatedWidth,
+      cropRect.top * rotatedHeight,
+      cropRect.width * rotatedWidth,
+      cropRect.height * rotatedHeight,
+    );
     final scaledSize = _scaleToMax(
-      rotatedInputSize,
+      cropSrcRect.size,
       _quality.imageMaxDimension,
     );
     final outputWidth = math.max(1, scaledSize.width.round());
@@ -2477,64 +2897,23 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
 
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
-    final srcRect = Rect.fromLTWH(0, 0, inputSize.width, inputSize.height);
     final paint = Paint()..isAntiAlias = true;
-
-    switch (item.rotationTurns % 4) {
-      case 1:
-        canvas.save();
-        canvas.translate(outputWidth.toDouble(), 0);
-        canvas.rotate(math.pi / 2);
-        canvas.drawImageRect(
-          sourceImage,
-          srcRect,
-          Rect.fromLTWH(0, 0, outputHeight.toDouble(), outputWidth.toDouble()),
-          paint,
-        );
-        canvas.restore();
-        break;
-      case 2:
-        canvas.save();
-        canvas.translate(outputWidth.toDouble(), outputHeight.toDouble());
-        canvas.rotate(math.pi);
-        canvas.drawImageRect(
-          sourceImage,
-          srcRect,
-          Rect.fromLTWH(0, 0, outputWidth.toDouble(), outputHeight.toDouble()),
-          paint,
-        );
-        canvas.restore();
-        break;
-      case 3:
-        canvas.save();
-        canvas.translate(0, outputHeight.toDouble());
-        canvas.rotate(-math.pi / 2);
-        canvas.drawImageRect(
-          sourceImage,
-          srcRect,
-          Rect.fromLTWH(0, 0, outputHeight.toDouble(), outputWidth.toDouble()),
-          paint,
-        );
-        canvas.restore();
-        break;
-      default:
-        canvas.drawImageRect(
-          sourceImage,
-          srcRect,
-          Rect.fromLTWH(0, 0, outputWidth.toDouble(), outputHeight.toDouble()),
-          paint,
-        );
-    }
+    canvas.drawImageRect(
+      rotatedImage,
+      cropSrcRect,
+      Rect.fromLTWH(0, 0, outputWidth.toDouble(), outputHeight.toDouble()),
+      paint,
+    );
 
     _paintComposerStrokes(
       canvas,
       size: Size(outputWidth.toDouble(), outputHeight.toDouble()),
-      strokes: item.strokes,
+      strokes: _transformStrokesForCrop(item.strokes, cropRect),
     );
     _paintComposerTextOverlays(
       canvas,
       size: Size(outputWidth.toDouble(), outputHeight.toDouble()),
-      overlays: item.textOverlays,
+      overlays: _transformTextOverlaysForCrop(item.textOverlays, cropRect),
     );
 
     final rendered = await recorder.endRecording().toImage(
@@ -2563,17 +2942,6 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
     return Size(size.width * scale, size.height * scale);
   }
 
-  String _buildQualityNote() {
-    final current = _currentItem;
-    if (current.kind == ChatAttachmentKind.video) {
-      return 'Video composer icinde bekler, gonder deyince upload baslar.';
-    }
-    if (_quality == MediaComposerQuality.sd) {
-      return 'SD secili: daha hafif gorsel gonderilir.';
-    }
-    return 'HD secili: inline medya yine optimize edilerek gider.';
-  }
-
   @override
   Widget build(BuildContext context) {
     final current = _currentItem;
@@ -2584,31 +2952,29 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
         backgroundColor: const Color(0xFF101312),
         foregroundColor: Colors.white,
         titleSpacing: 0,
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              widget.chat.name,
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+        title: GestureDetector(
+          onTap: _toggleQuality,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1FAA59),
+              borderRadius: BorderRadius.circular(20),
             ),
-            Text(
-              '${_items.length} medya',
-              style: const TextStyle(fontSize: 12, color: Color(0xFFB8BFBC)),
+            child: Text(
+              _quality.label,
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+              ),
             ),
-          ],
+          ),
         ),
         actions: [
           IconButton(
             tooltip: 'Kirp',
-            onPressed: () => _showComingSoon(
-              'Kirpma araci bir sonraki adimda fiziksel crop ile tamamlanacak.',
-            ),
+            onPressed: _toggleCropMode,
+            color: _cropMode ? const Color(0xFF1FAA59) : null,
             icon: const Icon(Icons.crop_outlined),
-          ),
-          IconButton(
-            tooltip: 'Dondur',
-            onPressed: _rotateCurrent,
-            icon: const Icon(Icons.rotate_90_degrees_ccw_outlined),
           ),
           IconButton(
             tooltip: 'Yazi',
@@ -2626,37 +2992,7 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
             onPressed: () => _editOverlayText(emojiMode: true),
             icon: const Icon(Icons.emoji_emotions_outlined),
           ),
-          PopupMenuButton<MediaComposerQuality>(
-            initialValue: _quality,
-            onSelected: (value) => setState(() => _quality = value),
-            color: const Color(0xFF1E2321),
-            itemBuilder: (_) => MediaComposerQuality.values
-                .map(
-                  (value) => PopupMenuItem(
-                    value: value,
-                    child: Text(
-                      value.label,
-                      style: const TextStyle(color: Colors.white),
-                    ),
-                  ),
-                )
-                .toList(),
-            child: Container(
-              margin: const EdgeInsets.only(right: 12),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(
-                color: const Color(0xFF1FAA59),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Text(
-                _quality.label,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-          ),
+          const SizedBox(width: 8),
         ],
       ),
       body: SafeArea(
@@ -2669,40 +3005,25 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
                 child: Column(
                   children: [
                     if (_drawMode && current.isImage)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 10),
-                        child: Row(
-                          children: [
-                            const Icon(
-                              Icons.brush_outlined,
-                              color: Color(0xFFB8BFBC),
-                              size: 18,
-                            ),
-                            const SizedBox(width: 8),
-                            const Expanded(
-                              child: Text(
-                                'Cizmek icin gorselin uzerinde surukle. Sagdaki renk cetvelinden renk sec, son cizgiyi geri almak icin tekrar ciz ikonuna bas.',
-                                style: TextStyle(
-                                  color: Color(0xFFB8BFBC),
-                                  fontSize: 12,
-                                ),
-                              ),
-                            ),
-                            TextButton(
-                              onPressed: _undoCurrentStroke,
-                              child: const Text('Geri al'),
-                            ),
-                          ],
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: TextButton(
+                          onPressed: _undoCurrentStroke,
+                          child: const Text('Geri al'),
                         ),
                       ),
                     Expanded(
                       child: PageView.builder(
                         controller: _pageController,
+                        physics: _cropMode
+                            ? const NeverScrollableScrollPhysics()
+                            : null,
                         itemCount: _items.length,
                         onPageChanged: (index) {
                           _finishTextEditing();
                           setState(() {
                             _selectedIndex = index;
+                            _cropMode = false;
                             _drawMode = false;
                           });
                         },
@@ -2710,17 +3031,6 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
                           final item = _items[index];
                           return _buildPreviewPage(item);
                         },
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        '${_buildQualityNote()} Text modunda merkezden inline yaz, renk cetveli acik kalsin; tamamlayinca eski yazilarin rengi sabit kalir.',
-                        style: const TextStyle(
-                          color: Color(0xFFB8BFBC),
-                          fontSize: 12,
-                        ),
                       ),
                     ),
                   ],
@@ -2777,20 +3087,6 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
                       ),
                     );
                   },
-                ),
-              )
-            else
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    '${current.fileName} • ${formatBytesLabel(current.sizeBytes)}',
-                    style: const TextStyle(
-                      color: Color(0xFFB8BFBC),
-                      fontSize: 12,
-                    ),
-                  ),
                 ),
               ),
             Padding(
@@ -2898,10 +3194,13 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final aspectRatio = item.effectiveAspectRatio;
-        final activeOverlay = identical(item, _currentItem)
-            ? _activeTextOverlay
-            : null;
+        final isCurrent = identical(item, _currentItem);
+        final isCropingCurrent = isCurrent && _cropMode;
+        final activeOverlay = isCurrent ? _activeTextOverlay : null;
+        final displayCrop = isCropingCurrent
+            ? kComposerFullCropRectNormalized
+            : _displayCropRectFor(item);
+        final aspectRatio = _effectiveAspectRatioFor(item, displayCrop);
         var width = constraints.maxWidth;
         var height = width / aspectRatio;
         if (height > constraints.maxHeight) {
@@ -2909,14 +3208,181 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
           width = height * aspectRatio;
         }
         final canvasSize = Size(width, height);
+        final transformedStrokes = _transformStrokesForCrop(
+          item.strokes,
+          displayCrop,
+        );
+        final cropRect = item.cropRectNormalized ?? _defaultCropRectFor(item);
+
+        if (isCropingCurrent) {
+          final viewportFrame = _cropViewportRectFor(
+            canvasSize,
+            item,
+            cropRect,
+          );
+          final sourceFrame = _normalizedCropToRect(cropRect, canvasSize);
+          final scale = math.min(
+            viewportFrame.width / math.max(1, sourceFrame.width),
+            viewportFrame.height / math.max(1, sourceFrame.height),
+          );
+          final offset = Offset(
+            viewportFrame.left - (sourceFrame.left * scale),
+            viewportFrame.top - (sourceFrame.top * scale),
+          );
+
+          return Center(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onPanUpdate: (details) =>
+                  _panCropSelection(details, viewportFrame),
+              child: SizedBox(
+                width: width,
+                height: height,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(28),
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      Transform.translate(
+                        offset: offset,
+                        child: Transform.scale(
+                          alignment: Alignment.topLeft,
+                          scale: scale,
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              RotatedBox(
+                                quarterTurns: item.rotationTurns,
+                                child: Image.file(
+                                  File(item.file.path),
+                                  fit: BoxFit.fill,
+                                ),
+                              ),
+                              for (final overlay in item.textOverlays)
+                                Align(
+                                  alignment: Alignment(
+                                    (overlay.position.dx * 2) - 1,
+                                    (overlay.position.dy * 2) - 1,
+                                  ),
+                                  child: ConstrainedBox(
+                                    constraints: BoxConstraints(
+                                      maxWidth: width * 0.82,
+                                    ),
+                                    child: Text(
+                                      overlay.text,
+                                      textAlign: TextAlign.center,
+                                      style: TextStyle(
+                                        color: overlay.color,
+                                        fontWeight: FontWeight.w700,
+                                        fontSize:
+                                            math.max(18, width * 0.06) *
+                                            overlay.scale,
+                                        shadows: const [
+                                          Shadow(
+                                            color: Colors.black54,
+                                            blurRadius: 10,
+                                            offset: Offset(0, 2),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              IgnorePointer(
+                                child: CustomPaint(
+                                  painter: _MediaComposerStrokePainter(
+                                    strokes: item.strokes,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      Positioned.fill(
+                        child: _ComposerCropOverlay(cropFrame: viewportFrame),
+                      ),
+                      Positioned(
+                        left: 16,
+                        bottom: 16,
+                        child: _ComposerOverlayPillButton(
+                          icon: Icons.rotate_90_degrees_ccw_outlined,
+                          onTap: _rotateCurrent,
+                        ),
+                      ),
+                      Positioned(
+                        left: 76,
+                        right: 16,
+                        bottom: 16,
+                        child: SizedBox(
+                          height: 38,
+                          child: ListView.separated(
+                            scrollDirection: Axis.horizontal,
+                            itemCount: _kComposerCropPresets.length,
+                            separatorBuilder: (_, _) =>
+                                const SizedBox(width: 8),
+                            itemBuilder: (context, index) {
+                              final preset = _kComposerCropPresets[index];
+                              return _ComposerCropPresetChip(
+                                label: preset.label,
+                                selected: preset.id == item.cropPresetId,
+                                onTap: () => _applyCropPreset(preset),
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          );
+        }
+
+        final Widget imageLayer;
+        if (displayCrop == kComposerFullCropRectNormalized) {
+          imageLayer = RotatedBox(
+            quarterTurns: item.rotationTurns,
+            child: Image.file(File(item.file.path), fit: BoxFit.fill),
+          );
+        } else {
+          final expandedWidth = width / displayCrop.width;
+          final expandedHeight = height / displayCrop.height;
+          imageLayer = ClipRect(
+            child: Transform.translate(
+              offset: Offset(
+                -(displayCrop.left * expandedWidth),
+                -(displayCrop.top * expandedHeight),
+              ),
+              child: SizedBox(
+                width: expandedWidth,
+                height: expandedHeight,
+                child: RotatedBox(
+                  quarterTurns: item.rotationTurns,
+                  child: Image.file(File(item.file.path), fit: BoxFit.fill),
+                ),
+              ),
+            ),
+          );
+        }
 
         return Center(
           child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
             onPanStart: _drawMode
-                ? (details) => _startStroke(details.localPosition, canvasSize)
+                ? (details) => _startStroke(
+                    details.localPosition,
+                    canvasSize,
+                    displayCrop,
+                  )
                 : null,
             onPanUpdate: _drawMode
-                ? (details) => _appendStroke(details.localPosition, canvasSize)
+                ? (details) => _appendStroke(
+                    details.localPosition,
+                    canvasSize,
+                    displayCrop,
+                  )
                 : null,
             child: SizedBox(
               width: width,
@@ -2926,12 +3392,8 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
-                    RotatedBox(
-                      quarterTurns: item.rotationTurns,
-                      child: Image.file(File(item.file.path), fit: BoxFit.fill),
-                    ),
-                    if (identical(item, _currentItem) &&
-                        _activeTextOverlay != null)
+                    imageLayer,
+                    if (isCurrent && _activeTextOverlay != null)
                       Positioned.fill(
                         child: GestureDetector(
                           behavior: HitTestBehavior.opaque,
@@ -2940,110 +3402,122 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
                         ),
                       ),
                     for (final overlay in item.textOverlays)
-                      Align(
-                        alignment: Alignment(
-                          (overlay.position.dx * 2) - 1,
-                          (overlay.position.dy * 2) - 1,
-                        ),
-                        child:
-                            identical(item, _currentItem) &&
-                                overlay.id == _activeTextOverlayId
-                            ? ConstrainedBox(
-                                constraints: BoxConstraints(
-                                  maxWidth: width * 0.82,
-                                ),
-                                child: TextField(
-                                  controller: _inlineTextController,
-                                  focusNode: _inlineTextFocusNode,
-                                  autofocus: false,
-                                  maxLines: 4,
-                                  minLines: 1,
-                                  textAlign: TextAlign.center,
-                                  cursorColor: overlay.color,
-                                  style: TextStyle(
-                                    color: overlay.color,
-                                    fontWeight: FontWeight.w700,
-                                    fontSize:
-                                        math.max(18, width * 0.06) *
-                                        overlay.scale,
-                                    shadows: const [
-                                      Shadow(
-                                        color: Colors.black54,
-                                        blurRadius: 10,
-                                        offset: Offset(0, 2),
+                      Builder(
+                        builder: (_) {
+                          final displayPosition = _projectPointToDisplay(
+                            overlay.position,
+                            displayCrop,
+                          );
+                          return Align(
+                            alignment: Alignment(
+                              (displayPosition.dx * 2) - 1,
+                              (displayPosition.dy * 2) - 1,
+                            ),
+                            child:
+                                isCurrent && overlay.id == _activeTextOverlayId
+                                ? ConstrainedBox(
+                                    constraints: BoxConstraints(
+                                      maxWidth: width * 0.82,
+                                    ),
+                                    child: TextField(
+                                      controller: _inlineTextController,
+                                      focusNode: _inlineTextFocusNode,
+                                      autofocus: false,
+                                      maxLines: 4,
+                                      minLines: 1,
+                                      textAlign: TextAlign.center,
+                                      cursorColor: overlay.color,
+                                      style: TextStyle(
+                                        color: overlay.color,
+                                        fontWeight: FontWeight.w700,
+                                        fontSize:
+                                            math.max(18, width * 0.06) *
+                                            overlay.scale,
+                                        shadows: const [
+                                          Shadow(
+                                            color: Colors.black54,
+                                            blurRadius: 10,
+                                            offset: Offset(0, 2),
+                                          ),
+                                        ],
                                       ),
-                                    ],
-                                  ),
-                                  decoration: const InputDecoration(
-                                    border: InputBorder.none,
-                                    isDense: true,
-                                    contentPadding: EdgeInsets.zero,
-                                  ),
-                                  onChanged: _syncActiveTextOverlay,
-                                  onSubmitted: (_) => _finishTextEditing(),
-                                ),
-                              )
-                            : GestureDetector(
-                                behavior: HitTestBehavior.translucent,
-                                onTap: _drawMode
-                                    ? null
-                                    : () => _beginEditingTextOverlay(
-                                        overlay,
-                                        requestKeyboard: true,
+                                      decoration: const InputDecoration(
+                                        border: InputBorder.none,
+                                        isDense: true,
+                                        contentPadding: EdgeInsets.zero,
                                       ),
-                                onScaleStart: _drawMode
-                                    ? null
-                                    : (_) => _handleOverlayScaleStart(overlay),
-                                onScaleUpdate: _drawMode
-                                    ? null
-                                    : (details) => _handleOverlayScaleUpdate(
-                                        overlay,
-                                        details,
-                                        canvasSize,
+                                      onChanged: _syncActiveTextOverlay,
+                                      onSubmitted: (_) => _finishTextEditing(),
+                                    ),
+                                  )
+                                : GestureDetector(
+                                    behavior: HitTestBehavior.translucent,
+                                    onTap: _drawMode || _cropMode
+                                        ? null
+                                        : () => _beginEditingTextOverlay(
+                                            overlay,
+                                            requestKeyboard: true,
+                                          ),
+                                    onScaleStart: _drawMode || _cropMode
+                                        ? null
+                                        : (_) =>
+                                              _handleOverlayScaleStart(overlay),
+                                    onScaleUpdate: _drawMode || _cropMode
+                                        ? null
+                                        : (details) =>
+                                              _handleOverlayScaleUpdate(
+                                                overlay,
+                                                details,
+                                                canvasSize,
+                                                displayCrop,
+                                              ),
+                                    child: ConstrainedBox(
+                                      constraints: BoxConstraints(
+                                        maxWidth: width * 0.82,
                                       ),
-                                child: ConstrainedBox(
-                                  constraints: BoxConstraints(
-                                    maxWidth: width * 0.82,
-                                  ),
-                                  child: Text(
-                                    overlay.text,
-                                    textAlign: TextAlign.center,
-                                    style: TextStyle(
-                                      color: overlay.color,
-                                      fontWeight: FontWeight.w700,
-                                      fontSize:
-                                          math.max(18, width * 0.06) *
-                                          overlay.scale,
-                                      shadows: const [
-                                        Shadow(
-                                          color: Colors.black54,
-                                          blurRadius: 10,
-                                          offset: Offset(0, 2),
+                                      child: Text(
+                                        overlay.text,
+                                        textAlign: TextAlign.center,
+                                        style: TextStyle(
+                                          color: overlay.color,
+                                          fontWeight: FontWeight.w700,
+                                          fontSize:
+                                              math.max(18, width * 0.06) *
+                                              overlay.scale,
+                                          shadows: const [
+                                            Shadow(
+                                              color: Colors.black54,
+                                              blurRadius: 10,
+                                              offset: Offset(0, 2),
+                                            ),
+                                          ],
                                         ),
-                                      ],
+                                      ),
                                     ),
                                   ),
-                                ),
-                              ),
+                          );
+                        },
                       ),
                     IgnorePointer(
                       child: CustomPaint(
                         painter: _MediaComposerStrokePainter(
-                          strokes: item.strokes,
+                          strokes: transformedStrokes,
                         ),
                       ),
                     ),
-                    Positioned(
-                      right: 12,
-                      top: 16,
-                      bottom: 16,
-                      child: _ComposerColorSlider(
-                        value:
-                            activeOverlay?.colorValue ?? item.markupColorValue,
-                        color: activeOverlay?.color ?? item.markupColor,
-                        onChanged: _setMarkupColor,
+                    if (isCurrent && (_drawMode || activeOverlay != null))
+                      Positioned(
+                        right: 12,
+                        top: 16,
+                        bottom: 16,
+                        child: _ComposerColorSlider(
+                          value:
+                              activeOverlay?.colorValue ??
+                              item.markupColorValue,
+                          color: activeOverlay?.color ?? item.markupColor,
+                          onChanged: _setMarkupColor,
+                        ),
                       ),
-                    ),
                   ],
                 ),
               ),
@@ -3132,6 +3606,133 @@ class _ComposerColorSlider extends StatelessWidget {
   }
 }
 
+class _ComposerCropOverlay extends StatelessWidget {
+  const _ComposerCropOverlay({required this.cropFrame});
+
+  final Rect cropFrame;
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: CustomPaint(
+        size: Size.infinite,
+        painter: _ComposerCropOverlayPainter(cropFrame: cropFrame),
+      ),
+    );
+  }
+}
+
+class _ComposerCropOverlayPainter extends CustomPainter {
+  const _ComposerCropOverlayPainter({required this.cropFrame});
+
+  final Rect cropFrame;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final outer = Path()..addRect(Offset.zero & size);
+    final inner = Path()..addRect(cropFrame);
+    final overlay = Path.combine(PathOperation.difference, outer, inner);
+
+    canvas.drawPath(
+      overlay,
+      Paint()..color = Colors.black.withValues(alpha: 0.48),
+    );
+    canvas.drawRect(
+      cropFrame,
+      Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2,
+    );
+
+    final gridPaint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.32)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1;
+    final thirdWidth = cropFrame.width / 3;
+    final thirdHeight = cropFrame.height / 3;
+
+    for (var index = 1; index <= 2; index++) {
+      final dx = cropFrame.left + (thirdWidth * index);
+      canvas.drawLine(
+        Offset(dx, cropFrame.top),
+        Offset(dx, cropFrame.bottom),
+        gridPaint,
+      );
+
+      final dy = cropFrame.top + (thirdHeight * index);
+      canvas.drawLine(
+        Offset(cropFrame.left, dy),
+        Offset(cropFrame.right, dy),
+        gridPaint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _ComposerCropOverlayPainter oldDelegate) {
+    return oldDelegate.cropFrame != cropFrame;
+  }
+}
+
+class _ComposerOverlayPillButton extends StatelessWidget {
+  const _ComposerOverlayPillButton({required this.icon, required this.onTap});
+
+  final IconData icon;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: const Color(0xB81A1F1D),
+      borderRadius: BorderRadius.circular(999),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(999),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Icon(icon, color: Colors.white, size: 20),
+        ),
+      ),
+    );
+  }
+}
+
+class _ComposerCropPresetChip extends StatelessWidget {
+  const _ComposerCropPresetChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: selected ? const Color(0xFF1FAA59) : const Color(0xCC1A1F1D),
+      borderRadius: BorderRadius.circular(999),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(999),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+          child: Text(
+            label,
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 12,
+              fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _MediaComposerItem {
   _MediaComposerItem({
     required this.kind,
@@ -3158,6 +3759,8 @@ class _MediaComposerItem {
   final int sizeBytes;
   final List<_MediaComposerStroke> strokes = [];
   final List<_MediaComposerTextOverlay> textOverlays = [];
+  Rect? cropRectNormalized;
+  String cropPresetId = 'original';
   double markupColorValue = 0;
   int rotationTurns = 0;
   Size? sourceSize;
@@ -3167,7 +3770,11 @@ class _MediaComposerItem {
   Color get markupColor => composerColorForValue(markupColorValue);
 
   bool get hasMarkup =>
-      rotationTurns != 0 || strokes.isNotEmpty || textOverlays.isNotEmpty;
+      rotationTurns != 0 ||
+      strokes.isNotEmpty ||
+      textOverlays.isNotEmpty ||
+      (cropRectNormalized != null &&
+          cropRectNormalized != kComposerFullCropRectNormalized);
 
   double get effectiveAspectRatio {
     final base = sourceSize ?? const Size(1, 1);
