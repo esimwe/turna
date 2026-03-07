@@ -7,6 +7,8 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_callkit_incoming/entities/entities.dart';
+import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:livekit_client/livekit_client.dart' as lk;
@@ -57,11 +59,13 @@ class TurnaActiveChatRegistry extends ChangeNotifier {
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await TurnaFirebase.ensureInitialized();
+  await TurnaNativeCallManager.handleBackgroundRemoteMessage(message.data);
 }
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await TurnaFirebase.ensureInitialized();
+  await TurnaNativeCallManager.initialize();
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
   final session = await AuthSession.load();
   runApp(TurnaApp(initialSession: session));
@@ -356,6 +360,11 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     TurnaPushManager.syncSession(widget.session);
+    TurnaNativeCallManager.bindSession(
+      session: widget.session,
+      coordinator: _callCoordinator,
+      onSessionExpired: widget.onLogout,
+    );
     TurnaAnalytics.logEvent('app_session_started', {
       'user_id': widget.session.userId,
     });
@@ -367,6 +376,7 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
       onIncomingCall: _callCoordinator.handleIncoming,
       onCallAccepted: _callCoordinator.handleAccepted,
       onCallDeclined: _callCoordinator.handleDeclined,
+      onCallMissed: _callCoordinator.handleMissed,
       onCallEnded: _callCoordinator.handleEnded,
     )..connect();
     _callCoordinator.addListener(_handleCallCoordinator);
@@ -378,6 +388,11 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
     if (oldWidget.session.token != widget.session.token ||
         oldWidget.session.userId != widget.session.userId) {
       TurnaPushManager.syncSession(widget.session);
+      TurnaNativeCallManager.bindSession(
+        session: widget.session,
+        coordinator: _callCoordinator,
+        onSessionExpired: widget.onLogout,
+      );
     }
   }
 
@@ -386,6 +401,7 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _callCoordinator.removeListener(_handleCallCoordinator);
     _presenceClient.dispose();
+    TurnaNativeCallManager.unbindSession(widget.session.userId);
     _callCoordinator.dispose();
     _inboxUpdateNotifier.dispose();
     super.dispose();
@@ -395,6 +411,7 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state != AppLifecycleState.resumed) return;
     _presenceClient.refreshConnection();
+    TurnaNativeCallManager.handleAppResumed();
     _inboxUpdateNotifier.value++;
   }
 
@@ -3710,6 +3727,7 @@ class PresenceSocketClient {
     this.onIncomingCall,
     this.onCallAccepted,
     this.onCallDeclined,
+    this.onCallMissed,
     this.onCallEnded,
   });
 
@@ -3718,6 +3736,7 @@ class PresenceSocketClient {
   final void Function(Map<String, dynamic> payload)? onIncomingCall;
   final void Function(Map<String, dynamic> payload)? onCallAccepted;
   final void Function(Map<String, dynamic> payload)? onCallDeclined;
+  final void Function(Map<String, dynamic> payload)? onCallMissed;
   final void Function(Map<String, dynamic> payload)? onCallEnded;
   io.Socket? _socket;
   Timer? _refreshDebounce;
@@ -3778,6 +3797,12 @@ class PresenceSocketClient {
       if (map == null) return;
       turnaLog('presence call:declined received', map);
       onCallDeclined?.call(map);
+    });
+    _socket!.on('call:missed', (data) {
+      final map = _asMap(data);
+      if (map == null) return;
+      turnaLog('presence call:missed received', map);
+      onCallMissed?.call(map);
     });
     _socket!.on('call:ended', (data) {
       final map = _asMap(data);
@@ -3954,6 +3979,7 @@ class PushApi {
     AuthSession session, {
     required String token,
     required String platform,
+    String tokenKind = 'standard',
     String? deviceLabel,
   }) async {
     final res = await http.post(
@@ -3965,6 +3991,7 @@ class PushApi {
       body: jsonEncode({
         'token': token,
         'platform': platform,
+        'tokenKind': tokenKind,
         'deviceLabel': deviceLabel,
       }),
     );
@@ -3997,9 +4024,11 @@ class PushApi {
 
 class TurnaPushManager {
   static const _lastPushTokenKey = 'turna_last_push_token';
+  static AuthSession? _session;
   static bool _listenersAttached = false;
 
   static Future<void> syncSession(AuthSession session) async {
+    _session = session;
     final ready = await TurnaFirebase.ensureInitialized();
     if (!ready) return;
     if (!Platform.isIOS && !Platform.isAndroid) return;
@@ -4017,26 +4046,37 @@ class TurnaPushManager {
           session,
           token: token,
           platform: Platform.isIOS ? 'ios' : 'android',
+          tokenKind: 'standard',
           deviceLabel: Platform.isIOS ? 'ios-device' : 'android-device',
         );
         await prefs.setString(_lastPushTokenKey, token);
       }
+      await TurnaNativeCallManager.syncVoipToken(session);
 
       if (!_listenersAttached) {
         _listenersAttached = true;
-        FirebaseMessaging.onMessage.listen((message) {
+        FirebaseMessaging.onMessage.listen((message) async {
           turnaLog('push foreground', message.data);
+          await TurnaNativeCallManager.handleForegroundRemoteMessage(
+            message.data,
+          );
         });
-        FirebaseMessaging.onMessageOpenedApp.listen((message) {
+        FirebaseMessaging.onMessageOpenedApp.listen((message) async {
           turnaLog('push opened', message.data);
+          await TurnaNativeCallManager.handleForegroundRemoteMessage(
+            message.data,
+          );
         });
         messaging.onTokenRefresh.listen((freshToken) async {
           if (freshToken.trim().isEmpty) return;
+          final activeSession = _session;
+          if (activeSession == null) return;
           try {
             await PushApi.registerDevice(
-              session,
+              activeSession,
               token: freshToken,
               platform: Platform.isIOS ? 'ios' : 'android',
+              tokenKind: 'standard',
               deviceLabel: Platform.isIOS ? 'ios-device' : 'android-device',
             );
             final prefs = await SharedPreferences.getInstance();
@@ -4048,6 +4088,483 @@ class TurnaPushManager {
       }
     } catch (error) {
       turnaLog('push sync skipped', error);
+    }
+  }
+}
+
+class _TurnaPendingNativeAction {
+  const _TurnaPendingNativeAction({required this.action, required this.body});
+
+  final String action;
+  final Map<String, dynamic> body;
+
+  Map<String, dynamic> toMap() => {'action': action, 'body': body};
+
+  factory _TurnaPendingNativeAction.fromMap(Map<String, dynamic> map) {
+    return _TurnaPendingNativeAction(
+      action: (map['action'] ?? '').toString(),
+      body: Map<String, dynamic>.from(map['body'] as Map? ?? const {}),
+    );
+  }
+}
+
+class TurnaNativeCallManager {
+  static const _pendingActionKey = 'turna_pending_native_call_action';
+  static const _lastVoipPushTokenKey = 'turna_last_voip_push_token';
+  static bool _initialized = false;
+  static bool _androidPermissionsRequested = false;
+  static AuthSession? _session;
+  static TurnaCallCoordinator? _coordinator;
+  static VoidCallback? _onSessionExpired;
+  static final Set<String> _handledActionKeys = <String>{};
+  static final Set<String> _suppressedEndEvents = <String>{};
+  static final Set<String> _shownIncomingCalls = <String>{};
+  static String? _activeCallId;
+
+  static Future<void> initialize() async {
+    if (_initialized) return;
+    _initialized = true;
+    if (!Platform.isAndroid && !Platform.isIOS) return;
+
+    FlutterCallkitIncoming.onEvent.listen((event) {
+      if (event == null) return;
+      Future<void>(() async {
+        await _handleCallkitEvent(event);
+      });
+    });
+
+    if (Platform.isAndroid) {
+      await _requestAndroidPermissions();
+    }
+  }
+
+  static Future<void> bindSession({
+    required AuthSession session,
+    required TurnaCallCoordinator coordinator,
+    required VoidCallback onSessionExpired,
+  }) async {
+    _session = session;
+    _coordinator = coordinator;
+    _onSessionExpired = onSessionExpired;
+    if (Platform.isAndroid) {
+      await _requestAndroidPermissions();
+    }
+    await syncVoipToken(session);
+    await _consumePendingAction();
+    await _recoverAcceptedNativeCall();
+  }
+
+  static void unbindSession(String userId) {
+    if (_session?.userId != userId) return;
+    _session = null;
+    _coordinator = null;
+    _onSessionExpired = null;
+  }
+
+  static Future<void> handleAppResumed() async {
+    await _consumePendingAction();
+    await _recoverAcceptedNativeCall();
+  }
+
+  static Future<void> handleBackgroundRemoteMessage(
+    Map<String, dynamic> data,
+  ) async {
+    await initialize();
+    final type = (data['type'] ?? '').toString();
+    if (type == 'incoming_call') {
+      await _showIncomingCallkitIfNeeded(data);
+      return;
+    }
+    if (type == 'call_ended') {
+      final callId = _readCallId(data);
+      if (callId != null) {
+        await endCallUi(callId);
+      }
+    }
+  }
+
+  static Future<void> handleForegroundRemoteMessage(
+    Map<String, dynamic> data,
+  ) async {
+    final type = (data['type'] ?? '').toString();
+    if (type == 'call_ended') {
+      final callId = _readCallId(data);
+      if (callId != null) {
+        await endCallUi(callId);
+      }
+    }
+  }
+
+  static Future<void> syncVoipToken(AuthSession session) async {
+    if (!Platform.isIOS) return;
+    try {
+      final token = (await FlutterCallkitIncoming.getDevicePushTokenVoIP())
+          ?.toString()
+          .trim();
+      if (token == null || token.isEmpty) return;
+      final prefs = await SharedPreferences.getInstance();
+      final previous = prefs.getString(_lastVoipPushTokenKey);
+      if (previous == token) return;
+      await PushApi.registerDevice(
+        session,
+        token: token,
+        platform: 'ios',
+        tokenKind: 'voip',
+        deviceLabel: 'ios-voip',
+      );
+      await prefs.setString(_lastVoipPushTokenKey, token);
+      turnaLog('voip token synced');
+    } catch (error) {
+      turnaLog('voip token sync skipped', error);
+    }
+  }
+
+  static Future<void> setCallConnected(String callId) async {
+    _activeCallId = callId;
+    try {
+      await FlutterCallkitIncoming.setCallConnected(callId);
+    } catch (error) {
+      turnaLog('native call connected skipped', error);
+    }
+  }
+
+  static Future<void> endCallUi(String callId) async {
+    _shownIncomingCalls.remove(callId);
+    if (_activeCallId == callId) {
+      _activeCallId = null;
+    }
+    _suppressedEndEvents.add(callId);
+    try {
+      await FlutterCallkitIncoming.endCall(callId);
+    } catch (error) {
+      turnaLog('native call end skipped', error);
+      _suppressedEndEvents.remove(callId);
+    }
+  }
+
+  static Future<void> _requestAndroidPermissions() async {
+    if (!Platform.isAndroid || _androidPermissionsRequested) return;
+    _androidPermissionsRequested = true;
+    try {
+      await FlutterCallkitIncoming.requestNotificationPermission({
+        'title': 'Bildirim izni',
+        'rationaleMessagePermission':
+            'Gelen aramalari gosterebilmek icin bildirim izni gerekiyor.',
+        'postNotificationMessageRequired':
+            'Gelen aramalari gosterebilmek icin bildirim izni ver.',
+      });
+    } catch (error) {
+      turnaLog('android notification permission skipped', error);
+    }
+    try {
+      await FlutterCallkitIncoming.requestFullIntentPermission();
+    } catch (error) {
+      turnaLog('android full intent permission skipped', error);
+    }
+  }
+
+  static Future<void> _handleCallkitEvent(CallEvent event) async {
+    final body = _normalizeBody(event.body);
+    final callId = _readCallId(body);
+    switch (event.event) {
+      case Event.actionDidUpdateDevicePushTokenVoip:
+        final session = _session;
+        if (session != null) {
+          await syncVoipToken(session);
+        }
+        return;
+      case Event.actionCallIncoming:
+        if (callId != null) {
+          _shownIncomingCalls.add(callId);
+        }
+        return;
+      case Event.actionCallAccept:
+        await _queueOrHandleAction('accept', body);
+        return;
+      case Event.actionCallDecline:
+        await _queueOrHandleAction('decline', body);
+        return;
+      case Event.actionCallEnded:
+        if (callId != null && _suppressedEndEvents.remove(callId)) {
+          return;
+        }
+        await _queueOrHandleAction('end', body);
+        return;
+      case Event.actionCallTimeout:
+        await _queueOrHandleAction('timeout', body);
+        return;
+      default:
+        return;
+    }
+  }
+
+  static Future<void> _queueOrHandleAction(
+    String action,
+    Map<String, dynamic> body,
+  ) async {
+    final handled = await _handleAction(action, body);
+    if (handled) {
+      await _clearPendingAction();
+      return;
+    }
+    await _persistPendingAction(
+      _TurnaPendingNativeAction(action: action, body: body),
+    );
+  }
+
+  static Future<bool> _handleAction(
+    String action,
+    Map<String, dynamic> body,
+  ) async {
+    final session = _session;
+    final coordinator = _coordinator;
+    if (session == null || coordinator == null) return false;
+
+    final callId = _readCallId(body);
+    if (callId == null || callId.isEmpty) return false;
+    final actionKey = '$action:$callId';
+    if (_handledActionKeys.contains(actionKey)) {
+      return true;
+    }
+
+    try {
+      switch (action) {
+        case 'accept':
+          final accepted = await CallApi.acceptCall(session, callId: callId);
+          coordinator.clearCall(callId);
+          _handledActionKeys.add(actionKey);
+          _shownIncomingCalls.remove(callId);
+          await _openAcceptedCall(session, coordinator, accepted);
+          return true;
+        case 'decline':
+          await CallApi.declineCall(session, callId: callId);
+          coordinator.clearCall(callId);
+          _handledActionKeys.add(actionKey);
+          await endCallUi(callId);
+          return true;
+        case 'end':
+          await CallApi.endCall(session, callId: callId);
+          coordinator.clearCall(callId);
+          _handledActionKeys.add(actionKey);
+          await endCallUi(callId);
+          return true;
+        case 'timeout':
+          coordinator.clearCall(callId);
+          _handledActionKeys.add(actionKey);
+          await endCallUi(callId);
+          return true;
+        default:
+          return false;
+      }
+    } on TurnaUnauthorizedException {
+      _onSessionExpired?.call();
+      return true;
+    } catch (error) {
+      turnaLog('native call action failed', {
+        'action': action,
+        'callId': callId,
+        'error': error.toString(),
+      });
+      return false;
+    }
+  }
+
+  static Future<void> _openAcceptedCall(
+    AuthSession session,
+    TurnaCallCoordinator coordinator,
+    TurnaAcceptedCallEvent accepted,
+  ) async {
+    if (_activeCallId == accepted.call.id) return;
+    await Future<void>.delayed(Duration.zero);
+    final navigator = kTurnaNavigatorKey.currentState;
+    if (navigator == null) return;
+    _activeCallId = accepted.call.id;
+    final returnChat = buildDirectChatPreviewForCall(session, accepted.call);
+    await navigator.push(
+      MaterialPageRoute(
+        settings: const RouteSettings(name: 'active-call'),
+        builder: (_) => ActiveCallPage(
+          session: session,
+          coordinator: coordinator,
+          call: accepted.call,
+          connect: accepted.connect,
+          onSessionExpired: _onSessionExpired ?? () {},
+          returnChatOnExit: returnChat,
+        ),
+      ),
+    );
+  }
+
+  static Future<void> _recoverAcceptedNativeCall() async {
+    final session = _session;
+    if (session == null) return;
+    try {
+      final activeCalls = await FlutterCallkitIncoming.activeCalls();
+      if (activeCalls is! List || activeCalls.isEmpty) return;
+      for (final item in activeCalls) {
+        if (item is! Map) continue;
+        final map = Map<String, dynamic>.from(item);
+        final accepted = map['accepted'] == true || map['isAccepted'] == true;
+        if (!accepted) continue;
+        final callId = _readCallId(map);
+        if (callId == null || callId.isEmpty) continue;
+        await _handleAction('accept', map);
+        break;
+      }
+    } catch (error) {
+      turnaLog('active native call recovery skipped', error);
+    }
+  }
+
+  static Future<void> _persistPendingAction(
+    _TurnaPendingNativeAction action,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_pendingActionKey, jsonEncode(action.toMap()));
+  }
+
+  static Future<void> _clearPendingAction() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_pendingActionKey);
+  }
+
+  static Future<void> _consumePendingAction() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_pendingActionKey);
+    if (raw == null || raw.trim().isEmpty) return;
+    try {
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      final pending = _TurnaPendingNativeAction.fromMap(map);
+      final handled = await _handleAction(pending.action, pending.body);
+      if (handled) {
+        await prefs.remove(_pendingActionKey);
+      }
+    } catch (error) {
+      turnaLog('pending native call action parse failed', error);
+      await prefs.remove(_pendingActionKey);
+    }
+  }
+
+  static Map<String, dynamic> _normalizeBody(dynamic raw) {
+    if (raw is Map) {
+      return Map<String, dynamic>.from(raw);
+    }
+    return <String, dynamic>{};
+  }
+
+  static String? _readCallId(Map<String, dynamic> map) {
+    final extra = map['extra'] is Map
+        ? Map<String, dynamic>.from(map['extra'] as Map)
+        : const <String, dynamic>{};
+    final id = map['id'] ?? map['callId'] ?? extra['callId'] ?? extra['id'];
+    final value = id?.toString().trim();
+    if (value == null || value.isEmpty) return null;
+    return value;
+  }
+
+  static String _readCallerName(Map<String, dynamic> map) {
+    final extra = map['extra'] is Map
+        ? Map<String, dynamic>.from(map['extra'] as Map)
+        : const <String, dynamic>{};
+    return (map['callerDisplayName'] ??
+                map['nameCaller'] ??
+                extra['callerDisplayName'] ??
+                map['handle'] ??
+                'Turna')
+            .toString()
+            .trim()
+            .isEmpty
+        ? 'Turna'
+        : (map['callerDisplayName'] ??
+                  map['nameCaller'] ??
+                  extra['callerDisplayName'] ??
+                  map['handle'] ??
+                  'Turna')
+              .toString();
+  }
+
+  static bool _readIsVideo(Map<String, dynamic> map) {
+    final extra = map['extra'] is Map
+        ? Map<String, dynamic>.from(map['extra'] as Map)
+        : const <String, dynamic>{};
+    final raw =
+        map['isVideo'] ??
+        map['callType'] ??
+        extra['callType'] ??
+        extra['isVideo'];
+    if (raw is bool) return raw;
+    final text = raw?.toString().toLowerCase();
+    return text == 'video' || text == 'true' || text == '1';
+  }
+
+  static Future<void> _showIncomingCallkitIfNeeded(
+    Map<String, dynamic> payload,
+  ) async {
+    final callId = _readCallId(payload);
+    if (callId == null || callId.isEmpty) return;
+    if (_shownIncomingCalls.contains(callId)) return;
+    if (Platform.isIOS) {
+      return;
+    }
+
+    _shownIncomingCalls.add(callId);
+    final isVideo = _readIsVideo(payload);
+    final callerName = _readCallerName(payload);
+    final params = CallKitParams(
+      id: callId,
+      nameCaller: callerName,
+      appName: 'Turna',
+      handle: callerName,
+      type: isVideo ? 1 : 0,
+      duration: 30000,
+      textAccept: 'Ac',
+      textDecline: 'Reddet',
+      extra: <String, dynamic>{
+        'callId': callId,
+        'callerId': (payload['callerId'] ?? '').toString(),
+        'callerDisplayName': callerName,
+        'callType': isVideo ? 'video' : 'audio',
+      },
+      missedCallNotification: const NotificationParams(
+        showNotification: true,
+        isShowCallback: false,
+        subtitle: 'Cevapsiz arama',
+      ),
+      android: const AndroidParams(
+        isCustomNotification: true,
+        isShowLogo: false,
+        ringtonePath: 'system_ringtone_default',
+        backgroundColor: '#101314',
+        actionColor: '#1FAA59',
+        textColor: '#ffffff',
+        incomingCallNotificationChannelName: 'Turna Arama',
+        missedCallNotificationChannelName: 'Turna Cevapsiz',
+        isShowCallID: false,
+        isShowFullLockedScreen: true,
+        isImportant: true,
+      ),
+      ios: IOSParams(
+        handleType: 'generic',
+        supportsVideo: isVideo,
+        maximumCallGroups: 1,
+        maximumCallsPerCallGroup: 1,
+        audioSessionMode: 'default',
+        audioSessionActive: true,
+        audioSessionPreferredSampleRate: 44100.0,
+        audioSessionPreferredIOBufferDuration: 0.005,
+        supportsDTMF: false,
+        supportsHolding: false,
+        supportsGrouping: false,
+        supportsUngrouping: false,
+        ringtonePath: 'system_ringtone_default',
+      ),
+    );
+
+    try {
+      await FlutterCallkitIncoming.showCallkitIncoming(params);
+    } catch (error) {
+      _shownIncomingCalls.remove(callId);
+      turnaLog('native incoming call show failed', error);
     }
   }
 }
@@ -4757,6 +5274,12 @@ class TurnaCallCoordinator extends ChangeNotifier {
     notifyListeners();
   }
 
+  void handleMissed(Map<String, dynamic> payload) {
+    final event = TurnaTerminalCallEvent.fromMap('missed', payload);
+    _terminalEvents[event.call.id] = event;
+    notifyListeners();
+  }
+
   void handleEnded(Map<String, dynamic> payload) {
     final event = TurnaTerminalCallEvent.fromMap('ended', payload);
     _terminalEvents[event.call.id] = event;
@@ -5056,6 +5579,7 @@ class _IncomingCallPageState extends State<IncomingCallPage> {
     } catch (_) {}
 
     widget.coordinator.clearCall(widget.incoming.call.id);
+    await TurnaNativeCallManager.endCallUi(widget.incoming.call.id);
     if (mounted) {
       Navigator.of(context).pop();
     }
@@ -5196,9 +5720,11 @@ class _OutgoingCallPageState extends State<OutgoingCallPage> {
     final terminal = widget.coordinator.consumeTerminal(widget.initialCall.id);
     if (terminal == null) return;
 
-    final message = terminal.kind == 'declined'
-        ? 'Arama reddedildi.'
-        : 'Arama sonlandi.';
+    final message = switch (terminal.kind) {
+      'declined' => 'Arama reddedildi.',
+      'missed' => 'Cevap yok.',
+      _ => 'Arama sonlandi.',
+    };
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text(message)));
@@ -5217,6 +5743,7 @@ class _OutgoingCallPageState extends State<OutgoingCallPage> {
     } catch (_) {}
 
     widget.coordinator.clearCall(widget.initialCall.id);
+    await TurnaNativeCallManager.endCallUi(widget.initialCall.id);
     if (mounted) {
       Navigator.of(context).pop();
     }
@@ -5288,16 +5815,14 @@ abstract class CallProviderAdapter {
 }
 
 class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
-  LiveKitCallAdapter({
-    required this.connectPayload,
-    required this.videoEnabled,
-  }) : room = lk.Room(
-         roomOptions: lk.RoomOptions(
-           adaptiveStream: true,
-           dynacast: true,
-           defaultAudioOutputOptions: lk.AudioOutputOptions(speakerOn: false),
-         ),
-       );
+  LiveKitCallAdapter({required this.connectPayload, required this.videoEnabled})
+    : room = lk.Room(
+        roomOptions: lk.RoomOptions(
+          adaptiveStream: true,
+          dynacast: true,
+          defaultAudioOutputOptions: lk.AudioOutputOptions(speakerOn: false),
+        ),
+      );
 
   final TurnaCallConnectPayload connectPayload;
   final bool videoEnabled;
@@ -5455,6 +5980,7 @@ class ActiveCallPage extends StatefulWidget {
 class _ActiveCallPageState extends State<ActiveCallPage> {
   late final LiveKitCallAdapter _adapter;
   bool _ending = false;
+  bool _reportedConnected = false;
   Timer? _durationTicker;
   int _durationSeconds = 0;
 
@@ -5485,6 +6011,10 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
   }
 
   void _refresh() {
+    if (_adapter.connected && !_reportedConnected) {
+      _reportedConnected = true;
+      TurnaNativeCallManager.setCallConnected(widget.call.id);
+    }
     if (mounted) {
       setState(() {});
     }
@@ -5493,6 +6023,7 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
   void _handleCoordinator() {
     final terminal = widget.coordinator.consumeTerminal(widget.call.id);
     if (terminal == null || !mounted) return;
+    TurnaNativeCallManager.endCallUi(widget.call.id);
     _leaveCallView();
   }
 
@@ -5529,6 +6060,7 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
 
     widget.coordinator.clearCall(widget.call.id);
     await _adapter.disconnect();
+    await TurnaNativeCallManager.endCallUi(widget.call.id);
     if (mounted) {
       _leaveCallView();
     }
@@ -5639,9 +6171,7 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
                         ? null
                         : () => _adapter.toggleSpeaker(),
                     child: Icon(
-                      _adapter.speakerEnabled
-                          ? Icons.volume_up
-                          : Icons.hearing,
+                      _adapter.speakerEnabled ? Icons.volume_up : Icons.hearing,
                       color: Colors.white,
                     ),
                   ),
