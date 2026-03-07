@@ -37,7 +37,7 @@ const sendMessageSchema = z.object({
       (value) => (typeof value === "string" ? value.trim() : value),
       z.string().max(4000).optional().nullable()
     ),
-  attachments: z.array(sendMessageAttachmentSchema).max(8).optional().default([])
+  attachments: z.array(sendMessageAttachmentSchema).max(30).optional().default([])
 }).superRefine((value, ctx) => {
   if ((value.text?.length ?? 0) > 0 || value.attachments.length > 0) {
     return;
