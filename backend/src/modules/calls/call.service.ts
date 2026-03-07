@@ -1,6 +1,7 @@
 import { prisma } from "../../lib/prisma.js";
 import type { CallProvider } from "./call.provider.js";
 import { livekitCallProvider } from "./livekit.provider.js";
+import { CALL_RING_TIMEOUT_MS } from "./call.timeout.js";
 import type {
   AppCallStatus,
   AppCallType,
@@ -16,6 +17,7 @@ type PrismaCallType = "AUDIO" | "VIDEO";
 
 const prismaCall = (prisma as unknown as { call: any }).call;
 const prismaCallEvent = (prisma as unknown as { callEvent: any }).callEvent;
+const ACTIVE_CALL_STALE_GRACE_MS = 15_000;
 
 function toAppCallType(type: PrismaCallType): AppCallType {
   return type === "AUDIO" ? "audio" : "video";
@@ -198,6 +200,7 @@ export class CallService {
   }
 
   private async ensureNoActiveConflict(userIds: string[]): Promise<void> {
+    await this.reconcileActiveCallsForUsers(userIds);
     const conflict = await prismaCall.findFirst({
       where: {
         status: { in: ["RINGING", "ACCEPTED"] },
@@ -208,6 +211,102 @@ export class CallService {
     if (conflict) {
       throw new Error("call_conflict");
     }
+  }
+
+  private async finalizeReconciledCall(
+    row: NonNullable<CallRow>,
+    nextStatus: "MISSED" | "ENDED",
+    actorUserId?: string,
+    payload?: Record<string, unknown>
+  ): Promise<CallRecord | null> {
+    const updated = await prismaCall.updateMany({
+      where: {
+        id: row.id,
+        status: row.status
+      },
+      data: {
+        status: nextStatus,
+        endedAt: new Date()
+      }
+    });
+
+    if (updated.count === 0) {
+      return null;
+    }
+
+    await this.recordEvent(row.id, toAppCallStatus(nextStatus), actorUserId, payload);
+    await this.provider.closeSession({
+      callId: row.id,
+      sessionId: row.providerSessionId,
+      roomName: row.roomName
+    });
+
+    return this.getCallByIdForUser(row.id, row.callerId);
+  }
+
+  async reconcileActiveCallsForUsers(userIds: string[]): Promise<CallRecord[]> {
+    const uniqueUserIds = [...new Set(userIds.filter(Boolean))];
+    if (uniqueUserIds.length === 0) return [];
+
+    const rows = await prismaCall.findMany({
+      where: {
+        status: { in: ["RINGING", "ACCEPTED"] },
+        OR: [{ callerId: { in: uniqueUserIds } }, { calleeId: { in: uniqueUserIds } }]
+      },
+      include: {
+        caller: {
+          select: {
+            id: true,
+            displayName: true,
+            avatarUrl: true,
+            updatedAt: true
+          }
+        },
+        callee: {
+          select: {
+            id: true,
+            displayName: true,
+            avatarUrl: true,
+            updatedAt: true
+          }
+        }
+      }
+    });
+
+    const now = Date.now();
+    const reconciled: CallRecord[] = [];
+
+    for (const row of rows as NonNullable<CallRow>[]) {
+      if (
+        row.status === "RINGING" &&
+        now - row.createdAt.getTime() >= CALL_RING_TIMEOUT_MS + ACTIVE_CALL_STALE_GRACE_MS
+      ) {
+        const updated = await this.finalizeReconciledCall(row, "MISSED", row.calleeId, {
+          reason: "stale_ringing_conflict"
+        });
+        if (updated) reconciled.push(updated);
+        continue;
+      }
+
+      if (row.status !== "ACCEPTED") {
+        continue;
+      }
+
+      const participantCount = await this.provider.getParticipantCount({
+        callId: row.id,
+        sessionId: row.providerSessionId,
+        roomName: row.roomName
+      });
+
+      if (participantCount === 0) {
+        const updated = await this.finalizeReconciledCall(row, "ENDED", undefined, {
+          reason: "empty_room_conflict"
+        });
+        if (updated) reconciled.push(updated);
+      }
+    }
+
+    return reconciled;
   }
 
   async startCall(params: {

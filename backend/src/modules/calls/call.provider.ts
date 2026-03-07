@@ -33,4 +33,5 @@ export interface CallProvider {
   createSession(input: CreateCallSessionInput): Promise<CreateCallSessionResult>;
   createParticipantToken(input: CreateCallParticipantTokenInput): Promise<CallJoinPayload>;
   closeSession(input: CloseCallSessionInput): Promise<void>;
+  getParticipantCount(input: CloseCallSessionInput): Promise<number | null>;
 }

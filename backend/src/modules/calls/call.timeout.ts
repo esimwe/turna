@@ -1,4 +1,4 @@
-const CALL_RING_TIMEOUT_MS = 30_000;
+export const CALL_RING_TIMEOUT_MS = 30_000;
 const scheduledTimeouts = new Map<string, NodeJS.Timeout>();
 
 export function scheduleCallTimeout(

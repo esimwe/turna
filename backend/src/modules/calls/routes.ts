@@ -116,6 +116,36 @@ callRouter.get("/", requireAuth, async (req, res) => {
   });
 });
 
+callRouter.post("/reconcile", requireAuth, async (req, res) => {
+  try {
+    const calls = await callService.reconcileActiveCallsForUsers([req.authUserId!]);
+
+    for (const call of calls) {
+      const callerPayload = serializeCallForViewer(req, call, call.callerId);
+      const calleePayload = serializeCallForViewer(req, call, call.calleeId);
+      const eventName = call.status === "missed" ? "call:missed" : "call:ended";
+
+      emitUserEvent([call.callerId], eventName, { call: callerPayload });
+      emitUserEvent([call.calleeId], eventName, { call: calleePayload });
+
+      await sendCallEndedPush({
+        callId: call.id,
+        reason: call.status,
+        recipientUserIds: [call.callerId, call.calleeId]
+      });
+    }
+
+    res.json({
+      data: {
+        calls: calls.map((call) => serializeCallForViewer(req, call, req.authUserId!))
+      }
+    });
+  } catch (error) {
+    logError("call reconcile failed", error);
+    res.status(500).json({ error: "failed_to_reconcile_calls" });
+  }
+});
+
 callRouter.post("/start", requireAuth, async (req, res) => {
   const parsed = startCallSchema.safeParse(req.body);
   if (!parsed.success) {

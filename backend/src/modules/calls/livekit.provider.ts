@@ -94,6 +94,20 @@ export class LiveKitCallProvider implements CallProvider {
       logError("livekit room delete failed", error);
     }
   }
+
+  async getParticipantCount(input: CloseCallSessionInput): Promise<number | null> {
+    if (!this.isConfigured() || !input.roomName) {
+      return null;
+    }
+
+    try {
+      const participants = await this.roomService.listParticipants(input.roomName);
+      return participants.length;
+    } catch (error) {
+      logError("livekit participant list failed", error);
+      return 0;
+    }
+  }
 }
 
 export const livekitCallProvider = new LiveKitCallProvider();
