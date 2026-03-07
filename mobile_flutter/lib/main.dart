@@ -1,6 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:firebase_analytics/firebase_analytics.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -19,6 +22,12 @@ import 'package:url_launcher/url_launcher.dart';
 const String kBackendBaseUrl = 'http://178.104.8.155:4000';
 const bool kTurnaDebugLogs = true;
 const String kChatRoomRouteName = 'chat-room';
+const int kComposerMediaLimit = 30;
+const int kInlineAttachmentSoftLimitBytes = 64 * 1024 * 1024;
+const int kInlineImagePickerQuality = 82;
+const double kInlineImagePickerMaxDimension = 2200;
+const double kInlineImageSdMaxDimension = 1280;
+const double kInlineImageHdMaxDimension = 2200;
 
 final GlobalKey<NavigatorState> kTurnaNavigatorKey =
     GlobalKey<NavigatorState>();
@@ -34,6 +43,53 @@ void turnaLog(String message, [Object? data]) {
     return;
   }
   debugPrint('[turna-mobile] $message');
+}
+
+String? guessContentTypeForFileName(String fileName) {
+  final lower = fileName.toLowerCase();
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+  if (lower.endsWith('.png')) return 'image/png';
+  if (lower.endsWith('.webp')) return 'image/webp';
+  if (lower.endsWith('.gif')) return 'image/gif';
+  if (lower.endsWith('.heic')) return 'image/heic';
+  if (lower.endsWith('.heif')) return 'image/heif';
+  if (lower.endsWith('.mp4')) return 'video/mp4';
+  if (lower.endsWith('.mov')) return 'video/quicktime';
+  if (lower.endsWith('.m4v')) return 'video/x-m4v';
+  if (lower.endsWith('.webm')) return 'video/webm';
+  if (lower.endsWith('.pdf')) return 'application/pdf';
+  if (lower.endsWith('.txt')) return 'text/plain';
+  if (lower.endsWith('.doc')) return 'application/msword';
+  if (lower.endsWith('.docx')) {
+    return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  }
+  if (lower.endsWith('.xls')) return 'application/vnd.ms-excel';
+  if (lower.endsWith('.xlsx')) {
+    return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  }
+  if (lower.endsWith('.zip')) return 'application/zip';
+  return 'application/octet-stream';
+}
+
+String formatBytesLabel(int bytes) {
+  if (bytes <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  var value = bytes.toDouble();
+  var unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex++;
+  }
+  final display = value >= 10 || unitIndex == 0
+      ? value.toStringAsFixed(0)
+      : value.toStringAsFixed(1);
+  return '$display ${units[unitIndex]}';
+}
+
+String replaceFileExtension(String fileName, String extension) {
+  final dotIndex = fileName.lastIndexOf('.');
+  final base = dotIndex <= 0 ? fileName : fileName.substring(0, dotIndex);
+  return '$base.$extension';
 }
 
 class TurnaActiveChatRegistry extends ChangeNotifier {
@@ -1023,46 +1079,10 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         current.day != older.day;
   }
 
-  String? _guessContentType(String fileName) {
-    final lower = fileName.toLowerCase();
-    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
-    if (lower.endsWith('.png')) return 'image/png';
-    if (lower.endsWith('.webp')) return 'image/webp';
-    if (lower.endsWith('.gif')) return 'image/gif';
-    if (lower.endsWith('.heic')) return 'image/heic';
-    if (lower.endsWith('.heif')) return 'image/heif';
-    if (lower.endsWith('.mp4')) return 'video/mp4';
-    if (lower.endsWith('.mov')) return 'video/quicktime';
-    if (lower.endsWith('.m4v')) return 'video/x-m4v';
-    if (lower.endsWith('.webm')) return 'video/webm';
-    if (lower.endsWith('.pdf')) return 'application/pdf';
-    if (lower.endsWith('.txt')) return 'text/plain';
-    if (lower.endsWith('.doc')) return 'application/msword';
-    if (lower.endsWith('.docx')) {
-      return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-    }
-    if (lower.endsWith('.xls')) return 'application/vnd.ms-excel';
-    if (lower.endsWith('.xlsx')) {
-      return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-    }
-    if (lower.endsWith('.zip')) return 'application/zip';
-    return 'application/octet-stream';
-  }
+  String? _guessContentType(String fileName) =>
+      guessContentTypeForFileName(fileName);
 
-  String _formatFileSize(int bytes) {
-    if (bytes <= 0) return '0 B';
-    const units = ['B', 'KB', 'MB', 'GB'];
-    var value = bytes.toDouble();
-    var unitIndex = 0;
-    while (value >= 1024 && unitIndex < units.length - 1) {
-      value /= 1024;
-      unitIndex++;
-    }
-    final display = value >= 10 || unitIndex == 0
-        ? value.toStringAsFixed(0)
-        : value.toStringAsFixed(1);
-    return '$display ${units[unitIndex]}';
-  }
+  String _formatFileSize(int bytes) => formatBytesLabel(bytes);
 
   Future<void> _sendPickedAttachment({
     required ChatAttachmentKind kind,
@@ -1130,52 +1150,98 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     }
   }
 
-  Future<void> _pickImage(ImageSource source) async {
-    final file = await _mediaPicker.pickImage(
-      source: source,
-      imageQuality: 90,
-      maxWidth: 1800,
-    );
-    if (file == null) return;
+  Future<void> _openMediaComposerFromFiles(List<XFile> files) async {
+    final seeds = <MediaComposerSeed>[];
 
-    final contentType = _guessContentType(file.name);
-    if (contentType == null || !contentType.startsWith('image/')) {
+    for (final file in files.take(kComposerMediaLimit)) {
+      final contentType = _guessContentType(file.name);
+      if (contentType == null) continue;
+
+      late final ChatAttachmentKind kind;
+      if (contentType.startsWith('image/')) {
+        kind = ChatAttachmentKind.image;
+      } else if (contentType.startsWith('video/')) {
+        kind = ChatAttachmentKind.video;
+      } else {
+        continue;
+      }
+
+      final sizeBytes = await file.length();
+      if (sizeBytes > kInlineAttachmentSoftLimitBytes) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '${file.name} 64 MB ustu oldugu icin inline medya olarak gonderilemiyor.',
+            ),
+          ),
+        );
+        continue;
+      }
+
+      seeds.add(
+        MediaComposerSeed(
+          kind: kind,
+          file: file,
+          fileName: file.name,
+          contentType: contentType,
+          sizeBytes: sizeBytes,
+        ),
+      );
+    }
+
+    if (seeds.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Desteklenmeyen gorsel formati.')),
+        const SnackBar(content: Text('Gonderilebilir medya bulunamadi.')),
       );
       return;
     }
 
-    await _sendPickedAttachment(
-      kind: ChatAttachmentKind.image,
-      fileName: file.name,
-      contentType: contentType,
-      readBytes: file.readAsBytes,
-      sizeBytes: await file.length(),
+    if (!mounted) return;
+    final message = await Navigator.push<ChatMessage>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => MediaComposerPage(
+          session: widget.session,
+          chat: widget.chat,
+          items: seeds,
+          onSessionExpired: widget.onSessionExpired,
+        ),
+      ),
     );
+
+    if (!mounted || message == null) return;
+    _client.mergeServerMessage(message);
+    _jumpToBottom();
   }
 
-  Future<void> _pickVideo(ImageSource source) async {
-    final file = await _mediaPicker.pickVideo(source: source);
-    if (file == null) return;
-
-    final contentType = _guessContentType(file.name);
-    if (contentType == null || !contentType.startsWith('video/')) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Desteklenmeyen video formati.')),
-      );
-      return;
-    }
-
-    await _sendPickedAttachment(
-      kind: ChatAttachmentKind.video,
-      fileName: file.name,
-      contentType: contentType,
-      readBytes: file.readAsBytes,
-      sizeBytes: await file.length(),
+  Future<void> _pickGalleryMedia() async {
+    final files = await _mediaPicker.pickMultipleMedia(
+      limit: kComposerMediaLimit,
+      imageQuality: kInlineImagePickerQuality,
+      maxWidth: kInlineImagePickerMaxDimension,
+      maxHeight: kInlineImagePickerMaxDimension,
     );
+    if (files.isEmpty) return;
+    await _openMediaComposerFromFiles(files);
+  }
+
+  Future<void> _pickCameraImage() async {
+    final file = await _mediaPicker.pickImage(
+      source: ImageSource.camera,
+      imageQuality: kInlineImagePickerQuality,
+      maxWidth: kInlineImagePickerMaxDimension,
+      maxHeight: kInlineImagePickerMaxDimension,
+    );
+    if (file == null) return;
+    await _openMediaComposerFromFiles([file]);
+  }
+
+  Future<void> _pickCameraVideo() async {
+    final file = await _mediaPicker.pickVideo(source: ImageSource.camera);
+    if (file == null) return;
+    await _openMediaComposerFromFiles([file]);
   }
 
   Future<void> _pickFile() async {
@@ -1198,7 +1264,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     await _sendPickedAttachment(
       kind: ChatAttachmentKind.file,
       fileName: fileName,
-      contentType: _guessContentType(fileName) ?? 'application/octet-stream',
+      contentType:
+          guessContentTypeForFileName(fileName) ?? 'application/octet-stream',
       readBytes: () => File(filePath).readAsBytes(),
       sizeBytes: file.size,
     );
@@ -1216,10 +1283,10 @@ class _ChatRoomPageState extends State<ChatRoomPage>
             children: [
               ListTile(
                 leading: const Icon(Icons.photo_library_outlined),
-                title: const Text('Galeriden foto'),
+                title: const Text('Galeri'),
                 onTap: () {
                   Navigator.pop(sheetContext);
-                  _pickImage(ImageSource.gallery);
+                  _pickGalleryMedia();
                 },
               ),
               ListTile(
@@ -1227,15 +1294,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                 title: const Text('Kameradan foto'),
                 onTap: () {
                   Navigator.pop(sheetContext);
-                  _pickImage(ImageSource.camera);
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.video_library_outlined),
-                title: const Text('Galeriden video'),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  _pickVideo(ImageSource.gallery);
+                  _pickCameraImage();
                 },
               ),
               ListTile(
@@ -1243,12 +1302,12 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                 title: const Text('Kameradan video'),
                 onTap: () {
                   Navigator.pop(sheetContext);
-                  _pickVideo(ImageSource.camera);
+                  _pickCameraVideo();
                 },
               ),
               ListTile(
                 leading: const Icon(Icons.attach_file_outlined),
-                title: const Text('Dosya sec'),
+                title: const Text('Dosya olarak gonder'),
                 onTap: () {
                   Navigator.pop(sheetContext);
                   _pickFile();
@@ -1876,6 +1935,1032 @@ class ChatAttachmentViewerPage extends StatelessWidget {
       ),
     );
   }
+}
+
+enum MediaComposerQuality { sd, hd }
+
+extension MediaComposerQualityX on MediaComposerQuality {
+  String get label => name.toUpperCase();
+
+  double get imageMaxDimension {
+    switch (this) {
+      case MediaComposerQuality.sd:
+        return kInlineImageSdMaxDimension;
+      case MediaComposerQuality.hd:
+        return kInlineImageHdMaxDimension;
+    }
+  }
+}
+
+class MediaComposerSeed {
+  MediaComposerSeed({
+    required this.kind,
+    required this.file,
+    required this.fileName,
+    required this.contentType,
+    required this.sizeBytes,
+  });
+
+  final ChatAttachmentKind kind;
+  final XFile file;
+  final String fileName;
+  final String contentType;
+  final int sizeBytes;
+}
+
+class MediaComposerPage extends StatefulWidget {
+  const MediaComposerPage({
+    super.key,
+    required this.session,
+    required this.chat,
+    required this.items,
+    required this.onSessionExpired,
+  });
+
+  final AuthSession session;
+  final ChatPreview chat;
+  final List<MediaComposerSeed> items;
+  final VoidCallback onSessionExpired;
+
+  @override
+  State<MediaComposerPage> createState() => _MediaComposerPageState();
+}
+
+class _MediaComposerPageState extends State<MediaComposerPage> {
+  final TextEditingController _captionController = TextEditingController();
+  late final PageController _pageController;
+  late final List<_MediaComposerItem> _items;
+  int _selectedIndex = 0;
+  bool _drawMode = false;
+  bool _sending = false;
+  String? _sendingLabel;
+  MediaComposerQuality _quality = MediaComposerQuality.sd;
+
+  _MediaComposerItem get _currentItem => _items[_selectedIndex];
+
+  @override
+  void initState() {
+    super.initState();
+    _pageController = PageController();
+    _items = widget.items.map(_MediaComposerItem.fromSeed).toList();
+    for (final item in _items.where((item) => item.isImage)) {
+      unawaited(_primeImageSize(item));
+    }
+  }
+
+  @override
+  void dispose() {
+    _captionController.dispose();
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _primeImageSize(_MediaComposerItem item) async {
+    if (!item.isImage || item.sourceSize != null) return;
+    final bytes = await item.file.readAsBytes();
+    final codec = await ui.instantiateImageCodec(bytes);
+    final frame = await codec.getNextFrame();
+    final size = Size(
+      frame.image.width.toDouble(),
+      frame.image.height.toDouble(),
+    );
+    if (!mounted) return;
+    setState(() => item.sourceSize = size);
+  }
+
+  Future<void> _showComingSoon(String text) async {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  Future<void> _editOverlayText({required bool emojiMode}) async {
+    if (!_currentItem.isImage) {
+      await _showComingSoon('Bu duzenleme su an sadece fotograflarda acik.');
+      return;
+    }
+
+    if (emojiMode) {
+      final selectedEmoji = await showModalBottomSheet<String>(
+        context: context,
+        backgroundColor: const Color(0xFF171A19),
+        builder: (sheetContext) {
+          const emojis = [
+            '🙂',
+            '😍',
+            '🔥',
+            '❤️',
+            '👏',
+            '🎉',
+            '😂',
+            '😎',
+            '🚀',
+            '✨',
+            '🤝',
+            '🫶',
+          ];
+          return SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Wrap(
+                spacing: 12,
+                runSpacing: 12,
+                children: [
+                  for (final emoji in emojis)
+                    InkWell(
+                      onTap: () => Navigator.pop(sheetContext, emoji),
+                      borderRadius: BorderRadius.circular(18),
+                      child: Container(
+                        width: 56,
+                        height: 56,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF222725),
+                          borderRadius: BorderRadius.circular(18),
+                        ),
+                        child: Text(
+                          emoji,
+                          style: const TextStyle(fontSize: 28),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          );
+        },
+      );
+      if (selectedEmoji == null || !mounted) return;
+      setState(() {
+        _currentItem.overlayText = selectedEmoji;
+      });
+      return;
+    }
+
+    final controller = TextEditingController(text: _currentItem.overlayText);
+    final result = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Uste gorunecek yazi'),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            maxLength: 60,
+            decoration: const InputDecoration(hintText: 'Yazini yaz'),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Iptal'),
+            ),
+            FilledButton(
+              onPressed: () =>
+                  Navigator.pop(dialogContext, controller.text.trim()),
+              child: const Text('Kaydet'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (!mounted || result == null) return;
+    setState(() {
+      _currentItem.overlayText = result.isEmpty ? null : result;
+    });
+  }
+
+  void _toggleDrawMode() {
+    if (!_currentItem.isImage) {
+      _showComingSoon('Cizim modu su an sadece fotograflarda acik.');
+      return;
+    }
+    setState(() => _drawMode = !_drawMode);
+  }
+
+  void _rotateCurrent() {
+    if (!_currentItem.isImage) {
+      _showComingSoon('Dondurme su an sadece fotograflarda acik.');
+      return;
+    }
+    setState(() {
+      _currentItem.rotationTurns = (_currentItem.rotationTurns + 1) % 4;
+    });
+  }
+
+  void _undoCurrentStroke() {
+    if (!_currentItem.isImage || _currentItem.strokes.isEmpty) return;
+    setState(() {
+      _currentItem.strokes.removeLast();
+    });
+  }
+
+  Offset _normalizePoint(Offset point, Size size) {
+    final safeWidth = size.width <= 0 ? 1.0 : size.width;
+    final safeHeight = size.height <= 0 ? 1.0 : size.height;
+    final dx = point.dx.clamp(0.0, safeWidth) / safeWidth;
+    final dy = point.dy.clamp(0.0, safeHeight) / safeHeight;
+    return Offset(dx, dy);
+  }
+
+  void _startStroke(Offset point, Size size) {
+    if (!_drawMode || !_currentItem.isImage) return;
+    setState(() {
+      _currentItem.strokes.add(
+        _MediaComposerStroke(points: [_normalizePoint(point, size)]),
+      );
+    });
+  }
+
+  void _appendStroke(Offset point, Size size) {
+    if (!_drawMode || !_currentItem.isImage || _currentItem.strokes.isEmpty) {
+      return;
+    }
+    setState(() {
+      _currentItem.strokes.last.points.add(_normalizePoint(point, size));
+    });
+  }
+
+  Future<void> _send() async {
+    if (_sending || _items.isEmpty) return;
+
+    setState(() {
+      _sending = true;
+      _sendingLabel = 'Hazirlaniyor...';
+    });
+
+    try {
+      final attachments = <OutgoingAttachmentDraft>[];
+      for (var index = 0; index < _items.length; index++) {
+        final item = _items[index];
+        if (mounted) {
+          setState(() {
+            _sendingLabel = '${index + 1}/${_items.length} yukleniyor';
+          });
+        }
+
+        final prepared = await _prepareAttachment(item);
+        final upload = await ChatApi.createAttachmentUpload(
+          widget.session,
+          chatId: widget.chat.chatId,
+          kind: prepared.kind,
+          contentType: prepared.contentType,
+          fileName: prepared.fileName,
+        );
+
+        final uploadRes = await http.put(
+          Uri.parse(upload.uploadUrl),
+          headers: upload.headers,
+          body: prepared.bytes,
+        );
+        if (uploadRes.statusCode >= 400) {
+          throw TurnaApiException('Dosya yuklenemedi.');
+        }
+
+        attachments.add(
+          OutgoingAttachmentDraft(
+            objectKey: upload.objectKey,
+            kind: prepared.kind,
+            fileName: prepared.fileName,
+            contentType: prepared.contentType,
+            sizeBytes: prepared.bytes.length,
+            width: prepared.width,
+            height: prepared.height,
+          ),
+        );
+      }
+
+      final caption = _captionController.text.trim();
+      final message = await ChatApi.sendMessage(
+        widget.session,
+        chatId: widget.chat.chatId,
+        text: caption.isEmpty ? null : caption,
+        attachments: attachments,
+      );
+
+      await TurnaAnalytics.logEvent('attachment_sent', {
+        'chat_id': widget.chat.chatId,
+        'quality': _quality.name,
+        'count': attachments.length,
+        'kind': attachments.length == 1 ? attachments.first.kind.name : 'album',
+      });
+
+      if (!mounted) return;
+      Navigator.pop(context, message);
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+      Navigator.pop(context);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _sending = false;
+          _sendingLabel = null;
+        });
+      }
+    }
+  }
+
+  Future<_PreparedComposerAttachment> _prepareAttachment(
+    _MediaComposerItem item,
+  ) async {
+    final sourceBytes = await item.file.readAsBytes();
+
+    if (!item.isImage) {
+      return _PreparedComposerAttachment(
+        kind: item.kind,
+        fileName: item.fileName,
+        contentType: item.contentType,
+        bytes: sourceBytes,
+      );
+    }
+
+    await _primeImageSize(item);
+    final sourceSize = item.sourceSize ?? const Size(1, 1);
+    if (!item.hasMarkup && _quality == MediaComposerQuality.hd) {
+      return _PreparedComposerAttachment(
+        kind: item.kind,
+        fileName: item.fileName,
+        contentType: item.contentType,
+        bytes: sourceBytes,
+        width: sourceSize.width.round(),
+        height: sourceSize.height.round(),
+      );
+    }
+
+    return _renderImageAttachment(item, sourceBytes);
+  }
+
+  Future<_PreparedComposerAttachment> _renderImageAttachment(
+    _MediaComposerItem item,
+    Uint8List sourceBytes,
+  ) async {
+    final codec = await ui.instantiateImageCodec(sourceBytes);
+    final frame = await codec.getNextFrame();
+    final sourceImage = frame.image;
+    final inputSize = Size(
+      sourceImage.width.toDouble(),
+      sourceImage.height.toDouble(),
+    );
+    final rotatedInputSize = item.rotationTurns.isOdd
+        ? Size(inputSize.height, inputSize.width)
+        : inputSize;
+    final scaledSize = _scaleToMax(
+      rotatedInputSize,
+      _quality.imageMaxDimension,
+    );
+    final outputWidth = math.max(1, scaledSize.width.round());
+    final outputHeight = math.max(1, scaledSize.height.round());
+
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    final srcRect = Rect.fromLTWH(0, 0, inputSize.width, inputSize.height);
+    final paint = Paint()..isAntiAlias = true;
+
+    switch (item.rotationTurns % 4) {
+      case 1:
+        canvas.save();
+        canvas.translate(outputWidth.toDouble(), 0);
+        canvas.rotate(math.pi / 2);
+        canvas.drawImageRect(
+          sourceImage,
+          srcRect,
+          Rect.fromLTWH(0, 0, outputHeight.toDouble(), outputWidth.toDouble()),
+          paint,
+        );
+        canvas.restore();
+        break;
+      case 2:
+        canvas.save();
+        canvas.translate(outputWidth.toDouble(), outputHeight.toDouble());
+        canvas.rotate(math.pi);
+        canvas.drawImageRect(
+          sourceImage,
+          srcRect,
+          Rect.fromLTWH(0, 0, outputWidth.toDouble(), outputHeight.toDouble()),
+          paint,
+        );
+        canvas.restore();
+        break;
+      case 3:
+        canvas.save();
+        canvas.translate(0, outputHeight.toDouble());
+        canvas.rotate(-math.pi / 2);
+        canvas.drawImageRect(
+          sourceImage,
+          srcRect,
+          Rect.fromLTWH(0, 0, outputHeight.toDouble(), outputWidth.toDouble()),
+          paint,
+        );
+        canvas.restore();
+        break;
+      default:
+        canvas.drawImageRect(
+          sourceImage,
+          srcRect,
+          Rect.fromLTWH(0, 0, outputWidth.toDouble(), outputHeight.toDouble()),
+          paint,
+        );
+    }
+
+    _paintComposerStrokes(
+      canvas,
+      size: Size(outputWidth.toDouble(), outputHeight.toDouble()),
+      strokes: item.strokes,
+    );
+    _paintComposerOverlayText(
+      canvas,
+      size: Size(outputWidth.toDouble(), outputHeight.toDouble()),
+      text: item.overlayText,
+    );
+
+    final rendered = await recorder.endRecording().toImage(
+      outputWidth,
+      outputHeight,
+    );
+    final data = await rendered.toByteData(format: ui.ImageByteFormat.png);
+    if (data == null) {
+      throw TurnaApiException('Gorsel hazirlanamadi.');
+    }
+
+    return _PreparedComposerAttachment(
+      kind: item.kind,
+      fileName: replaceFileExtension(item.fileName, 'png'),
+      contentType: 'image/png',
+      bytes: data.buffer.asUint8List(),
+      width: outputWidth,
+      height: outputHeight,
+    );
+  }
+
+  Size _scaleToMax(Size size, double maxDimension) {
+    final longestSide = math.max(size.width, size.height);
+    if (longestSide <= maxDimension) return size;
+    final scale = maxDimension / longestSide;
+    return Size(size.width * scale, size.height * scale);
+  }
+
+  String _buildQualityNote() {
+    final current = _currentItem;
+    if (current.kind == ChatAttachmentKind.video) {
+      return 'Video composer icinde bekler, gonder deyince upload baslar.';
+    }
+    if (_quality == MediaComposerQuality.sd) {
+      return 'SD secili: daha hafif gorsel gonderilir.';
+    }
+    return 'HD secili: inline medya yine optimize edilerek gider.';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final current = _currentItem;
+
+    return Scaffold(
+      backgroundColor: const Color(0xFF101312),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF101312),
+        foregroundColor: Colors.white,
+        titleSpacing: 0,
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              widget.chat.name,
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+            ),
+            Text(
+              '${_items.length} medya',
+              style: const TextStyle(fontSize: 12, color: Color(0xFFB8BFBC)),
+            ),
+          ],
+        ),
+        actions: [
+          IconButton(
+            tooltip: 'Kirp',
+            onPressed: () => _showComingSoon(
+              'Kirpma araci bir sonraki adimda fiziksel crop ile tamamlanacak.',
+            ),
+            icon: const Icon(Icons.crop_outlined),
+          ),
+          IconButton(
+            tooltip: 'Dondur',
+            onPressed: _rotateCurrent,
+            icon: const Icon(Icons.rotate_90_degrees_ccw_outlined),
+          ),
+          IconButton(
+            tooltip: 'Yazi',
+            onPressed: () => _editOverlayText(emojiMode: false),
+            icon: const Icon(Icons.text_fields_outlined),
+          ),
+          IconButton(
+            tooltip: 'Ciz',
+            onPressed: _toggleDrawMode,
+            color: _drawMode ? const Color(0xFF1FAA59) : null,
+            icon: const Icon(Icons.draw_outlined),
+          ),
+          IconButton(
+            tooltip: 'Emoji',
+            onPressed: () => _editOverlayText(emojiMode: true),
+            icon: const Icon(Icons.emoji_emotions_outlined),
+          ),
+          PopupMenuButton<MediaComposerQuality>(
+            initialValue: _quality,
+            onSelected: (value) => setState(() => _quality = value),
+            color: const Color(0xFF1E2321),
+            itemBuilder: (_) => MediaComposerQuality.values
+                .map(
+                  (value) => PopupMenuItem(
+                    value: value,
+                    child: Text(
+                      value.label,
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                  ),
+                )
+                .toList(),
+            child: Container(
+              margin: const EdgeInsets.only(right: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1FAA59),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Text(
+                _quality.label,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+      body: SafeArea(
+        top: false,
+        child: Column(
+          children: [
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+                child: Column(
+                  children: [
+                    if (_drawMode && current.isImage)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.brush_outlined,
+                              color: Color(0xFFB8BFBC),
+                              size: 18,
+                            ),
+                            const SizedBox(width: 8),
+                            const Expanded(
+                              child: Text(
+                                'Cizmek icin gorselin uzerinde surukle. Son cizgiyi geri almak icin tekrar ciz ikonuna bas.',
+                                style: TextStyle(
+                                  color: Color(0xFFB8BFBC),
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ),
+                            TextButton(
+                              onPressed: _undoCurrentStroke,
+                              child: const Text('Geri al'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    Expanded(
+                      child: PageView.builder(
+                        controller: _pageController,
+                        itemCount: _items.length,
+                        onPageChanged: (index) {
+                          setState(() {
+                            _selectedIndex = index;
+                            _drawMode = false;
+                          });
+                        },
+                        itemBuilder: (context, index) {
+                          final item = _items[index];
+                          return _buildPreviewPage(item);
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        _buildQualityNote(),
+                        style: const TextStyle(
+                          color: Color(0xFFB8BFBC),
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            if (_items.length > 1)
+              SizedBox(
+                height: 92,
+                child: ListView.separated(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+                  scrollDirection: Axis.horizontal,
+                  itemCount: _items.length,
+                  separatorBuilder: (_, _) => const SizedBox(width: 10),
+                  itemBuilder: (context, index) {
+                    final item = _items[index];
+                    final selected = index == _selectedIndex;
+                    return GestureDetector(
+                      onTap: () {
+                        _pageController.animateToPage(
+                          index,
+                          duration: const Duration(milliseconds: 180),
+                          curve: Curves.easeOut,
+                        );
+                      },
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 160),
+                        width: 72,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(
+                            color: selected
+                                ? const Color(0xFF1FAA59)
+                                : Colors.transparent,
+                            width: 2,
+                          ),
+                        ),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(16),
+                          child: item.isImage
+                              ? Image.file(
+                                  File(item.file.path),
+                                  fit: BoxFit.cover,
+                                )
+                              : Container(
+                                  color: const Color(0xFF1F2322),
+                                  alignment: Alignment.center,
+                                  child: const Icon(
+                                    Icons.videocam_outlined,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              )
+            else
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    '${current.fileName} • ${formatBytesLabel(current.sizeBytes)}',
+                    style: const TextStyle(
+                      color: Color(0xFFB8BFBC),
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+              ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _captionController,
+                      minLines: 1,
+                      maxLines: 4,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        hintText: 'Aciklama ekle',
+                        hintStyle: const TextStyle(color: Color(0xFF7C8380)),
+                        filled: true,
+                        fillColor: const Color(0xFF1A1F1D),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(24),
+                          borderSide: BorderSide.none,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (_sendingLabel != null)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: Text(
+                            _sendingLabel!,
+                            style: const TextStyle(
+                              color: Color(0xFFB8BFBC),
+                              fontSize: 11,
+                            ),
+                          ),
+                        ),
+                      FloatingActionButton.small(
+                        backgroundColor: const Color(0xFF1FAA59),
+                        onPressed: _sending ? null : _send,
+                        child: _sending
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : const Icon(Icons.send, color: Colors.white),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPreviewPage(_MediaComposerItem item) {
+    if (!item.isImage) {
+      return Center(
+        child: Container(
+          width: double.infinity,
+          margin: const EdgeInsets.symmetric(vertical: 20),
+          decoration: BoxDecoration(
+            color: const Color(0xFF181D1C),
+            borderRadius: BorderRadius.circular(28),
+          ),
+          padding: const EdgeInsets.all(28),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(
+                Icons.videocam_outlined,
+                size: 56,
+                color: Colors.white,
+              ),
+              const SizedBox(height: 16),
+              Text(
+                item.fileName,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                formatBytesLabel(item.sizeBytes),
+                style: const TextStyle(color: Color(0xFFB8BFBC), fontSize: 13),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final aspectRatio = item.effectiveAspectRatio;
+        var width = constraints.maxWidth;
+        var height = width / aspectRatio;
+        if (height > constraints.maxHeight) {
+          height = constraints.maxHeight;
+          width = height * aspectRatio;
+        }
+        final canvasSize = Size(width, height);
+
+        return Center(
+          child: GestureDetector(
+            onPanStart: _drawMode
+                ? (details) => _startStroke(details.localPosition, canvasSize)
+                : null,
+            onPanUpdate: _drawMode
+                ? (details) => _appendStroke(details.localPosition, canvasSize)
+                : null,
+            child: SizedBox(
+              width: width,
+              height: height,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(28),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    RotatedBox(
+                      quarterTurns: item.rotationTurns,
+                      child: Image.file(File(item.file.path), fit: BoxFit.fill),
+                    ),
+                    if (item.overlayText != null &&
+                        item.overlayText!.trim().isNotEmpty)
+                      Align(
+                        alignment: Alignment.bottomCenter,
+                        child: Padding(
+                          padding: EdgeInsets.only(
+                            left: width * 0.08,
+                            right: width * 0.08,
+                            bottom: math.max(18, height * 0.07),
+                          ),
+                          child: Text(
+                            item.overlayText!,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700,
+                              fontSize: math.max(18, width * 0.06),
+                              shadows: const [
+                                Shadow(
+                                  color: Colors.black54,
+                                  blurRadius: 10,
+                                  offset: Offset(0, 2),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    IgnorePointer(
+                      child: CustomPaint(
+                        painter: _MediaComposerStrokePainter(
+                          strokes: item.strokes,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _MediaComposerItem {
+  _MediaComposerItem({
+    required this.kind,
+    required this.file,
+    required this.fileName,
+    required this.contentType,
+    required this.sizeBytes,
+  });
+
+  factory _MediaComposerItem.fromSeed(MediaComposerSeed seed) {
+    return _MediaComposerItem(
+      kind: seed.kind,
+      file: seed.file,
+      fileName: seed.fileName,
+      contentType: seed.contentType,
+      sizeBytes: seed.sizeBytes,
+    );
+  }
+
+  final ChatAttachmentKind kind;
+  final XFile file;
+  final String fileName;
+  final String contentType;
+  final int sizeBytes;
+  final List<_MediaComposerStroke> strokes = [];
+  String? overlayText;
+  int rotationTurns = 0;
+  Size? sourceSize;
+
+  bool get isImage => kind == ChatAttachmentKind.image;
+
+  bool get hasMarkup =>
+      rotationTurns != 0 ||
+      strokes.isNotEmpty ||
+      (overlayText?.trim().isNotEmpty ?? false);
+
+  double get effectiveAspectRatio {
+    final base = sourceSize ?? const Size(1, 1);
+    final width = rotationTurns.isOdd ? base.height : base.width;
+    final height = rotationTurns.isOdd ? base.width : base.height;
+    return math.max(0.1, width / math.max(0.1, height));
+  }
+}
+
+class _MediaComposerStroke {
+  _MediaComposerStroke({required this.points});
+
+  final List<Offset> points;
+}
+
+class _PreparedComposerAttachment {
+  _PreparedComposerAttachment({
+    required this.kind,
+    required this.fileName,
+    required this.contentType,
+    required this.bytes,
+    this.width,
+    this.height,
+  });
+
+  final ChatAttachmentKind kind;
+  final String fileName;
+  final String contentType;
+  final Uint8List bytes;
+  final int? width;
+  final int? height;
+}
+
+class _MediaComposerStrokePainter extends CustomPainter {
+  const _MediaComposerStrokePainter({required this.strokes});
+
+  final List<_MediaComposerStroke> strokes;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    _paintComposerStrokes(canvas, size: size, strokes: strokes);
+  }
+
+  @override
+  bool shouldRepaint(covariant _MediaComposerStrokePainter oldDelegate) {
+    return true;
+  }
+}
+
+void _paintComposerStrokes(
+  Canvas canvas, {
+  required Size size,
+  required List<_MediaComposerStroke> strokes,
+}) {
+  final paint = Paint()
+    ..color = Colors.white
+    ..strokeCap = StrokeCap.round
+    ..strokeJoin = StrokeJoin.round
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = math.max(3, size.shortestSide * 0.011);
+
+  for (final stroke in strokes) {
+    if (stroke.points.isEmpty) continue;
+    if (stroke.points.length == 1) {
+      final point = Offset(
+        stroke.points.first.dx * size.width,
+        stroke.points.first.dy * size.height,
+      );
+      canvas.drawCircle(point, paint.strokeWidth * 0.5, paint);
+      continue;
+    }
+
+    final path = Path();
+    final first = stroke.points.first;
+    path.moveTo(first.dx * size.width, first.dy * size.height);
+    for (final point in stroke.points.skip(1)) {
+      path.lineTo(point.dx * size.width, point.dy * size.height);
+    }
+    canvas.drawPath(path, paint);
+  }
+}
+
+void _paintComposerOverlayText(
+  Canvas canvas, {
+  required Size size,
+  required String? text,
+}) {
+  final value = text?.trim() ?? '';
+  if (value.isEmpty) return;
+
+  final painter = TextPainter(
+    textDirection: TextDirection.ltr,
+    textAlign: TextAlign.center,
+    text: TextSpan(
+      text: value,
+      style: TextStyle(
+        color: Colors.white,
+        fontWeight: FontWeight.w700,
+        fontSize: math.max(28, size.width * 0.06),
+        shadows: const [
+          Shadow(color: Colors.black54, blurRadius: 12, offset: Offset(0, 2)),
+        ],
+      ),
+    ),
+  )..layout(maxWidth: size.width * 0.82);
+
+  painter.paint(
+    canvas,
+    Offset(
+      (size.width - painter.width) / 2,
+      size.height - painter.height - math.max(18, size.height * 0.07),
+    ),
+  );
 }
 
 class NewChatPage extends StatefulWidget {
