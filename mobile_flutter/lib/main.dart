@@ -2016,16 +2016,28 @@ class MediaComposerPage extends StatefulWidget {
 
 class _MediaComposerPageState extends State<MediaComposerPage> {
   final TextEditingController _captionController = TextEditingController();
+  final TextEditingController _inlineTextController = TextEditingController();
+  final FocusNode _inlineTextFocusNode = FocusNode();
   late final PageController _pageController;
   late final List<_MediaComposerItem> _items;
   int _selectedIndex = 0;
   bool _drawMode = false;
   bool _sending = false;
   String? _sendingLabel;
+  String? _activeTextOverlayId;
   MediaComposerQuality _quality = MediaComposerQuality.sd;
   double _overlayInteractionBaseScale = 1;
 
   _MediaComposerItem get _currentItem => _items[_selectedIndex];
+
+  _MediaComposerTextOverlay? get _activeTextOverlay {
+    final overlayId = _activeTextOverlayId;
+    if (overlayId == null) return null;
+    for (final overlay in _currentItem.textOverlays) {
+      if (overlay.id == overlayId) return overlay;
+    }
+    return null;
+  }
 
   @override
   void initState() {
@@ -2040,6 +2052,8 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
   @override
   void dispose() {
     _captionController.dispose();
+    _inlineTextController.dispose();
+    _inlineTextFocusNode.dispose();
     _pageController.dispose();
     super.dispose();
   }
@@ -2060,6 +2074,97 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
   Future<void> _showComingSoon(String text) async {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  String _nextTextOverlayId() {
+    return '${DateTime.now().microsecondsSinceEpoch}-${_currentItem.textOverlays.length + 1}';
+  }
+
+  void _requestInlineTextFocus() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _inlineTextFocusNode.requestFocus();
+    });
+  }
+
+  void _finishTextEditing() {
+    final overlayId = _activeTextOverlayId;
+    if (overlayId == null) return;
+
+    final overlay = _activeTextOverlay;
+    if (overlay == null) {
+      if (mounted) {
+        setState(() => _activeTextOverlayId = null);
+      }
+      _inlineTextController.clear();
+      _inlineTextFocusNode.unfocus();
+      return;
+    }
+
+    final nextText = _inlineTextController.text.trim();
+    setState(() {
+      if (nextText.isEmpty) {
+        _currentItem.textOverlays.removeWhere((item) => item.id == overlayId);
+      } else {
+        overlay.text = nextText;
+      }
+      _activeTextOverlayId = null;
+    });
+    _inlineTextController.clear();
+    _inlineTextFocusNode.unfocus();
+  }
+
+  void _beginNewTextOverlay({
+    required String initialText,
+    required bool requestKeyboard,
+  }) {
+    if (!_currentItem.isImage) return;
+    _finishTextEditing();
+
+    final overlay = _MediaComposerTextOverlay(
+      id: _nextTextOverlayId(),
+      text: initialText,
+      position: kComposerOverlayDefaultPosition,
+      scale: 1,
+      colorValue: _currentItem.markupColorValue,
+    );
+
+    setState(() {
+      _drawMode = false;
+      _currentItem.textOverlays.add(overlay);
+      _activeTextOverlayId = overlay.id;
+      _inlineTextController.value = TextEditingValue(
+        text: initialText,
+        selection: TextSelection.collapsed(offset: initialText.length),
+      );
+    });
+
+    if (requestKeyboard) {
+      _requestInlineTextFocus();
+    } else {
+      _inlineTextFocusNode.unfocus();
+    }
+  }
+
+  void _beginEditingTextOverlay(
+    _MediaComposerTextOverlay overlay, {
+    required bool requestKeyboard,
+  }) {
+    if (!_currentItem.isImage) return;
+    setState(() {
+      _drawMode = false;
+      _activeTextOverlayId = overlay.id;
+      _inlineTextController.value = TextEditingValue(
+        text: overlay.text,
+        selection: TextSelection.collapsed(offset: overlay.text.length),
+      );
+    });
+
+    if (requestKeyboard) {
+      _requestInlineTextFocus();
+    } else {
+      _inlineTextFocusNode.unfocus();
+    }
   }
 
   Future<void> _editOverlayText({required bool emojiMode}) async {
@@ -2119,50 +2224,18 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
         },
       );
       if (selectedEmoji == null || !mounted) return;
-      setState(() {
-        _currentItem.overlayText = selectedEmoji;
-        _currentItem.overlayPosition ??= kComposerOverlayDefaultPosition;
-        _currentItem.overlayScale = 1;
-      });
+      _beginNewTextOverlay(initialText: selectedEmoji, requestKeyboard: false);
       return;
     }
 
-    final controller = TextEditingController(text: _currentItem.overlayText);
-    final result = await showDialog<String>(
-      context: context,
-      builder: (dialogContext) {
-        return AlertDialog(
-          title: const Text('Uste gorunecek yazi'),
-          content: TextField(
-            controller: controller,
-            autofocus: true,
-            maxLength: 60,
-            decoration: const InputDecoration(hintText: 'Yazini yaz'),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('Iptal'),
-            ),
-            FilledButton(
-              onPressed: () =>
-                  Navigator.pop(dialogContext, controller.text.trim()),
-              child: const Text('Kaydet'),
-            ),
-          ],
-        );
-      },
-    );
+    _beginNewTextOverlay(initialText: '', requestKeyboard: true);
+  }
 
-    if (!mounted || result == null) return;
+  void _syncActiveTextOverlay(String value) {
+    final overlay = _activeTextOverlay;
+    if (overlay == null) return;
     setState(() {
-      _currentItem.overlayText = result.isEmpty ? null : result;
-      if (_currentItem.overlayText != null) {
-        _currentItem.overlayPosition ??= kComposerOverlayDefaultPosition;
-        _currentItem.overlayScale = _currentItem.overlayScale
-            .clamp(0.7, 3.2)
-            .toDouble();
-      }
+      overlay.text = value;
     });
   }
 
@@ -2171,6 +2244,7 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
       _showComingSoon('Cizim modu su an sadece fotograflarda acik.');
       return;
     }
+    _finishTextEditing();
     setState(() => _drawMode = !_drawMode);
   }
 
@@ -2179,6 +2253,7 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
       _showComingSoon('Dondurme su an sadece fotograflarda acik.');
       return;
     }
+    _finishTextEditing();
     setState(() {
       _currentItem.rotationTurns = (_currentItem.rotationTurns + 1) % 4;
     });
@@ -2208,28 +2283,35 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
 
   void _setMarkupColor(double value) {
     if (!_currentItem.isImage) return;
+    final clampedValue = value.clamp(0.0, 1.0).toDouble();
     setState(() {
-      _currentItem.markupColorValue = value.clamp(0.0, 1.0).toDouble();
+      _currentItem.markupColorValue = clampedValue;
+      final activeOverlay = _activeTextOverlay;
+      if (activeOverlay != null) {
+        activeOverlay.colorValue = clampedValue;
+      }
     });
   }
 
-  void _handleOverlayScaleStart() {
-    _overlayInteractionBaseScale = _currentItem.overlayScale;
+  void _handleOverlayScaleStart(_MediaComposerTextOverlay overlay) {
+    _overlayInteractionBaseScale = overlay.scale;
   }
 
-  void _handleOverlayScaleUpdate(ScaleUpdateDetails details, Size size) {
-    final currentPosition =
-        _currentItem.overlayPosition ?? kComposerOverlayDefaultPosition;
+  void _handleOverlayScaleUpdate(
+    _MediaComposerTextOverlay overlay,
+    ScaleUpdateDetails details,
+    Size size,
+  ) {
     final safeWidth = size.width <= 0 ? 1.0 : size.width;
     final safeHeight = size.height <= 0 ? 1.0 : size.height;
     final movedPosition = Offset(
-      currentPosition.dx + (details.focalPointDelta.dx / safeWidth),
-      currentPosition.dy + (details.focalPointDelta.dy / safeHeight),
+      overlay.position.dx + (details.focalPointDelta.dx / safeWidth),
+      overlay.position.dy + (details.focalPointDelta.dy / safeHeight),
     );
 
     setState(() {
-      _currentItem.overlayPosition = _clampOverlayPosition(movedPosition);
-      _currentItem.overlayScale = (_overlayInteractionBaseScale * details.scale)
+      overlay.position = _clampOverlayPosition(movedPosition);
+      overlay.scale = (_overlayInteractionBaseScale * details.scale)
           .clamp(0.7, 3.2)
           .toDouble();
     });
@@ -2258,6 +2340,7 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
 
   Future<void> _send() async {
     if (_sending || _items.isEmpty) return;
+    _finishTextEditing();
 
     setState(() {
       _sending = true;
@@ -2448,13 +2531,10 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
       size: Size(outputWidth.toDouble(), outputHeight.toDouble()),
       strokes: item.strokes,
     );
-    _paintComposerOverlayText(
+    _paintComposerTextOverlays(
       canvas,
       size: Size(outputWidth.toDouble(), outputHeight.toDouble()),
-      text: item.overlayText,
-      position: item.overlayPosition,
-      scale: item.overlayScale,
-      color: item.markupColor,
+      overlays: item.textOverlays,
     );
 
     final rendered = await recorder.endRecording().toImage(
@@ -2620,6 +2700,7 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
                         controller: _pageController,
                         itemCount: _items.length,
                         onPageChanged: (index) {
+                          _finishTextEditing();
                           setState(() {
                             _selectedIndex = index;
                             _drawMode = false;
@@ -2635,7 +2716,7 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
                     Align(
                       alignment: Alignment.centerLeft,
                       child: Text(
-                        '${_buildQualityNote()} Metni surukleyebilir, iki parmakla buyutup kucultebilirsin.',
+                        '${_buildQualityNote()} Text modunda merkezden inline yaz, renk cetveli acik kalsin; tamamlayinca eski yazilarin rengi sabit kalir.',
                         style: const TextStyle(
                           color: Color(0xFFB8BFBC),
                           fontSize: 12,
@@ -2818,6 +2899,9 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final aspectRatio = item.effectiveAspectRatio;
+        final activeOverlay = identical(item, _currentItem)
+            ? _activeTextOverlay
+            : null;
         var width = constraints.maxWidth;
         var height = width / aspectRatio;
         if (height > constraints.maxHeight) {
@@ -2846,57 +2930,101 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
                       quarterTurns: item.rotationTurns,
                       child: Image.file(File(item.file.path), fit: BoxFit.fill),
                     ),
-                    if (item.overlayText != null &&
-                        item.overlayText!.trim().isNotEmpty)
+                    if (identical(item, _currentItem) &&
+                        _activeTextOverlay != null)
+                      Positioned.fill(
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: _finishTextEditing,
+                          child: Container(color: Colors.black45),
+                        ),
+                      ),
+                    for (final overlay in item.textOverlays)
                       Align(
                         alignment: Alignment(
-                          ((item.overlayPosition ??
-                                          kComposerOverlayDefaultPosition)
-                                      .dx *
-                                  2) -
-                              1,
-                          ((item.overlayPosition ??
-                                          kComposerOverlayDefaultPosition)
-                                      .dy *
-                                  2) -
-                              1,
+                          (overlay.position.dx * 2) - 1,
+                          (overlay.position.dy * 2) - 1,
                         ),
-                        child: GestureDetector(
-                          behavior: HitTestBehavior.translucent,
-                          onTap: _drawMode
-                              ? null
-                              : () => _editOverlayText(emojiMode: false),
-                          onScaleStart: _drawMode
-                              ? null
-                              : (_) => _handleOverlayScaleStart(),
-                          onScaleUpdate: _drawMode
-                              ? null
-                              : (details) => _handleOverlayScaleUpdate(
-                                  details,
-                                  canvasSize,
+                        child:
+                            identical(item, _currentItem) &&
+                                overlay.id == _activeTextOverlayId
+                            ? ConstrainedBox(
+                                constraints: BoxConstraints(
+                                  maxWidth: width * 0.82,
                                 ),
-                          child: ConstrainedBox(
-                            constraints: BoxConstraints(maxWidth: width * 0.82),
-                            child: Text(
-                              item.overlayText!,
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                color: item.markupColor,
-                                fontWeight: FontWeight.w700,
-                                fontSize:
-                                    math.max(18, width * 0.06) *
-                                    item.overlayScale,
-                                shadows: const [
-                                  Shadow(
-                                    color: Colors.black54,
-                                    blurRadius: 10,
-                                    offset: Offset(0, 2),
+                                child: TextField(
+                                  controller: _inlineTextController,
+                                  focusNode: _inlineTextFocusNode,
+                                  autofocus: false,
+                                  maxLines: 4,
+                                  minLines: 1,
+                                  textAlign: TextAlign.center,
+                                  cursorColor: overlay.color,
+                                  style: TextStyle(
+                                    color: overlay.color,
+                                    fontWeight: FontWeight.w700,
+                                    fontSize:
+                                        math.max(18, width * 0.06) *
+                                        overlay.scale,
+                                    shadows: const [
+                                      Shadow(
+                                        color: Colors.black54,
+                                        blurRadius: 10,
+                                        offset: Offset(0, 2),
+                                      ),
+                                    ],
                                   ),
-                                ],
+                                  decoration: const InputDecoration(
+                                    border: InputBorder.none,
+                                    isDense: true,
+                                    contentPadding: EdgeInsets.zero,
+                                  ),
+                                  onChanged: _syncActiveTextOverlay,
+                                  onSubmitted: (_) => _finishTextEditing(),
+                                ),
+                              )
+                            : GestureDetector(
+                                behavior: HitTestBehavior.translucent,
+                                onTap: _drawMode
+                                    ? null
+                                    : () => _beginEditingTextOverlay(
+                                        overlay,
+                                        requestKeyboard: true,
+                                      ),
+                                onScaleStart: _drawMode
+                                    ? null
+                                    : (_) => _handleOverlayScaleStart(overlay),
+                                onScaleUpdate: _drawMode
+                                    ? null
+                                    : (details) => _handleOverlayScaleUpdate(
+                                        overlay,
+                                        details,
+                                        canvasSize,
+                                      ),
+                                child: ConstrainedBox(
+                                  constraints: BoxConstraints(
+                                    maxWidth: width * 0.82,
+                                  ),
+                                  child: Text(
+                                    overlay.text,
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      color: overlay.color,
+                                      fontWeight: FontWeight.w700,
+                                      fontSize:
+                                          math.max(18, width * 0.06) *
+                                          overlay.scale,
+                                      shadows: const [
+                                        Shadow(
+                                          color: Colors.black54,
+                                          blurRadius: 10,
+                                          offset: Offset(0, 2),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
                               ),
-                            ),
-                          ),
-                        ),
                       ),
                     IgnorePointer(
                       child: CustomPaint(
@@ -2910,8 +3038,9 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
                       top: 16,
                       bottom: 16,
                       child: _ComposerColorSlider(
-                        value: item.markupColorValue,
-                        color: item.markupColor,
+                        value:
+                            activeOverlay?.colorValue ?? item.markupColorValue,
+                        color: activeOverlay?.color ?? item.markupColor,
                         onChanged: _setMarkupColor,
                       ),
                     ),
@@ -3028,9 +3157,7 @@ class _MediaComposerItem {
   final String contentType;
   final int sizeBytes;
   final List<_MediaComposerStroke> strokes = [];
-  String? overlayText;
-  Offset? overlayPosition;
-  double overlayScale = 1;
+  final List<_MediaComposerTextOverlay> textOverlays = [];
   double markupColorValue = 0;
   int rotationTurns = 0;
   Size? sourceSize;
@@ -3040,9 +3167,7 @@ class _MediaComposerItem {
   Color get markupColor => composerColorForValue(markupColorValue);
 
   bool get hasMarkup =>
-      rotationTurns != 0 ||
-      strokes.isNotEmpty ||
-      (overlayText?.trim().isNotEmpty ?? false);
+      rotationTurns != 0 || strokes.isNotEmpty || textOverlays.isNotEmpty;
 
   double get effectiveAspectRatio {
     final base = sourceSize ?? const Size(1, 1);
@@ -3050,6 +3175,24 @@ class _MediaComposerItem {
     final height = rotationTurns.isOdd ? base.width : base.height;
     return math.max(0.1, width / math.max(0.1, height));
   }
+}
+
+class _MediaComposerTextOverlay {
+  _MediaComposerTextOverlay({
+    required this.id,
+    required this.text,
+    required this.position,
+    required this.scale,
+    required this.colorValue,
+  });
+
+  final String id;
+  String text;
+  Offset position;
+  double scale;
+  double colorValue;
+
+  Color get color => composerColorForValue(colorValue);
 }
 
 class _MediaComposerStroke {
@@ -3125,46 +3268,44 @@ void _paintComposerStrokes(
   }
 }
 
-void _paintComposerOverlayText(
+void _paintComposerTextOverlays(
   Canvas canvas, {
   required Size size,
-  required String? text,
-  Offset? position,
-  required double scale,
-  required Color color,
+  required List<_MediaComposerTextOverlay> overlays,
 }) {
-  final value = text?.trim() ?? '';
-  if (value.isEmpty) return;
+  for (final overlay in overlays) {
+    final value = overlay.text.trim();
+    if (value.isEmpty) continue;
 
-  final painter = TextPainter(
-    textDirection: TextDirection.ltr,
-    textAlign: TextAlign.center,
-    text: TextSpan(
-      text: value,
-      style: TextStyle(
-        color: color,
-        fontWeight: FontWeight.w700,
-        fontSize: math.max(28, size.width * 0.06) * scale,
-        shadows: const [
-          Shadow(color: Colors.black54, blurRadius: 12, offset: Offset(0, 2)),
-        ],
+    final painter = TextPainter(
+      textDirection: TextDirection.ltr,
+      textAlign: TextAlign.center,
+      text: TextSpan(
+        text: value,
+        style: TextStyle(
+          color: overlay.color,
+          fontWeight: FontWeight.w700,
+          fontSize: math.max(28, size.width * 0.06) * overlay.scale,
+          shadows: const [
+            Shadow(color: Colors.black54, blurRadius: 12, offset: Offset(0, 2)),
+          ],
+        ),
       ),
-    ),
-  )..layout(maxWidth: size.width * 0.82);
+    )..layout(maxWidth: size.width * 0.82);
 
-  final center = position ?? kComposerOverlayDefaultPosition;
-  final marginX = size.width * 0.04;
-  final marginY = size.height * 0.04;
-  final left = (size.width * center.dx) - (painter.width / 2);
-  final top = (size.height * center.dy) - (painter.height / 2);
+    final marginX = size.width * 0.04;
+    final marginY = size.height * 0.04;
+    final left = (size.width * overlay.position.dx) - (painter.width / 2);
+    final top = (size.height * overlay.position.dy) - (painter.height / 2);
 
-  painter.paint(
-    canvas,
-    Offset(
-      left.clamp(marginX, size.width - painter.width - marginX).toDouble(),
-      top.clamp(marginY, size.height - painter.height - marginY).toDouble(),
-    ),
-  );
+    painter.paint(
+      canvas,
+      Offset(
+        left.clamp(marginX, size.width - painter.width - marginX).toDouble(),
+        top.clamp(marginY, size.height - painter.height - marginY).toDouble(),
+      ),
+    );
+  }
 }
 
 class NewChatPage extends StatefulWidget {
