@@ -820,10 +820,12 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     _client = TurnaSocketClient(
       chatId: widget.chat.chatId,
       senderId: widget.session.userId,
+      peerUserId: _peerUserId,
       token: widget.session.token,
       onSessionExpired: widget.onSessionExpired,
     )..connect();
     _client.addListener(_refresh);
+    _controller.addListener(_handleComposerChanged);
     _scrollController.addListener(_handleScroll);
   }
 
@@ -871,6 +873,38 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
       }
     }
+  }
+
+  void _handleComposerChanged() {
+    _client.updateComposerText(_controller.text);
+  }
+
+  String? _buildPeerStatusText() {
+    if (_peerUserId == null) return null;
+    if (_client.peerTyping) return 'yaziyor...';
+    if (_client.peerOnline) return 'online';
+    final lastSeenAt = _client.peerLastSeenAt;
+    if (lastSeenAt == null || lastSeenAt.trim().isEmpty) return null;
+    return 'son gorulme ${_formatPresenceTime(lastSeenAt)}';
+  }
+
+  String _formatPresenceTime(String iso) {
+    final dt = DateTime.tryParse(iso)?.toLocal();
+    if (dt == null) return iso;
+
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final seenDay = DateTime(dt.year, dt.month, dt.day);
+    final diffDays = today.difference(seenDay).inDays;
+    final hh = dt.hour.toString().padLeft(2, '0');
+    final mm = dt.minute.toString().padLeft(2, '0');
+    if (diffDays == 0) return 'bugun $hh:$mm';
+    if (diffDays == 1) return 'dun $hh:$mm';
+
+    final dd = dt.day.toString().padLeft(2, '0');
+    final month = dt.month.toString().padLeft(2, '0');
+    if (dt.year == now.year) return '$dd.$month $hh:$mm';
+    return '$dd.$month.${dt.year} $hh:$mm';
   }
 
   Future<void> _openPeerProfile() async {
@@ -1259,6 +1293,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     kTurnaActiveChatRegistry.clearCurrent(widget.chat.chatId);
     _client.removeListener(_refresh);
     _client.dispose();
+    _controller.removeListener(_handleComposerChanged);
     _controller.dispose();
     _scrollController.removeListener(_handleScroll);
     _scrollController.dispose();
@@ -1274,6 +1309,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   @override
   Widget build(BuildContext context) {
     final displayMessages = _client.messages.reversed.toList();
+    final peerStatusText = _buildPeerStatusText();
 
     return Scaffold(
       appBar: AppBar(
@@ -1288,7 +1324,34 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                 radius: 18,
               ),
               const SizedBox(width: 10),
-              Expanded(child: Text(widget.chat.name)),
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      widget.chat.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    if (peerStatusText != null)
+                      Text(
+                        peerStatusText,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: _client.peerTyping
+                              ? const Color(0xFF1FAA59)
+                              : const Color(0xFF6E7572),
+                          fontWeight: _client.peerTyping
+                              ? FontWeight.w600
+                              : FontWeight.w400,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
             ],
           ),
         ),
@@ -3208,12 +3271,14 @@ class TurnaSocketClient extends ChangeNotifier {
   TurnaSocketClient({
     required this.chatId,
     required this.senderId,
+    this.peerUserId,
     required this.token,
     this.onSessionExpired,
   });
 
   final String chatId;
   final String senderId;
+  final String? peerUserId;
   final String token;
   final VoidCallback? onSessionExpired;
 
@@ -3222,16 +3287,35 @@ class TurnaSocketClient extends ChangeNotifier {
   final Map<String, Timer> _messageTimeouts = {};
   final Map<String, ChatMessageStatus> _pendingStatusByMessageId = {};
   io.Socket? _socket;
+  Timer? _typingPauseTimer;
+  Timer? _peerTypingTimeout;
   bool _historyLoadedFromSocket = false;
   bool _restoredPendingMessages = false;
   bool _isFlushingQueue = false;
+  bool _localTyping = false;
   int _localMessageSeq = 0;
   bool isConnected = false;
   bool loadingInitial = true;
   bool loadingMore = false;
   bool hasMore = true;
+  bool peerOnline = false;
+  bool peerTyping = false;
   String? nextBefore;
   String? error;
+  String? peerLastSeenAt;
+
+  Map<String, dynamic>? _asMap(Object? data) {
+    if (data is Map) {
+      return Map<String, dynamic>.from(data);
+    }
+    return null;
+  }
+
+  String? _nullableString(Object? value) {
+    final text = value?.toString().trim();
+    if (text == null || text.isEmpty) return null;
+    return text;
+  }
 
   void connect() {
     loadingInitial = true;
@@ -3256,6 +3340,9 @@ class TurnaSocketClient extends ChangeNotifier {
       isConnected = true;
       turnaLog('socket connected', {'id': _socket?.id, 'chatId': chatId});
       _socket!.emit('chat:join', {'chatId': chatId});
+      if (_localTyping) {
+        _emitTyping(true);
+      }
       _flushQueuedMessages();
       notifyListeners();
     });
@@ -3394,8 +3481,55 @@ class TurnaSocketClient extends ChangeNotifier {
       }
     });
 
+    _socket!.on('user:presence', (data) {
+      final payload = _asMap(data);
+      if (payload == null || peerUserId == null) return;
+
+      final userId = (payload['userId'] ?? '').toString();
+      if (userId != peerUserId) return;
+
+      final online = payload['online'] == true;
+      final lastSeenAt = _nullableString(payload['lastSeenAt']);
+      var changed = false;
+      if (peerOnline != online) {
+        peerOnline = online;
+        changed = true;
+      }
+      if (peerLastSeenAt != lastSeenAt) {
+        peerLastSeenAt = lastSeenAt;
+        changed = true;
+      }
+      if (!online && peerTyping) {
+        _cancelPeerTypingTimeout();
+        peerTyping = false;
+        changed = true;
+      }
+      if (changed) {
+        turnaLog('socket user:presence', {
+          'chatId': chatId,
+          'userId': userId,
+          'online': online,
+        });
+        notifyListeners();
+      }
+    });
+
+    _socket!.on('chat:typing', (data) {
+      final payload = _asMap(data);
+      if (payload == null) return;
+      if ((payload['chatId'] ?? '').toString() != chatId) return;
+
+      final userId = (payload['userId'] ?? '').toString();
+      if (userId.isEmpty || userId == senderId) return;
+      if (peerUserId != null && userId != peerUserId) return;
+
+      _setPeerTyping(payload['isTyping'] == true);
+    });
+
     _socket!.onDisconnect((reason) {
       isConnected = false;
+      _cancelPeerTypingTimeout();
+      peerTyping = false;
       turnaLog('socket disconnected', {'reason': reason, 'chatId': chatId});
       notifyListeners();
     });
@@ -3491,6 +3625,28 @@ class TurnaSocketClient extends ChangeNotifier {
 
   void _markSeen() {
     _socket?.emit('chat:seen', {'chatId': chatId});
+  }
+
+  void updateComposerText(String text) {
+    final shouldShowTyping = text.trim().isNotEmpty;
+    if (shouldShowTyping) {
+      if (!_localTyping) {
+        _localTyping = true;
+        _emitTyping(true);
+      }
+      _typingPauseTimer?.cancel();
+      _typingPauseTimer = Timer(const Duration(seconds: 2), () {
+        _localTyping = false;
+        _emitTyping(false);
+      });
+      return;
+    }
+
+    _typingPauseTimer?.cancel();
+    if (_localTyping) {
+      _localTyping = false;
+      _emitTyping(false);
+    }
   }
 
   void mergeServerMessage(ChatMessage message) {
@@ -3637,6 +3793,13 @@ class TurnaSocketClient extends ChangeNotifier {
     });
   }
 
+  void _emitTyping(bool isTyping) {
+    final socket = _socket;
+    if (socket == null || !socket.connected) return;
+    turnaLog('socket chat:typing', {'chatId': chatId, 'isTyping': isTyping});
+    socket.emit('chat:typing', {'chatId': chatId, 'isTyping': isTyping});
+  }
+
   Future<void> _flushQueuedMessages() async {
     if (_isFlushingQueue || !isConnected) return;
     _isFlushingQueue = true;
@@ -3670,6 +3833,24 @@ class TurnaSocketClient extends ChangeNotifier {
 
   void _cancelMessageTimeout(String localId) {
     _messageTimeouts.remove(localId)?.cancel();
+  }
+
+  void _cancelPeerTypingTimeout() {
+    _peerTypingTimeout?.cancel();
+    _peerTypingTimeout = null;
+  }
+
+  void _setPeerTyping(bool isTyping) {
+    _cancelPeerTypingTimeout();
+    if (peerTyping != isTyping) {
+      peerTyping = isTyping;
+      notifyListeners();
+    }
+    if (!isTyping) return;
+
+    _peerTypingTimeout = Timer(const Duration(seconds: 4), () {
+      _setPeerTyping(false);
+    });
   }
 
   ChatMessage _applyPendingStatus(ChatMessage message) {
@@ -3711,10 +3892,15 @@ class TurnaSocketClient extends ChangeNotifier {
   @override
   void dispose() {
     turnaLog('socket dispose', {'chatId': chatId, 'senderId': senderId});
+    if (_localTyping && _socket?.connected == true) {
+      _socket?.emit('chat:typing', {'chatId': chatId, 'isTyping': false});
+    }
     for (final timer in _messageTimeouts.values) {
       timer.cancel();
     }
     _messageTimeouts.clear();
+    _typingPauseTimer?.cancel();
+    _cancelPeerTypingTimeout();
     _socket?.dispose();
     super.dispose();
   }
