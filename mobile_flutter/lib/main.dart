@@ -16,6 +16,14 @@ import 'package:url_launcher/url_launcher.dart';
 
 const String kBackendBaseUrl = 'http://178.104.8.155:4000';
 const bool kTurnaDebugLogs = true;
+const String kChatRoomRouteName = 'chat-room';
+
+final GlobalKey<NavigatorState> kTurnaNavigatorKey =
+    GlobalKey<NavigatorState>();
+final RouteObserver<PageRoute<dynamic>> kTurnaRouteObserver =
+    RouteObserver<PageRoute<dynamic>>();
+final TurnaActiveChatRegistry kTurnaActiveChatRegistry =
+    TurnaActiveChatRegistry();
 
 void turnaLog(String message, [Object? data]) {
   if (!kTurnaDebugLogs) return;
@@ -24,6 +32,26 @@ void turnaLog(String message, [Object? data]) {
     return;
   }
   debugPrint('[turna-mobile] $message');
+}
+
+class TurnaActiveChatRegistry extends ChangeNotifier {
+  ChatPreview? _currentChat;
+
+  ChatPreview? get currentChat => _currentChat;
+
+  bool isChatActive(String chatId) => _currentChat?.chatId == chatId;
+
+  void setCurrent(ChatPreview chat) {
+    if (_currentChat?.chatId == chat.chatId) return;
+    _currentChat = chat;
+    notifyListeners();
+  }
+
+  void clearCurrent(String chatId) {
+    if (_currentChat?.chatId != chatId) return;
+    _currentChat = null;
+    notifyListeners();
+  }
 }
 
 @pragma('vm:entry-point')
@@ -90,6 +118,8 @@ class _TurnaAppState extends State<TurnaApp> with WidgetsBindingObserver {
     return MaterialApp(
       title: 'Turna',
       debugShowCheckedModeBanner: false,
+      navigatorKey: kTurnaNavigatorKey,
+      navigatorObservers: [kTurnaRouteObserver],
       theme: theme,
       home: _session == null
           ? AuthPage(
@@ -374,20 +404,33 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
     if (_activeIncomingCallId == incoming.call.id) return;
 
     _activeIncomingCallId = incoming.call.id;
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      if (!mounted) return;
-      await Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => IncomingCallPage(
-            session: widget.session,
-            coordinator: _callCoordinator,
-            incoming: incoming,
-            onSessionExpired: widget.onLogout,
+    final returnChat = buildDirectChatPreviewForCall(
+      widget.session,
+      incoming.call,
+    );
+    final shouldOpenChatOnExit = !kTurnaActiveChatRegistry.isChatActive(
+      returnChat.chatId,
+    );
+    Future<void>(() async {
+      final navigator = kTurnaNavigatorKey.currentState;
+      if (!mounted || navigator == null) return;
+      try {
+        await navigator.push(
+          MaterialPageRoute(
+            settings: const RouteSettings(name: 'incoming-call'),
+            builder: (_) => IncomingCallPage(
+              session: widget.session,
+              coordinator: _callCoordinator,
+              incoming: incoming,
+              onSessionExpired: widget.onLogout,
+              returnChatOnExit: shouldOpenChatOnExit ? returnChat : null,
+            ),
           ),
-        ),
-      );
-      if (mounted) {
-        _activeIncomingCallId = null;
+        );
+      } finally {
+        if (mounted) {
+          _activeIncomingCallId = null;
+        }
       }
     });
   }
@@ -645,13 +688,11 @@ class _ChatsPageState extends State<ChatsPage> {
                   onTap: () {
                     Navigator.push(
                       context,
-                      MaterialPageRoute(
-                        builder: (_) => ChatRoomPage(
-                          chat: chat,
-                          session: widget.session,
-                          callCoordinator: widget.callCoordinator,
-                          onSessionExpired: widget.onSessionExpired,
-                        ),
+                      buildChatRoomRoute(
+                        chat: chat,
+                        session: widget.session,
+                        callCoordinator: widget.callCoordinator,
+                        onSessionExpired: widget.onSessionExpired,
                       ),
                     );
                   },
@@ -703,8 +744,41 @@ class ChatRoomPage extends StatefulWidget {
   State<ChatRoomPage> createState() => _ChatRoomPageState();
 }
 
+PageRoute<void> buildChatRoomRoute({
+  required ChatPreview chat,
+  required AuthSession session,
+  required TurnaCallCoordinator callCoordinator,
+  required VoidCallback onSessionExpired,
+}) {
+  return MaterialPageRoute(
+    settings: RouteSettings(
+      name: kChatRoomRouteName,
+      arguments: {'chatId': chat.chatId},
+    ),
+    builder: (_) => ChatRoomPage(
+      chat: chat,
+      session: session,
+      callCoordinator: callCoordinator,
+      onSessionExpired: onSessionExpired,
+    ),
+  );
+}
+
+ChatPreview buildDirectChatPreviewForCall(
+  AuthSession session,
+  TurnaCallSummary call,
+) {
+  return ChatPreview(
+    chatId: ChatApi.buildDirectChatId(session.userId, call.peer.id),
+    name: call.peer.displayName,
+    message: '',
+    time: '',
+    avatarUrl: call.peer.avatarUrl,
+  );
+}
+
 class _ChatRoomPageState extends State<ChatRoomPage>
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver, RouteAware {
   late final TurnaSocketClient _client;
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollController = ScrollController();
@@ -712,6 +786,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   bool _showScrollToBottom = false;
   bool _attachmentBusy = false;
   int _lastRenderedMessageCount = 0;
+  PageRoute<dynamic>? _route;
 
   String? get _peerUserId =>
       ChatApi.extractPeerUserId(widget.chat.chatId, widget.session.userId);
@@ -733,6 +808,38 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     )..connect();
     _client.addListener(_refresh);
     _scrollController.addListener(_handleScroll);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route is! PageRoute<dynamic> || identical(route, _route)) return;
+    if (_route != null) {
+      kTurnaRouteObserver.unsubscribe(this);
+    }
+    _route = route;
+    kTurnaRouteObserver.subscribe(this, route);
+  }
+
+  @override
+  void didPush() {
+    kTurnaActiveChatRegistry.setCurrent(widget.chat);
+  }
+
+  @override
+  void didPopNext() {
+    kTurnaActiveChatRegistry.setCurrent(widget.chat);
+  }
+
+  @override
+  void didPushNext() {
+    kTurnaActiveChatRegistry.clearCurrent(widget.chat.chatId);
+  }
+
+  @override
+  void didPop() {
+    kTurnaActiveChatRegistry.clearCurrent(widget.chat.chatId);
   }
 
   void _refresh() {
@@ -1129,6 +1236,10 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     turnaLog('chat room dispose', {'chatId': widget.chat.chatId});
+    if (_route != null) {
+      kTurnaRouteObserver.unsubscribe(this);
+    }
+    kTurnaActiveChatRegistry.clearCurrent(widget.chat.chatId);
     _client.removeListener(_refresh);
     _client.dispose();
     _controller.dispose();
@@ -1817,13 +1928,11 @@ class _NewChatPageState extends State<NewChatPage> {
                           );
                           await Navigator.push(
                             context,
-                            MaterialPageRoute(
-                              builder: (_) => ChatRoomPage(
-                                chat: chat,
-                                session: widget.session,
-                                callCoordinator: widget.callCoordinator,
-                                onSessionExpired: widget.onSessionExpired,
-                              ),
+                            buildChatRoomRoute(
+                              chat: chat,
+                              session: widget.session,
+                              callCoordinator: widget.callCoordinator,
+                              onSessionExpired: widget.onSessionExpired,
                             ),
                           );
                           if (!mounted) return;
@@ -4861,12 +4970,14 @@ class IncomingCallPage extends StatefulWidget {
     required this.coordinator,
     required this.incoming,
     required this.onSessionExpired,
+    this.returnChatOnExit,
   });
 
   final AuthSession session;
   final TurnaCallCoordinator coordinator;
   final TurnaIncomingCallEvent incoming;
   final VoidCallback onSessionExpired;
+  final ChatPreview? returnChatOnExit;
 
   @override
   State<IncomingCallPage> createState() => _IncomingCallPageState();
@@ -4907,12 +5018,14 @@ class _IncomingCallPageState extends State<IncomingCallPage> {
       if (!mounted) return;
       await Navigator.of(context).pushReplacement(
         MaterialPageRoute(
+          settings: const RouteSettings(name: 'active-call'),
           builder: (_) => ActiveCallPage(
             session: widget.session,
             coordinator: widget.coordinator,
             call: accepted.call,
             connect: accepted.connect,
             onSessionExpired: widget.onSessionExpired,
+            returnChatOnExit: widget.returnChatOnExit,
           ),
         ),
       );
@@ -4969,20 +5082,29 @@ class _IncomingCallPageState extends State<IncomingCallPage> {
                   radius: 48,
                 ),
                 const SizedBox(height: 20),
-                Text(
-                  call.peer.displayName,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 28,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  isVideo ? 'Goruntulu arama' : 'Sesli arama',
-                  style: const TextStyle(
-                    color: Color(0xFFB7BCB9),
-                    fontSize: 16,
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 280),
+                  child: Column(
+                    children: [
+                      Text(
+                        call.peer.displayName,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 28,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        isVideo ? 'Goruntulu arama' : 'Sesli arama',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Color(0xFFB7BCB9),
+                          fontSize: 16,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
                 const Spacer(),
@@ -5118,20 +5240,32 @@ class _OutgoingCallPageState extends State<OutgoingCallPage> {
                 radius: 48,
               ),
               const SizedBox(height: 20),
-              Text(
-                call.peer.displayName,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 28,
-                  fontWeight: FontWeight.w700,
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 280),
+                child: Column(
+                  children: [
+                    Text(
+                      call.peer.displayName,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 28,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      call.type == TurnaCallType.video
+                          ? 'Goruntulu arama caliyor...'
+                          : 'Sesli arama caliyor...',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: Color(0xFFB7BCB9),
+                        fontSize: 16,
+                      ),
+                    ),
+                  ],
                 ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                call.type == TurnaCallType.video
-                    ? 'Goruntulu arama caliyor...'
-                    : 'Sesli arama caliyor...',
-                style: const TextStyle(color: Color(0xFFB7BCB9), fontSize: 16),
               ),
               const Spacer(),
               FloatingActionButton(
@@ -5157,18 +5291,23 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
   LiveKitCallAdapter({
     required this.connectPayload,
     required this.videoEnabled,
-  });
+  }) : room = lk.Room(
+         roomOptions: lk.RoomOptions(
+           adaptiveStream: true,
+           dynacast: true,
+           defaultAudioOutputOptions: lk.AudioOutputOptions(speakerOn: false),
+         ),
+       );
 
   final TurnaCallConnectPayload connectPayload;
   final bool videoEnabled;
-  final lk.Room room = lk.Room(
-    roomOptions: const lk.RoomOptions(adaptiveStream: true, dynacast: true),
-  );
+  final lk.Room room;
   lk.EventsListener<lk.RoomEvent>? _listener;
   bool connecting = false;
   bool connected = false;
   bool microphoneEnabled = true;
   bool cameraEnabled = false;
+  bool speakerEnabled = false;
   String? error;
 
   Iterable<lk.RemoteParticipant> get remoteParticipants =>
@@ -5228,11 +5367,14 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
       }
       await localParticipant.setMicrophoneEnabled(true);
       microphoneEnabled = true;
+      speakerEnabled = false;
 
       if (videoEnabled) {
         await localParticipant.setCameraEnabled(true);
         cameraEnabled = true;
       }
+
+      await room.setSpeakerOn(false);
 
       connected = true;
       connecting = false;
@@ -5263,6 +5405,13 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
     notifyListeners();
   }
 
+  Future<void> toggleSpeaker() async {
+    final next = !speakerEnabled;
+    await room.setSpeakerOn(next);
+    speakerEnabled = next;
+    notifyListeners();
+  }
+
   @override
   Future<void> disconnect() async {
     try {
@@ -5289,6 +5438,7 @@ class ActiveCallPage extends StatefulWidget {
     required this.call,
     required this.connect,
     required this.onSessionExpired,
+    this.returnChatOnExit,
   });
 
   final AuthSession session;
@@ -5296,6 +5446,7 @@ class ActiveCallPage extends StatefulWidget {
   final TurnaCallSummary call;
   final TurnaCallConnectPayload connect;
   final VoidCallback onSessionExpired;
+  final ChatPreview? returnChatOnExit;
 
   @override
   State<ActiveCallPage> createState() => _ActiveCallPageState();
@@ -5342,7 +5493,27 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
   void _handleCoordinator() {
     final terminal = widget.coordinator.consumeTerminal(widget.call.id);
     if (terminal == null || !mounted) return;
-    Navigator.of(context).pop();
+    _leaveCallView();
+  }
+
+  void _leaveCallView() {
+    final returnChat = widget.returnChatOnExit;
+    if (returnChat == null) {
+      Navigator.of(context).pop();
+      return;
+    }
+
+    final navigator = kTurnaNavigatorKey.currentState;
+    if (navigator == null) return;
+    navigator.pushAndRemoveUntil(
+      buildChatRoomRoute(
+        chat: returnChat,
+        session: widget.session,
+        callCoordinator: widget.coordinator,
+        onSessionExpired: widget.onSessionExpired,
+      ),
+      (route) => route.isFirst,
+    );
   }
 
   Future<void> _endCall() async {
@@ -5359,7 +5530,7 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
     widget.coordinator.clearCall(widget.call.id);
     await _adapter.disconnect();
     if (mounted) {
-      Navigator.of(context).pop();
+      _leaveCallView();
     }
   }
 
@@ -5456,6 +5627,21 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
                         : () => _adapter.toggleMicrophone(),
                     child: Icon(
                       _adapter.microphoneEnabled ? Icons.mic : Icons.mic_off,
+                      color: Colors.white,
+                    ),
+                  ),
+                  FloatingActionButton(
+                    heroTag: 'speaker_${widget.call.id}',
+                    backgroundColor: _adapter.speakerEnabled
+                        ? const Color(0xFF1FAA59)
+                        : Colors.white12,
+                    onPressed: _adapter.connecting
+                        ? null
+                        : () => _adapter.toggleSpeaker(),
+                    child: Icon(
+                      _adapter.speakerEnabled
+                          ? Icons.volume_up
+                          : Icons.hearing,
                       color: Colors.white,
                     ),
                   ),
