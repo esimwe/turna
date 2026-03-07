@@ -44,7 +44,6 @@
 		<string>audio</string>
 		<string>voip</string>
 		<string>remote-notification</string>
-		<string>processing</string>
 	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
