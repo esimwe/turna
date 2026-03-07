@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_callkit_incoming/entities/entities.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:http/http.dart' as http;
+import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
 import 'package:livekit_client/livekit_client.dart' as lk;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -27,7 +28,7 @@ const int kInlineAttachmentSoftLimitBytes = 64 * 1024 * 1024;
 const int kInlineImagePickerQuality = 82;
 const double kInlineImagePickerMaxDimension = 2200;
 const double kInlineImageSdMaxDimension = 1280;
-const double kInlineImageHdMaxDimension = 2200;
+const double kInlineImageHdMaxDimension = 2048;
 const Offset kComposerOverlayDefaultPosition = Offset(0.5, 0.5);
 const Rect kComposerFullCropRectNormalized = Rect.fromLTWH(0, 0, 1, 1);
 const double kComposerCropInitialInset = 0.08;
@@ -63,6 +64,7 @@ final RouteObserver<PageRoute<dynamic>> kTurnaRouteObserver =
     RouteObserver<PageRoute<dynamic>>();
 final TurnaActiveChatRegistry kTurnaActiveChatRegistry =
     TurnaActiveChatRegistry();
+final TurnaCallUiController kTurnaCallUiController = TurnaCallUiController();
 
 void turnaLog(String message, [Object? data]) {
   if (!kTurnaDebugLogs) return;
@@ -1993,6 +1995,15 @@ extension MediaComposerQualityX on MediaComposerQuality {
         return kInlineImageHdMaxDimension;
     }
   }
+
+  int get jpegQuality {
+    switch (this) {
+      case MediaComposerQuality.sd:
+        return 74;
+      case MediaComposerQuality.hd:
+        return 86;
+    }
+  }
 }
 
 class MediaComposerSeed {
@@ -2063,6 +2074,8 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
   String? _activeTextOverlayId;
   MediaComposerQuality _quality = MediaComposerQuality.sd;
   double _overlayInteractionBaseScale = 1;
+  double _brushSizeFactor = 0.011;
+  bool _eraserMode = false;
 
   _MediaComposerItem get _currentItem => _items[_selectedIndex];
 
@@ -2074,6 +2087,14 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
     }
     return null;
   }
+
+  Rect get _currentWorkingCropRect =>
+      _currentItem.draftCropRectNormalized ??
+      _currentItem.cropRectNormalized ??
+      _defaultCropRectFor(_currentItem);
+
+  String get _currentWorkingCropPresetId =>
+      _currentItem.draftCropPresetId ?? _currentItem.cropPresetId;
 
   @override
   void initState() {
@@ -2201,7 +2222,9 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
   }
 
   double? _lockedNormalizedCropAspectRatio(_MediaComposerItem item) {
-    final preset = _cropPresetForId(item.cropPresetId);
+    final preset = identical(item, _currentItem) && _cropMode
+        ? _cropPresetForId(_currentWorkingCropPresetId)
+        : _cropPresetForId(item.cropPresetId);
     if (preset.freeform || preset.fullImage) return null;
     final imageSize = _rotatedSourceSize(item);
     final imageAspect = imageSize.width / math.max(0.1, imageSize.height);
@@ -2261,12 +2284,37 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
     return _cropRectForPreset(item, _cropPresetForId(item.cropPresetId));
   }
 
+  void _beginCropEditing() {
+    _currentItem.draftCropPresetId = _currentItem.cropPresetId;
+    _currentItem.draftCropRectNormalized =
+        _currentItem.cropRectNormalized ?? _defaultCropRectFor(_currentItem);
+    _cropMode = true;
+  }
+
+  void _cancelCropEditing() {
+    setState(() {
+      _currentItem.draftCropRectNormalized = null;
+      _currentItem.draftCropPresetId = null;
+      _cropMode = false;
+    });
+  }
+
+  void _applyCropEditing() {
+    setState(() {
+      _currentItem.cropPresetId = _currentWorkingCropPresetId;
+      _currentItem.cropRectNormalized = _currentWorkingCropRect;
+      _currentItem.draftCropRectNormalized = null;
+      _currentItem.draftCropPresetId = null;
+      _cropMode = false;
+    });
+  }
+
   void _applyCropPreset(_MediaCropPreset preset) {
     if (!_currentItem.isImage) return;
-    final currentCenter = _currentItem.cropRectNormalized?.center;
+    final currentCenter = _currentWorkingCropRect.center;
     setState(() {
-      _currentItem.cropPresetId = preset.id;
-      _currentItem.cropRectNormalized = _cropRectForPreset(
+      _currentItem.draftCropPresetId = preset.id;
+      _currentItem.draftCropRectNormalized = _cropRectForPreset(
         _currentItem,
         preset,
         center: currentCenter,
@@ -2291,15 +2339,18 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
     }
 
     _finishTextEditing();
+    if (_cropMode) {
+      _applyCropEditing();
+      return;
+    }
+
     setState(() {
       _drawMode = false;
-      if (!_cropMode) {
-        if (_currentItem.cropRectNormalized == null) {
-          _currentItem.cropPresetId = 'free';
-        }
-        _currentItem.cropRectNormalized ??= _defaultCropRectFor(_currentItem);
+      _eraserMode = false;
+      if (_currentItem.cropRectNormalized == null) {
+        _currentItem.cropPresetId = 'free';
       }
-      _cropMode = !_cropMode;
+      _beginCropEditing();
     });
   }
 
@@ -2484,6 +2535,22 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
     setState(() {
       _cropMode = false;
       _drawMode = !_drawMode;
+      if (!_drawMode) {
+        _eraserMode = false;
+      }
+    });
+  }
+
+  void _setBrushSize(double widthFactor) {
+    setState(() {
+      _eraserMode = false;
+      _brushSizeFactor = widthFactor;
+    });
+  }
+
+  void _toggleEraser() {
+    setState(() {
+      _eraserMode = !_eraserMode;
     });
   }
 
@@ -2495,14 +2562,19 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
     _finishTextEditing();
     setState(() {
       _currentItem.rotationTurns = (_currentItem.rotationTurns + 1) % 4;
-      final preset = _cropPresetForId(_currentItem.cropPresetId);
-      _currentItem.cropRectNormalized = _cropMode
+      final preset = _cropPresetForId(_currentWorkingCropPresetId);
+      final nextCrop = _cropMode
           ? _cropRectForPreset(
               _currentItem,
               preset,
-              center: _currentItem.cropRectNormalized?.center,
+              center: _currentWorkingCropRect.center,
             )
           : null;
+      if (_cropMode) {
+        _currentItem.draftCropRectNormalized = nextCrop;
+      } else {
+        _currentItem.cropRectNormalized = nextCrop;
+      }
     });
   }
 
@@ -2586,10 +2658,15 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
 
   void _startStroke(Offset point, Size size, Rect displayCrop) {
     if (!_drawMode || !_currentItem.isImage) return;
+    if (_eraserMode) {
+      _eraseAtPoint(point, size, displayCrop);
+      return;
+    }
     setState(() {
       _currentItem.strokes.add(
         _MediaComposerStroke(
           color: _currentItem.markupColor,
+          widthFactor: _brushSizeFactor,
           points: [_normalizePoint(point, size, displayCrop)],
         ),
       );
@@ -2598,6 +2675,13 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
 
   void _appendStroke(Offset point, Size size, Rect displayCrop) {
     if (!_drawMode || !_currentItem.isImage || _currentItem.strokes.isEmpty) {
+      if (_drawMode && _eraserMode && _currentItem.isImage) {
+        _eraseAtPoint(point, size, displayCrop);
+      }
+      return;
+    }
+    if (_eraserMode) {
+      _eraseAtPoint(point, size, displayCrop);
       return;
     }
     setState(() {
@@ -2607,16 +2691,61 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
     });
   }
 
+  void _eraseAtPoint(Offset point, Size size, Rect displayCrop) {
+    final target = _normalizePoint(point, size, displayCrop);
+    final radius = _brushSizeFactor * 2.2;
+    final nextStrokes = <_MediaComposerStroke>[];
+
+    for (final stroke in _currentItem.strokes) {
+      final nextSegments = <List<Offset>>[];
+      var currentSegment = <Offset>[];
+      for (final itemPoint in stroke.points) {
+        final shouldErase = (itemPoint - target).distance <= radius;
+        if (shouldErase) {
+          if (currentSegment.length > 1) {
+            nextSegments.add(List<Offset>.from(currentSegment));
+          } else if (currentSegment.length == 1) {
+            nextSegments.add(List<Offset>.from(currentSegment));
+          }
+          currentSegment = <Offset>[];
+          continue;
+        }
+        currentSegment.add(itemPoint);
+      }
+
+      if (currentSegment.isNotEmpty) {
+        nextSegments.add(List<Offset>.from(currentSegment));
+      }
+
+      for (final segment in nextSegments) {
+        if (segment.isEmpty) continue;
+        nextStrokes.add(
+          _MediaComposerStroke(
+            color: stroke.color,
+            widthFactor: stroke.widthFactor,
+            points: segment,
+          ),
+        );
+      }
+    }
+
+    setState(() {
+      _currentItem.strokes
+        ..clear()
+        ..addAll(nextStrokes);
+    });
+  }
+
   void _moveCropRect(DragUpdateDetails details, Size size) {
-    final currentCrop = _currentItem.cropRectNormalized;
-    if (!_cropMode || currentCrop == null) return;
+    final currentCrop = _currentWorkingCropRect;
+    if (!_cropMode) return;
     final safeWidth = size.width <= 0 ? 1.0 : size.width;
     final safeHeight = size.height <= 0 ? 1.0 : size.height;
     final dx = details.delta.dx / safeWidth;
     final dy = details.delta.dy / safeHeight;
 
     setState(() {
-      _currentItem.cropRectNormalized = _clampCropRect(
+      _currentItem.draftCropRectNormalized = _clampCropRect(
         currentCrop.shift(Offset(dx, dy)),
       );
     });
@@ -2721,8 +2850,8 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
     DragUpdateDetails details,
     Size size,
   ) {
-    final currentCrop = _currentItem.cropRectNormalized;
-    if (!_cropMode || currentCrop == null) return;
+    final currentCrop = _currentWorkingCropRect;
+    if (!_cropMode) return;
     final safeWidth = size.width <= 0 ? 1.0 : size.width;
     final safeHeight = size.height <= 0 ? 1.0 : size.height;
     final dx = details.delta.dx / safeWidth;
@@ -2767,7 +2896,7 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
       }
 
       setState(() {
-        _currentItem.cropRectNormalized = _clampCropRect(next);
+        _currentItem.draftCropRectNormalized = _clampCropRect(next);
       });
       return;
     }
@@ -2806,7 +2935,7 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
     }
 
     setState(() {
-      _currentItem.cropRectNormalized = _clampLockedCropRect(
+      _currentItem.draftCropRectNormalized = _clampLockedCropRect(
         handle: handle,
         anchor: anchor,
         desiredWidth: desiredWidth,
@@ -2817,6 +2946,9 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
 
   Future<void> _send() async {
     if (_sending || _items.isEmpty) return;
+    if (_cropMode) {
+      _applyCropEditing();
+    }
     _finishTextEditing();
 
     setState(() {
@@ -2916,18 +3048,6 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
     }
 
     await _primeImageSize(item);
-    final sourceSize = item.sourceSize ?? const Size(1, 1);
-    if (!item.hasMarkup && _quality == MediaComposerQuality.hd) {
-      return _PreparedComposerAttachment(
-        kind: item.kind,
-        fileName: item.fileName,
-        contentType: item.contentType,
-        bytes: sourceBytes,
-        width: sourceSize.width.round(),
-        height: sourceSize.height.round(),
-      );
-    }
-
     return _renderImageAttachment(item, sourceBytes);
   }
 
@@ -2940,6 +3060,7 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
         .map(
           (stroke) => _MediaComposerStroke(
             color: stroke.color,
+            widthFactor: stroke.widthFactor,
             points: stroke.points
                 .map(
                   (point) => Offset(
@@ -3100,16 +3221,26 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
       outputWidth,
       outputHeight,
     );
-    final data = await rendered.toByteData(format: ui.ImageByteFormat.png);
+    final data = await rendered.toByteData(format: ui.ImageByteFormat.rawRgba);
     if (data == null) {
       throw TurnaApiException('Gorsel hazirlanamadi.');
     }
+    final encodedImage = img.Image.fromBytes(
+      width: outputWidth,
+      height: outputHeight,
+      bytes: data.buffer,
+      numChannels: 4,
+      order: img.ChannelOrder.rgba,
+    );
+    final jpgBytes = Uint8List.fromList(
+      img.encodeJpg(encodedImage, quality: _quality.jpegQuality),
+    );
 
     return _PreparedComposerAttachment(
       kind: item.kind,
-      fileName: replaceFileExtension(item.fileName, 'png'),
-      contentType: 'image/png',
-      bytes: data.buffer.asUint8List(),
+      fileName: replaceFileExtension(item.fileName, 'jpg'),
+      contentType: 'image/jpeg',
+      bytes: jpgBytes,
       width: outputWidth,
       height: outputHeight,
     );
@@ -3158,18 +3289,22 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
           ),
           IconButton(
             tooltip: 'Yazi',
-            onPressed: () => _editOverlayText(emojiMode: false),
+            onPressed: _cropMode
+                ? null
+                : () => _editOverlayText(emojiMode: false),
             icon: const Icon(Icons.text_fields_outlined),
           ),
           IconButton(
             tooltip: 'Ciz',
-            onPressed: _toggleDrawMode,
+            onPressed: _cropMode ? null : _toggleDrawMode,
             color: _drawMode ? const Color(0xFF1FAA59) : null,
             icon: const Icon(Icons.draw_outlined),
           ),
           IconButton(
             tooltip: 'Emoji',
-            onPressed: () => _editOverlayText(emojiMode: true),
+            onPressed: _cropMode
+                ? null
+                : () => _editOverlayText(emojiMode: true),
             icon: const Icon(Icons.emoji_emotions_outlined),
           ),
           const SizedBox(width: 8),
@@ -3187,9 +3322,44 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
                     if (_drawMode && current.isImage)
                       Align(
                         alignment: Alignment.centerRight,
-                        child: TextButton(
-                          onPressed: _undoCurrentStroke,
-                          child: const Text('Geri al'),
+                        child: SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              _ComposerToolChip(
+                                label: 'Ince',
+                                selected:
+                                    !_eraserMode && _brushSizeFactor == 0.008,
+                                onTap: () => _setBrushSize(0.008),
+                              ),
+                              const SizedBox(width: 8),
+                              _ComposerToolChip(
+                                label: 'Orta',
+                                selected:
+                                    !_eraserMode && _brushSizeFactor == 0.011,
+                                onTap: () => _setBrushSize(0.011),
+                              ),
+                              const SizedBox(width: 8),
+                              _ComposerToolChip(
+                                label: 'Kalin',
+                                selected:
+                                    !_eraserMode && _brushSizeFactor == 0.016,
+                                onTap: () => _setBrushSize(0.016),
+                              ),
+                              const SizedBox(width: 8),
+                              _ComposerToolChip(
+                                label: 'Silgi',
+                                selected: _eraserMode,
+                                onTap: _toggleEraser,
+                              ),
+                              const SizedBox(width: 8),
+                              TextButton(
+                                onPressed: _undoCurrentStroke,
+                                child: const Text('Geri al'),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     Expanded(
@@ -3205,6 +3375,11 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
                             _selectedIndex = index;
                             _cropMode = false;
                             _drawMode = false;
+                            _eraserMode = false;
+                            for (final item in _items) {
+                              item.draftCropRectNormalized = null;
+                              item.draftCropPresetId = null;
+                            }
                           });
                         },
                         itemBuilder: (context, index) {
@@ -3280,7 +3455,7 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
                     ),
                     const SizedBox(width: 10),
                     PopupMenuButton<String>(
-                      initialValue: current.cropPresetId,
+                      initialValue: _currentWorkingCropPresetId,
                       onSelected: (value) =>
                           _applyCropPreset(_cropPresetForId(value)),
                       color: const Color(0xFF1A1F1D),
@@ -3314,7 +3489,9 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
                             ),
                             const SizedBox(width: 8),
                             Text(
-                              _cropPresetForId(current.cropPresetId).label,
+                              _cropPresetForId(
+                                _currentWorkingCropPresetId,
+                              ).label,
                               style: const TextStyle(
                                 color: Colors.white,
                                 fontSize: 12,
@@ -3330,6 +3507,22 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
                           ],
                         ),
                       ),
+                    ),
+                    const Spacer(),
+                    TextButton(
+                      onPressed: _cancelCropEditing,
+                      child: const Text(
+                        'Iptal',
+                        style: TextStyle(color: Color(0xFFB7BCB9)),
+                      ),
+                    ),
+                    FilledButton(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: const Color(0xFF1FAA59),
+                        foregroundColor: Colors.white,
+                      ),
+                      onPressed: _applyCropEditing,
+                      child: const Text('Tamam'),
                     ),
                   ],
                 ),
@@ -3457,7 +3650,9 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
           item.strokes,
           displayCrop,
         );
-        final cropRect = item.cropRectNormalized ?? _defaultCropRectFor(item);
+        final cropRect = isCropingCurrent
+            ? _currentWorkingCropRect
+            : (item.cropRectNormalized ?? _defaultCropRectFor(item));
         final cropFrame = _normalizedCropToRect(cropRect, canvasSize);
 
         final Widget imageLayer;
@@ -3900,6 +4095,41 @@ class _ComposerOverlayPillButton extends StatelessWidget {
   }
 }
 
+class _ComposerToolChip extends StatelessWidget {
+  const _ComposerToolChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: selected ? const Color(0xFF1FAA59) : const Color(0xFF1A1F1D),
+      borderRadius: BorderRadius.circular(999),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(999),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Text(
+            label,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _MediaComposerItem {
   _MediaComposerItem({
     required this.kind,
@@ -3927,7 +4157,9 @@ class _MediaComposerItem {
   final List<_MediaComposerStroke> strokes = [];
   final List<_MediaComposerTextOverlay> textOverlays = [];
   Rect? cropRectNormalized;
+  Rect? draftCropRectNormalized;
   String cropPresetId = 'original';
+  String? draftCropPresetId;
   double markupColorValue = 0;
   int rotationTurns = 0;
   Size? sourceSize;
@@ -3970,10 +4202,15 @@ class _MediaComposerTextOverlay {
 }
 
 class _MediaComposerStroke {
-  _MediaComposerStroke({required this.color, required this.points});
+  _MediaComposerStroke({
+    required this.color,
+    required this.points,
+    required this.widthFactor,
+  });
 
   final Color color;
   final List<Offset> points;
+  final double widthFactor;
 }
 
 class _PreparedComposerAttachment {
@@ -4021,7 +4258,7 @@ void _paintComposerStrokes(
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round
       ..style = PaintingStyle.stroke
-      ..strokeWidth = math.max(3, size.shortestSide * 0.011);
+      ..strokeWidth = math.max(3, size.shortestSide * stroke.widthFactor);
     if (stroke.points.isEmpty) continue;
     if (stroke.points.length == 1) {
       final point = Offset(
@@ -6826,17 +7063,18 @@ class TurnaNativeCallManager {
     if (navigator == null) return;
     _activeCallId = accepted.call.id;
     final returnChat = buildDirectChatPreviewForCall(session, accepted.call);
+    final callSession = kTurnaCallUiController.obtainSession(
+      session: session,
+      coordinator: coordinator,
+      call: accepted.call,
+      connect: accepted.connect,
+      onSessionExpired: _onSessionExpired ?? () {},
+      returnChatOnExit: returnChat,
+    );
     await navigator.push(
       MaterialPageRoute(
         settings: const RouteSettings(name: 'active-call'),
-        builder: (_) => ActiveCallPage(
-          session: session,
-          coordinator: coordinator,
-          call: accepted.call,
-          connect: accepted.connect,
-          onSessionExpired: _onSessionExpired ?? () {},
-          returnChatOnExit: returnChat,
-        ),
+        builder: (_) => ActiveCallPage(callSession: callSession),
       ),
     );
   }
@@ -7985,17 +8223,18 @@ class _IncomingCallPageState extends State<IncomingCallPage> {
       );
       widget.coordinator.clearCall(widget.incoming.call.id);
       if (!mounted) return;
+      final callSession = kTurnaCallUiController.obtainSession(
+        session: widget.session,
+        coordinator: widget.coordinator,
+        call: accepted.call,
+        connect: accepted.connect,
+        onSessionExpired: widget.onSessionExpired,
+        returnChatOnExit: widget.returnChatOnExit,
+      );
       await Navigator.of(context).pushReplacement(
         MaterialPageRoute(
           settings: const RouteSettings(name: 'active-call'),
-          builder: (_) => ActiveCallPage(
-            session: widget.session,
-            coordinator: widget.coordinator,
-            call: accepted.call,
-            connect: accepted.connect,
-            onSessionExpired: widget.onSessionExpired,
-            returnChatOnExit: widget.returnChatOnExit,
-          ),
+          builder: (_) => ActiveCallPage(callSession: callSession),
         ),
       );
     } on TurnaUnauthorizedException {
@@ -8149,15 +8388,16 @@ class _OutgoingCallPageState extends State<OutgoingCallPage> {
     if (accepted != null) {
       _navigatedToActive = true;
       widget.coordinator.clearCall(widget.initialCall.id);
+      final callSession = kTurnaCallUiController.obtainSession(
+        session: widget.session,
+        coordinator: widget.coordinator,
+        call: accepted.call,
+        connect: accepted.connect,
+        onSessionExpired: widget.onSessionExpired,
+      );
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(
-          builder: (_) => ActiveCallPage(
-            session: widget.session,
-            coordinator: widget.coordinator,
-            call: accepted.call,
-            connect: accepted.connect,
-            onSessionExpired: widget.onSessionExpired,
-          ),
+          builder: (_) => ActiveCallPage(callSession: callSession),
         ),
       );
       return;
@@ -8279,6 +8519,7 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
   bool microphoneEnabled = true;
   bool cameraEnabled = false;
   bool speakerEnabled = false;
+  lk.CameraPosition cameraPosition = lk.CameraPosition.front;
   String? error;
 
   Iterable<lk.RemoteParticipant> get remoteParticipants =>
@@ -8302,6 +8543,18 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
     for (final publication in localParticipant.videoTrackPublications) {
       final track = publication.track;
       if (track is lk.VideoTrack) {
+        return track;
+      }
+    }
+    return null;
+  }
+
+  lk.LocalVideoTrack? get localCameraTrack {
+    final localParticipant = room.localParticipant;
+    if (localParticipant == null) return null;
+    for (final publication in localParticipant.videoTrackPublications) {
+      final track = publication.track;
+      if (track is lk.LocalVideoTrack) {
         return track;
       }
     }
@@ -8376,6 +8629,14 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
     notifyListeners();
   }
 
+  Future<void> flipCamera() async {
+    final track = localCameraTrack;
+    if (track == null) return;
+    cameraPosition = cameraPosition.switched();
+    await track.setCameraPosition(cameraPosition);
+    notifyListeners();
+  }
+
   Future<void> toggleSpeaker() async {
     final next = !speakerEnabled;
     await room.setSpeakerOn(next);
@@ -8401,16 +8662,26 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
   }
 }
 
-class ActiveCallPage extends StatefulWidget {
-  const ActiveCallPage({
-    super.key,
+class TurnaManagedCallSession extends ChangeNotifier {
+  TurnaManagedCallSession({
     required this.session,
     required this.coordinator,
     required this.call,
     required this.connect,
     required this.onSessionExpired,
     this.returnChatOnExit,
-  });
+  }) : adapter = LiveKitCallAdapter(
+         connectPayload: connect,
+         videoEnabled: call.type == TurnaCallType.video,
+       ) {
+    adapter.addListener(_handleAdapterChanged);
+    coordinator.addListener(_handleCoordinatorChanged);
+    _durationTicker = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!adapter.connected || _ended) return;
+      _durationSeconds++;
+      notifyListeners();
+    });
+  }
 
   final AuthSession session;
   final TurnaCallCoordinator coordinator;
@@ -8418,63 +8689,304 @@ class ActiveCallPage extends StatefulWidget {
   final TurnaCallConnectPayload connect;
   final VoidCallback onSessionExpired;
   final ChatPreview? returnChatOnExit;
+  final LiveKitCallAdapter adapter;
+
+  bool _started = false;
+  bool _ended = false;
+  bool _reportedConnected = false;
+  bool presentingFullScreen = false;
+  String? terminalMessage;
+  int _durationSeconds = 0;
+  Timer? _durationTicker;
+
+  bool get ended => _ended;
+  int get durationSeconds => _durationSeconds;
+
+  String formatDuration() {
+    final minutes = (_durationSeconds ~/ 60).toString().padLeft(2, '0');
+    final seconds = (_durationSeconds % 60).toString().padLeft(2, '0');
+    return '$minutes:$seconds';
+  }
+
+  Future<void> ensureStarted() async {
+    if (_started) return;
+    _started = true;
+    await adapter.connect();
+  }
+
+  void setFullScreenVisible(bool value) {
+    if (presentingFullScreen == value) return;
+    presentingFullScreen = value;
+    notifyListeners();
+  }
+
+  Future<void> endCall() async {
+    if (_ended) return;
+    try {
+      await CallApi.endCall(session, callId: call.id);
+    } on TurnaUnauthorizedException {
+      onSessionExpired();
+    } catch (_) {}
+
+    coordinator.clearCall(call.id);
+    await adapter.disconnect();
+    await TurnaNativeCallManager.endCallUi(call.id);
+    _ended = true;
+    terminalMessage = null;
+    notifyListeners();
+    kTurnaCallUiController.clearEndedSession(this);
+  }
+
+  void _handleAdapterChanged() {
+    if (adapter.connected && !_reportedConnected) {
+      _reportedConnected = true;
+      TurnaNativeCallManager.setCallConnected(call.id);
+    }
+    notifyListeners();
+  }
+
+  void _handleCoordinatorChanged() {
+    final terminal = coordinator.consumeTerminal(call.id);
+    if (terminal == null || _ended) return;
+    coordinator.clearCall(call.id);
+    terminalMessage = switch (terminal.kind) {
+      'declined' => 'Arama reddedildi.',
+      'missed' => 'Cevap yok.',
+      _ => 'Arama sonlandi.',
+    };
+    _ended = true;
+    unawaited(adapter.disconnect());
+    unawaited(TurnaNativeCallManager.endCallUi(call.id));
+    notifyListeners();
+    kTurnaCallUiController.clearEndedSession(this);
+  }
+
+  @override
+  void dispose() {
+    adapter.removeListener(_handleAdapterChanged);
+    coordinator.removeListener(_handleCoordinatorChanged);
+    _durationTicker?.cancel();
+    adapter.dispose();
+    super.dispose();
+  }
+}
+
+class TurnaCallUiController {
+  TurnaManagedCallSession? _currentSession;
+  OverlayEntry? _miniOverlayEntry;
+  VoidCallback? _miniListener;
+
+  TurnaManagedCallSession obtainSession({
+    required AuthSession session,
+    required TurnaCallCoordinator coordinator,
+    required TurnaCallSummary call,
+    required TurnaCallConnectPayload connect,
+    required VoidCallback onSessionExpired,
+    ChatPreview? returnChatOnExit,
+  }) {
+    if (_currentSession?.call.id == call.id) {
+      return _currentSession!;
+    }
+    _disposeCurrentSession();
+    _currentSession = TurnaManagedCallSession(
+      session: session,
+      coordinator: coordinator,
+      call: call,
+      connect: connect,
+      onSessionExpired: onSessionExpired,
+      returnChatOnExit: returnChatOnExit,
+    );
+    return _currentSession!;
+  }
+
+  void showMini(TurnaManagedCallSession session) {
+    hideMini();
+    _currentSession = session;
+    final navigator = kTurnaNavigatorKey.currentState;
+    final overlay = navigator?.overlay;
+    if (overlay == null) return;
+
+    _miniListener = () {
+      if (session.ended) {
+        clearEndedSession(session);
+      } else {
+        _miniOverlayEntry?.markNeedsBuild();
+      }
+    };
+    session.addListener(_miniListener!);
+    _miniOverlayEntry = OverlayEntry(
+      builder: (_) => _MiniCallOverlay(session: session),
+    );
+    overlay.insert(_miniOverlayEntry!);
+  }
+
+  void hideMini() {
+    final session = _currentSession;
+    final listener = _miniListener;
+    if (session != null && listener != null) {
+      session.removeListener(listener);
+    }
+    _miniListener = null;
+    _miniOverlayEntry?.remove();
+    _miniOverlayEntry = null;
+  }
+
+  Future<void> expandMini(TurnaManagedCallSession session) async {
+    if (session.presentingFullScreen) return;
+    hideMini();
+    final navigator = kTurnaNavigatorKey.currentState;
+    if (navigator == null) return;
+    await navigator.push(
+      MaterialPageRoute(builder: (_) => ActiveCallPage(callSession: session)),
+    );
+  }
+
+  void clearEndedSession(TurnaManagedCallSession session) {
+    if (!identical(_currentSession, session)) return;
+    hideMini();
+    if (!session.presentingFullScreen) {
+      _currentSession = null;
+      session.dispose();
+    }
+  }
+
+  void releaseFullScreenSession(TurnaManagedCallSession session) {
+    if (!identical(_currentSession, session)) return;
+    if (session.ended) {
+      hideMini();
+      _currentSession = null;
+      session.dispose();
+    }
+  }
+
+  void _disposeCurrentSession() {
+    hideMini();
+    _currentSession?.dispose();
+    _currentSession = null;
+  }
+}
+
+class _MiniCallOverlay extends StatelessWidget {
+  const _MiniCallOverlay({required this.session});
+
+  final TurnaManagedCallSession session;
+
+  @override
+  Widget build(BuildContext context) {
+    final remoteVideo = session.adapter.primaryRemoteVideoTrack;
+    return Positioned(
+      right: 16,
+      top: 92,
+      width: 138,
+      height: 196,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(20),
+          onTap: () => kTurnaCallUiController.expandMini(session),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(20),
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                remoteVideo != null && session.call.type == TurnaCallType.video
+                    ? lk.VideoTrackRenderer(remoteVideo)
+                    : Container(
+                        color: const Color(0xFF111416),
+                        child: Center(
+                          child: _ProfileAvatar(
+                            label: session.call.peer.displayName,
+                            avatarUrl: session.call.peer.avatarUrl,
+                            authToken: session.session.token,
+                            radius: 26,
+                          ),
+                        ),
+                      ),
+                Positioned(
+                  left: 10,
+                  right: 10,
+                  bottom: 10,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.44),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      session.call.peer.displayName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class ActiveCallPage extends StatefulWidget {
+  const ActiveCallPage({super.key, required this.callSession});
+
+  final TurnaManagedCallSession callSession;
 
   @override
   State<ActiveCallPage> createState() => _ActiveCallPageState();
 }
 
 class _ActiveCallPageState extends State<ActiveCallPage> {
-  late final LiveKitCallAdapter _adapter;
+  late final TurnaManagedCallSession _callSession;
   bool _ending = false;
-  bool _reportedConnected = false;
-  Timer? _durationTicker;
-  int _durationSeconds = 0;
+  bool _handledSessionEnd = false;
 
   @override
   void initState() {
     super.initState();
-    _adapter =
-        LiveKitCallAdapter(
-            connectPayload: widget.connect,
-            videoEnabled: widget.call.type == TurnaCallType.video,
-          )
-          ..addListener(_refresh)
-          ..connect();
-    widget.coordinator.addListener(_handleCoordinator);
-    _durationTicker = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (!mounted || !_adapter.connected) return;
-      setState(() => _durationSeconds++);
-    });
+    _callSession = widget.callSession;
+    kTurnaCallUiController.hideMini();
+    _callSession
+      ..addListener(_refresh)
+      ..setFullScreenVisible(true);
+    unawaited(_callSession.ensureStarted());
   }
 
   @override
   void dispose() {
-    widget.coordinator.removeListener(_handleCoordinator);
-    _durationTicker?.cancel();
-    _adapter.removeListener(_refresh);
-    _adapter.dispose();
+    _callSession
+      ..removeListener(_refresh)
+      ..setFullScreenVisible(false);
+    kTurnaCallUiController.releaseFullScreenSession(_callSession);
     super.dispose();
   }
 
   void _refresh() {
-    if (_adapter.connected && !_reportedConnected) {
-      _reportedConnected = true;
-      TurnaNativeCallManager.setCallConnected(widget.call.id);
+    if (_callSession.ended && !_handledSessionEnd && mounted) {
+      _handledSessionEnd = true;
+      final message = _callSession.terminalMessage;
+      if (message != null && message.isNotEmpty) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(message)));
+      }
+      _leaveCallView();
+      return;
     }
-    if (mounted) {
-      setState(() {});
-    }
-  }
-
-  void _handleCoordinator() {
-    final terminal = widget.coordinator.consumeTerminal(widget.call.id);
-    if (terminal == null || !mounted) return;
-    TurnaNativeCallManager.endCallUi(widget.call.id);
-    _leaveCallView();
+    if (mounted) setState(() {});
   }
 
   void _leaveCallView() {
-    final returnChat = widget.returnChatOnExit;
+    final returnChat = _callSession.returnChatOnExit;
     if (returnChat == null) {
       Navigator.of(context).pop();
       return;
@@ -8485,166 +8997,157 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
     navigator.pushAndRemoveUntil(
       buildChatRoomRoute(
         chat: returnChat,
-        session: widget.session,
-        callCoordinator: widget.coordinator,
-        onSessionExpired: widget.onSessionExpired,
+        session: _callSession.session,
+        callCoordinator: _callSession.coordinator,
+        onSessionExpired: _callSession.onSessionExpired,
       ),
       (route) => route.isFirst,
     );
   }
 
+  void _minimizeCall() {
+    if (_callSession.call.type != TurnaCallType.video) {
+      _leaveCallView();
+      return;
+    }
+    kTurnaCallUiController.showMini(_callSession);
+    Navigator.of(context).pop();
+  }
+
   Future<void> _endCall() async {
     if (_ending) return;
     setState(() => _ending = true);
-    try {
-      await CallApi.endCall(widget.session, callId: widget.call.id);
-    } on TurnaUnauthorizedException {
-      if (mounted) {
-        widget.onSessionExpired();
-      }
-    } catch (_) {}
-
-    widget.coordinator.clearCall(widget.call.id);
-    await _adapter.disconnect();
-    await TurnaNativeCallManager.endCallUi(widget.call.id);
+    await _callSession.endCall();
     if (mounted) {
       _leaveCallView();
     }
   }
 
-  String _formatDuration() {
-    final minutes = (_durationSeconds ~/ 60).toString().padLeft(2, '0');
-    final seconds = (_durationSeconds % 60).toString().padLeft(2, '0');
-    return '$minutes:$seconds';
-  }
-
   @override
   Widget build(BuildContext context) {
-    final remoteVideo = _adapter.primaryRemoteVideoTrack;
-    final localVideo = _adapter.localVideoTrack;
-    final isVideo = widget.call.type == TurnaCallType.video;
+    final adapter = _callSession.adapter;
+    final remoteVideo = adapter.primaryRemoteVideoTrack;
+    final localVideo = adapter.localVideoTrack;
+    final isVideo = _callSession.call.type == TurnaCallType.video;
 
-    return Scaffold(
-      backgroundColor: const Color(0xFF101314),
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        foregroundColor: Colors.white,
-        title: Text(widget.call.peer.displayName),
-      ),
-      body: SafeArea(
-        child: Stack(
-          children: [
-            Positioned.fill(
-              child: remoteVideo != null && isVideo
-                  ? lk.VideoTrackRenderer(remoteVideo)
-                  : Container(
-                      color: const Color(0xFF101314),
-                      child: Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            _ProfileAvatar(
-                              label: widget.call.peer.displayName,
-                              avatarUrl: widget.call.peer.avatarUrl,
-                              authToken: widget.session.token,
-                              radius: 48,
-                            ),
-                            const SizedBox(height: 16),
-                            Text(
-                              widget.call.peer.displayName,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 24,
-                                fontWeight: FontWeight.w700,
+    return PopScope(
+      canPop: !isVideo,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && isVideo) {
+          _minimizeCall();
+        }
+      },
+      child: Scaffold(
+        backgroundColor: const Color(0xFF101314),
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          foregroundColor: Colors.white,
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: isVideo ? _minimizeCall : _leaveCallView,
+          ),
+          title: Text(_callSession.call.peer.displayName),
+        ),
+        body: SafeArea(
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: remoteVideo != null && isVideo
+                    ? lk.VideoTrackRenderer(remoteVideo)
+                    : Container(
+                        color: const Color(0xFF101314),
+                        child: Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              _ProfileAvatar(
+                                label: _callSession.call.peer.displayName,
+                                avatarUrl: _callSession.call.peer.avatarUrl,
+                                authToken: _callSession.session.token,
+                                radius: 48,
                               ),
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              _adapter.connecting
-                                  ? 'Baglaniyor...'
-                                  : (_adapter.connected
-                                        ? _formatDuration()
-                                        : (_adapter.error ??
-                                              'Arama hazirlaniyor')),
-                              style: const TextStyle(
-                                color: Color(0xFFB7BCB9),
-                                fontSize: 16,
+                              const SizedBox(height: 16),
+                              Text(
+                                _callSession.call.peer.displayName,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.w700,
+                                ),
                               ),
-                            ),
-                          ],
+                              const SizedBox(height: 8),
+                              Text(
+                                adapter.connecting
+                                    ? 'Baglaniyor...'
+                                    : (adapter.connected
+                                          ? _callSession.formatDuration()
+                                          : (adapter.error ??
+                                                'Arama hazirlaniyor')),
+                                style: const TextStyle(
+                                  color: Color(0xFFB7BCB9),
+                                  fontSize: 16,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
+              ),
+              if (localVideo != null && isVideo)
+                Positioned(
+                  right: 16,
+                  top: 16,
+                  width: 110,
+                  height: 160,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(16),
+                    child: ColoredBox(
+                      color: Colors.black,
+                      child: lk.VideoTrackRenderer(localVideo),
                     ),
-            ),
-            if (localVideo != null && isVideo)
-              Positioned(
-                right: 16,
-                top: 16,
-                width: 110,
-                height: 160,
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(16),
-                  child: ColoredBox(
-                    color: Colors.black,
-                    child: lk.VideoTrackRenderer(localVideo),
                   ),
                 ),
-              ),
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: 24,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  FloatingActionButton(
-                    heroTag: 'mute_${widget.call.id}',
-                    backgroundColor: Colors.white12,
-                    onPressed: _adapter.connecting
-                        ? null
-                        : () => _adapter.toggleMicrophone(),
-                    child: Icon(
-                      _adapter.microphoneEnabled ? Icons.mic : Icons.mic_off,
-                      color: Colors.white,
-                    ),
-                  ),
-                  FloatingActionButton(
-                    heroTag: 'speaker_${widget.call.id}',
-                    backgroundColor: _adapter.speakerEnabled
-                        ? const Color(0xFF1FAA59)
-                        : Colors.white12,
-                    onPressed: _adapter.connecting
-                        ? null
-                        : () => _adapter.toggleSpeaker(),
-                    child: Icon(
-                      _adapter.speakerEnabled ? Icons.volume_up : Icons.hearing,
-                      color: Colors.white,
-                    ),
-                  ),
-                  if (isVideo)
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 24,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    if (isVideo)
+                      FloatingActionButton(
+                        heroTag: 'flip_${_callSession.call.id}',
+                        backgroundColor: Colors.white12,
+                        onPressed: adapter.connecting
+                            ? null
+                            : () => adapter.flipCamera(),
+                        child: const Icon(
+                          Icons.cameraswitch_outlined,
+                          color: Colors.white,
+                        ),
+                      ),
                     FloatingActionButton(
-                      heroTag: 'camera_${widget.call.id}',
+                      heroTag: 'end_${_callSession.call.id}',
+                      backgroundColor: Colors.red.shade400,
+                      onPressed: _ending ? null : _endCall,
+                      child: const Icon(Icons.call_end, color: Colors.white),
+                    ),
+                    FloatingActionButton(
+                      heroTag: 'mute_${_callSession.call.id}',
                       backgroundColor: Colors.white12,
-                      onPressed: _adapter.connecting
+                      onPressed: adapter.connecting
                           ? null
-                          : () => _adapter.toggleCamera(),
+                          : () => adapter.toggleMicrophone(),
                       child: Icon(
-                        _adapter.cameraEnabled
-                            ? Icons.videocam
-                            : Icons.videocam_off,
+                        adapter.microphoneEnabled ? Icons.mic : Icons.mic_off,
                         color: Colors.white,
                       ),
                     ),
-                  FloatingActionButton(
-                    heroTag: 'end_${widget.call.id}',
-                    backgroundColor: Colors.red.shade400,
-                    onPressed: _ending ? null : _endCall,
-                    child: const Icon(Icons.call_end, color: Colors.white),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
