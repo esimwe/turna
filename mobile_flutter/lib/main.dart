@@ -45,6 +45,7 @@ const List<Color> kComposerPaletteStops = [
   Color(0xFFFF2D55),
 ];
 const List<_MediaCropPreset> _kComposerCropPresets = [
+  _MediaCropPreset(id: 'free', label: 'Serbest', freeform: true),
   _MediaCropPreset(id: 'fit', label: 'Sigdir', fullImage: true),
   _MediaCropPreset(id: 'original', label: 'Orijinal', useOriginalAspect: true),
   _MediaCropPreset(id: 'square', label: 'Kare', aspectRatio: 1),
@@ -2017,6 +2018,7 @@ class _MediaCropPreset {
     this.aspectRatio,
     this.useOriginalAspect = false,
     this.fullImage = false,
+    this.freeform = false,
   });
 
   final String id;
@@ -2024,7 +2026,10 @@ class _MediaCropPreset {
   final double? aspectRatio;
   final bool useOriginalAspect;
   final bool fullImage;
+  final bool freeform;
 }
+
+enum _MediaComposerCropHandle { topLeft, topRight, bottomLeft, bottomRight }
 
 class MediaComposerPage extends StatefulWidget {
   const MediaComposerPage({
@@ -2135,7 +2140,7 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
   _MediaCropPreset _cropPresetForId(String id) {
     return _kComposerCropPresets.firstWhere(
       (preset) => preset.id == id,
-      orElse: () => _kComposerCropPresets[1],
+      orElse: () => _kComposerCropPresets.first,
     );
   }
 
@@ -2156,6 +2161,21 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
     Offset? center,
   }) {
     if (preset.fullImage) return kComposerFullCropRectNormalized;
+    if (preset.freeform) {
+      final existing = item.cropRectNormalized;
+      if (existing != null &&
+          existing != kComposerFullCropRectNormalized &&
+          existing.width < 1 &&
+          existing.height < 1) {
+        return _clampCropRect(existing);
+      }
+      return Rect.fromLTWH(
+        kComposerCropInitialInset,
+        kComposerCropInitialInset,
+        1 - (kComposerCropInitialInset * 2),
+        1 - (kComposerCropInitialInset * 2),
+      );
+    }
 
     final imageSize = _rotatedSourceSize(item);
     final imageAspect = imageSize.width / math.max(0.1, imageSize.height);
@@ -2180,13 +2200,13 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
     );
   }
 
-  double _cropAspectRatioForRect(_MediaComposerItem item, Rect cropRect) {
-    final size = _rotatedSourceSize(item);
-    return math.max(
-      0.1,
-      (size.width * cropRect.width) /
-          math.max(0.1, size.height * cropRect.height),
-    );
+  double? _lockedNormalizedCropAspectRatio(_MediaComposerItem item) {
+    final preset = _cropPresetForId(item.cropPresetId);
+    if (preset.freeform || preset.fullImage) return null;
+    final imageSize = _rotatedSourceSize(item);
+    final imageAspect = imageSize.width / math.max(0.1, imageSize.height);
+    final targetAspect = _resolvedCropAspectRatio(item, preset);
+    return targetAspect / math.max(0.1, imageAspect);
   }
 
   Rect _normalizedCropToRect(Rect normalizedCrop, Size size) {
@@ -2241,38 +2261,6 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
     return _cropRectForPreset(item, _cropPresetForId(item.cropPresetId));
   }
 
-  Rect _cropViewportRectFor(
-    Size canvasSize,
-    _MediaComposerItem item,
-    Rect cropRect,
-  ) {
-    final targetAspect = _cropAspectRatioForRect(item, cropRect);
-    final horizontalPadding = math.min(24.0, canvasSize.width * 0.08);
-    final topPadding = math.min(24.0, canvasSize.height * 0.08);
-    final bottomPadding = math.min(92.0, canvasSize.height * 0.22);
-    final maxWidth = math.max(40.0, canvasSize.width - (horizontalPadding * 2));
-    final maxHeight = math.max(
-      40.0,
-      canvasSize.height - topPadding - bottomPadding,
-    );
-
-    var width = maxWidth;
-    var height = width / targetAspect;
-    if (height > maxHeight) {
-      height = maxHeight;
-      width = height * targetAspect;
-    }
-
-    return Rect.fromCenter(
-      center: Offset(
-        canvasSize.width / 2,
-        (canvasSize.height - bottomPadding + topPadding) / 2,
-      ),
-      width: width,
-      height: height,
-    );
-  }
-
   void _applyCropPreset(_MediaCropPreset preset) {
     if (!_currentItem.isImage) return;
     final currentCenter = _currentItem.cropRectNormalized?.center;
@@ -2306,6 +2294,9 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
     setState(() {
       _drawMode = false;
       if (!_cropMode) {
+        if (_currentItem.cropRectNormalized == null) {
+          _currentItem.cropPresetId = 'free';
+        }
         _currentItem.cropRectNormalized ??= _defaultCropRectFor(_currentItem);
       }
       _cropMode = !_cropMode;
@@ -2616,21 +2607,210 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
     });
   }
 
-  void _panCropSelection(DragUpdateDetails details, Rect viewportFrame) {
+  void _moveCropRect(DragUpdateDetails details, Size size) {
     final currentCrop = _currentItem.cropRectNormalized;
     if (!_cropMode || currentCrop == null) return;
-    final safeViewportWidth = viewportFrame.width <= 0
-        ? 1.0
-        : viewportFrame.width;
-    final safeViewportHeight = viewportFrame.height <= 0
-        ? 1.0
-        : viewportFrame.height;
-    final dx = -(details.delta.dx / safeViewportWidth) * currentCrop.width;
-    final dy = -(details.delta.dy / safeViewportHeight) * currentCrop.height;
+    final safeWidth = size.width <= 0 ? 1.0 : size.width;
+    final safeHeight = size.height <= 0 ? 1.0 : size.height;
+    final dx = details.delta.dx / safeWidth;
+    final dy = details.delta.dy / safeHeight;
 
     setState(() {
       _currentItem.cropRectNormalized = _clampCropRect(
         currentCrop.shift(Offset(dx, dy)),
+      );
+    });
+  }
+
+  Rect _buildLockedCropRect({
+    required _MediaComposerCropHandle handle,
+    required Offset anchor,
+    required double width,
+    required double aspectRatio,
+  }) {
+    final height = width / math.max(0.1, aspectRatio);
+    switch (handle) {
+      case _MediaComposerCropHandle.topLeft:
+        return Rect.fromLTRB(
+          anchor.dx - width,
+          anchor.dy - height,
+          anchor.dx,
+          anchor.dy,
+        );
+      case _MediaComposerCropHandle.topRight:
+        return Rect.fromLTRB(
+          anchor.dx,
+          anchor.dy - height,
+          anchor.dx + width,
+          anchor.dy,
+        );
+      case _MediaComposerCropHandle.bottomLeft:
+        return Rect.fromLTRB(
+          anchor.dx - width,
+          anchor.dy,
+          anchor.dx,
+          anchor.dy + height,
+        );
+      case _MediaComposerCropHandle.bottomRight:
+        return Rect.fromLTRB(
+          anchor.dx,
+          anchor.dy,
+          anchor.dx + width,
+          anchor.dy + height,
+        );
+    }
+  }
+
+  Rect _clampLockedCropRect({
+    required _MediaComposerCropHandle handle,
+    required Offset anchor,
+    required double desiredWidth,
+    required double aspectRatio,
+  }) {
+    final minHeight = math.max(
+      kComposerCropMinSide,
+      kComposerCropMinSide / aspectRatio,
+    );
+    final minWidth = math.max(kComposerCropMinSide, minHeight * aspectRatio);
+
+    late final double maxWidth;
+    late final double maxHeight;
+    switch (handle) {
+      case _MediaComposerCropHandle.topLeft:
+        maxWidth = anchor.dx;
+        maxHeight = anchor.dy;
+        break;
+      case _MediaComposerCropHandle.topRight:
+        maxWidth = 1 - anchor.dx;
+        maxHeight = anchor.dy;
+        break;
+      case _MediaComposerCropHandle.bottomLeft:
+        maxWidth = anchor.dx;
+        maxHeight = 1 - anchor.dy;
+        break;
+      case _MediaComposerCropHandle.bottomRight:
+        maxWidth = 1 - anchor.dx;
+        maxHeight = 1 - anchor.dy;
+        break;
+    }
+
+    var width = desiredWidth
+        .clamp(minWidth, math.max(minWidth, maxWidth))
+        .toDouble();
+    var height = width / aspectRatio;
+    if (height > maxHeight) {
+      height = maxHeight;
+      width = height * aspectRatio;
+    }
+    if (height < minHeight) {
+      height = minHeight;
+      width = height * aspectRatio;
+    }
+    width = width.clamp(minWidth, math.max(minWidth, maxWidth)).toDouble();
+    height = height.clamp(minHeight, math.max(minHeight, maxHeight)).toDouble();
+    return _buildLockedCropRect(
+      handle: handle,
+      anchor: anchor,
+      width: width,
+      aspectRatio: aspectRatio,
+    );
+  }
+
+  void _resizeCropRect(
+    _MediaComposerCropHandle handle,
+    DragUpdateDetails details,
+    Size size,
+  ) {
+    final currentCrop = _currentItem.cropRectNormalized;
+    if (!_cropMode || currentCrop == null) return;
+    final safeWidth = size.width <= 0 ? 1.0 : size.width;
+    final safeHeight = size.height <= 0 ? 1.0 : size.height;
+    final dx = details.delta.dx / safeWidth;
+    final dy = details.delta.dy / safeHeight;
+    final lockedAspectRatio = _lockedNormalizedCropAspectRatio(_currentItem);
+
+    if (lockedAspectRatio == null) {
+      var next = currentCrop;
+      switch (handle) {
+        case _MediaComposerCropHandle.topLeft:
+          next = Rect.fromLTRB(
+            currentCrop.left + dx,
+            currentCrop.top + dy,
+            currentCrop.right,
+            currentCrop.bottom,
+          );
+          break;
+        case _MediaComposerCropHandle.topRight:
+          next = Rect.fromLTRB(
+            currentCrop.left,
+            currentCrop.top + dy,
+            currentCrop.right + dx,
+            currentCrop.bottom,
+          );
+          break;
+        case _MediaComposerCropHandle.bottomLeft:
+          next = Rect.fromLTRB(
+            currentCrop.left + dx,
+            currentCrop.top,
+            currentCrop.right,
+            currentCrop.bottom + dy,
+          );
+          break;
+        case _MediaComposerCropHandle.bottomRight:
+          next = Rect.fromLTRB(
+            currentCrop.left,
+            currentCrop.top,
+            currentCrop.right + dx,
+            currentCrop.bottom + dy,
+          );
+          break;
+      }
+
+      setState(() {
+        _currentItem.cropRectNormalized = _clampCropRect(next);
+      });
+      return;
+    }
+
+    late final Offset anchor;
+    late final double desiredWidth;
+    switch (handle) {
+      case _MediaComposerCropHandle.topLeft:
+        anchor = currentCrop.bottomRight;
+        desiredWidth = math.max(
+          currentCrop.width - dx,
+          (currentCrop.height - dy) * lockedAspectRatio,
+        );
+        break;
+      case _MediaComposerCropHandle.topRight:
+        anchor = currentCrop.bottomLeft;
+        desiredWidth = math.max(
+          currentCrop.width + dx,
+          (currentCrop.height - dy) * lockedAspectRatio,
+        );
+        break;
+      case _MediaComposerCropHandle.bottomLeft:
+        anchor = currentCrop.topRight;
+        desiredWidth = math.max(
+          currentCrop.width - dx,
+          (currentCrop.height + dy) * lockedAspectRatio,
+        );
+        break;
+      case _MediaComposerCropHandle.bottomRight:
+        anchor = currentCrop.topLeft;
+        desiredWidth = math.max(
+          currentCrop.width + dx,
+          (currentCrop.height + dy) * lockedAspectRatio,
+        );
+        break;
+    }
+
+    setState(() {
+      _currentItem.cropRectNormalized = _clampLockedCropRect(
+        handle: handle,
+        anchor: anchor,
+        desiredWidth: desiredWidth,
+        aspectRatio: lockedAspectRatio,
       );
     });
   }
@@ -3089,6 +3269,71 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
                   },
                 ),
               ),
+            if (_cropMode && current.isImage)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 0, 16, 10),
+                child: Row(
+                  children: [
+                    _ComposerOverlayPillButton(
+                      icon: Icons.rotate_90_degrees_ccw_outlined,
+                      onTap: _rotateCurrent,
+                    ),
+                    const SizedBox(width: 10),
+                    PopupMenuButton<String>(
+                      initialValue: current.cropPresetId,
+                      onSelected: (value) =>
+                          _applyCropPreset(_cropPresetForId(value)),
+                      color: const Color(0xFF1A1F1D),
+                      itemBuilder: (_) => _kComposerCropPresets
+                          .map(
+                            (preset) => PopupMenuItem<String>(
+                              value: preset.id,
+                              child: Text(
+                                preset.label,
+                                style: const TextStyle(color: Colors.white),
+                              ),
+                            ),
+                          )
+                          .toList(),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 10,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xCC1A1F1D),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.crop_outlined,
+                              color: Colors.white,
+                              size: 18,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              _cropPresetForId(current.cropPresetId).label,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            const Icon(
+                              Icons.keyboard_arrow_down,
+                              color: Colors.white,
+                              size: 18,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
               child: Row(
@@ -3213,132 +3458,7 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
           displayCrop,
         );
         final cropRect = item.cropRectNormalized ?? _defaultCropRectFor(item);
-
-        if (isCropingCurrent) {
-          final viewportFrame = _cropViewportRectFor(
-            canvasSize,
-            item,
-            cropRect,
-          );
-          final sourceFrame = _normalizedCropToRect(cropRect, canvasSize);
-          final scale = math.min(
-            viewportFrame.width / math.max(1, sourceFrame.width),
-            viewportFrame.height / math.max(1, sourceFrame.height),
-          );
-          final offset = Offset(
-            viewportFrame.left - (sourceFrame.left * scale),
-            viewportFrame.top - (sourceFrame.top * scale),
-          );
-
-          return Center(
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onPanUpdate: (details) =>
-                  _panCropSelection(details, viewportFrame),
-              child: SizedBox(
-                width: width,
-                height: height,
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(28),
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      Transform.translate(
-                        offset: offset,
-                        child: Transform.scale(
-                          alignment: Alignment.topLeft,
-                          scale: scale,
-                          child: Stack(
-                            fit: StackFit.expand,
-                            children: [
-                              RotatedBox(
-                                quarterTurns: item.rotationTurns,
-                                child: Image.file(
-                                  File(item.file.path),
-                                  fit: BoxFit.fill,
-                                ),
-                              ),
-                              for (final overlay in item.textOverlays)
-                                Align(
-                                  alignment: Alignment(
-                                    (overlay.position.dx * 2) - 1,
-                                    (overlay.position.dy * 2) - 1,
-                                  ),
-                                  child: ConstrainedBox(
-                                    constraints: BoxConstraints(
-                                      maxWidth: width * 0.82,
-                                    ),
-                                    child: Text(
-                                      overlay.text,
-                                      textAlign: TextAlign.center,
-                                      style: TextStyle(
-                                        color: overlay.color,
-                                        fontWeight: FontWeight.w700,
-                                        fontSize:
-                                            math.max(18, width * 0.06) *
-                                            overlay.scale,
-                                        shadows: const [
-                                          Shadow(
-                                            color: Colors.black54,
-                                            blurRadius: 10,
-                                            offset: Offset(0, 2),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              IgnorePointer(
-                                child: CustomPaint(
-                                  painter: _MediaComposerStrokePainter(
-                                    strokes: item.strokes,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      Positioned.fill(
-                        child: _ComposerCropOverlay(cropFrame: viewportFrame),
-                      ),
-                      Positioned(
-                        left: 16,
-                        bottom: 16,
-                        child: _ComposerOverlayPillButton(
-                          icon: Icons.rotate_90_degrees_ccw_outlined,
-                          onTap: _rotateCurrent,
-                        ),
-                      ),
-                      Positioned(
-                        left: 76,
-                        right: 16,
-                        bottom: 16,
-                        child: SizedBox(
-                          height: 38,
-                          child: ListView.separated(
-                            scrollDirection: Axis.horizontal,
-                            itemCount: _kComposerCropPresets.length,
-                            separatorBuilder: (_, _) =>
-                                const SizedBox(width: 8),
-                            itemBuilder: (context, index) {
-                              final preset = _kComposerCropPresets[index];
-                              return _ComposerCropPresetChip(
-                                label: preset.label,
-                                selected: preset.id == item.cropPresetId,
-                                onTap: () => _applyCropPreset(preset),
-                              );
-                            },
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          );
-        }
+        final cropFrame = _normalizedCropToRect(cropRect, canvasSize);
 
         final Widget imageLayer;
         if (displayCrop == kComposerFullCropRectNormalized) {
@@ -3505,6 +3625,16 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
                         ),
                       ),
                     ),
+                    if (isCurrent && _cropMode)
+                      Positioned.fill(
+                        child: _ComposerCropOverlay(
+                          cropFrame: cropFrame,
+                          onMove: (details) =>
+                              _moveCropRect(details, canvasSize),
+                          onResize: (handle, details) =>
+                              _resizeCropRect(handle, details, canvasSize),
+                        ),
+                      ),
                     if (isCurrent && (_drawMode || activeOverlay != null))
                       Positioned(
                         right: 12,
@@ -3607,16 +3737,88 @@ class _ComposerColorSlider extends StatelessWidget {
 }
 
 class _ComposerCropOverlay extends StatelessWidget {
-  const _ComposerCropOverlay({required this.cropFrame});
+  const _ComposerCropOverlay({
+    required this.cropFrame,
+    required this.onMove,
+    required this.onResize,
+  });
 
   final Rect cropFrame;
+  final ValueChanged<DragUpdateDetails> onMove;
+  final void Function(
+    _MediaComposerCropHandle handle,
+    DragUpdateDetails details,
+  )
+  onResize;
 
   @override
   Widget build(BuildContext context) {
-    return IgnorePointer(
-      child: CustomPaint(
-        size: Size.infinite,
-        painter: _ComposerCropOverlayPainter(cropFrame: cropFrame),
+    const handleSize = 30.0;
+    return Stack(
+      children: [
+        IgnorePointer(
+          child: CustomPaint(
+            size: Size.infinite,
+            painter: _ComposerCropOverlayPainter(cropFrame: cropFrame),
+          ),
+        ),
+        Positioned.fromRect(
+          rect: cropFrame,
+          child: GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onPanUpdate: onMove,
+            child: const SizedBox.expand(),
+          ),
+        ),
+        _buildHandle(
+          center: cropFrame.topLeft,
+          handle: _MediaComposerCropHandle.topLeft,
+          handleSize: handleSize,
+        ),
+        _buildHandle(
+          center: cropFrame.topRight,
+          handle: _MediaComposerCropHandle.topRight,
+          handleSize: handleSize,
+        ),
+        _buildHandle(
+          center: cropFrame.bottomLeft,
+          handle: _MediaComposerCropHandle.bottomLeft,
+          handleSize: handleSize,
+        ),
+        _buildHandle(
+          center: cropFrame.bottomRight,
+          handle: _MediaComposerCropHandle.bottomRight,
+          handleSize: handleSize,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildHandle({
+    required Offset center,
+    required _MediaComposerCropHandle handle,
+    required double handleSize,
+  }) {
+    return Positioned(
+      left: center.dx - (handleSize / 2),
+      top: center.dy - (handleSize / 2),
+      child: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onPanUpdate: (details) => onResize(handle, details),
+        child: Container(
+          width: handleSize,
+          height: handleSize,
+          alignment: Alignment.center,
+          child: Container(
+            width: 16,
+            height: 16,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: const Color(0xFF101312), width: 2),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -3692,41 +3894,6 @@ class _ComposerOverlayPillButton extends StatelessWidget {
         child: Padding(
           padding: const EdgeInsets.all(12),
           child: Icon(icon, color: Colors.white, size: 20),
-        ),
-      ),
-    );
-  }
-}
-
-class _ComposerCropPresetChip extends StatelessWidget {
-  const _ComposerCropPresetChip({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: selected ? const Color(0xFF1FAA59) : const Color(0xCC1A1F1D),
-      borderRadius: BorderRadius.circular(999),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(999),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-          child: Text(
-            label,
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 12,
-              fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-            ),
-          ),
         ),
       ),
     );
