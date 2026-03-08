@@ -1,7 +1,7 @@
 import { AttachmentKind, ChatType, MessageStatus } from "@prisma/client";
 import { logError } from "../../lib/logger.js";
 import { prisma } from "../../lib/prisma.js";
-import { createObjectReadUrl, getObjectHead } from "../../lib/storage.js";
+import { createObjectReadUrl, deleteObject, getObjectHead } from "../../lib/storage.js";
 import type {
   ChatAttachment,
   ChatMessage,
@@ -13,6 +13,8 @@ import type {
 } from "./chat.types.js";
 
 const prismaUser = (prisma as unknown as { user: any }).user;
+const TURNA_DELETED_EVERYONE_MARKER = "[[turna-deleted-everyone]]";
+const DELETE_FOR_EVERYONE_WINDOW_MS = 10 * 60 * 1000;
 
 type MessageRow = {
   id: string;
@@ -61,6 +63,7 @@ function summarizeMessage(row: {
   attachments?: Array<{ kind: AttachmentKind }>;
 }): string {
   const text = row.text?.trim();
+  if (text === TURNA_DELETED_EVERYONE_MARKER) return "Silindi.";
   if (text) return text;
 
   const attachments = row.attachments ?? [];
@@ -235,6 +238,67 @@ export class ChatService {
     });
 
     return toChatMessage(message);
+  }
+
+  async deleteMessageForEveryone(messageId: string, requesterId: string): Promise<ChatMessage> {
+    const existing = await prisma.message.findUnique({
+      where: { id: messageId },
+      include: {
+        attachments: {
+          orderBy: { createdAt: "asc" }
+        }
+      }
+    });
+
+    if (!existing) {
+      throw new Error("message_not_found");
+    }
+
+    const hasAccess = await this.ensureChatAccess(existing.chatId, requesterId);
+    if (!hasAccess) {
+      throw new Error("forbidden_chat_access");
+    }
+
+    if (existing.senderId !== requesterId) {
+      throw new Error("message_delete_not_allowed");
+    }
+
+    if ((existing.text ?? "").trim() === TURNA_DELETED_EVERYONE_MARKER) {
+      return toChatMessage(existing);
+    }
+
+    if (Date.now() - existing.createdAt.getTime() > DELETE_FOR_EVERYONE_WINDOW_MS) {
+      throw new Error("message_delete_window_expired");
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      await tx.messageAttachment.deleteMany({
+        where: { messageId: existing.id }
+      });
+
+      return tx.message.update({
+        where: { id: existing.id },
+        data: {
+          text: TURNA_DELETED_EVERYONE_MARKER,
+          isViewOnce: false
+        },
+        include: {
+          attachments: {
+            orderBy: { createdAt: "asc" }
+          }
+        }
+      });
+    });
+
+    await Promise.all(
+      existing.attachments.map((attachment) =>
+        deleteObject(attachment.objectKey).catch((error: unknown) => {
+          logError("message attachment delete failed", error);
+        })
+      )
+    );
+
+    return toChatMessage(updated);
   }
 
   async markMessagesDelivered(chatId: string, userId: string): Promise<string[]> {

@@ -77,6 +77,10 @@ const listMessagesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(30)
 });
 
+const messageIdParamSchema = z.object({
+  messageId: z.string().trim().min(1).max(255)
+});
+
 chatRouter.get("/:chatId/messages", requireAuth, async (req, res) => {
   const rawChatId = req.params.chatId;
   const chatId = Array.isArray(rawChatId) ? rawChatId[0] : rawChatId;
@@ -258,5 +262,42 @@ chatRouter.post("/messages", requireAuth, async (req, res) => {
 
     logError("chat http send failed", error);
     res.status(500).json({ error: "failed_to_send_message" });
+  }
+});
+
+chatRouter.post("/messages/:messageId/delete-for-everyone", requireAuth, async (req, res) => {
+  const parsed = messageIdParamSchema.safeParse(req.params);
+  if (!parsed.success) {
+    res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
+    return;
+  }
+
+  const userId = req.authUserId!;
+  try {
+    const message = await chatService.deleteMessageForEveryone(parsed.data.messageId, userId);
+    const participants = await chatService.getChatParticipantIds(message.chatId);
+    emitChatMessage(message.chatId, message, participants);
+    emitInboxUpdate(participants.length > 0 ? participants : [userId]);
+    res.json({ data: message });
+  } catch (error) {
+    if (error instanceof Error) {
+      switch (error.message) {
+        case "message_not_found":
+          res.status(404).json({ error: error.message });
+          return;
+        case "message_delete_not_allowed":
+          res.status(403).json({ error: error.message });
+          return;
+        case "message_delete_window_expired":
+          res.status(409).json({ error: error.message });
+          return;
+        case "forbidden_chat_access":
+          res.status(403).json({ error: error.message });
+          return;
+      }
+    }
+
+    logError("chat delete for everyone failed", error);
+    res.status(500).json({ error: "failed_to_delete_message" });
   }
 });
