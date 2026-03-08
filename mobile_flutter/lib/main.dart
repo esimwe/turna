@@ -113,6 +113,7 @@ class TurnaChatTokens {
 final RegExp _kTurnaReplyMarkerPattern = RegExp(
   r'^\[\[turna-reply:([A-Za-z0-9_-]+)\]\]\n?',
 );
+const String _kTurnaDeletedEveryoneMarker = '[[turna-deleted-everyone]]';
 
 class TurnaReplyPayload {
   const TurnaReplyPayload({
@@ -141,10 +142,15 @@ class TurnaReplyPayload {
 }
 
 class ParsedTurnaMessageText {
-  const ParsedTurnaMessageText({required this.text, this.reply});
+  const ParsedTurnaMessageText({
+    required this.text,
+    this.reply,
+    this.deletedForEveryone = false,
+  });
 
   final String text;
   final TurnaReplyPayload? reply;
+  final bool deletedForEveryone;
 }
 
 class _PinnedMessageDraft {
@@ -174,6 +180,13 @@ class _PinnedMessageDraft {
 }
 
 ParsedTurnaMessageText parseTurnaMessageText(String raw) {
+  if (raw.trim() == _kTurnaDeletedEveryoneMarker) {
+    return const ParsedTurnaMessageText(
+      text: 'Silindi.',
+      deletedForEveryone: true,
+    );
+  }
+
   final match = _kTurnaReplyMarkerPattern.firstMatch(raw);
   if (match == null) {
     return ParsedTurnaMessageText(text: raw);
@@ -204,6 +217,7 @@ String buildTurnaReplyEncodedText({
 
 String sanitizeTurnaChatPreviewText(String raw) {
   final parsed = parseTurnaMessageText(raw);
+  if (parsed.deletedForEveryone) return parsed.text;
   final cleaned = parsed.text.trim();
   if (cleaned.isNotEmpty) return cleaned;
   return parsed.reply?.previewText ?? raw;
@@ -1079,6 +1093,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   TurnaReplyPayload? _replyDraft;
   _PinnedMessageDraft? _pinnedMessage;
   Set<String> _starredMessageIds = <String>{};
+  Set<String> _softDeletedMessageIds = <String>{};
   Set<String> _deletedMessageIds = <String>{};
   final Map<String, GlobalKey> _messageKeys = <String, GlobalKey>{};
   int _lastRenderedMessageCount = 0;
@@ -1092,6 +1107,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   String get _pinnedMessageKey => 'turna_pinned_message_${widget.chat.chatId}';
   String get _starredMessagesKey =>
       'turna_starred_messages_${widget.chat.chatId}';
+  String get _softDeletedMessagesKey =>
+      'turna_soft_deleted_messages_${widget.chat.chatId}';
   String get _deletedMessagesKey =>
       'turna_deleted_messages_${widget.chat.chatId}';
 
@@ -1354,10 +1371,13 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     try {
       final prefs = await SharedPreferences.getInstance();
       final starred = prefs.getStringList(_starredMessagesKey) ?? const [];
+      final softDeleted =
+          prefs.getStringList(_softDeletedMessagesKey) ?? const [];
       final deleted = prefs.getStringList(_deletedMessagesKey) ?? const [];
       if (!mounted) return;
       setState(() {
         _starredMessageIds = starred.toSet();
+        _softDeletedMessageIds = softDeleted.toSet();
         _deletedMessageIds = deleted.toSet();
       });
     } catch (error) {
@@ -1370,13 +1390,92 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     await prefs.setStringList(_starredMessagesKey, _starredMessageIds.toList());
   }
 
+  Future<void> _persistSoftDeletedMessages() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(
+      _softDeletedMessagesKey,
+      _softDeletedMessageIds.toList(),
+    );
+  }
+
   Future<void> _persistDeletedMessages() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList(_deletedMessagesKey, _deletedMessageIds.toList());
   }
 
+  bool _isMessageDeletedForMe(ChatMessage msg) =>
+      _softDeletedMessageIds.contains(msg.id);
+
+  bool _isMessageDeletedPlaceholder(
+    ChatMessage msg, {
+    ParsedTurnaMessageText? parsed,
+  }) => _isMessageDeletedForMe(msg) || (parsed?.deletedForEveryone ?? false);
+
+  bool _canDeleteForEveryone(
+    ChatMessage msg, {
+    ParsedTurnaMessageText? parsed,
+  }) {
+    if (msg.senderId != widget.session.userId) return false;
+    if (msg.id.startsWith('local_')) return false;
+    if (_isMessageDeletedPlaceholder(msg, parsed: parsed)) return false;
+    final createdAt = DateTime.tryParse(msg.createdAt)?.toLocal();
+    if (createdAt == null) return false;
+    return DateTime.now().difference(createdAt) <= const Duration(minutes: 10);
+  }
+
+  Future<bool> _showDestructiveConfirm({
+    required String title,
+    required String message,
+    required String confirmLabel,
+  }) async {
+    final approved = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: Text(title),
+          content: Text(message),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Vazgec'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              style: FilledButton.styleFrom(
+                backgroundColor: TurnaColors.error,
+                foregroundColor: Colors.white,
+              ),
+              child: Text(confirmLabel),
+            ),
+          ],
+        );
+      },
+    );
+    return approved == true;
+  }
+
+  Future<void> _setPinnedPreviewIfNeeded(
+    String messageId,
+    String previewText,
+  ) async {
+    final current = _pinnedMessage;
+    if (current == null || current.messageId != messageId) return;
+    final next = _PinnedMessageDraft(
+      messageId: current.messageId,
+      senderLabel: current.senderLabel,
+      previewText: previewText,
+    );
+    if (mounted) {
+      setState(() => _pinnedMessage = next);
+    }
+    await _persistPinnedMessage(next);
+  }
+
   String _previewSnippetForMessage(ChatMessage msg) {
     final parsed = parseTurnaMessageText(msg.text);
+    if (_isMessageDeletedPlaceholder(msg, parsed: parsed)) {
+      return 'Silindi.';
+    }
     final text = parsed.text.trim();
     if (text.isNotEmpty) {
       return text.length > 72 ? '${text.substring(0, 72)}...' : text;
@@ -1517,13 +1616,17 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     final wasPinned = _pinnedMessage?.messageId == msg.id;
     final next = Set<String>.from(_deletedMessageIds)..add(msg.id);
     final nextStarred = Set<String>.from(_starredMessageIds)..remove(msg.id);
+    final nextSoftDeleted = Set<String>.from(_softDeletedMessageIds)
+      ..remove(msg.id);
     setState(() {
       _deletedMessageIds = next;
       _starredMessageIds = nextStarred;
+      _softDeletedMessageIds = nextSoftDeleted;
       if (wasPinned) {
         _pinnedMessage = null;
       }
     });
+    await _persistSoftDeletedMessages();
     await _persistDeletedMessages();
     await _persistStarredMessages();
     if (wasPinned) {
@@ -1533,6 +1636,112 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(const SnackBar(content: Text('Mesaj bu cihazdan silindi.')));
+  }
+
+  Future<void> _deleteMessageForMe(ChatMessage msg) async {
+    final nextSoftDeleted = Set<String>.from(_softDeletedMessageIds)
+      ..add(msg.id);
+    final nextStarred = Set<String>.from(_starredMessageIds)..remove(msg.id);
+    setState(() {
+      _softDeletedMessageIds = nextSoftDeleted;
+      _starredMessageIds = nextStarred;
+    });
+    await _persistSoftDeletedMessages();
+    await _persistStarredMessages();
+    await _setPinnedPreviewIfNeeded(msg.id, 'Silindi.');
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Mesaj sende Silindi. olarak gosteriliyor.'),
+      ),
+    );
+  }
+
+  Future<void> _deleteMessageForEveryone(ChatMessage msg) async {
+    try {
+      final updated = await ChatApi.deleteMessageForEveryone(
+        widget.session,
+        messageId: msg.id,
+      );
+      final nextSoftDeleted = Set<String>.from(_softDeletedMessageIds)
+        ..remove(msg.id);
+      if (mounted) {
+        setState(() => _softDeletedMessageIds = nextSoftDeleted);
+      }
+      await _persistSoftDeletedMessages();
+      await _setPinnedPreviewIfNeeded(msg.id, 'Silindi.');
+      _client.mergeServerMessage(updated);
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Mesaj herkesten silindi.')));
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
+  Future<void> _confirmRemoveDeletedPlaceholder(ChatMessage msg) async {
+    final confirmed = await _showDestructiveConfirm(
+      title: 'Mesajı kaldir',
+      message: 'Bu Silindi. mesajı cihazından tamamen kaldirilsin mi?',
+      confirmLabel: 'Kaldir',
+    );
+    if (!confirmed) return;
+    await _deleteMessageLocally(msg);
+  }
+
+  Future<void> _showDeleteMessageOptions(ChatMessage msg) async {
+    final parsed = parseTurnaMessageText(msg.text);
+    final canDeleteForEveryone = _canDeleteForEveryone(msg, parsed: parsed);
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.delete_outline_rounded),
+                title: const Text('Benden sil'),
+                onTap: () async {
+                  Navigator.pop(sheetContext);
+                  final confirmed = await _showDestructiveConfirm(
+                    title: 'Mesajı senden sil',
+                    message:
+                        'Bu mesaj sadece senin tarafinda Silindi. olarak gosterilecek.',
+                    confirmLabel: 'Benden sil',
+                  );
+                  if (!confirmed) return;
+                  await _deleteMessageForMe(msg);
+                },
+              ),
+              if (canDeleteForEveryone)
+                ListTile(
+                  leading: const Icon(Icons.delete_sweep_outlined),
+                  title: const Text('Herkesten sil'),
+                  onTap: () async {
+                    Navigator.pop(sheetContext);
+                    final confirmed = await _showDestructiveConfirm(
+                      title: 'Mesajı herkesten sil',
+                      message:
+                          'Bu mesaj iki taraf icin de Silindi. olarak degisecek.',
+                      confirmLabel: 'Herkesten sil',
+                    );
+                    if (!confirmed) return;
+                    await _deleteMessageForEveryone(msg);
+                  },
+                ),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   Future<void> _translateMessage(ChatMessage msg) async {
@@ -1584,6 +1793,11 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   }
 
   Future<void> _showMoreMessageActions(ChatMessage msg) async {
+    final parsed = parseTurnaMessageText(msg.text);
+    if (_isMessageDeletedPlaceholder(msg, parsed: parsed)) {
+      await _confirmRemoveDeletedPlaceholder(msg);
+      return;
+    }
     final isPinned = _pinnedMessage?.messageId == msg.id;
     await showModalBottomSheet<void>(
       context: context,
@@ -1632,7 +1846,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                 title: const Text('Sil'),
                 onTap: () {
                   Navigator.pop(sheetContext);
-                  _deleteMessageLocally(msg);
+                  _showDeleteMessageOptions(msg);
                 },
               ),
             ],
@@ -1643,9 +1857,14 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   }
 
   Future<void> _handleMessageLongPress(ChatMessage msg) async {
+    final parsed = parseTurnaMessageText(msg.text);
+    if (_isMessageDeletedPlaceholder(msg, parsed: parsed)) {
+      await _confirmRemoveDeletedPlaceholder(msg);
+      return;
+    }
     final replyPayload = _replyPayloadForMessage(msg);
     final isStarred = _starredMessageIds.contains(msg.id);
-    final textOnly = parseTurnaMessageText(msg.text).text.trim();
+    final textOnly = parsed.text.trim();
     await showModalBottomSheet<void>(
       context: context,
       builder: (sheetContext) {
@@ -1705,7 +1924,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                       label: 'Sil',
                       onTap: () {
                         Navigator.pop(sheetContext);
-                        _deleteMessageLocally(msg);
+                        _showDeleteMessageOptions(msg);
                       },
                     ),
                     _MessageQuickAction(
@@ -1887,8 +2106,19 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     bool mine,
   ) {
     final parsed = parseTurnaMessageText(msg.text);
-    final hasText = parsed.text.trim().isNotEmpty;
-    final hasError = msg.errorText != null && msg.errorText!.trim().isNotEmpty;
+    final isDeletedPlaceholder = _isMessageDeletedPlaceholder(
+      msg,
+      parsed: parsed,
+    );
+    final displayText = isDeletedPlaceholder ? 'Silindi.' : parsed.text.trim();
+    final visibleAttachments = isDeletedPlaceholder
+        ? const <ChatAttachment>[]
+        : msg.attachments;
+    final hasText = displayText.isNotEmpty;
+    final hasError =
+        !isDeletedPlaceholder &&
+        msg.errorText != null &&
+        msg.errorText!.trim().isNotEmpty;
     final isHighlighted = _highlightedMessageId == msg.id;
     final footer = _MessageMetaFooter(
       timeLabel: _formatMessageTime(msg.createdAt),
@@ -1928,10 +2158,11 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
       child: GestureDetector(
         onLongPress: () => _handleMessageLongPress(msg),
-        onTap:
-            mine &&
-                (msg.status == ChatMessageStatus.failed ||
-                    msg.status == ChatMessageStatus.queued)
+        onTap: isDeletedPlaceholder
+            ? () => _confirmRemoveDeletedPlaceholder(msg)
+            : mine &&
+                  (msg.status == ChatMessageStatus.failed ||
+                      msg.status == ChatMessageStatus.queued)
             ? () => _client.retryMessage(msg)
             : null,
         child: AnimatedContainer(
@@ -1983,7 +2214,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                     ),
                   ),
                 ),
-              if (parsed.reply != null) ...[
+              if (parsed.reply != null && !isDeletedPlaceholder) ...[
                 _ReplySnippetCard(
                   reply: parsed.reply!,
                   mine: mine,
@@ -1992,9 +2223,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                 if (hasText || msg.attachments.isNotEmpty)
                   const SizedBox(height: 8),
               ],
-              if (msg.attachments.isNotEmpty) ...[
+              if (visibleAttachments.isNotEmpty) ...[
                 _ChatAttachmentList(
-                  attachments: msg.attachments,
+                  attachments: visibleAttachments,
                   onTap: _openAttachment,
                   formatFileSize: _formatFileSize,
                 ),
@@ -2010,10 +2241,13 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                         bottom: 4,
                       ),
                       child: Text(
-                        parsed.text.trim(),
+                        displayText,
                         style: TextStyle(
                           fontSize: 16,
                           height: 1.28,
+                          fontStyle: isDeletedPlaceholder
+                              ? FontStyle.italic
+                              : FontStyle.normal,
                           color: mine
                               ? TurnaColors.chatOutgoingText
                               : TurnaColors.chatIncomingText,
@@ -2023,7 +2257,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                     footer,
                   ],
                 )
-              else if (msg.attachments.isNotEmpty || hasError)
+              else if (visibleAttachments.isNotEmpty || hasError)
                 Align(alignment: Alignment.bottomRight, child: footer),
             ],
           ),
@@ -10098,6 +10332,12 @@ class ProfileApi {
           return 'Avatar yüklemesi doğrulanamadı.';
         case 'invalid_attachment_key':
           return 'Medya yüklemesi doğrulanamadı.';
+        case 'message_not_found':
+          return 'Mesaj bulunamadi.';
+        case 'message_delete_not_allowed':
+          return 'Bu mesaj sadece gonderen tarafindan herkesten silinebilir.';
+        case 'message_delete_window_expired':
+          return 'Mesaj artik herkesten silinemez. 10 dakika siniri doldu.';
         case 'uploaded_file_not_found':
           return 'Yüklenen dosya bulunamadı.';
         case 'avatar_not_found':
@@ -10310,6 +10550,32 @@ class ChatApi {
       rethrow;
     } catch (_) {
       throw TurnaApiException('Mesaj gonderilemedi.');
+    }
+  }
+
+  static Future<ChatMessage> deleteMessageForEveryone(
+    AuthSession session, {
+    required String messageId,
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse(
+          '$kBackendBaseUrl/api/chats/messages/$messageId/delete-for-everyone',
+        ),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+      );
+      _throwIfApiError(res);
+
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = map['data'] as Map<String, dynamic>? ?? const {};
+      return ChatMessage.fromMap(data);
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Mesaj herkesten silinemedi.');
     }
   }
 
