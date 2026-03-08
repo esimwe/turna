@@ -3563,6 +3563,7 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
   late final TurnaManagedCallSession _callSession;
   bool _ending = false;
   bool _handledSessionEnd = false;
+  bool _showLocalVideoPrimary = false;
 
   @override
   void initState() {
@@ -3637,20 +3638,124 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
     }
   }
 
+  void _toggleVideoSwap() {
+    final adapter = _callSession.adapter;
+    if (_callSession.call.type != TurnaCallType.video ||
+        adapter.localVideoTrack == null) {
+      return;
+    }
+    setState(() => _showLocalVideoPrimary = !_showLocalVideoPrimary);
+  }
+
   Widget _buildCallControlButton({
-    required String heroTag,
     required VoidCallback? onPressed,
     required Widget child,
     Color backgroundColor = Colors.white12,
+    double size = 64,
   }) {
     return SizedBox(
-      width: 56,
-      height: 56,
-      child: FloatingActionButton(
-        heroTag: heroTag,
-        backgroundColor: backgroundColor,
-        onPressed: onPressed,
-        child: child,
+      width: size,
+      height: size,
+      child: Material(
+        color: onPressed == null
+            ? backgroundColor.withValues(alpha: 0.45)
+            : backgroundColor,
+        shape: const CircleBorder(),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onPressed,
+          child: Center(
+            child: IconTheme(
+              data: const IconThemeData(size: 28, color: Colors.white),
+              child: child,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPrimaryCallPlaceholder() {
+    final adapter = _callSession.adapter;
+    return Container(
+      color: const Color(0xFF101314),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _ProfileAvatar(
+              label: _callSession.call.peer.displayName,
+              avatarUrl: _callSession.call.peer.avatarUrl,
+              authToken: _callSession.session.token,
+              radius: 48,
+            ),
+            const SizedBox(height: 16),
+            Text(
+              _callSession.call.peer.displayName,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 24,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              adapter.connecting
+                  ? 'Baglaniyor...'
+                  : (adapter.connected
+                        ? _callSession.formatDuration()
+                        : (adapter.error ?? 'Arama hazirlaniyor')),
+              style: const TextStyle(
+                color: Color(0xFFB7BCB9),
+                fontSize: 16,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildVideoPreviewCard({
+    required Widget child,
+    required VoidCallback? onTap,
+  }) {
+    return Material(
+      color: Colors.black,
+      borderRadius: BorderRadius.circular(18),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(onTap: onTap, child: child),
+    );
+  }
+
+  Widget _buildPreviewPlaceholder({required bool showLocalUser}) {
+    return Container(
+      color: const Color(0xFF1A1F20),
+      padding: const EdgeInsets.all(14),
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              showLocalUser ? Icons.videocam_off : Icons.person,
+              color: Colors.white70,
+              size: 24,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              showLocalUser ? 'Sen' : _callSession.call.peer.displayName,
+              textAlign: TextAlign.center,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -3661,10 +3766,70 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
     final remoteVideo = adapter.primaryRemoteVideoTrack;
     final localVideo = adapter.localVideoTrack;
     final isVideo = _callSession.call.type == TurnaCallType.video;
+    final canSwapVideoViews = isVideo && localVideo != null;
+    final showLocalVideoPrimary = canSwapVideoViews && _showLocalVideoPrimary;
     final localPreviewMirrorMode =
         adapter.cameraPosition == lk.CameraPosition.front
         ? lk.VideoViewMirrorMode.mirror
         : lk.VideoViewMirrorMode.off;
+    const previewTop = 16.0;
+    const previewRight = 16.0;
+    const previewWidth = 96.0;
+    const previewHeight = 170.0;
+    final previewBottom = previewTop + previewHeight + 12;
+
+    Widget primaryContent;
+    if (isVideo && showLocalVideoPrimary) {
+      primaryContent = lk.VideoTrackRenderer(
+        localVideo,
+        key: ValueKey(
+          'primary-local-${_callSession.call.id}-${adapter.cameraPosition.name}',
+        ),
+        fit: lk.VideoViewFit.cover,
+        mirrorMode: localPreviewMirrorMode,
+      );
+    } else if (remoteVideo != null && isVideo) {
+      primaryContent = lk.VideoTrackRenderer(
+        remoteVideo,
+        key: ValueKey('primary-remote-${_callSession.call.id}'),
+        fit: lk.VideoViewFit.cover,
+      );
+    } else {
+      primaryContent = _buildPrimaryCallPlaceholder();
+    }
+
+    final previewOverlays = <Widget>[];
+    if (isVideo && localVideo != null) {
+      final previewChild = showLocalVideoPrimary
+          ? (remoteVideo != null
+                ? lk.VideoTrackRenderer(
+                    remoteVideo,
+                    key: ValueKey('preview-remote-${_callSession.call.id}'),
+                    fit: lk.VideoViewFit.cover,
+                  )
+                : _buildPreviewPlaceholder(showLocalUser: false))
+          : lk.VideoTrackRenderer(
+              localVideo,
+              key: ValueKey(
+                'preview-local-${_callSession.call.id}-${adapter.cameraPosition.name}',
+              ),
+              fit: lk.VideoViewFit.cover,
+              mirrorMode: localPreviewMirrorMode,
+            );
+
+      previewOverlays.add(
+        Positioned(
+          right: previewRight,
+          top: previewTop,
+          width: previewWidth,
+          height: previewHeight,
+          child: _buildVideoPreviewCard(
+            onTap: _toggleVideoSwap,
+            child: previewChild,
+          ),
+        ),
+      );
+    }
 
     return PopScope(
       canPop: !isVideo,
@@ -3687,74 +3852,13 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
         body: SafeArea(
           child: Stack(
             children: [
-              Positioned.fill(
-                child: remoteVideo != null && isVideo
-                    ? lk.VideoTrackRenderer(remoteVideo)
-                    : Container(
-                        color: const Color(0xFF101314),
-                        child: Center(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              _ProfileAvatar(
-                                label: _callSession.call.peer.displayName,
-                                avatarUrl: _callSession.call.peer.avatarUrl,
-                                authToken: _callSession.session.token,
-                                radius: 48,
-                              ),
-                              const SizedBox(height: 16),
-                              Text(
-                                _callSession.call.peer.displayName,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 24,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                adapter.connecting
-                                    ? 'Baglaniyor...'
-                                    : (adapter.connected
-                                          ? _callSession.formatDuration()
-                                          : (adapter.error ??
-                                                'Arama hazirlaniyor')),
-                                style: const TextStyle(
-                                  color: Color(0xFFB7BCB9),
-                                  fontSize: 16,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-              ),
-              if (localVideo != null && isVideo)
-                Positioned(
-                  right: 16,
-                  top: 16,
-                  width: 110,
-                  height: 160,
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(16),
-                    child: ColoredBox(
-                      color: Colors.black,
-                      child: lk.VideoTrackRenderer(
-                        localVideo,
-                        key: ValueKey(
-                          'local-preview-${_callSession.call.id}-${adapter.cameraPosition.name}',
-                        ),
-                        mirrorMode: localPreviewMirrorMode,
-                      ),
-                    ),
-                  ),
-                ),
+              Positioned.fill(child: primaryContent),
+              ...previewOverlays,
               if (localVideo != null && isVideo && adapter.cameraEnabled)
                 Positioned(
-                  right: 16,
-                  top: 184,
+                  right: previewRight,
+                  top: previewBottom,
                   child: _buildCallControlButton(
-                    heroTag: 'flip_${_callSession.call.id}',
                     backgroundColor: Colors.black54,
                     onPressed: adapter.connecting
                         ? null
@@ -3766,14 +3870,14 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
                   ),
                 ),
               Positioned(
-                right: 20,
+                left: 24,
+                right: 24,
                 bottom: 24,
                 child: Row(
-                  mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     if (isVideo) ...[
                       _buildCallControlButton(
-                        heroTag: 'camera_${_callSession.call.id}',
                         onPressed: adapter.connecting
                             ? null
                             : () => adapter.toggleCamera(),
@@ -3784,10 +3888,8 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
                           color: Colors.white,
                         ),
                       ),
-                      const SizedBox(width: 12),
                     ],
                     _buildCallControlButton(
-                      heroTag: 'speaker_${_callSession.call.id}',
                       onPressed: adapter.connecting
                           ? null
                           : () => adapter.toggleSpeaker(),
@@ -3798,9 +3900,7 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
                         color: Colors.white,
                       ),
                     ),
-                    const SizedBox(width: 12),
                     _buildCallControlButton(
-                      heroTag: 'mute_${_callSession.call.id}',
                       onPressed: adapter.connecting
                           ? null
                           : () => adapter.toggleMicrophone(),
@@ -3809,9 +3909,7 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
                         color: Colors.white,
                       ),
                     ),
-                    const SizedBox(width: 12),
                     _buildCallControlButton(
-                      heroTag: 'end_${_callSession.call.id}',
                       backgroundColor: Colors.red.shade400,
                       onPressed: _ending ? null : _endCall,
                       child: const Icon(Icons.call_end, color: Colors.white),
