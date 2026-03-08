@@ -100,6 +100,16 @@ class TurnaColors {
   static const info = Color(0xFF38BDF8);
 }
 
+class TurnaChatTokens {
+  static const bubbleRadius = 20.0;
+  static const bubbleRadiusTail = 8.0;
+  static const messageMaxWidthFactor = 0.76;
+  static const stackGap = 4.0;
+  static const groupGap = 10.0;
+  static const sectionGap = 14.0;
+  static const dateGap = 18.0;
+}
+
 void turnaLog(String message, [Object? data]) {
   if (!kTurnaDebugLogs) return;
   if (data != null) {
@@ -951,6 +961,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   final ImagePicker _mediaPicker = ImagePicker();
+  final FocusNode _composerFocusNode = FocusNode();
   bool _showScrollToBottom = false;
   bool _attachmentBusy = false;
   bool _hasComposerText = false;
@@ -978,6 +989,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     )..connect();
     _client.addListener(_refresh);
     _controller.addListener(_handleComposerChanged);
+    _composerFocusNode.addListener(_refresh);
     _scrollController.addListener(_handleScroll);
   }
 
@@ -1182,6 +1194,48 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     );
   }
 
+  void _showAttachmentPlaceholder(String label) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('$label yakinda eklenecek.')));
+  }
+
+  bool _isSameMessageGroup(
+    List<ChatMessage> displayMessages,
+    int currentIndex,
+    int neighborIndex,
+  ) {
+    if (neighborIndex < 0 || neighborIndex >= displayMessages.length) {
+      return false;
+    }
+    final current = displayMessages[currentIndex];
+    final neighbor = displayMessages[neighborIndex];
+    if (current.senderId != neighbor.senderId) return false;
+    final currentDate = DateTime.tryParse(current.createdAt);
+    final neighborDate = DateTime.tryParse(neighbor.createdAt);
+    if (currentDate == null || neighborDate == null) return false;
+    return currentDate.year == neighborDate.year &&
+        currentDate.month == neighborDate.month &&
+        currentDate.day == neighborDate.day;
+  }
+
+  EdgeInsets _bubbleMarginFor(
+    List<ChatMessage> displayMessages,
+    int index,
+    bool mine,
+  ) {
+    final joinsOlder = _isSameMessageGroup(displayMessages, index, index + 1);
+    final joinsNewer = _isSameMessageGroup(displayMessages, index, index - 1);
+    return EdgeInsets.only(
+      left: mine ? 56 : 8,
+      right: mine ? 8 : 56,
+      top: joinsOlder ? TurnaChatTokens.stackGap / 2 : TurnaChatTokens.groupGap,
+      bottom: joinsNewer
+          ? TurnaChatTokens.stackGap / 2
+          : TurnaChatTokens.groupGap / 2,
+    );
+  }
+
   Future<void> _handleSendPressed() async {
     if (_attachmentBusy) return;
     final text = _controller.text.trim();
@@ -1195,7 +1249,12 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     _jumpToBottom();
   }
 
-  Widget _buildMessageBubble(ChatMessage msg, bool mine) {
+  Widget _buildMessageBubble(
+    List<ChatMessage> displayMessages,
+    int index,
+    ChatMessage msg,
+    bool mine,
+  ) {
     final hasText = msg.text.trim().isNotEmpty;
     final hasError = msg.errorText != null && msg.errorText!.trim().isNotEmpty;
     final footer = _MessageMetaFooter(
@@ -1207,10 +1266,14 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         ? TurnaColors.chatOutgoing
         : TurnaColors.chatIncoming;
     final bubbleRadius = BorderRadius.only(
-      topLeft: const Radius.circular(18),
-      topRight: const Radius.circular(18),
-      bottomLeft: Radius.circular(mine ? 18 : 4),
-      bottomRight: Radius.circular(mine ? 4 : 18),
+      topLeft: const Radius.circular(TurnaChatTokens.bubbleRadius),
+      topRight: const Radius.circular(TurnaChatTokens.bubbleRadius),
+      bottomLeft: Radius.circular(
+        mine ? TurnaChatTokens.bubbleRadiusTail : TurnaChatTokens.bubbleRadius,
+      ),
+      bottomRight: Radius.circular(
+        mine ? TurnaChatTokens.bubbleRadius : TurnaChatTokens.bubbleRadiusTail,
+      ),
     );
 
     return Align(
@@ -1224,14 +1287,11 @@ class _ChatRoomPageState extends State<ChatRoomPage>
             : null,
         child: Container(
           constraints: BoxConstraints(
-            maxWidth: MediaQuery.of(context).size.width * 0.78,
+            maxWidth:
+                MediaQuery.of(context).size.width *
+                TurnaChatTokens.messageMaxWidthFactor,
           ),
-          margin: EdgeInsets.only(
-            left: mine ? 56 : 8,
-            right: mine ? 8 : 56,
-            top: 2,
-            bottom: 2,
-          ),
+          margin: _bubbleMarginFor(displayMessages, index, mine),
           padding: EdgeInsets.fromLTRB(
             12,
             9,
@@ -1309,6 +1369,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   }
 
   Widget _buildComposer() {
+    final focused = _composerFocusNode.hasFocus;
     return SafeArea(
       top: false,
       child: Padding(
@@ -1332,13 +1393,19 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                 constraints: const BoxConstraints(minHeight: 52),
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 decoration: BoxDecoration(
-                  color: TurnaColors.surface,
+                  color: TurnaColors.backgroundSoft,
                   borderRadius: BorderRadius.circular(28),
+                  border: Border.all(
+                    color: focused ? TurnaColors.primary : TurnaColors.border,
+                    width: focused ? 1.4 : 1,
+                  ),
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.05),
-                      blurRadius: 8,
-                      offset: const Offset(0, 1),
+                      color: TurnaColors.primary.withValues(
+                        alpha: focused ? 0.08 : 0.03,
+                      ),
+                      blurRadius: focused ? 16 : 8,
+                      offset: const Offset(0, 1.5),
                     ),
                   ],
                 ),
@@ -1348,6 +1415,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                     Expanded(
                       child: TextField(
                         controller: _controller,
+                        focusNode: _composerFocusNode,
                         minLines: 1,
                         maxLines: 5,
                         textCapitalization: TextCapitalization.sentences,
@@ -1611,44 +1679,91 @@ class _ChatRoomPageState extends State<ChatRoomPage>
 
     await showModalBottomSheet<void>(
       context: context,
+      backgroundColor: Colors.transparent,
       builder: (sheetContext) {
         return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ListTile(
-                leading: const Icon(Icons.photo_library_outlined),
-                title: const Text('Galeri'),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  _pickGalleryMedia();
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.photo_camera_outlined),
-                title: const Text('Kameradan foto'),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  _pickCameraImage();
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.videocam_outlined),
-                title: const Text('Kameradan video'),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  _pickCameraVideo();
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.attach_file_outlined),
-                title: const Text('Dosya olarak gonder'),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  _pickFile();
-                },
-              ),
-            ],
+          child: Container(
+            margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+            padding: const EdgeInsets.fromLTRB(18, 18, 18, 22),
+            decoration: BoxDecoration(
+              color: TurnaColors.surface,
+              borderRadius: BorderRadius.circular(28),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Paylas',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: TurnaColors.text,
+                  ),
+                ),
+                const SizedBox(height: 18),
+                Wrap(
+                  spacing: 18,
+                  runSpacing: 18,
+                  children: [
+                    _AttachmentQuickAction(
+                      icon: Icons.photo_camera_outlined,
+                      label: 'Kamera',
+                      backgroundColor: TurnaColors.primary,
+                      onTap: () {
+                        Navigator.pop(sheetContext);
+                        _pickCameraImage();
+                      },
+                    ),
+                    _AttachmentQuickAction(
+                      icon: Icons.photo_library_outlined,
+                      label: 'Galeri',
+                      backgroundColor: TurnaColors.accent,
+                      onTap: () {
+                        Navigator.pop(sheetContext);
+                        _pickGalleryMedia();
+                      },
+                    ),
+                    _AttachmentQuickAction(
+                      icon: Icons.videocam_outlined,
+                      label: 'Video',
+                      backgroundColor: TurnaColors.primaryStrong,
+                      onTap: () {
+                        Navigator.pop(sheetContext);
+                        _pickCameraVideo();
+                      },
+                    ),
+                    _AttachmentQuickAction(
+                      icon: Icons.insert_drive_file_outlined,
+                      label: 'Belge',
+                      backgroundColor: TurnaColors.primaryDeep,
+                      onTap: () {
+                        Navigator.pop(sheetContext);
+                        _pickFile();
+                      },
+                    ),
+                    _AttachmentQuickAction(
+                      icon: Icons.location_on_outlined,
+                      label: 'Konum',
+                      backgroundColor: TurnaColors.primary400,
+                      onTap: () {
+                        Navigator.pop(sheetContext);
+                        _showAttachmentPlaceholder('Konum');
+                      },
+                    ),
+                    _AttachmentQuickAction(
+                      icon: Icons.perm_contact_calendar_outlined,
+                      label: 'Kisi',
+                      backgroundColor: TurnaColors.accentStrong,
+                      onTap: () {
+                        Navigator.pop(sheetContext);
+                        _showAttachmentPlaceholder('Kisi');
+                      },
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
         );
       },
@@ -1700,6 +1815,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     _client.dispose();
     _controller.removeListener(_handleComposerChanged);
     _controller.dispose();
+    _composerFocusNode.removeListener(_refresh);
+    _composerFocusNode.dispose();
     _scrollController.removeListener(_handleScroll);
     _scrollController.dispose();
     super.dispose();
@@ -1872,32 +1989,28 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                         children: [
                           if (_shouldShowDayChip(displayMessages, index))
                             Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 12),
-                              child: DecoratedBox(
-                                decoration: BoxDecoration(
-                                  color: TurnaColors.backgroundMuted,
-                                  borderRadius: BorderRadius.circular(999),
-                                ),
-                                child: Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 12,
-                                    vertical: 6,
-                                  ),
-                                  child: Text(
-                                    _formatDayLabel(msg.createdAt),
-                                    style: const TextStyle(
-                                      color: TurnaColors.textMuted,
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ),
+                              padding: const EdgeInsets.symmetric(
+                                vertical: TurnaChatTokens.dateGap / 2,
+                              ),
+                              child: _DateSeparatorChip(
+                                label: _formatDayLabel(msg.createdAt),
                               ),
                             ),
-                          _buildMessageBubble(msg, mine),
+                          _buildMessageBubble(
+                            displayMessages,
+                            index,
+                            msg,
+                            mine,
+                          ),
                         ],
                       );
                     },
+                  ),
+                if (_client.peerTyping)
+                  const Positioned(
+                    left: 14,
+                    bottom: 12,
+                    child: _TypingIndicatorPill(),
                   ),
                 if (_showScrollToBottom)
                   Positioned(
@@ -1985,6 +2098,108 @@ class _StatusTick extends StatelessWidget {
   }
 }
 
+class _DateSeparatorChip extends StatelessWidget {
+  const _DateSeparatorChip({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: TurnaColors.surfaceHover,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: TurnaColors.border),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        child: Text(
+          label,
+          style: const TextStyle(
+            color: TurnaColors.textMuted,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TypingIndicatorPill extends StatefulWidget {
+  const _TypingIndicatorPill();
+
+  @override
+  State<_TypingIndicatorPill> createState() => _TypingIndicatorPillState();
+}
+
+class _TypingIndicatorPillState extends State<_TypingIndicatorPill>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1100),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  double _opacityForDot(int index) {
+    final progress = (_controller.value + (index * 0.16)) % 1.0;
+    if (progress < 0.5) {
+      return 0.32 + (progress / 0.5) * 0.68;
+    }
+    return 1 - ((progress - 0.5) / 0.5) * 0.68;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: TurnaColors.chatIncoming,
+        borderRadius: BorderRadius.circular(TurnaChatTokens.bubbleRadius),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 8,
+            offset: const Offset(0, 1),
+          ),
+        ],
+      ),
+      child: AnimatedBuilder(
+        animation: _controller,
+        builder: (_, _) {
+          return Row(
+            mainAxisSize: MainAxisSize.min,
+            children: List.generate(3, (index) {
+              return Container(
+                width: 7,
+                height: 7,
+                margin: EdgeInsets.only(right: index == 2 ? 0 : 4),
+                decoration: BoxDecoration(
+                  color: TurnaColors.textMuted.withValues(
+                    alpha: _opacityForDot(index),
+                  ),
+                  shape: BoxShape.circle,
+                ),
+              );
+            }),
+          );
+        },
+      ),
+    );
+  }
+}
+
 class _ChatWallpaper extends StatelessWidget {
   const _ChatWallpaper();
 
@@ -2055,6 +2270,54 @@ class _ChatWallpaperPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class _AttachmentQuickAction extends StatelessWidget {
+  const _AttachmentQuickAction({
+    required this.icon,
+    required this.label,
+    required this.backgroundColor,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color backgroundColor;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 78,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 56,
+              height: 56,
+              decoration: BoxDecoration(
+                color: backgroundColor,
+                borderRadius: BorderRadius.circular(18),
+              ),
+              child: Icon(icon, color: Colors.white, size: 25),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              label,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 12.5,
+                color: TurnaColors.textSoft,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _ChatAttachmentList extends StatelessWidget {
