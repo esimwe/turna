@@ -551,7 +551,7 @@ class TurnaSocketClient extends ChangeNotifier {
       }
 
       final merged = byId.values.toList()
-        ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+        ..sort((a, b) => compareTurnaTimestamps(a.createdAt, b.createdAt));
       messages
         ..clear()
         ..addAll(merged);
@@ -600,7 +600,7 @@ class TurnaSocketClient extends ChangeNotifier {
         byId[serverMessage.id] = _applyPendingStatus(serverMessage);
       }
       final merged = byId.values.toList()
-        ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+        ..sort((a, b) => compareTurnaTimestamps(a.createdAt, b.createdAt));
       messages
         ..clear()
         ..addAll(merged);
@@ -696,7 +696,7 @@ class TurnaSocketClient extends ChangeNotifier {
   }
 
   Future<void> send(String text) async {
-    final nowIso = DateTime.now().toIso8601String();
+    final nowIso = DateTime.now().toUtc().toIso8601String();
     final localMessage = ChatMessage(
       id: 'local_${senderId}_${_localMessageSeq++}',
       senderId: senderId,
@@ -904,7 +904,7 @@ class TurnaSocketClient extends ChangeNotifier {
   }
 
   void _sortMessages() {
-    messages.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    messages.sort((a, b) => compareTurnaTimestamps(a.createdAt, b.createdAt));
   }
 
   @override
@@ -2288,12 +2288,7 @@ class ChatApi {
   }
 
   static String _formatTime(String? iso) {
-    if (iso == null || iso.isEmpty) return '';
-    final dt = DateTime.tryParse(iso);
-    if (dt == null) return '';
-    final hh = dt.hour.toString().padLeft(2, '0');
-    final mm = dt.minute.toString().padLeft(2, '0');
-    return '$hh:$mm';
+    return formatTurnaLocalClock(iso);
   }
 }
 
@@ -2610,12 +2605,7 @@ class _CallsPageState extends State<CallsPage> {
   }
 
   String _formatTime(String? iso) {
-    if (iso == null || iso.isEmpty) return '';
-    final dt = DateTime.tryParse(iso);
-    if (dt == null) return '';
-    final hh = dt.hour.toString().padLeft(2, '0');
-    final mm = dt.minute.toString().padLeft(2, '0');
-    return '$hh:$mm';
+    return formatTurnaLocalClock(iso);
   }
 
   String _statusLabel(TurnaCallHistoryItem item) {

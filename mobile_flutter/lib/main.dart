@@ -236,6 +236,31 @@ void turnaLog(String message, [Object? data]) {
   debugPrint('[turna-mobile] $message');
 }
 
+DateTime? parseTurnaLocalDateTime(String? raw) {
+  final iso = raw?.trim();
+  if (iso == null || iso.isEmpty) return null;
+  return DateTime.tryParse(iso)?.toLocal();
+}
+
+int compareTurnaTimestamps(String? left, String? right) {
+  final leftDate = parseTurnaLocalDateTime(left);
+  final rightDate = parseTurnaLocalDateTime(right);
+  if (leftDate != null && rightDate != null) {
+    return leftDate.compareTo(rightDate);
+  }
+  if (leftDate != null) return 1;
+  if (rightDate != null) return -1;
+  return (left ?? '').compareTo(right ?? '');
+}
+
+String formatTurnaLocalClock(String? raw) {
+  final dt = parseTurnaLocalDateTime(raw);
+  if (dt == null) return '';
+  final hh = dt.hour.toString().padLeft(2, '0');
+  final mm = dt.minute.toString().padLeft(2, '0');
+  return '$hh:$mm';
+}
+
 String? guessContentTypeForFileName(String fileName) {
   final lower = fileName.toLowerCase();
   if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';

@@ -640,7 +640,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   }
 
   String _formatPresenceTime(String iso) {
-    final dt = DateTime.tryParse(iso)?.toLocal();
+    final dt = parseTurnaLocalDateTime(iso);
     if (dt == null) return iso;
 
     final now = DateTime.now();
@@ -734,15 +734,11 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   }
 
   String _formatMessageTime(String iso) {
-    final dt = DateTime.tryParse(iso);
-    if (dt == null) return '';
-    final hh = dt.hour.toString().padLeft(2, '0');
-    final mm = dt.minute.toString().padLeft(2, '0');
-    return '$hh:$mm';
+    return formatTurnaLocalClock(iso);
   }
 
   String _formatDayLabel(String iso) {
-    final dt = DateTime.tryParse(iso);
+    final dt = parseTurnaLocalDateTime(iso);
     if (dt == null) return '';
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
@@ -763,8 +759,10 @@ class _ChatRoomPageState extends State<ChatRoomPage>
 
   bool _shouldShowDayChip(List<_ChatTimelineEntry> entries, int index) {
     if (index == entries.length - 1) return true;
-    final current = DateTime.tryParse(_timelineCreatedAt(entries[index]));
-    final older = DateTime.tryParse(_timelineCreatedAt(entries[index + 1]));
+    final current = parseTurnaLocalDateTime(_timelineCreatedAt(entries[index]));
+    final older = parseTurnaLocalDateTime(
+      _timelineCreatedAt(entries[index + 1]),
+    );
     if (current == null || older == null) return false;
     return current.year != older.year ||
         current.month != older.month ||
@@ -792,7 +790,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
             ..sort((a, b) {
               final aTime = a.createdAt ?? a.endedAt ?? a.acceptedAt ?? '';
               final bTime = b.createdAt ?? b.endedAt ?? b.acceptedAt ?? '';
-              return aTime.compareTo(bTime);
+              return compareTurnaTimestamps(aTime, bTime);
             });
       setState(() => _peerCalls = filtered);
       final nextCount = _buildTimelineEntries().length;
@@ -1438,8 +1436,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     final neighbor = neighborEntry.message;
     if (current == null || neighbor == null) return false;
     if (current.senderId != neighbor.senderId) return false;
-    final currentDate = DateTime.tryParse(current.createdAt);
-    final neighborDate = DateTime.tryParse(neighbor.createdAt);
+    final currentDate = parseTurnaLocalDateTime(current.createdAt);
+    final neighborDate = parseTurnaLocalDateTime(neighbor.createdAt);
     if (currentDate == null || neighborDate == null) return false;
     return currentDate.year == neighborDate.year &&
         currentDate.month == neighborDate.month &&
@@ -1473,7 +1471,10 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       ..._peerCalls.map(_ChatTimelineEntry.call),
     ];
     entries.sort(
-      (a, b) => _timelineCreatedAt(b).compareTo(_timelineCreatedAt(a)),
+      (a, b) => compareTurnaTimestamps(
+        _timelineCreatedAt(b),
+        _timelineCreatedAt(a),
+      ),
     );
     return entries;
   }
