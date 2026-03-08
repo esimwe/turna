@@ -481,8 +481,6 @@ class AuthPage extends StatefulWidget {
 
 class _AuthPageState extends State<AuthPage> {
   final _usernameController = TextEditingController();
-  final _phoneController = TextEditingController();
-  final _nameController = TextEditingController();
   final _passwordController = TextEditingController();
 
   bool _loading = false;
@@ -492,24 +490,20 @@ class _AuthPageState extends State<AuthPage> {
   @override
   void dispose() {
     _usernameController.dispose();
-    _phoneController.dispose();
-    _nameController.dispose();
     _passwordController.dispose();
     super.dispose();
   }
 
   Future<void> _submit() async {
     final username = _usernameController.text.trim();
-    final phone = _phoneController.text.trim();
-    final name = _nameController.text.trim();
     final password = _passwordController.text.trim();
 
-    if (username.isEmpty && phone.isEmpty) {
-      setState(() => _error = 'Username veya telefon gir.');
+    if (username.isEmpty) {
+      setState(() => _error = 'Username gir.');
       return;
     }
-    if (_isRegisterMode && name.length < 2) {
-      setState(() => _error = 'Kayıt için ad soyad gir.');
+    if (password.length < 4) {
+      setState(() => _error = 'Şifre en az 4 karakter olmalı.');
       return;
     }
 
@@ -523,13 +517,10 @@ class _AuthPageState extends State<AuthPage> {
       turnaLog('auth submit', {
         'mode': endpoint,
         'username': username,
-        'hasPhone': phone.isNotEmpty,
       });
       final payload = <String, dynamic>{
-        if (username.isNotEmpty) 'username': username,
-        if (phone.isNotEmpty) 'phone': phone,
-        if (password.isNotEmpty) 'password': password,
-        if (_isRegisterMode) 'displayName': name,
+        'username': username,
+        'password': password,
       };
 
       final res = await http.post(
@@ -587,8 +578,8 @@ class _AuthPageState extends State<AuthPage> {
         children: [
           Text(
             _isRegisterMode
-                ? 'Username/telefon ile kayıt ol.'
-                : 'Username/telefon ile giriş yap.',
+                ? 'Username ve şifre ile kayıt ol.'
+                : 'Username ve şifre ile giriş yap.',
             style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: 14),
@@ -601,26 +592,10 @@ class _AuthPageState extends State<AuthPage> {
           ),
           const SizedBox(height: 12),
           TextField(
-            controller: _phoneController,
-            decoration: const InputDecoration(
-              labelText: 'Telefon (opsiyonel)',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _nameController,
-            decoration: const InputDecoration(
-              labelText: 'Ad Soyad (kayıtta zorunlu)',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          const SizedBox(height: 12),
-          TextField(
             controller: _passwordController,
             obscureText: true,
             decoration: const InputDecoration(
-              labelText: 'Şifre (opsiyonel)',
+              labelText: 'Şifre',
               border: OutlineInputBorder(),
             ),
           ),
