@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:firebase_analytics/firebase_analytics.dart';
@@ -12,6 +11,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_callkit_incoming/entities/entities.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
@@ -110,6 +110,105 @@ class TurnaChatTokens {
   static const dateGap = 18.0;
 }
 
+final RegExp _kTurnaReplyMarkerPattern = RegExp(
+  r'^\[\[turna-reply:([A-Za-z0-9_-]+)\]\]\n?',
+);
+
+class TurnaReplyPayload {
+  const TurnaReplyPayload({
+    required this.messageId,
+    required this.senderLabel,
+    required this.previewText,
+  });
+
+  final String messageId;
+  final String senderLabel;
+  final String previewText;
+
+  Map<String, dynamic> toMap() => {
+    'messageId': messageId,
+    'senderLabel': senderLabel,
+    'previewText': previewText,
+  };
+
+  factory TurnaReplyPayload.fromMap(Map<String, dynamic> map) {
+    return TurnaReplyPayload(
+      messageId: (map['messageId'] ?? '').toString(),
+      senderLabel: (map['senderLabel'] ?? '').toString(),
+      previewText: (map['previewText'] ?? '').toString(),
+    );
+  }
+}
+
+class ParsedTurnaMessageText {
+  const ParsedTurnaMessageText({required this.text, this.reply});
+
+  final String text;
+  final TurnaReplyPayload? reply;
+}
+
+class _PinnedMessageDraft {
+  const _PinnedMessageDraft({
+    required this.messageId,
+    required this.senderLabel,
+    required this.previewText,
+  });
+
+  final String messageId;
+  final String senderLabel;
+  final String previewText;
+
+  Map<String, dynamic> toMap() => {
+    'messageId': messageId,
+    'senderLabel': senderLabel,
+    'previewText': previewText,
+  };
+
+  factory _PinnedMessageDraft.fromMap(Map<String, dynamic> map) {
+    return _PinnedMessageDraft(
+      messageId: (map['messageId'] ?? '').toString(),
+      senderLabel: (map['senderLabel'] ?? '').toString(),
+      previewText: (map['previewText'] ?? '').toString(),
+    );
+  }
+}
+
+ParsedTurnaMessageText parseTurnaMessageText(String raw) {
+  final match = _kTurnaReplyMarkerPattern.firstMatch(raw);
+  if (match == null) {
+    return ParsedTurnaMessageText(text: raw);
+  }
+
+  try {
+    final encoded = match.group(1)!;
+    final decoded = utf8.decode(base64Url.decode(base64Url.normalize(encoded)));
+    final payload = TurnaReplyPayload.fromMap(
+      jsonDecode(decoded) as Map<String, dynamic>,
+    );
+    final cleaned = raw.substring(match.end);
+    return ParsedTurnaMessageText(text: cleaned, reply: payload);
+  } catch (_) {
+    return ParsedTurnaMessageText(text: raw);
+  }
+}
+
+String buildTurnaReplyEncodedText({
+  required TurnaReplyPayload reply,
+  required String text,
+}) {
+  final encoded = base64UrlEncode(
+    utf8.encode(jsonEncode(reply.toMap())),
+  ).replaceAll('=', '');
+  return '[[turna-reply:$encoded]]\n$text';
+}
+
+String sanitizeTurnaChatPreviewText(String raw) {
+  final parsed = parseTurnaMessageText(raw);
+  final cleaned = parsed.text.trim();
+  if (cleaned.isNotEmpty) return cleaned;
+  return parsed.reply?.previewText ?? raw;
+}
+
 void turnaLog(String message, [Object? data]) {
   if (!kTurnaDebugLogs) return;
   if (data != null) {
@@ -143,6 +242,18 @@ String? guessContentTypeForFileName(String fileName) {
   }
   if (lower.endsWith('.zip')) return 'application/zip';
   return 'application/octet-stream';
+}
+
+bool _isAudioAttachment(ChatAttachment attachment) {
+  final contentType = attachment.contentType.toLowerCase();
+  if (contentType.startsWith('audio/')) return true;
+  final fileName = (attachment.fileName ?? '').toLowerCase();
+  return fileName.endsWith('.m4a') ||
+      fileName.endsWith('.aac') ||
+      fileName.endsWith('.mp3') ||
+      fileName.endsWith('.wav') ||
+      fileName.endsWith('.ogg') ||
+      fileName.endsWith('.opus');
 }
 
 String formatBytesLabel(int bytes) {
@@ -965,11 +1076,15 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   bool _showScrollToBottom = false;
   bool _attachmentBusy = false;
   bool _hasComposerText = false;
+  TurnaReplyPayload? _replyDraft;
+  _PinnedMessageDraft? _pinnedMessage;
   int _lastRenderedMessageCount = 0;
   PageRoute<dynamic>? _route;
 
   String? get _peerUserId =>
       ChatApi.extractPeerUserId(widget.chat.chatId, widget.session.userId);
+
+  String get _pinnedMessageKey => 'turna_pinned_message_${widget.chat.chatId}';
 
   @override
   void initState() {
@@ -991,6 +1106,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     _controller.addListener(_handleComposerChanged);
     _composerFocusNode.addListener(_refresh);
     _scrollController.addListener(_handleScroll);
+    _loadPinnedMessage();
   }
 
   @override
@@ -1200,6 +1316,116 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     ).showSnackBar(SnackBar(content: Text('$label yakinda eklenecek.')));
   }
 
+  Future<void> _loadPinnedMessage() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_pinnedMessageKey);
+      if (raw == null || raw.trim().isEmpty) return;
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      if (!mounted) return;
+      setState(() {
+        _pinnedMessage = _PinnedMessageDraft.fromMap(map);
+      });
+    } catch (error) {
+      turnaLog('chat pinned message load failed', error);
+    }
+  }
+
+  Future<void> _persistPinnedMessage(_PinnedMessageDraft? draft) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (draft == null) {
+      await prefs.remove(_pinnedMessageKey);
+      return;
+    }
+    await prefs.setString(_pinnedMessageKey, jsonEncode(draft.toMap()));
+  }
+
+  String _previewSnippetForMessage(ChatMessage msg) {
+    final parsed = parseTurnaMessageText(msg.text);
+    final text = parsed.text.trim();
+    if (text.isNotEmpty) {
+      return text.length > 72 ? '${text.substring(0, 72)}...' : text;
+    }
+    if (msg.attachments.isEmpty) return 'Mesaj';
+    final first = msg.attachments.first;
+    if (_isAudioAttachment(first)) return 'Sesli mesaj';
+    if (first.kind == ChatAttachmentKind.image) return 'Fotograf';
+    if (first.kind == ChatAttachmentKind.video) return 'Video';
+    return 'Dosya';
+  }
+
+  TurnaReplyPayload _replyPayloadForMessage(ChatMessage msg) {
+    final mine = msg.senderId == widget.session.userId;
+    return TurnaReplyPayload(
+      messageId: msg.id,
+      senderLabel: mine ? 'Sen' : widget.chat.name,
+      previewText: _previewSnippetForMessage(msg),
+    );
+  }
+
+  Future<void> _handleMessageLongPress(ChatMessage msg) async {
+    final replyPayload = _replyPayloadForMessage(msg);
+    final isPinned = _pinnedMessage?.messageId == msg.id;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.reply_rounded),
+                title: const Text('Yanitla'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  setState(() => _replyDraft = replyPayload);
+                  _composerFocusNode.requestFocus();
+                },
+              ),
+              ListTile(
+                leading: Icon(
+                  isPinned ? Icons.push_pin_outlined : Icons.push_pin_rounded,
+                ),
+                title: Text(isPinned ? 'Sabitlemeyi kaldir' : 'Sabitle'),
+                onTap: () async {
+                  Navigator.pop(sheetContext);
+                  final next = isPinned
+                      ? null
+                      : _PinnedMessageDraft(
+                          messageId: msg.id,
+                          senderLabel: replyPayload.senderLabel,
+                          previewText: replyPayload.previewText,
+                        );
+                  if (!mounted) return;
+                  setState(() => _pinnedMessage = next);
+                  await _persistPinnedMessage(next);
+                },
+              ),
+              if (parseTurnaMessageText(msg.text).text.trim().isNotEmpty)
+                ListTile(
+                  leading: const Icon(Icons.copy_all_outlined),
+                  title: const Text('Kopyala'),
+                  onTap: () async {
+                    Navigator.pop(sheetContext);
+                    await Clipboard.setData(
+                      ClipboardData(
+                        text: parseTurnaMessageText(msg.text).text.trim(),
+                      ),
+                    );
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Mesaj kopyalandi.')),
+                    );
+                  },
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   bool _isSameMessageGroup(
     List<ChatMessage> displayMessages,
     int currentIndex,
@@ -1240,12 +1466,18 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     if (_attachmentBusy) return;
     final text = _controller.text.trim();
     if (text.isEmpty) return;
-    _client.send(text);
+    final outboundText = _replyDraft == null
+        ? text
+        : buildTurnaReplyEncodedText(reply: _replyDraft!, text: text);
+    _client.send(outboundText);
     TurnaAnalytics.logEvent('message_sent', {
       'chat_id': widget.chat.chatId,
       'kind': 'text',
     });
     _controller.clear();
+    if (mounted) {
+      setState(() => _replyDraft = null);
+    }
     _jumpToBottom();
   }
 
@@ -1255,7 +1487,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     ChatMessage msg,
     bool mine,
   ) {
-    final hasText = msg.text.trim().isNotEmpty;
+    final parsed = parseTurnaMessageText(msg.text);
+    final hasText = parsed.text.trim().isNotEmpty;
     final hasError = msg.errorText != null && msg.errorText!.trim().isNotEmpty;
     final footer = _MessageMetaFooter(
       timeLabel: _formatMessageTime(msg.createdAt),
@@ -1279,6 +1512,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     return Align(
       alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
       child: GestureDetector(
+        onLongPress: () => _handleMessageLongPress(msg),
         onTap:
             mine &&
                 (msg.status == ChatMessageStatus.failed ||
@@ -1328,6 +1562,11 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                     ),
                   ),
                 ),
+              if (parsed.reply != null) ...[
+                _ReplySnippetCard(reply: parsed.reply!, mine: mine),
+                if (hasText || msg.attachments.isNotEmpty)
+                  const SizedBox(height: 8),
+              ],
               if (msg.attachments.isNotEmpty) ...[
                 _ChatAttachmentList(
                   attachments: msg.attachments,
@@ -1346,7 +1585,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                         bottom: 1,
                       ),
                       child: Text(
-                        msg.text,
+                        parsed.text.trim(),
                         style: TextStyle(
                           fontSize: 16,
                           height: 1.28,
@@ -1374,112 +1613,131 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       top: false,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(8, 6, 8, 10),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            IconButton(
-              onPressed: _attachmentBusy ? null : _showAttachmentSheet,
-              icon: _attachmentBusy
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.add, size: 28),
-              color: TurnaColors.textSoft,
-            ),
-            Expanded(
-              child: Container(
-                constraints: const BoxConstraints(minHeight: 52),
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                decoration: BoxDecoration(
-                  color: TurnaColors.backgroundSoft,
-                  borderRadius: BorderRadius.circular(28),
-                  border: Border.all(
-                    color: focused ? TurnaColors.primary : TurnaColors.border,
-                    width: focused ? 1.4 : 1,
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: TurnaColors.primary.withValues(
-                        alpha: focused ? 0.08 : 0.03,
-                      ),
-                      blurRadius: focused ? 16 : 8,
-                      offset: const Offset(0, 1.5),
-                    ),
-                  ],
-                ),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _controller,
-                        focusNode: _composerFocusNode,
-                        minLines: 1,
-                        maxLines: 5,
-                        textCapitalization: TextCapitalization.sentences,
-                        decoration: const InputDecoration(
-                          hintText: 'Mesaj',
-                          border: InputBorder.none,
-                          contentPadding: EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 14,
-                          ),
-                        ),
-                      ),
-                    ),
-                    if (!_hasComposerText)
-                      IconButton(
-                        onPressed: _attachmentBusy ? null : _pickCameraImage,
-                        icon: const Icon(Icons.camera_alt_outlined),
-                        color: TurnaColors.textSoft,
-                      ),
-                  ],
+            if (_replyDraft != null)
+              Padding(
+                padding: const EdgeInsets.only(left: 48, right: 54, bottom: 8),
+                child: _ComposerReplyBanner(
+                  reply: _replyDraft!,
+                  onClose: () => setState(() => _replyDraft = null),
                 ),
               ),
-            ),
-            const SizedBox(width: 8),
-            AnimatedSwitcher(
-              duration: const Duration(milliseconds: 160),
-              child: _hasComposerText
-                  ? Container(
-                      key: const ValueKey('send'),
-                      width: 46,
-                      height: 46,
-                      decoration: const BoxDecoration(
-                        color: TurnaColors.primary,
-                        shape: BoxShape.circle,
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                IconButton(
+                  onPressed: _attachmentBusy ? null : _showAttachmentSheet,
+                  icon: _attachmentBusy
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.add, size: 28),
+                  color: TurnaColors.textSoft,
+                ),
+                Expanded(
+                  child: Container(
+                    constraints: const BoxConstraints(minHeight: 52),
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    decoration: BoxDecoration(
+                      color: TurnaColors.backgroundSoft,
+                      borderRadius: BorderRadius.circular(28),
+                      border: Border.all(
+                        color: focused
+                            ? TurnaColors.primary
+                            : TurnaColors.border,
+                        width: focused ? 1.4 : 1,
                       ),
-                      child: IconButton(
-                        onPressed: _attachmentBusy ? null : _handleSendPressed,
-                        icon: const Icon(Icons.send_rounded),
-                        color: TurnaColors.surface,
-                      ),
-                    )
-                  : Container(
-                      key: const ValueKey('mic'),
-                      width: 46,
-                      height: 46,
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        shape: BoxShape.circle,
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.05),
-                            blurRadius: 8,
-                            offset: const Offset(0, 1),
+                      boxShadow: [
+                        BoxShadow(
+                          color: TurnaColors.primary.withValues(
+                            alpha: focused ? 0.08 : 0.03,
                           ),
-                        ],
-                      ),
-                      child: IconButton(
-                        onPressed: _attachmentBusy
-                            ? null
-                            : _showVoiceMessagePlaceholder,
-                        icon: const Icon(Icons.mic_none_rounded),
-                        color: TurnaColors.textSoft,
-                      ),
+                          blurRadius: focused ? 16 : 8,
+                          offset: const Offset(0, 1.5),
+                        ),
+                      ],
                     ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _controller,
+                            focusNode: _composerFocusNode,
+                            minLines: 1,
+                            maxLines: 5,
+                            textCapitalization: TextCapitalization.sentences,
+                            decoration: const InputDecoration(
+                              hintText: 'Mesaj',
+                              border: InputBorder.none,
+                              contentPadding: EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 14,
+                              ),
+                            ),
+                          ),
+                        ),
+                        if (!_hasComposerText)
+                          IconButton(
+                            onPressed: _attachmentBusy
+                                ? null
+                                : _pickCameraImage,
+                            icon: const Icon(Icons.camera_alt_outlined),
+                            color: TurnaColors.textSoft,
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 160),
+                  child: _hasComposerText
+                      ? Container(
+                          key: const ValueKey('send'),
+                          width: 46,
+                          height: 46,
+                          decoration: const BoxDecoration(
+                            color: TurnaColors.primary,
+                            shape: BoxShape.circle,
+                          ),
+                          child: IconButton(
+                            onPressed: _attachmentBusy
+                                ? null
+                                : _handleSendPressed,
+                            icon: const Icon(Icons.send_rounded),
+                            color: TurnaColors.surface,
+                          ),
+                        )
+                      : Container(
+                          key: const ValueKey('mic'),
+                          width: 46,
+                          height: 46,
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            shape: BoxShape.circle,
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.05),
+                                blurRadius: 8,
+                                offset: const Offset(0, 1),
+                              ),
+                            ],
+                          ),
+                          child: IconButton(
+                            onPressed: _attachmentBusy
+                                ? null
+                                : _showVoiceMessagePlaceholder,
+                            icon: const Icon(Icons.mic_none_rounded),
+                            color: TurnaColors.textSoft,
+                          ),
+                        ),
+                ),
+              ],
             ),
           ],
         ),
@@ -1518,7 +1776,14 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       final message = await ChatApi.sendMessage(
         widget.session,
         chatId: widget.chat.chatId,
-        text: _controller.text.trim().isEmpty ? null : _controller.text.trim(),
+        text: _controller.text.trim().isEmpty
+            ? null
+            : (_replyDraft == null
+                  ? _controller.text.trim()
+                  : buildTurnaReplyEncodedText(
+                      reply: _replyDraft!,
+                      text: _controller.text.trim(),
+                    )),
         attachments: [
           OutgoingAttachmentDraft(
             objectKey: upload.objectKey,
@@ -1533,6 +1798,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       if (!mounted) return;
       _client.mergeServerMessage(message);
       _controller.clear();
+      setState(() => _replyDraft = null);
       _jumpToBottom();
       await TurnaAnalytics.logEvent('attachment_sent', {
         'chat_id': widget.chat.chatId,
@@ -1943,6 +2209,14 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                 style: TextStyle(color: TurnaColors.primaryStrong),
               ),
             ),
+          if (_pinnedMessage != null)
+            _PinnedMessageBar(
+              pinned: _pinnedMessage!,
+              onClear: () async {
+                setState(() => _pinnedMessage = null);
+                await _persistPinnedMessage(null);
+              },
+            ),
           Expanded(
             child: Stack(
               children: [
@@ -2320,6 +2594,290 @@ class _AttachmentQuickAction extends StatelessWidget {
   }
 }
 
+class _ReplySnippetCard extends StatelessWidget {
+  const _ReplySnippetCard({required this.reply, required this.mine});
+
+  final TurnaReplyPayload reply;
+  final bool mine;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = mine
+        ? Colors.white.withValues(alpha: 0.85)
+        : TurnaColors.primary;
+    final background = mine
+        ? Colors.white.withValues(alpha: 0.14)
+        : TurnaColors.primary50;
+    final textColor = mine
+        ? Colors.white.withValues(alpha: 0.95)
+        : TurnaColors.text;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 3,
+            height: 34,
+            decoration: BoxDecoration(
+              color: accent,
+              borderRadius: BorderRadius.circular(999),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  reply.senderLabel,
+                  style: TextStyle(
+                    color: accent,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  reply.previewText,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: textColor.withValues(alpha: 0.92),
+                    fontSize: 12.5,
+                    height: 1.25,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ComposerReplyBanner extends StatelessWidget {
+  const _ComposerReplyBanner({required this.reply, required this.onClose});
+
+  final TurnaReplyPayload reply;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+      decoration: BoxDecoration(
+        color: TurnaColors.surface,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: TurnaColors.border),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 3,
+            height: 36,
+            decoration: BoxDecoration(
+              color: TurnaColors.primary,
+              borderRadius: BorderRadius.circular(999),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Yanitlaniyor: ${reply.senderLabel}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: TurnaColors.primary,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  reply.previewText,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: TurnaColors.textMuted,
+                    fontSize: 12.5,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            onPressed: onClose,
+            visualDensity: VisualDensity.compact,
+            icon: const Icon(Icons.close_rounded, size: 18),
+            color: TurnaColors.textMuted,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PinnedMessageBar extends StatelessWidget {
+  const _PinnedMessageBar({required this.pinned, required this.onClear});
+
+  final _PinnedMessageDraft pinned;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
+      decoration: const BoxDecoration(
+        color: TurnaColors.surface,
+        border: Border(bottom: BorderSide(color: TurnaColors.divider)),
+      ),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.push_pin_rounded,
+            size: 17,
+            color: TurnaColors.primary,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Sabitlenen mesaj',
+                  style: TextStyle(
+                    color: TurnaColors.primary,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '${pinned.senderLabel}: ${pinned.previewText}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: TurnaColors.textSoft,
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            onPressed: onClear,
+            visualDensity: VisualDensity.compact,
+            icon: const Icon(Icons.close_rounded, size: 18),
+            color: TurnaColors.textMuted,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _VoiceMessageBubbleSkeleton extends StatelessWidget {
+  const _VoiceMessageBubbleSkeleton({
+    required this.attachment,
+    required this.onTap,
+  });
+
+  final ChatAttachment attachment;
+  final VoidCallback onTap;
+
+  String _formatDuration() {
+    final duration = attachment.durationSeconds;
+    if (duration == null || duration <= 0) return '--:--';
+    final minutes = (duration ~/ 60).toString().padLeft(2, '0');
+    final seconds = (duration % 60).toString().padLeft(2, '0');
+    return '$minutes:$seconds';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    const bars = [10, 16, 12, 20, 13, 17, 9, 19, 11, 15, 18, 12];
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(18),
+        child: Container(
+          width: 236,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          decoration: BoxDecoration(
+            color: TurnaColors.primary50,
+            borderRadius: BorderRadius.circular(18),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: const BoxDecoration(
+                  color: TurnaColors.primary,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.play_arrow_rounded,
+                  color: Colors.white,
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: bars
+                          .map(
+                            (height) => Container(
+                              width: 3,
+                              height: height.toDouble(),
+                              margin: const EdgeInsets.only(right: 3),
+                              decoration: BoxDecoration(
+                                color: TurnaColors.primary.withValues(
+                                  alpha: 0.78,
+                                ),
+                                borderRadius: BorderRadius.circular(999),
+                              ),
+                            ),
+                          )
+                          .toList(),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      _formatDuration(),
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: TurnaColors.textMuted,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _ChatAttachmentList extends StatelessWidget {
   const _ChatAttachmentList({
     required this.attachments,
@@ -2335,6 +2893,12 @@ class _ChatAttachmentList extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(
       children: attachments.map((attachment) {
+        if (_isAudioAttachment(attachment)) {
+          return _VoiceMessageBubbleSkeleton(
+            attachment: attachment,
+            onTap: () => onTap(attachment),
+          );
+        }
         if (attachment.kind == ChatAttachmentKind.image) {
           final imageUrl = attachment.url?.trim() ?? '';
           return Padding(
@@ -2347,7 +2911,7 @@ class _ChatAttachmentList extends StatelessWidget {
                 child: Container(
                   width: 220,
                   height: 220,
-                  color: const Color(0xFFE8ECE8),
+                  color: TurnaColors.backgroundMuted,
                   child: imageUrl.isEmpty
                       ? const Center(
                           child: Icon(Icons.image_not_supported_outlined),
@@ -2375,7 +2939,7 @@ class _ChatAttachmentList extends StatelessWidget {
               width: 220,
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: const Color(0xFFF3F5F3),
+                color: TurnaColors.backgroundMuted,
                 borderRadius: BorderRadius.circular(14),
               ),
               child: Row(
@@ -2384,7 +2948,7 @@ class _ChatAttachmentList extends StatelessWidget {
                     width: 42,
                     height: 42,
                     decoration: BoxDecoration(
-                      color: Colors.white,
+                      color: TurnaColors.surface,
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: Icon(
@@ -2410,7 +2974,7 @@ class _ChatAttachmentList extends StatelessWidget {
                           '${isVideo ? 'Video' : 'Dosya'} • ${formatFileSize(attachment.sizeBytes)}',
                           style: const TextStyle(
                             fontSize: 12,
-                            color: Color(0xFF777C79),
+                            color: TurnaColors.textMuted,
                           ),
                         ),
                       ],
@@ -8951,7 +9515,9 @@ class ChatApi {
         return ChatPreview(
           chatId: map['chatId'].toString(),
           name: map['title']?.toString() ?? 'Chat',
-          message: map['lastMessage']?.toString() ?? '',
+          message: sanitizeTurnaChatPreviewText(
+            map['lastMessage']?.toString() ?? '',
+          ),
           time: _formatTime(map['lastMessageAt']?.toString()),
           avatarUrl: _nullableString(map['avatarUrl']),
           unreadCount: (map['unreadCount'] as num?)?.toInt() ?? 0,
