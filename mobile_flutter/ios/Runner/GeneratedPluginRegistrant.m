@@ -42,6 +42,12 @@
 @import firebase_messaging;
 #endif
 
+#if __has_include(<flutter_callkit_incoming/FlutterCallkitIncomingPlugin.h>)
+#import <flutter_callkit_incoming/FlutterCallkitIncomingPlugin.h>
+#else
+@import flutter_callkit_incoming;
+#endif
+
 #if __has_include(<flutter_webrtc/FlutterWebRTCPlugin.h>)
 #import <flutter_webrtc/FlutterWebRTCPlugin.h>
 #else
@@ -81,6 +87,7 @@
   [FirebaseAnalyticsPlugin registerWithRegistrar:[registry registrarForPlugin:@"FirebaseAnalyticsPlugin"]];
   [FLTFirebaseCorePlugin registerWithRegistrar:[registry registrarForPlugin:@"FLTFirebaseCorePlugin"]];
   [FLTFirebaseMessagingPlugin registerWithRegistrar:[registry registrarForPlugin:@"FLTFirebaseMessagingPlugin"]];
+  [FlutterCallkitIncomingPlugin registerWithRegistrar:[registry registrarForPlugin:@"FlutterCallkitIncomingPlugin"]];
   [FlutterWebRTCPlugin registerWithRegistrar:[registry registrarForPlugin:@"FlutterWebRTCPlugin"]];
   [FLTImagePickerPlugin registerWithRegistrar:[registry registrarForPlugin:@"FLTImagePickerPlugin"]];
   [LiveKitPlugin registerWithRegistrar:[registry registrarForPlugin:@"LiveKitPlugin"]];

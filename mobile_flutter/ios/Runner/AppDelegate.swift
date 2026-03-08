@@ -1,3 +1,4 @@
+import AVFAudio
 import CallKit
 import Flutter
 import PushKit
@@ -77,7 +78,7 @@ import flutter_callkit_incoming
       handle: handle,
       type: isVideo ? 1 : 0
     )
-    data.extra = payloadData
+    data.extra = payloadData as NSDictionary
 
     SwiftFlutterCallkitIncomingPlugin.sharedInstance?.showCallkitIncoming(data, fromPushKit: true) {
       completion()
@@ -102,6 +103,10 @@ import flutter_callkit_incoming
   func onTimeOut(_ call: Call) {
     persistPendingAction("timeout", call)
   }
+
+  func didActivateAudioSession(_ audioSession: AVAudioSession) {}
+
+  func didDeactivateAudioSession(_ audioSession: AVAudioSession) {}
 
   private func persistPendingAction(_ action: String, _ call: Call) {
     let payload: [String: Any] = [
