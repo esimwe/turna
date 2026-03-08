@@ -4,7 +4,7 @@ import { getMessaging } from "firebase-admin/messaging";
 import { createSign } from "node:crypto";
 import * as http2 from "node:http2";
 import { env } from "../config/env.js";
-import { logError } from "./logger.js";
+import { logError, logInfo } from "./logger.js";
 import { prisma } from "./prisma.js";
 import type { ChatMessage } from "../modules/chat/chat.types.js";
 import type { AppCallType } from "../modules/calls/call.types.js";
@@ -330,16 +330,34 @@ export async function sendChatMessagePush(params: {
   recipientUserIds: string[];
 }): Promise<void> {
   if (!hasFirebaseCredentials() || params.recipientUserIds.length === 0) {
+    logInfo("chat push skipped", {
+      reason: !hasFirebaseCredentials() ? "firebase_not_configured" : "no_recipients",
+      chatId: params.message.chatId,
+      recipientCount: params.recipientUserIds.length
+    });
     return;
   }
 
   const app = ensureFirebaseApp();
-  if (!app) return;
+  if (!app) {
+    logInfo("chat push skipped", {
+      reason: "firebase_app_init_failed",
+      chatId: params.message.chatId
+    });
+    return;
+  }
 
   const devices = (await findActiveDevices(params.recipientUserIds)).filter(
     (device) => device.tokenKind === "STANDARD"
   );
-  if (devices.length === 0) return;
+  if (devices.length === 0) {
+    logInfo("chat push skipped", {
+      reason: "no_active_standard_devices",
+      chatId: params.message.chatId,
+      recipientUserIds: params.recipientUserIds
+    });
+    return;
+  }
 
   try {
     const response = await getMessaging(app).sendEachForMulticast({
@@ -351,7 +369,22 @@ export async function sendChatMessagePush(params: {
       data: {
         type: "chat_message",
         chatId: params.message.chatId,
-        senderId: params.message.senderId
+        senderId: params.message.senderId,
+        senderDisplayName: params.senderDisplayName,
+        body: buildPushBody(params.message)
+      },
+      android: {
+        priority: "high"
+      },
+      apns: {
+        headers: {
+          "apns-priority": "10"
+        },
+        payload: {
+          aps: {
+            sound: "default"
+          }
+        }
       }
     });
 
@@ -359,6 +392,13 @@ export async function sendChatMessagePush(params: {
     if (invalidTokenIds.length > 0) {
       await markInactiveDeviceTokens(invalidTokenIds);
     }
+    logInfo("chat push sent", {
+      chatId: params.message.chatId,
+      recipientUserIds: params.recipientUserIds,
+      deviceCount: devices.length,
+      successCount: response.successCount,
+      failureCount: response.failureCount
+    });
   } catch (error) {
     logError("send chat push failed", error);
   }
