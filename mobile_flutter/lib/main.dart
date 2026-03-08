@@ -11425,63 +11425,46 @@ class _IncomingCallPageState extends State<IncomingCallPage> {
         body: SafeArea(
           child: Padding(
             padding: const EdgeInsets.all(24),
-            child: Column(
+            child: Stack(
               children: [
-                const Spacer(),
-                _ProfileAvatar(
-                  label: call.peer.displayName,
-                  avatarUrl: call.peer.avatarUrl,
-                  authToken: widget.session.token,
-                  radius: 48,
-                ),
-                const SizedBox(height: 20),
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 280),
-                  child: Column(
-                    children: [
-                      Text(
-                        call.peer.displayName,
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 28,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        isVideo ? 'Goruntulu arama' : 'Sesli arama',
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          color: Color(0xFFB7BCB9),
-                          fontSize: 16,
-                        ),
-                      ),
-                    ],
+                Center(
+                  child: _CallIdentityPanel(
+                    authToken: widget.session.token,
+                    displayName: call.peer.displayName,
+                    avatarUrl: call.peer.avatarUrl,
+                    subtitle: isVideo ? 'Goruntulu arama' : 'Sesli arama',
                   ),
                 ),
-                const Spacer(),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    FloatingActionButton(
-                      heroTag: 'decline_${call.id}',
-                      backgroundColor: Colors.red.shade400,
-                      onPressed: _busy ? null : _decline,
-                      child: const Icon(Icons.call_end, color: Colors.white),
+                Align(
+                  alignment: Alignment.bottomCenter,
+                  child: Padding(
+                    padding: const EdgeInsets.only(bottom: 24),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        FloatingActionButton(
+                          heroTag: 'decline_${call.id}',
+                          backgroundColor: Colors.red.shade400,
+                          onPressed: _busy ? null : _decline,
+                          child: const Icon(
+                            Icons.call_end,
+                            color: Colors.white,
+                          ),
+                        ),
+                        const SizedBox(width: 72),
+                        FloatingActionButton(
+                          heroTag: 'accept_${call.id}',
+                          backgroundColor: TurnaColors.primary,
+                          onPressed: _busy ? null : _accept,
+                          child: Icon(
+                            isVideo ? Icons.videocam : Icons.call,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ],
                     ),
-                    FloatingActionButton(
-                      heroTag: 'accept_${call.id}',
-                      backgroundColor: TurnaColors.primary,
-                      onPressed: _busy ? null : _accept,
-                      child: Icon(
-                        isVideo ? Icons.videocam : Icons.call,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
-                const SizedBox(height: 24),
               ],
             ),
           ),
@@ -11587,53 +11570,80 @@ class _OutgoingCallPageState extends State<OutgoingCallPage> {
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(24),
-          child: Column(
+          child: Stack(
             children: [
-              const Spacer(),
-              _ProfileAvatar(
-                label: call.peer.displayName,
-                avatarUrl: call.peer.avatarUrl,
-                authToken: widget.session.token,
-                radius: 48,
-              ),
-              const SizedBox(height: 20),
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 280),
-                child: Column(
-                  children: [
-                    Text(
-                      call.peer.displayName,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 28,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      call.type == TurnaCallType.video
-                          ? 'Goruntulu arama caliyor...'
-                          : 'Sesli arama caliyor...',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        color: Color(0xFFB7BCB9),
-                        fontSize: 16,
-                      ),
-                    ),
-                  ],
+              Center(
+                child: _CallIdentityPanel(
+                  authToken: widget.session.token,
+                  displayName: call.peer.displayName,
+                  avatarUrl: call.peer.avatarUrl,
+                  subtitle: call.type == TurnaCallType.video
+                      ? 'Goruntulu arama caliyor...'
+                      : 'Sesli arama caliyor...',
                 ),
               ),
-              const Spacer(),
-              FloatingActionButton(
-                backgroundColor: Colors.red.shade400,
-                onPressed: _ending ? null : _cancelCall,
-                child: const Icon(Icons.call_end, color: Colors.white),
+              Align(
+                alignment: Alignment.bottomCenter,
+                child: Padding(
+                  padding: const EdgeInsets.only(bottom: 24),
+                  child: FloatingActionButton(
+                    backgroundColor: Colors.red.shade400,
+                    onPressed: _ending ? null : _cancelCall,
+                    child: const Icon(Icons.call_end, color: Colors.white),
+                  ),
+                ),
               ),
-              const SizedBox(height: 24),
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _CallIdentityPanel extends StatelessWidget {
+  const _CallIdentityPanel({
+    required this.authToken,
+    required this.displayName,
+    required this.avatarUrl,
+    required this.subtitle,
+  });
+
+  final String authToken;
+  final String displayName;
+  final String? avatarUrl;
+  final String subtitle;
+
+  @override
+  Widget build(BuildContext context) {
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 280),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _ProfileAvatar(
+            label: displayName,
+            avatarUrl: avatarUrl,
+            authToken: authToken,
+            radius: 48,
+          ),
+          const SizedBox(height: 20),
+          Text(
+            displayName,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 28,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            subtitle,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Color(0xFFB7BCB9), fontSize: 16),
+          ),
+        ],
       ),
     );
   }
