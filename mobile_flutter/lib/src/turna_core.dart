@@ -2435,6 +2435,7 @@ class TurnaCallConnectPayload {
     required this.url,
     required this.roomName,
     required this.token,
+    required this.e2eeKey,
     required this.callId,
     required this.type,
   });
@@ -2443,6 +2444,7 @@ class TurnaCallConnectPayload {
   final String url;
   final String roomName;
   final String token;
+  final String e2eeKey;
   final String callId;
   final TurnaCallType type;
 
@@ -2452,6 +2454,7 @@ class TurnaCallConnectPayload {
       url: (map['url'] ?? '').toString(),
       roomName: (map['roomName'] ?? '').toString(),
       token: (map['token'] ?? '').toString(),
+      e2eeKey: (map['e2eeKey'] ?? '').toString(),
       callId: (map['callId'] ?? '').toString(),
       type: ((map['type'] ?? '').toString().toLowerCase() == 'video')
           ? TurnaCallType.video
@@ -3088,19 +3091,96 @@ abstract class CallProviderAdapter {
   Future<void> disconnect();
 }
 
+enum _AdaptiveCallVideoProfile {
+  low,
+  medium,
+  standard,
+  high,
+}
+
+extension _AdaptiveCallVideoProfileX on _AdaptiveCallVideoProfile {
+  String get label => switch (this) {
+    _AdaptiveCallVideoProfile.low => '360p',
+    _AdaptiveCallVideoProfile.medium => '540p',
+    _AdaptiveCallVideoProfile.standard => '720p',
+    _AdaptiveCallVideoProfile.high => '1080p',
+  };
+
+  lk.VideoParameters get parameters => switch (this) {
+    _AdaptiveCallVideoProfile.low => lk.VideoParameters(
+      dimensions: lk.VideoParametersPresets.h360_169.dimensions,
+      encoding: const lk.VideoEncoding(
+        maxBitrate: 450 * 1000,
+        maxFramerate: 15,
+        bitratePriority: lk.Priority.low,
+        networkPriority: lk.Priority.low,
+      ),
+    ),
+    _AdaptiveCallVideoProfile.medium => lk.VideoParameters(
+      dimensions: lk.VideoParametersPresets.h540_169.dimensions,
+      encoding: const lk.VideoEncoding(
+        maxBitrate: 800 * 1000,
+        maxFramerate: 24,
+        bitratePriority: lk.Priority.low,
+        networkPriority: lk.Priority.low,
+      ),
+    ),
+    _AdaptiveCallVideoProfile.standard => lk.VideoParameters(
+      dimensions: lk.VideoParametersPresets.h720_169.dimensions,
+      encoding: const lk.VideoEncoding(
+        maxBitrate: 1000 * 1000,
+        maxFramerate: 30,
+        bitratePriority: lk.Priority.medium,
+        networkPriority: lk.Priority.medium,
+      ),
+    ),
+    _AdaptiveCallVideoProfile.high => lk.VideoParameters(
+      dimensions: lk.VideoParametersPresets.h1080_169.dimensions,
+      encoding: const lk.VideoEncoding(
+        maxBitrate: 2500 * 1000,
+        maxFramerate: 30,
+        bitratePriority: lk.Priority.medium,
+        networkPriority: lk.Priority.medium,
+      ),
+    ),
+  };
+
+  lk.CameraCaptureOptions captureOptions({
+    lk.CameraPosition cameraPosition = lk.CameraPosition.front,
+  }) {
+    return lk.CameraCaptureOptions(
+      cameraPosition: cameraPosition,
+      params: parameters,
+      maxFrameRate: parameters.encoding?.maxFramerate.toDouble(),
+    );
+  }
+
+  _AdaptiveCallVideoProfile? get higher => switch (this) {
+    _AdaptiveCallVideoProfile.low => _AdaptiveCallVideoProfile.medium,
+    _AdaptiveCallVideoProfile.medium => _AdaptiveCallVideoProfile.standard,
+    _AdaptiveCallVideoProfile.standard => _AdaptiveCallVideoProfile.high,
+    _AdaptiveCallVideoProfile.high => null,
+  };
+
+  _AdaptiveCallVideoProfile? get lower => switch (this) {
+    _AdaptiveCallVideoProfile.low => null,
+    _AdaptiveCallVideoProfile.medium => _AdaptiveCallVideoProfile.low,
+    _AdaptiveCallVideoProfile.standard => _AdaptiveCallVideoProfile.medium,
+    _AdaptiveCallVideoProfile.high => _AdaptiveCallVideoProfile.standard,
+  };
+}
+
 class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
-  LiveKitCallAdapter({required this.connectPayload, required this.videoEnabled})
-    : room = lk.Room(
-        roomOptions: lk.RoomOptions(
-          adaptiveStream: true,
-          dynacast: true,
-          defaultAudioOutputOptions: lk.AudioOutputOptions(speakerOn: false),
-        ),
-      );
+  static const _initialVideoProfile = _AdaptiveCallVideoProfile.standard;
+  static const _qualityUpgradeThreshold = 3;
+  static const _qualityDowngradeThreshold = 2;
+
+  LiveKitCallAdapter({required this.connectPayload, required this.videoEnabled});
 
   final TurnaCallConnectPayload connectPayload;
   final bool videoEnabled;
-  final lk.Room room;
+  lk.Room? _room;
+  lk.BaseKeyProvider? _e2eeKeyProvider;
   lk.EventsListener<lk.RoomEvent>? _listener;
   bool connecting = false;
   bool connected = false;
@@ -3108,13 +3188,31 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
   bool cameraEnabled = false;
   bool speakerEnabled = false;
   lk.CameraPosition cameraPosition = lk.CameraPosition.front;
+  _AdaptiveCallVideoProfile _videoProfile = _initialVideoProfile;
+  lk.ConnectionQuality _localConnectionQuality = lk.ConnectionQuality.unknown;
+  int _stableQualityTicks = 0;
+  int _poorQualityTicks = 0;
+  bool _videoProfileChangeInFlight = false;
   String? error;
 
+  lk.Room get room {
+    final current = _room;
+    if (current == null) {
+      throw StateError('livekit_room_not_initialized');
+    }
+    return current;
+  }
+
+  bool get e2eeEnabled => _e2eeKeyProvider != null;
+  String get videoQualityLabel => _videoProfile.label;
+
   Iterable<lk.RemoteParticipant> get remoteParticipants =>
-      room.remoteParticipants.values;
+      _room?.remoteParticipants.values ?? const <lk.RemoteParticipant>[];
 
   lk.VideoTrack? get primaryRemoteVideoTrack {
-    for (final participant in room.remoteParticipants.values) {
+    final currentRoom = _room;
+    if (currentRoom == null) return null;
+    for (final participant in currentRoom.remoteParticipants.values) {
       for (final publication in participant.videoTrackPublications) {
         final track = publication.track;
         if (track is lk.VideoTrack && publication.subscribed) {
@@ -3126,7 +3224,7 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
   }
 
   lk.VideoTrack? get localVideoTrack {
-    final localParticipant = room.localParticipant;
+    final localParticipant = _room?.localParticipant;
     if (localParticipant == null) return null;
     for (final publication in localParticipant.videoTrackPublications) {
       final track = publication.track;
@@ -3138,7 +3236,7 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
   }
 
   lk.LocalVideoTrack? get localCameraTrack {
-    final localParticipant = room.localParticipant;
+    final localParticipant = _room?.localParticipant;
     if (localParticipant == null) return null;
     for (final publication in localParticipant.videoTrackPublications) {
       final track = publication.track;
@@ -3149,6 +3247,50 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
     return null;
   }
 
+  Future<lk.BaseKeyProvider?> _createE2eeKeyProvider() async {
+    final encodedKey = connectPayload.e2eeKey.trim();
+    if (encodedKey.isEmpty) return null;
+
+    final keyProvider = await lk.BaseKeyProvider.create(sharedKey: true);
+    await keyProvider.setRawKey(base64Decode(encodedKey));
+    return keyProvider;
+  }
+
+  Future<lk.Room> _buildRoom() async {
+    final e2eeKeyProvider = await _createE2eeKeyProvider();
+    _e2eeKeyProvider = e2eeKeyProvider;
+    return lk.Room(
+      roomOptions: lk.RoomOptions(
+        adaptiveStream: true,
+        dynacast: true,
+        encryption: e2eeKeyProvider == null
+            ? null
+            : lk.E2EEOptions(keyProvider: e2eeKeyProvider),
+        defaultCameraCaptureOptions: _initialVideoProfile.captureOptions(),
+        defaultAudioCaptureOptions: const lk.AudioCaptureOptions(
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        ),
+        defaultVideoPublishOptions: lk.VideoPublishOptions(
+          degradationPreference: lk.DegradationPreference.maintainResolution,
+          videoEncoding: _initialVideoProfile.parameters.encoding,
+          simulcast: true,
+        ),
+        defaultAudioPublishOptions: const lk.AudioPublishOptions(
+          encoding: lk.AudioEncoding(
+            maxBitrate: 24000,
+            bitratePriority: lk.Priority.high,
+            networkPriority: lk.Priority.high,
+          ),
+          dtx: true,
+          red: true,
+        ),
+        defaultAudioOutputOptions: lk.AudioOutputOptions(speakerOn: false),
+      ),
+    );
+  }
+
   @override
   Future<void> connect() async {
     if (connecting || connected) return;
@@ -3157,22 +3299,31 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
     error = null;
     notifyListeners();
 
-    _listener = room.createListener()
-      ..on<lk.RoomDisconnectedEvent>((_) {
-        connected = false;
-        connecting = false;
-        notifyListeners();
-      })
-      ..on<lk.ParticipantConnectedEvent>((_) => notifyListeners())
-      ..on<lk.ParticipantDisconnectedEvent>((_) => notifyListeners())
-      ..on<lk.TrackSubscribedEvent>((_) => notifyListeners())
-      ..on<lk.TrackUnsubscribedEvent>((_) => notifyListeners())
-      ..on<lk.LocalTrackPublishedEvent>((_) => notifyListeners())
-      ..on<lk.LocalTrackUnpublishedEvent>((_) => notifyListeners());
-
     try {
+      _room ??= await _buildRoom();
+
+      _listener?.dispose();
+      _listener = room.createListener()
+        ..on<lk.RoomDisconnectedEvent>((_) {
+          connected = false;
+          connecting = false;
+          notifyListeners();
+        })
+        ..on<lk.ParticipantConnectedEvent>((_) => notifyListeners())
+        ..on<lk.ParticipantDisconnectedEvent>((_) => notifyListeners())
+        ..on<lk.TrackSubscribedEvent>((_) => notifyListeners())
+        ..on<lk.TrackUnsubscribedEvent>((_) => notifyListeners())
+        ..on<lk.LocalTrackPublishedEvent>((_) => notifyListeners())
+        ..on<lk.LocalTrackUnpublishedEvent>((_) => notifyListeners())
+        ..on<lk.ParticipantConnectionQualityUpdatedEvent>(
+          _handleConnectionQualityUpdated,
+        );
+
       await room.prepareConnection(connectPayload.url, connectPayload.token);
       await room.connect(connectPayload.url, connectPayload.token);
+      if (e2eeEnabled) {
+        await room.setE2EEEnabled(true);
+      }
       final localParticipant = room.localParticipant;
       if (localParticipant == null) {
         throw StateError('local_participant_missing');
@@ -3182,7 +3333,12 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
       speakerEnabled = false;
 
       if (videoEnabled) {
-        await localParticipant.setCameraEnabled(true);
+        await localParticipant.setCameraEnabled(
+          true,
+          cameraCaptureOptions: _videoProfile.captureOptions(
+            cameraPosition: cameraPosition,
+          ),
+        );
         cameraEnabled = true;
       }
 
@@ -3212,8 +3368,16 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
     final next = !cameraEnabled;
     final localParticipant = room.localParticipant;
     if (localParticipant == null) return;
-    await localParticipant.setCameraEnabled(next);
+    await localParticipant.setCameraEnabled(
+      next,
+      cameraCaptureOptions: _videoProfile.captureOptions(
+        cameraPosition: cameraPosition,
+      ),
+    );
     cameraEnabled = next;
+    if (next) {
+      _resetVideoQualityCounters();
+    }
     notifyListeners();
   }
 
@@ -3234,26 +3398,130 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
   }
 
   Future<void> toggleSpeaker() async {
+    if (_room == null) return;
     final next = !speakerEnabled;
     await room.setSpeakerOn(next);
     speakerEnabled = next;
     notifyListeners();
   }
 
+  void _handleConnectionQualityUpdated(
+    lk.ParticipantConnectionQualityUpdatedEvent event,
+  ) {
+    if (!videoEnabled || !cameraEnabled || !connected) return;
+    final localParticipant = room.localParticipant;
+    if (localParticipant == null) return;
+    if (event.participant.identity != localParticipant.identity) return;
+
+    _localConnectionQuality = event.connectionQuality;
+    switch (event.connectionQuality) {
+      case lk.ConnectionQuality.excellent:
+      case lk.ConnectionQuality.good:
+        _stableQualityTicks += 1;
+        _poorQualityTicks = 0;
+        if (
+          _stableQualityTicks >= _qualityUpgradeThreshold &&
+          !_videoProfileChangeInFlight
+        ) {
+          _stableQualityTicks = 0;
+          final nextProfile = _videoProfile.higher;
+          if (nextProfile != null) {
+            unawaited(
+              _applyVideoProfile(
+                nextProfile,
+                reason: 'stable_${event.connectionQuality.name}',
+              ),
+            );
+          }
+        }
+      case lk.ConnectionQuality.poor:
+      case lk.ConnectionQuality.lost:
+        _poorQualityTicks += 1;
+        _stableQualityTicks = 0;
+        if (
+          _poorQualityTicks >= _qualityDowngradeThreshold &&
+          !_videoProfileChangeInFlight
+        ) {
+          _poorQualityTicks = 0;
+          final nextProfile = _videoProfile.lower;
+          if (nextProfile != null) {
+            unawaited(
+              _applyVideoProfile(
+                nextProfile,
+                reason: 'poor_${event.connectionQuality.name}',
+              ),
+            );
+          }
+        }
+      case lk.ConnectionQuality.unknown:
+        _resetVideoQualityCounters();
+    }
+  }
+
+  Future<void> _applyVideoProfile(
+    _AdaptiveCallVideoProfile nextProfile, {
+    required String reason,
+  }) async {
+    if (!videoEnabled || _videoProfile == nextProfile) return;
+
+    final previousProfile = _videoProfile;
+    _videoProfile = nextProfile;
+    _videoProfileChangeInFlight = true;
+    notifyListeners();
+
+    try {
+      final track = localCameraTrack;
+      if (track != null && cameraEnabled) {
+        final currentOptions = track.currentOptions;
+        final newOptions = currentOptions is lk.CameraCaptureOptions
+            ? currentOptions.copyWith(
+                params: nextProfile.parameters,
+                cameraPosition: cameraPosition,
+                maxFrameRate: nextProfile.parameters.encoding?.maxFramerate
+                    .toDouble(),
+              )
+            : nextProfile.captureOptions(cameraPosition: cameraPosition);
+        await track.restartTrack(newOptions);
+        await track.replaceTrackForMultiCodecSimulcast(track.mediaStreamTrack);
+        track.currentOptions = newOptions;
+      }
+
+      turnaLog('livekit video quality changed', {
+        'from': previousProfile.label,
+        'to': nextProfile.label,
+        'reason': reason,
+        'connectionQuality': _localConnectionQuality.name,
+      });
+    } catch (err) {
+      _videoProfile = previousProfile;
+      turnaLog('livekit video quality change failed', err);
+    } finally {
+      _videoProfileChangeInFlight = false;
+      _resetVideoQualityCounters();
+      notifyListeners();
+    }
+  }
+
+  void _resetVideoQualityCounters() {
+    _stableQualityTicks = 0;
+    _poorQualityTicks = 0;
+  }
+
   @override
   Future<void> disconnect() async {
     try {
-      await room.disconnect();
+      await _room?.disconnect();
     } catch (_) {}
     connected = false;
     connecting = false;
+    _resetVideoQualityCounters();
     notifyListeners();
   }
 
   @override
   void dispose() {
     _listener?.dispose();
-    room.disconnect();
+    _room?.disconnect();
     super.dispose();
   }
 }

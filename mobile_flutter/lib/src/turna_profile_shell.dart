@@ -1773,12 +1773,12 @@ class _SecurityNotificationsPageState extends State<SecurityNotificationsPage> {
           const Icon(Icons.lock, size: 54, color: TurnaColors.primary),
           const SizedBox(height: 12),
           const Text(
-            'Your chats and calls are private',
+            'Security features for your account',
             style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: 8),
           const Text(
-            'End-to-end encryption keeps your personal messages and calls private between you and your contacts.',
+            'Turna uses secure connections and device protections today. End-to-end encryption for chats and calls is planned for a future update.',
           ),
           const SizedBox(height: 16),
           const ListTile(

@@ -24,7 +24,21 @@ part 'src/turna_chats.dart';
 part 'src/turna_profile_shell.dart';
 part 'src/turna_core.dart';
 
-const String kBackendBaseUrl = 'http://178.104.8.155:4000';
+String _normalizeTurnaBaseUrl(String value) {
+  final trimmed = value.trim();
+  if (trimmed.endsWith('/')) {
+    return trimmed.substring(0, trimmed.length - 1);
+  }
+  return trimmed;
+}
+
+const String _kDefaultBackendBaseUrl = 'http://178.104.8.155:4000';
+final String kBackendBaseUrl = _normalizeTurnaBaseUrl(
+  const String.fromEnvironment(
+    'TURNA_BACKEND_URL',
+    defaultValue: _kDefaultBackendBaseUrl,
+  ),
+);
 const bool kTurnaDebugLogs = true;
 const String kChatRoomRouteName = 'chat-room';
 const int kComposerMediaLimit = 30;
