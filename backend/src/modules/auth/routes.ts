@@ -8,23 +8,14 @@ import { requireAuth } from "../../middleware/auth.js";
 export const authRouter = Router();
 
 const registerSchema = z.object({
-  username: z.string().min(3).max(32).optional(),
-  phone: z.string().min(5).max(20).optional(),
-  displayName: z.string().min(2).max(80),
-  password: z.string().min(4).max(128).optional()
+  username: z.string().min(3).max(32),
+  password: z.string().min(4).max(128)
 });
 
 const loginSchema = z.object({
-  username: z.string().min(3).max(32).optional(),
-  phone: z.string().min(5).max(20).optional(),
-  password: z.string().min(4).max(128).optional()
+  username: z.string().min(3).max(32),
+  password: z.string().min(4).max(128)
 });
-
-function pickIdentity(input: { username?: string; phone?: string }): { username?: string; phone?: string } | null {
-  if (input.username) return { username: input.username.toLowerCase() };
-  if (input.phone) return { phone: input.phone };
-  return null;
-}
 
 authRouter.post("/register", async (req, res) => {
   const parsed = registerSchema.safeParse(req.body);
@@ -33,19 +24,10 @@ authRouter.post("/register", async (req, res) => {
     return;
   }
 
-  const identity = pickIdentity(parsed.data);
-  if (!identity) {
-    res.status(400).json({ error: "username_or_phone_required" });
-    return;
-  }
+  const username = parsed.data.username.toLowerCase();
 
   const existing = await prisma.user.findFirst({
-    where: {
-      OR: [
-        identity.username ? { username: identity.username } : undefined,
-        identity.phone ? { phone: identity.phone } : undefined
-      ].filter(Boolean) as Array<{ username?: string; phone?: string }>
-    },
+    where: { username },
     select: { id: true }
   });
 
@@ -54,13 +36,12 @@ authRouter.post("/register", async (req, res) => {
     return;
   }
 
-  const passwordHash = parsed.data.password ? await bcrypt.hash(parsed.data.password, 10) : null;
+  const passwordHash = await bcrypt.hash(parsed.data.password, 10);
 
   const user = await prisma.user.create({
     data: {
-      username: identity.username,
-      phone: identity.phone,
-      displayName: parsed.data.displayName,
+      username,
+      displayName: parsed.data.username,
       passwordHash
     }
   });
@@ -72,7 +53,6 @@ authRouter.post("/register", async (req, res) => {
     user: {
       id: user.id,
       username: user.username,
-      phone: user.phone,
       displayName: user.displayName
     }
   });
@@ -85,19 +65,10 @@ authRouter.post("/login", async (req, res) => {
     return;
   }
 
-  const identity = pickIdentity(parsed.data);
-  if (!identity) {
-    res.status(400).json({ error: "username_or_phone_required" });
-    return;
-  }
+  const username = parsed.data.username.toLowerCase();
 
   const user = await prisma.user.findFirst({
-    where: {
-      OR: [
-        identity.username ? { username: identity.username } : undefined,
-        identity.phone ? { phone: identity.phone } : undefined
-      ].filter(Boolean) as Array<{ username?: string; phone?: string }>
-    }
+    where: { username }
   });
 
   if (!user) {
@@ -105,17 +76,15 @@ authRouter.post("/login", async (req, res) => {
     return;
   }
 
-  if (user.passwordHash) {
-    if (!parsed.data.password) {
-      res.status(401).json({ error: "password_required" });
-      return;
-    }
+  if (!user.passwordHash) {
+    res.status(401).json({ error: "password_not_set" });
+    return;
+  }
 
-    const ok = await bcrypt.compare(parsed.data.password, user.passwordHash);
-    if (!ok) {
-      res.status(401).json({ error: "invalid_password" });
-      return;
-    }
+  const ok = await bcrypt.compare(parsed.data.password, user.passwordHash);
+  if (!ok) {
+    res.status(401).json({ error: "invalid_password" });
+    return;
   }
 
   const accessToken = signAccessToken(user.id);
@@ -124,7 +93,6 @@ authRouter.post("/login", async (req, res) => {
     user: {
       id: user.id,
       username: user.username,
-      phone: user.phone,
       displayName: user.displayName
     }
   });
