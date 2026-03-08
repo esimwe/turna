@@ -451,6 +451,7 @@ class MainTabs extends StatefulWidget {
 
 class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
   int _index = 0;
+  int _totalUnreadChats = 0;
   late final PresenceSocketClient _presenceClient;
   final _inboxUpdateNotifier = ValueNotifier<int>(0);
   final _callCoordinator = TurnaCallCoordinator();
@@ -564,17 +565,22 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     final pages = <Widget>[
+      const PlaceholderPage(title: 'Durum'),
+      CallsPage(
+        session: widget.session,
+        callCoordinator: _callCoordinator,
+        onSessionExpired: widget.onLogout,
+      ),
+      const PlaceholderPage(title: 'Araclar'),
       ChatsPage(
         session: widget.session,
         inboxUpdateNotifier: _inboxUpdateNotifier,
         callCoordinator: _callCoordinator,
         onSessionExpired: widget.onLogout,
-      ),
-      const PlaceholderPage(title: 'Updates'),
-      CallsPage(
-        session: widget.session,
-        callCoordinator: _callCoordinator,
-        onSessionExpired: widget.onLogout,
+        onUnreadChanged: (count) {
+          if (_totalUnreadChats == count || !mounted) return;
+          setState(() => _totalUnreadChats = count);
+        },
       ),
       SettingsPage(
         session: widget.session,
@@ -585,24 +591,11 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
 
     return Scaffold(
       body: pages[_index],
-      bottomNavigationBar: NavigationBar(
+      bottomNavigationBar: _TurnaBottomBar(
         selectedIndex: _index,
-        onDestinationSelected: (index) => setState(() => _index = index),
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.chat_bubble_outline),
-            label: 'Chats',
-          ),
-          NavigationDestination(icon: Icon(Icons.update), label: 'Updates'),
-          NavigationDestination(
-            icon: Icon(Icons.call_outlined),
-            label: 'Calls',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.settings_outlined),
-            label: 'Settings',
-          ),
-        ],
+        unreadChats: _totalUnreadChats,
+        session: widget.session,
+        onSelect: (index) => setState(() => _index = index),
       ),
     );
   }
@@ -615,12 +608,14 @@ class ChatsPage extends StatefulWidget {
     required this.onSessionExpired,
     required this.callCoordinator,
     this.inboxUpdateNotifier,
+    this.onUnreadChanged,
   });
 
   final AuthSession session;
   final VoidCallback onSessionExpired;
   final TurnaCallCoordinator callCoordinator;
   final ValueNotifier<int>? inboxUpdateNotifier;
+  final ValueChanged<int>? onUnreadChanged;
 
   @override
   State<ChatsPage> createState() => _ChatsPageState();
@@ -699,6 +694,14 @@ class _ChatsPageState extends State<ChatsPage> {
           }
 
           final chats = snapshot.data ?? [];
+          final unreadTotal = chats.fold<int>(
+            0,
+            (sum, chat) => sum + chat.unreadCount,
+          );
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            widget.onUnreadChanged?.call(unreadTotal);
+          });
           final query = _searchController.text.trim().toLowerCase();
           final filteredChats = chats.where((chat) {
             if (query.isEmpty) return true;
@@ -914,6 +917,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   final ImagePicker _mediaPicker = ImagePicker();
   bool _showScrollToBottom = false;
   bool _attachmentBusy = false;
+  bool _hasComposerText = false;
   int _lastRenderedMessageCount = 0;
   PageRoute<dynamic>? _route;
 
@@ -988,7 +992,12 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   }
 
   void _handleComposerChanged() {
-    _client.updateComposerText(_controller.text);
+    final text = _controller.text;
+    _client.updateComposerText(text);
+    final hasComposerText = text.trim().isNotEmpty;
+    if (hasComposerText != _hasComposerText && mounted) {
+      setState(() => _hasComposerText = hasComposerText);
+    }
   }
 
   String? _buildPeerStatusText() {
@@ -1031,6 +1040,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
           userId: peerUserId,
           fallbackName: widget.chat.name,
           fallbackAvatarUrl: widget.chat.avatarUrl,
+          callCoordinator: widget.callCoordinator,
+          onSessionExpired: widget.onSessionExpired,
         ),
       ),
     );
@@ -1128,6 +1139,245 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       guessContentTypeForFileName(fileName);
 
   String _formatFileSize(int bytes) => formatBytesLabel(bytes);
+
+  void _showVoiceMessagePlaceholder() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Sesli mesaj yakinda eklenecek.')),
+    );
+  }
+
+  Future<void> _handleSendPressed() async {
+    if (_attachmentBusy) return;
+    final text = _controller.text.trim();
+    if (text.isEmpty) return;
+    _client.send(text);
+    TurnaAnalytics.logEvent('message_sent', {
+      'chat_id': widget.chat.chatId,
+      'kind': 'text',
+    });
+    _controller.clear();
+    _jumpToBottom();
+  }
+
+  Widget _buildMessageBubble(ChatMessage msg, bool mine) {
+    final hasText = msg.text.trim().isNotEmpty;
+    final hasError = msg.errorText != null && msg.errorText!.trim().isNotEmpty;
+    final footer = _MessageMetaFooter(
+      timeLabel: _formatMessageTime(msg.createdAt),
+      mine: mine,
+      status: msg.status,
+    );
+    final bubbleColor = mine ? const Color(0xFFD9FDD3) : Colors.white;
+    final bubbleRadius = BorderRadius.only(
+      topLeft: const Radius.circular(18),
+      topRight: const Radius.circular(18),
+      bottomLeft: Radius.circular(mine ? 18 : 4),
+      bottomRight: Radius.circular(mine ? 4 : 18),
+    );
+
+    return Align(
+      alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
+      child: GestureDetector(
+        onTap:
+            mine &&
+                (msg.status == ChatMessageStatus.failed ||
+                    msg.status == ChatMessageStatus.queued)
+            ? () => _client.retryMessage(msg)
+            : null,
+        child: Container(
+          constraints: BoxConstraints(
+            maxWidth: MediaQuery.of(context).size.width * 0.78,
+          ),
+          margin: EdgeInsets.only(
+            left: mine ? 56 : 8,
+            right: mine ? 8 : 56,
+            top: 2,
+            bottom: 2,
+          ),
+          padding: EdgeInsets.fromLTRB(
+            12,
+            9,
+            12,
+            msg.attachments.isEmpty && !hasError ? 8 : 10,
+          ),
+          decoration: BoxDecoration(
+            color: bubbleColor,
+            borderRadius: bubbleRadius,
+            border: msg.status == ChatMessageStatus.failed
+                ? Border.all(color: Colors.red.shade200)
+                : null,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: mine ? 0.04 : 0.08),
+                blurRadius: mine ? 4 : 10,
+                offset: const Offset(0, 1),
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (hasError)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Text(
+                    msg.errorText!,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: msg.status == ChatMessageStatus.failed
+                          ? Colors.red.shade600
+                          : const Color(0xFF6F756E),
+                    ),
+                  ),
+                ),
+              if (msg.attachments.isNotEmpty) ...[
+                _ChatAttachmentList(
+                  attachments: msg.attachments,
+                  onTap: _openAttachment,
+                  formatFileSize: _formatFileSize,
+                ),
+                if (hasText) const SizedBox(height: 8),
+              ],
+              if (hasText)
+                Stack(
+                  alignment: Alignment.bottomRight,
+                  children: [
+                    Padding(
+                      padding: EdgeInsets.only(
+                        right: mine ? 52 : 42,
+                        bottom: 1,
+                      ),
+                      child: Text(
+                        msg.text,
+                        style: const TextStyle(
+                          fontSize: 16,
+                          height: 1.28,
+                          color: Color(0xFF1E1F1F),
+                        ),
+                      ),
+                    ),
+                    footer,
+                  ],
+                )
+              else if (msg.attachments.isNotEmpty || hasError)
+                Align(alignment: Alignment.bottomRight, child: footer),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildComposer() {
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(8, 6, 8, 10),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            IconButton(
+              onPressed: _attachmentBusy ? null : _showAttachmentSheet,
+              icon: _attachmentBusy
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.add, size: 28),
+              color: const Color(0xFF5D6660),
+            ),
+            Expanded(
+              child: Container(
+                constraints: const BoxConstraints(minHeight: 52),
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(28),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.05),
+                      blurRadius: 8,
+                      offset: const Offset(0, 1),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _controller,
+                        minLines: 1,
+                        maxLines: 5,
+                        textCapitalization: TextCapitalization.sentences,
+                        decoration: const InputDecoration(
+                          hintText: 'Mesaj',
+                          border: InputBorder.none,
+                          contentPadding: EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 14,
+                          ),
+                        ),
+                      ),
+                    ),
+                    if (!_hasComposerText)
+                      IconButton(
+                        onPressed: _attachmentBusy ? null : _pickCameraImage,
+                        icon: const Icon(Icons.camera_alt_outlined),
+                        color: const Color(0xFF5D6660),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 160),
+              child: _hasComposerText
+                  ? Container(
+                      key: const ValueKey('send'),
+                      width: 46,
+                      height: 46,
+                      decoration: const BoxDecoration(
+                        color: Color(0xFF20B15A),
+                        shape: BoxShape.circle,
+                      ),
+                      child: IconButton(
+                        onPressed: _attachmentBusy ? null : _handleSendPressed,
+                        icon: const Icon(Icons.send_rounded),
+                        color: Colors.white,
+                      ),
+                    )
+                  : Container(
+                      key: const ValueKey('mic'),
+                      width: 46,
+                      height: 46,
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.05),
+                            blurRadius: 8,
+                            offset: const Offset(0, 1),
+                          ),
+                        ],
+                      ),
+                      child: IconButton(
+                        onPressed: _attachmentBusy
+                            ? null
+                            : _showVoiceMessagePlaceholder,
+                        icon: const Icon(Icons.mic_none_rounded),
+                        color: const Color(0xFF4E5651),
+                      ),
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   Future<void> _sendPickedAttachment({
     required ChatAttachmentKind kind,
@@ -1435,7 +1685,12 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     final peerStatusText = _buildPeerStatusText();
 
     return Scaffold(
+      backgroundColor: const Color(0xFFEDE4D8),
       appBar: AppBar(
+        backgroundColor: const Color(0xFFF7F5F0),
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        titleSpacing: 4,
         title: GestureDetector(
           onTap: _peerUserId == null ? null : _openPeerProfile,
           child: Row(
@@ -1444,7 +1699,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                 label: widget.chat.name,
                 avatarUrl: widget.chat.avatarUrl,
                 authToken: widget.session.token,
-                radius: 18,
+                radius: 19,
               ),
               const SizedBox(width: 10),
               Expanded(
@@ -1457,7 +1712,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
-                        fontSize: 18,
+                        fontSize: 20,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
@@ -1467,7 +1722,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
-                          fontSize: 12,
+                          fontSize: 12.5,
                           color: _client.peerTyping
                               ? const Color(0xFF1FAA59)
                               : const Color(0xFF6E7572),
@@ -1484,18 +1739,18 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         ),
         actions: [
           IconButton(
-            tooltip: 'Sesli ara',
-            onPressed: _peerUserId == null
-                ? null
-                : () => _startCall(TurnaCallType.audio),
-            icon: const Icon(Icons.call_outlined),
-          ),
-          IconButton(
             tooltip: 'Goruntulu ara',
             onPressed: _peerUserId == null
                 ? null
                 : () => _startCall(TurnaCallType.video),
             icon: const Icon(Icons.videocam_outlined),
+          ),
+          IconButton(
+            tooltip: 'Sesli ara',
+            onPressed: _peerUserId == null
+                ? null
+                : () => _startCall(TurnaCallType.audio),
+            icon: const Icon(Icons.call_outlined),
           ),
         ],
       ),
@@ -1534,6 +1789,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
           Expanded(
             child: Stack(
               children: [
+                const Positioned.fill(child: _ChatWallpaper()),
                 if (_client.loadingInitial && displayMessages.isEmpty)
                   const Center(child: CircularProgressIndicator())
                 else if (displayMessages.isEmpty)
@@ -1546,7 +1802,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                   ListView.builder(
                     controller: _scrollController,
                     reverse: true,
-                    padding: const EdgeInsets.all(12),
+                    padding: const EdgeInsets.fromLTRB(8, 14, 8, 18),
                     itemCount: displayMessages.length + 1,
                     itemBuilder: (context, index) {
                       if (index == displayMessages.length) {
@@ -1572,23 +1828,14 @@ class _ChatRoomPageState extends State<ChatRoomPage>
 
                       final msg = displayMessages[index];
                       final mine = msg.senderId == widget.session.userId;
-                      final hasText = msg.text.trim().isNotEmpty;
-                      final hasError =
-                          msg.errorText != null &&
-                          msg.errorText!.trim().isNotEmpty;
-                      final metaFooter = _MessageMetaFooter(
-                        timeLabel: _formatMessageTime(msg.createdAt),
-                        mine: mine,
-                        status: msg.status,
-                      );
                       return Column(
                         children: [
                           if (_shouldShowDayChip(displayMessages, index))
                             Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 10),
+                              padding: const EdgeInsets.symmetric(vertical: 12),
                               child: DecoratedBox(
                                 decoration: BoxDecoration(
-                                  color: const Color(0xFFE8ECE8),
+                                  color: const Color(0xFFE7DDD3),
                                   borderRadius: BorderRadius.circular(999),
                                 ),
                                 child: Padding(
@@ -1599,7 +1846,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                                   child: Text(
                                     _formatDayLabel(msg.createdAt),
                                     style: const TextStyle(
-                                      color: Color(0xFF5C625F),
+                                      color: Color(0xFF726C66),
                                       fontSize: 12,
                                       fontWeight: FontWeight.w600,
                                     ),
@@ -1607,103 +1854,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                                 ),
                               ),
                             ),
-                          Align(
-                            alignment: mine
-                                ? Alignment.centerRight
-                                : Alignment.centerLeft,
-                            child: GestureDetector(
-                              onTap:
-                                  mine &&
-                                      (msg.status == ChatMessageStatus.failed ||
-                                          msg.status ==
-                                              ChatMessageStatus.queued)
-                                  ? () => _client.retryMessage(msg)
-                                  : null,
-                              child: Container(
-                                constraints: const BoxConstraints(
-                                  maxWidth: 320,
-                                ),
-                                margin: const EdgeInsets.symmetric(vertical: 4),
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 10,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: mine
-                                      ? const Color(0xFFDCF5E7)
-                                      : Colors.white,
-                                  borderRadius: BorderRadius.circular(14),
-                                  border: msg.status == ChatMessageStatus.failed
-                                      ? Border.all(color: Colors.red.shade200)
-                                      : null,
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.end,
-                                  children: [
-                                    if (hasError)
-                                      Padding(
-                                        padding: const EdgeInsets.only(
-                                          bottom: 6,
-                                        ),
-                                        child: Text(
-                                          msg.errorText!,
-                                          textAlign: TextAlign.right,
-                                          style: TextStyle(
-                                            fontSize: 11,
-                                            color:
-                                                msg.status ==
-                                                    ChatMessageStatus.failed
-                                                ? Colors.red.shade600
-                                                : const Color(0xFF777C79),
-                                          ),
-                                        ),
-                                      ),
-                                    if (hasText &&
-                                        msg.attachments.isEmpty &&
-                                        !hasError)
-                                      SizedBox(
-                                        width: double.infinity,
-                                        child: Stack(
-                                          alignment: Alignment.bottomRight,
-                                          children: [
-                                            Padding(
-                                              padding: EdgeInsets.only(
-                                                right: mine ? 56 : 40,
-                                              ),
-                                              child: Align(
-                                                alignment: Alignment.centerLeft,
-                                                child: Text(msg.text),
-                                              ),
-                                            ),
-                                            metaFooter,
-                                          ],
-                                        ),
-                                      )
-                                    else if (hasText)
-                                      Align(
-                                        alignment: Alignment.centerLeft,
-                                        child: Text(msg.text),
-                                      ),
-                                    if (hasText && msg.attachments.isNotEmpty)
-                                      const SizedBox(height: 10),
-                                    if (msg.attachments.isNotEmpty) ...[
-                                      Align(
-                                        alignment: Alignment.centerLeft,
-                                        child: _ChatAttachmentList(
-                                          attachments: msg.attachments,
-                                          onTap: _openAttachment,
-                                          formatFileSize: _formatFileSize,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 8),
-                                    ],
-                                    if (msg.attachments.isNotEmpty || hasError)
-                                      metaFooter,
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ),
+                          _buildMessageBubble(msg, mine),
                         ],
                       );
                     },
@@ -1722,60 +1873,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
               ],
             ),
           ),
-          SafeArea(
-            top: false,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(10, 6, 10, 8),
-              child: Row(
-                children: [
-                  IconButton(
-                    onPressed: _attachmentBusy ? null : _showAttachmentSheet,
-                    icon: _attachmentBusy
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.attach_file_outlined),
-                  ),
-                  Expanded(
-                    child: TextField(
-                      controller: _controller,
-                      minLines: 1,
-                      maxLines: 5,
-                      decoration: InputDecoration(
-                        hintText: 'Mesaj',
-                        filled: true,
-                        fillColor: Colors.white,
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(24),
-                          borderSide: BorderSide.none,
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  FloatingActionButton.small(
-                    backgroundColor: const Color(0xFF1FAA59),
-                    onPressed: _attachmentBusy
-                        ? null
-                        : () {
-                            final text = _controller.text.trim();
-                            if (text.isEmpty) return;
-                            _client.send(text);
-                            TurnaAnalytics.logEvent('message_sent', {
-                              'chat_id': widget.chat.chatId,
-                              'kind': 'text',
-                            });
-                            _controller.clear();
-                            _jumpToBottom();
-                          },
-                    child: const Icon(Icons.send, color: Colors.white),
-                  ),
-                ],
-              ),
-            ),
-          ),
+          _buildComposer(),
         ],
       ),
     );
@@ -1834,6 +1932,78 @@ class _StatusTick extends StatelessWidget {
 
     return Icon(icon, size: 16, color: color);
   }
+}
+
+class _ChatWallpaper extends StatelessWidget {
+  const _ChatWallpaper();
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(painter: _ChatWallpaperPainter());
+  }
+}
+
+class _ChatWallpaperPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final stroke = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1
+      ..color = const Color(0xFFCFC6B9).withValues(alpha: 0.34);
+    final fill = Paint()
+      ..style = PaintingStyle.fill
+      ..color = Colors.white.withValues(alpha: 0.08);
+
+    const stepX = 72.0;
+    const stepY = 78.0;
+    for (double y = -10; y < size.height + stepY; y += stepY) {
+      final row = (y / stepY).round();
+      for (double x = 0; x < size.width + stepX; x += stepX) {
+        final offsetX = row.isEven ? 10.0 : 36.0;
+        final origin = Offset(x + offsetX, y + 16);
+
+        canvas.drawCircle(origin, 6, stroke);
+        canvas.drawCircle(origin, 3, fill);
+
+        final rounded = RRect.fromRectAndRadius(
+          Rect.fromCenter(
+            center: origin + const Offset(22, 18),
+            width: 18,
+            height: 13,
+          ),
+          const Radius.circular(4),
+        );
+        canvas.drawRRect(rounded, stroke);
+
+        final path = Path()
+          ..moveTo(origin.dx - 4, origin.dy + 26)
+          ..quadraticBezierTo(
+            origin.dx + 2,
+            origin.dy + 18,
+            origin.dx + 8,
+            origin.dy + 26,
+          )
+          ..quadraticBezierTo(
+            origin.dx + 14,
+            origin.dy + 34,
+            origin.dx + 20,
+            origin.dy + 26,
+          );
+        canvas.drawPath(path, stroke);
+
+        canvas.drawArc(
+          Rect.fromCircle(center: origin + const Offset(44, 42), radius: 7),
+          -math.pi / 6,
+          math.pi * 1.2,
+          false,
+          stroke,
+        );
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 class _ChatAttachmentList extends StatelessWidget {
@@ -4492,7 +4662,7 @@ class _NewChatPageState extends State<NewChatPage> {
   }
 }
 
-class SettingsPage extends StatelessWidget {
+class SettingsPage extends StatefulWidget {
   const SettingsPage({
     super.key,
     required this.session,
@@ -4505,100 +4675,358 @@ class SettingsPage extends StatelessWidget {
   final VoidCallback onLogout;
 
   @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
-      body: ListView(
+  State<SettingsPage> createState() => _SettingsPageState();
+}
+
+class _SettingsPageState extends State<SettingsPage> {
+  late Future<TurnaUserProfile> _profileFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _profileFuture = ProfileApi.fetchMe(widget.session);
+  }
+
+  @override
+  void didUpdateWidget(covariant SettingsPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.session.userId != widget.session.userId ||
+        oldWidget.session.token != widget.session.token) {
+      _profileFuture = ProfileApi.fetchMe(widget.session);
+    }
+  }
+
+  void _reloadProfile() {
+    setState(() {
+      _profileFuture = ProfileApi.fetchMe(widget.session);
+    });
+  }
+
+  Future<void> _openPage(Widget page) async {
+    await Navigator.push(context, MaterialPageRoute(builder: (_) => page));
+    if (!mounted) return;
+    _reloadProfile();
+  }
+
+  Future<void> _openProfileEditor() async {
+    await _openPage(
+      ProfilePage(
+        session: widget.session,
+        onProfileUpdated: widget.onSessionUpdated,
+      ),
+    );
+  }
+
+  Widget _buildSectionPanel(List<_SettingsMenuAction> actions) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Column(
         children: [
-          ListTile(
-            leading: _SessionAvatar(session: session),
-            title: Text(
-              session.displayName,
-              style: const TextStyle(fontWeight: FontWeight.w700),
-            ),
-            subtitle: Text(session.userId),
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => ProfilePage(
-                  session: session,
-                  onProfileUpdated: onSessionUpdated,
+          for (var index = 0; index < actions.length; index++) ...[
+            ListTile(
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 18,
+                vertical: 0,
+              ),
+              leading: Icon(
+                actions[index].icon,
+                color: const Color(0xFF5D6461),
+                size: 21,
+              ),
+              title: Text(
+                actions[index].label,
+                style: TextStyle(
+                  color: const Color(0xFF1B1E1D),
+                  fontSize: 16.2,
+                  fontWeight: FontWeight.w500,
                 ),
               ),
+              trailing: Icon(
+                Icons.chevron_right_rounded,
+                color: Colors.black.withValues(alpha: 0.34),
+              ),
+              onTap: actions[index].onTap,
             ),
-          ),
-          const Divider(height: 1),
-          _settingsItem(
-            context,
-            Icons.vpn_key_outlined,
-            'Account',
-            const AccountPage(),
-          ),
-          _settingsItem(
-            context,
-            Icons.lock_outline,
-            'Privacy',
-            const PlaceholderPage(title: 'Privacy'),
-          ),
-          _settingsItem(
-            context,
-            Icons.face_outlined,
-            'Avatar',
-            ProfilePage(session: session, onProfileUpdated: onSessionUpdated),
-          ),
-          _settingsItem(
-            context,
-            Icons.list_alt_outlined,
-            'Lists',
-            const PlaceholderPage(title: 'Lists'),
-          ),
-          _settingsItem(
-            context,
-            Icons.chat_bubble_outline,
-            'Chats',
-            const PlaceholderPage(title: 'Chats'),
-          ),
-          _settingsItem(
-            context,
-            Icons.notifications_none,
-            'Notifications',
-            const PlaceholderPage(title: 'Notifications'),
-          ),
-          _settingsItem(
-            context,
-            Icons.data_saver_off_outlined,
-            'Storage and data',
-            const PlaceholderPage(title: 'Storage and data'),
-          ),
-          ListTile(
-            leading: const Icon(Icons.logout, color: Colors.red),
-            title: const Text('Çıkış Yap', style: TextStyle(color: Colors.red)),
-            onTap: onLogout,
-          ),
+            if (index != actions.length - 1)
+              const Divider(height: 1, indent: 58, endIndent: 18),
+          ],
         ],
       ),
     );
   }
 
-  Widget _settingsItem(
-    BuildContext context,
-    IconData icon,
-    String label,
-    Widget page,
-  ) {
-    return ListTile(
-      leading: Icon(icon, color: const Color(0xFF606664)),
-      title: Text(label),
-      onTap: () =>
-          Navigator.push(context, MaterialPageRoute(builder: (_) => page)),
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF3F3F2),
+      body: SafeArea(
+        child: FutureBuilder<TurnaUserProfile>(
+          future: _profileFuture,
+          builder: (context, snapshot) {
+            final profile = snapshot.data;
+            final about = profile?.about?.trim();
+            final subtitle = (about != null && about.isNotEmpty)
+                ? about
+                : '@${widget.session.userId}';
+
+            return ListView(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
+              children: [
+                Row(
+                  children: [
+                    IconButton(
+                      onPressed: () {},
+                      visualDensity: VisualDensity.compact,
+                      icon: const Icon(Icons.search_rounded, size: 23),
+                    ),
+                    const Spacer(),
+                    IconButton(
+                      onPressed: () {},
+                      visualDensity: VisualDensity.compact,
+                      icon: const Icon(Icons.qr_code_scanner_rounded, size: 22),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                const Text(
+                  'Ayarlar',
+                  style: TextStyle(
+                    fontSize: 25,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF121514),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Material(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(18),
+                  child: InkWell(
+                    onTap: _openProfileEditor,
+                    borderRadius: BorderRadius.circular(18),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 12,
+                      ),
+                      child: Row(
+                        children: [
+                          _SessionAvatar(session: widget.session, radius: 28),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  widget.session.displayName,
+                                  style: const TextStyle(
+                                    fontSize: 17.5,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFF131716),
+                                  ),
+                                ),
+                                const SizedBox(height: 6),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 9,
+                                    vertical: 6,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFF5F5F4),
+                                    borderRadius: BorderRadius.circular(14),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      const Icon(
+                                        Icons.edit_note_rounded,
+                                        size: 14,
+                                        color: Color(0xFF7B8280),
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Expanded(
+                                        child: Text(
+                                          subtitle,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            color: Color(0xFF6D7471),
+                                            fontSize: 13.2,
+                                            fontWeight: FontWeight.w500,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Icon(
+                            Icons.chevron_right_rounded,
+                            color: Colors.black.withValues(alpha: 0.3),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                if (snapshot.hasError) ...[
+                  const SizedBox(height: 10),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 12,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFF1F0),
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: Text(
+                      snapshot.error.toString(),
+                      style: const TextStyle(
+                        color: Color(0xFFC0392B),
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 18),
+                _buildSectionPanel([
+                  _SettingsMenuAction(
+                    icon: Icons.campaign_outlined,
+                    label: 'Reklam yayinlayin',
+                    onTap: () => _openPage(
+                      const PlaceholderPage(title: 'Reklam yayinlayin'),
+                    ),
+                  ),
+                  _SettingsMenuAction(
+                    icon: Icons.storefront_outlined,
+                    label: 'Isletme araclari',
+                    onTap: () => _openPage(
+                      const PlaceholderPage(title: 'Isletme araclari'),
+                    ),
+                  ),
+                  _SettingsMenuAction(
+                    icon: Icons.verified_outlined,
+                    label: 'Meta Verified',
+                    onTap: () => _openPage(
+                      const PlaceholderPage(title: 'Meta Verified'),
+                    ),
+                  ),
+                ]),
+                const SizedBox(height: 18),
+                _buildSectionPanel([
+                  _SettingsMenuAction(
+                    icon: Icons.star_border_rounded,
+                    label: 'Yildizli',
+                    onTap: () =>
+                        _openPage(const PlaceholderPage(title: 'Yildizli')),
+                  ),
+                  _SettingsMenuAction(
+                    icon: Icons.campaign_outlined,
+                    label: 'Toplu mesaj listeleri',
+                    onTap: () => _openPage(
+                      const PlaceholderPage(title: 'Toplu mesaj listeleri'),
+                    ),
+                  ),
+                  _SettingsMenuAction(
+                    icon: Icons.groups_outlined,
+                    label: 'Topluluklar',
+                    onTap: () =>
+                        _openPage(const PlaceholderPage(title: 'Topluluklar')),
+                  ),
+                  _SettingsMenuAction(
+                    icon: Icons.devices_outlined,
+                    label: 'Bagli cihazlar',
+                    onTap: () => _openPage(
+                      const PlaceholderPage(title: 'Bagli cihazlar'),
+                    ),
+                  ),
+                ]),
+                const SizedBox(height: 18),
+                _buildSectionPanel([
+                  _SettingsMenuAction(
+                    icon: Icons.key_outlined,
+                    label: 'Hesap',
+                    onTap: () => _openPage(const AccountPage()),
+                  ),
+                  _SettingsMenuAction(
+                    icon: Icons.lock_outline_rounded,
+                    label: 'Gizlilik',
+                    onTap: () =>
+                        _openPage(const PlaceholderPage(title: 'Gizlilik')),
+                  ),
+                  _SettingsMenuAction(
+                    icon: Icons.chat_bubble_outline_rounded,
+                    label: 'Sohbetler',
+                    onTap: () =>
+                        _openPage(const PlaceholderPage(title: 'Sohbetler')),
+                  ),
+                  _SettingsMenuAction(
+                    icon: Icons.notifications_none_rounded,
+                    label: 'Bildirimler',
+                    onTap: () =>
+                        _openPage(const PlaceholderPage(title: 'Bildirimler')),
+                  ),
+                  _SettingsMenuAction(
+                    icon: Icons.receipt_long_outlined,
+                    label: 'Siparisler',
+                    onTap: () =>
+                        _openPage(const PlaceholderPage(title: 'Siparisler')),
+                  ),
+                  _SettingsMenuAction(
+                    icon: Icons.swap_vert_rounded,
+                    label: 'Depolama ve veriler',
+                    onTap: () => _openPage(
+                      const PlaceholderPage(title: 'Depolama ve veriler'),
+                    ),
+                  ),
+                ]),
+                const SizedBox(height: 18),
+                _buildSectionPanel([
+                  _SettingsMenuAction(
+                    icon: Icons.help_outline_rounded,
+                    label: 'Yardim ve geri bildirim',
+                    onTap: () => _openPage(
+                      const PlaceholderPage(title: 'Yardim ve geri bildirim'),
+                    ),
+                  ),
+                  _SettingsMenuAction(
+                    icon: Icons.person_add_alt_1_outlined,
+                    label: 'Kisileri davet edin',
+                    onTap: () => _openPage(
+                      const PlaceholderPage(title: 'Kisileri davet edin'),
+                    ),
+                  ),
+                ]),
+                const SizedBox(height: 20),
+                TextButton.icon(
+                  onPressed: widget.onLogout,
+                  icon: const Icon(Icons.logout_rounded),
+                  label: const Text('Cikis yap'),
+                  style: TextButton.styleFrom(
+                    foregroundColor: const Color(0xFFE25241),
+                    alignment: Alignment.centerLeft,
+                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
     );
   }
 }
 
 class _SessionAvatar extends StatelessWidget {
-  const _SessionAvatar({required this.session});
+  const _SessionAvatar({required this.session, this.radius = 25});
 
   final AuthSession session;
+  final double radius;
 
   @override
   Widget build(BuildContext context) {
@@ -4606,7 +5034,214 @@ class _SessionAvatar extends StatelessWidget {
       label: session.displayName,
       avatarUrl: session.avatarUrl,
       authToken: session.token,
-      radius: 25,
+      radius: radius,
+    );
+  }
+}
+
+class _BottomProfileTabIcon extends StatelessWidget {
+  const _BottomProfileTabIcon({required this.session, this.selected = false});
+
+  final AuthSession session;
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 160),
+      padding: const EdgeInsets.all(2),
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(
+          color: selected ? const Color(0xFF1FAA59) : Colors.transparent,
+          width: 2,
+        ),
+      ),
+      child: _SessionAvatar(session: session, radius: 11),
+    );
+  }
+}
+
+class _SettingsMenuAction {
+  const _SettingsMenuAction({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+}
+
+class _TurnaBottomBar extends StatelessWidget {
+  const _TurnaBottomBar({
+    required this.selectedIndex,
+    required this.unreadChats,
+    required this.session,
+    required this.onSelect,
+  });
+
+  final int selectedIndex;
+  final int unreadChats;
+  final AuthSession session;
+  final ValueChanged<int> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(8, 6, 8, 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border(
+          top: BorderSide(color: Colors.black.withValues(alpha: 0.08)),
+        ),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Row(
+          children: [
+            Expanded(
+              child: _TurnaBottomBarItem(
+                label: 'Durum',
+                selected: selectedIndex == 0,
+                iconBuilder: (selected) => Icon(
+                  Icons.circle_outlined,
+                  size: 22,
+                  color: selected
+                      ? const Color(0xFF1FAA59)
+                      : const Color(0xFF6F7673),
+                ),
+                onTap: () => onSelect(0),
+              ),
+            ),
+            Expanded(
+              child: _TurnaBottomBarItem(
+                label: 'Aramalar',
+                selected: selectedIndex == 1,
+                iconBuilder: (selected) => Icon(
+                  Icons.call_outlined,
+                  size: 22,
+                  color: selected
+                      ? const Color(0xFF1FAA59)
+                      : const Color(0xFF6F7673),
+                ),
+                onTap: () => onSelect(1),
+              ),
+            ),
+            Expanded(
+              child: _TurnaBottomBarItem(
+                label: 'Araçlar',
+                selected: selectedIndex == 2,
+                iconBuilder: (selected) => Icon(
+                  Icons.business_center_outlined,
+                  size: 22,
+                  color: selected
+                      ? const Color(0xFF1FAA59)
+                      : const Color(0xFF6F7673),
+                ),
+                onTap: () => onSelect(2),
+              ),
+            ),
+            Expanded(
+              child: _TurnaBottomBarItem(
+                label: 'Sohbetler',
+                selected: selectedIndex == 3,
+                iconBuilder: (selected) => Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Icon(
+                      Icons.chat_bubble_outline_rounded,
+                      size: 22,
+                      color: selected
+                          ? const Color(0xFF1FAA59)
+                          : const Color(0xFF6F7673),
+                    ),
+                    if (unreadChats > 0)
+                      Positioned(
+                        right: -18,
+                        top: -8,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 1.5,
+                          ),
+                          constraints: const BoxConstraints(minWidth: 24),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1FAA59),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Text(
+                            unreadChats > 999 ? '999+' : '$unreadChats',
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+                onTap: () => onSelect(3),
+              ),
+            ),
+            Expanded(
+              child: _TurnaBottomBarItem(
+                label: 'Siz',
+                selected: selectedIndex == 4,
+                iconBuilder: (selected) =>
+                    _BottomProfileTabIcon(session: session, selected: selected),
+                onTap: () => onSelect(4),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TurnaBottomBarItem extends StatelessWidget {
+  const _TurnaBottomBarItem({
+    required this.label,
+    required this.selected,
+    required this.iconBuilder,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final Widget Function(bool selected) iconBuilder;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = selected ? const Color(0xFF1FAA59) : const Color(0xFF6F7673);
+    return InkWell(
+      borderRadius: BorderRadius.circular(18),
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(height: 28, child: Center(child: iconBuilder(selected))),
+            const SizedBox(height: 3),
+            Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.visible,
+              style: TextStyle(
+                color: color,
+                fontSize: 11,
+                fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -5111,12 +5746,16 @@ class UserProfilePage extends StatefulWidget {
     required this.userId,
     required this.fallbackName,
     this.fallbackAvatarUrl,
+    required this.callCoordinator,
+    required this.onSessionExpired,
   });
 
   final AuthSession session;
   final String userId;
   final String fallbackName;
   final String? fallbackAvatarUrl;
+  final TurnaCallCoordinator callCoordinator;
+  final VoidCallback onSessionExpired;
 
   @override
   State<UserProfilePage> createState() => _UserProfilePageState();
@@ -5125,6 +5764,7 @@ class UserProfilePage extends StatefulWidget {
 class _UserProfilePageState extends State<UserProfilePage> {
   TurnaUserProfile? _profile;
   bool _loading = true;
+  bool _chatLockEnabled = false;
   String? _error;
 
   @override
@@ -5155,6 +5795,43 @@ class _UserProfilePageState extends State<UserProfilePage> {
     }
   }
 
+  Future<void> _startCall(TurnaCallType type) async {
+    try {
+      final started = await CallApi.startCall(
+        widget.session,
+        calleeId: widget.userId,
+        type: type,
+      );
+      if (!mounted) return;
+
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => OutgoingCallPage(
+            session: widget.session,
+            coordinator: widget.callCoordinator,
+            initialCall: started,
+            onSessionExpired: widget.onSessionExpired,
+          ),
+        ),
+      );
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
+  void _showPlaceholderAction(String label) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('$label yakinda eklenecek.')));
+  }
+
   @override
   Widget build(BuildContext context) {
     final profile = _profile;
@@ -5163,14 +5840,26 @@ class _UserProfilePageState extends State<UserProfilePage> {
 
     if (_loading && profile == null) {
       return Scaffold(
-        appBar: AppBar(title: const Text('Kullanici Profili')),
+        backgroundColor: const Color(0xFFF3F4F3),
+        appBar: AppBar(
+          backgroundColor: const Color(0xFFF3F4F3),
+          surfaceTintColor: Colors.transparent,
+          centerTitle: true,
+          title: const Text('Kisi bilgisi'),
+        ),
         body: const Center(child: CircularProgressIndicator()),
       );
     }
 
     if (profile == null) {
       return Scaffold(
-        appBar: AppBar(title: const Text('Kullanici Profili')),
+        backgroundColor: const Color(0xFFF3F4F3),
+        appBar: AppBar(
+          backgroundColor: const Color(0xFFF3F4F3),
+          surfaceTintColor: Colors.transparent,
+          centerTitle: true,
+          title: const Text('Kisi bilgisi'),
+        ),
         body: Center(
           child: Padding(
             padding: const EdgeInsets.all(24),
@@ -5192,11 +5881,39 @@ class _UserProfilePageState extends State<UserProfilePage> {
 
     final about = profile.about?.trim();
     final phone = profile.phone?.trim();
+    final subtitle = about == null || about.isEmpty
+        ? 'Merhaba! Ben Turna kullaniyorum.'
+        : about;
+    final displayedPhone = phone == null || phone.isEmpty
+        ? widget.userId
+        : phone;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Kullanici Profili')),
+      backgroundColor: const Color(0xFFF3F4F3),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFFF3F4F3),
+        surfaceTintColor: Colors.transparent,
+        centerTitle: true,
+        title: const Text(
+          'Kisi bilgisi',
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => _showPlaceholderAction('Duzenle'),
+            child: const Text(
+              'Duzenle',
+              style: TextStyle(
+                color: Color(0xFF202124),
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+          const SizedBox(width: 4),
+        ],
+      ),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
         children: [
           Center(
             child: GestureDetector(
@@ -5212,7 +5929,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
                 label: name,
                 avatarUrl: avatarUrl,
                 authToken: widget.session.token,
-                radius: 58,
+                radius: 56,
               ),
             ),
           ),
@@ -5221,38 +5938,342 @@ class _UserProfilePageState extends State<UserProfilePage> {
             child: Text(
               name,
               textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Center(
+            child: Text(
+              displayedPhone,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 15,
+                color: Color(0xFF68706C),
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+          const SizedBox(height: 4),
+          Center(
+            child: Text(
+              subtitle,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 15,
+                color: Color(0xFF727A76),
+                height: 1.25,
+              ),
             ),
           ),
           const SizedBox(height: 18),
-          if (about != null && about.isNotEmpty)
-            Card(
-              child: ListTile(
-                leading: const Icon(Icons.info_outline),
-                title: const Text('Hakkinda'),
-                subtitle: Text(about),
+          Row(
+            children: [
+              Expanded(
+                child: _UserProfileActionButton(
+                  icon: Icons.call_outlined,
+                  label: 'Sesli',
+                  onTap: () => _startCall(TurnaCallType.audio),
+                ),
               ),
-            ),
-          if (phone != null && phone.isNotEmpty)
-            Card(
-              child: ListTile(
-                leading: const Icon(Icons.phone_outlined),
-                title: const Text('Telefon'),
-                subtitle: Text(phone),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _UserProfileActionButton(
+                  icon: Icons.videocam_outlined,
+                  label: 'Goruntulu',
+                  onTap: () => _startCall(TurnaCallType.video),
+                ),
               ),
-            ),
-          if ((about == null || about.isEmpty) &&
-              (phone == null || phone.isEmpty))
-            const Card(
-              child: ListTile(
-                leading: Icon(Icons.person_outline),
-                title: Text('Bu kullanici henuz profil detayi eklememis.'),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _UserProfileActionButton(
+                  icon: Icons.search_outlined,
+                  label: 'Ara',
+                  onTap: () => _showPlaceholderAction('Sohbet ici arama'),
+                ),
               ),
-            ),
-          const SizedBox(height: 8),
+            ],
+          ),
+          const SizedBox(height: 16),
+          _UserProfileGroupCard(
+            children: [
+              _UserProfileRow(
+                icon: Icons.photo_library_outlined,
+                title: 'Medya, baglanti ve belgeler',
+                trailingText: '27',
+                onTap: () => _showPlaceholderAction('Medya listesi'),
+              ),
+              _UserProfileRow(
+                icon: Icons.folder_outlined,
+                title: 'Depolama alanini yonet',
+                trailingText: '11,5 MB',
+                onTap: () => _showPlaceholderAction('Depolama alani'),
+              ),
+              _UserProfileRow(
+                icon: Icons.star_border_rounded,
+                title: 'Yildizli',
+                trailingText: 'Yok',
+                onTap: () => _showPlaceholderAction('Yildizli mesajlar'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _UserProfileGroupCard(
+            children: [
+              _UserProfileRow(
+                icon: Icons.notifications_none_outlined,
+                title: 'Bildirimler',
+                onTap: () => _showPlaceholderAction('Bildirim ayarlari'),
+              ),
+              _UserProfileRow(
+                icon: Icons.palette_outlined,
+                title: 'Sohbet temasi',
+                onTap: () => _showPlaceholderAction('Sohbet temasi'),
+              ),
+              _UserProfileRow(
+                icon: Icons.photo_outlined,
+                title: "Fotograflar'a Kaydet",
+                trailingText: 'Varsayilan',
+                onTap: () => _showPlaceholderAction("Fotograflar'a kaydet"),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _UserProfileGroupCard(
+            children: [
+              _UserProfileRow(
+                icon: Icons.timer_outlined,
+                title: 'Sureli mesajlar',
+                trailingText: 'Kapali',
+                onTap: () => _showPlaceholderAction('Sureli mesajlar'),
+              ),
+              _UserProfileSwitchRow(
+                icon: Icons.lock_outline_rounded,
+                title: 'Sohbeti kilitle',
+                subtitle: 'Bu sohbeti bu cihazda kilitleyin ve gizleyin.',
+                value: _chatLockEnabled,
+                onChanged: (value) => setState(() => _chatLockEnabled = value),
+              ),
+              _UserProfileRow(
+                icon: Icons.shield_outlined,
+                title: 'Gelismis sohbet gizliligi',
+                trailingText: 'Kapali',
+                onTap: () =>
+                    _showPlaceholderAction('Gelismis sohbet gizliligi'),
+              ),
+              _UserProfileRow(
+                icon: Icons.lock_person_outlined,
+                title: 'Sifreleme',
+                subtitle: 'Kisisel mesajlar ve aramalar uctan uca sifrelidir.',
+                onTap: () => _showPlaceholderAction('Sifreleme bilgisi'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
           OutlinedButton(
             onPressed: _loadProfile,
+            style: OutlinedButton.styleFrom(
+              foregroundColor: const Color(0xFF1FAA59),
+              side: const BorderSide(color: Color(0xFFB7D9C4)),
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(18),
+              ),
+            ),
             child: const Text('Sunucudan yenile'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _UserProfileActionButton extends StatelessWidget {
+  const _UserProfileActionButton({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          child: Column(
+            children: [
+              Icon(icon, color: const Color(0xFF20A355), size: 23),
+              const SizedBox(height: 8),
+              Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 14,
+                  color: Color(0xFF202124),
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _UserProfileGroupCard extends StatelessWidget {
+  const _UserProfileGroupCard({required this.children});
+
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Column(
+        children: [
+          for (var i = 0; i < children.length; i++) ...[
+            children[i],
+            if (i != children.length - 1)
+              const Divider(height: 1, indent: 54, endIndent: 16),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _UserProfileRow extends StatelessWidget {
+  const _UserProfileRow({
+    required this.icon,
+    required this.title,
+    required this.onTap,
+    this.subtitle,
+    this.trailingText,
+  });
+
+  final IconData icon;
+  final String title;
+  final String? subtitle;
+  final String? trailingText;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      minLeadingWidth: 24,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+      leading: Icon(icon, size: 22, color: const Color(0xFF2B2F2D)),
+      title: Text(
+        title,
+        style: const TextStyle(
+          fontSize: 16,
+          color: Color(0xFF202124),
+          fontWeight: FontWeight.w500,
+        ),
+      ),
+      subtitle: subtitle == null
+          ? null
+          : Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(
+                subtitle!,
+                style: const TextStyle(
+                  fontSize: 13,
+                  height: 1.22,
+                  color: Color(0xFF7A817D),
+                ),
+              ),
+            ),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (trailingText != null)
+            Text(
+              trailingText!,
+              style: const TextStyle(
+                fontSize: 15,
+                color: Color(0xFF7A817D),
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          const SizedBox(width: 6),
+          const Icon(Icons.chevron_right_rounded, color: Color(0xFF979D99)),
+        ],
+      ),
+      onTap: onTap,
+    );
+  }
+}
+
+class _UserProfileSwitchRow extends StatelessWidget {
+  const _UserProfileSwitchRow({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 12, 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Icon(icon, size: 22, color: const Color(0xFF2B2F2D)),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const SizedBox(height: 1),
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    color: Color(0xFF202124),
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  subtitle,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    height: 1.22,
+                    color: Color(0xFF7A817D),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Switch.adaptive(
+            value: value,
+            onChanged: onChanged,
+            activeThumbColor: const Color(0xFF20A355),
+            activeTrackColor: const Color(0xFF9AD2AF),
           ),
         ],
       ),
