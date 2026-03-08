@@ -99,11 +99,15 @@ async function emitResolvedCall(
   emitUserEvent([call.calleeId], eventName, {
     call: serializeCallForViewer(origin, call, call.calleeId)
   });
-  await sendCallEndedPush({
-    callId: call.id,
-    reason: pushReason,
-    recipientUserIds: [call.callerId, call.calleeId]
-  });
+  try {
+    await sendCallEndedPush({
+      callId: call.id,
+      reason: pushReason,
+      recipientUserIds: [call.callerId, call.calleeId]
+    });
+  } catch (error) {
+    logError("call ended push failed", error);
+  }
 }
 
 function getWebhookAuthToken(req: Request): string | undefined {
@@ -280,16 +284,10 @@ callRouter.post("/start", requireAuth, async (req, res) => {
     const callerPayload = serializeCallForViewer(origin, call, call.callerId);
     const calleePayload = serializeCallForViewer(origin, call, call.calleeId);
 
+    res.status(201).json({ data: { call: callerPayload } });
+
     emitUserEvent([call.callerId], "call:ringing", { call: callerPayload });
     emitUserEvent([call.calleeId], "call:incoming", { call: calleePayload });
-
-    await sendIncomingCallPush({
-      callId: call.id,
-      type: call.type,
-      callerId: call.callerId,
-      callerDisplayName: call.caller.displayName,
-      recipientUserIds: [call.calleeId]
-    });
 
     scheduleCallTimeout(call.id, async () => {
       try {
@@ -303,7 +301,15 @@ callRouter.post("/start", requireAuth, async (req, res) => {
       }
     });
 
-    res.status(201).json({ data: { call: callerPayload } });
+    void sendIncomingCallPush({
+      callId: call.id,
+      type: call.type,
+      callerId: call.callerId,
+      callerDisplayName: call.caller.displayName,
+      recipientUserIds: [call.calleeId]
+    }).catch((error: unknown) => {
+      logError("incoming call push failed", error);
+    });
   } catch (error) {
     if (respondCallError(res, error)) return;
     logError("call start failed", error);
@@ -323,6 +329,13 @@ callRouter.post("/:callId/accept", requireAuth, async (req, res) => {
     const callerPayload = serializeCallForViewer(origin, result.call, result.call.callerId);
     const calleePayload = serializeCallForViewer(origin, result.call, result.call.calleeId);
 
+    res.json({
+      data: {
+        call: calleePayload,
+        connect: result.joinByUserId[result.call.calleeId]
+      }
+    });
+
     emitUserEvent([result.call.callerId], "call:accepted", {
       call: callerPayload,
       connect: result.joinByUserId[result.call.callerId]
@@ -330,13 +343,6 @@ callRouter.post("/:callId/accept", requireAuth, async (req, res) => {
     emitUserEvent([result.call.calleeId], "call:accepted", {
       call: calleePayload,
       connect: result.joinByUserId[result.call.calleeId]
-    });
-
-    res.json({
-      data: {
-        call: calleePayload,
-        connect: result.joinByUserId[result.call.calleeId]
-      }
     });
   } catch (error) {
     if (respondCallError(res, error)) return;
@@ -354,13 +360,17 @@ callRouter.post("/:callId/decline", requireAuth, async (req, res) => {
       userId: req.authUserId!
     });
 
-    await emitResolvedCall(origin, call, "call:declined", "declined");
-
     res.json({
       data: {
         call: serializeCallForViewer(origin, call, req.authUserId!)
       }
     });
+
+    void emitResolvedCall(origin, call, "call:declined", "declined").catch(
+      (error: unknown) => {
+        logError("call decline side effects failed", error);
+      }
+    );
   } catch (error) {
     if (respondCallError(res, error)) return;
     logError("call decline failed", error);
@@ -377,13 +387,17 @@ callRouter.post("/:callId/end", requireAuth, async (req, res) => {
       userId: req.authUserId!
     });
 
-    await emitResolvedCall(origin, call, "call:ended", call.status);
-
     res.json({
       data: {
         call: serializeCallForViewer(origin, call, req.authUserId!)
       }
     });
+
+    void emitResolvedCall(origin, call, "call:ended", call.status).catch(
+      (error: unknown) => {
+        logError("call end side effects failed", error);
+      }
+    );
   } catch (error) {
     if (respondCallError(res, error)) return;
     logError("call end failed", error);
