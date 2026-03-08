@@ -261,6 +261,32 @@ String formatTurnaLocalClock(String? raw) {
   return '$hh:$mm';
 }
 
+class TurnaDisplayWakeLock {
+  static const MethodChannel _channel = MethodChannel('turna/display');
+  static final Set<String> _holders = <String>{};
+
+  static Future<void> acquire(String reason) async {
+    final wasEmpty = _holders.isEmpty;
+    _holders.add(reason);
+    if (!wasEmpty) return;
+    await _setEnabled(true);
+  }
+
+  static Future<void> release(String reason) async {
+    final removed = _holders.remove(reason);
+    if (!removed || _holders.isNotEmpty) return;
+    await _setEnabled(false);
+  }
+
+  static Future<void> _setEnabled(bool enabled) async {
+    try {
+      await _channel.invokeMethod('setKeepScreenOn', {'enabled': enabled});
+    } catch (error) {
+      turnaLog('display wake lock update skipped', error);
+    }
+  }
+}
+
 String? guessContentTypeForFileName(String fileName) {
   final lower = fileName.toLowerCase();
   if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';

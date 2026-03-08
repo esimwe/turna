@@ -2763,15 +2763,19 @@ class IncomingCallPage extends StatefulWidget {
 class _IncomingCallPageState extends State<IncomingCallPage> {
   bool _busy = false;
 
+  String get _wakeLockReason => 'incoming-call:${widget.incoming.call.id}';
+
   @override
   void initState() {
     super.initState();
     widget.coordinator.addListener(_handleCoordinator);
+    unawaited(TurnaDisplayWakeLock.acquire(_wakeLockReason));
   }
 
   @override
   void dispose() {
     widget.coordinator.removeListener(_handleCoordinator);
+    unawaited(TurnaDisplayWakeLock.release(_wakeLockReason));
     super.dispose();
   }
 
@@ -2922,16 +2926,20 @@ class _OutgoingCallPageState extends State<OutgoingCallPage> {
   bool _ending = false;
   bool _navigatedToActive = false;
 
+  String get _wakeLockReason => 'outgoing-call:${widget.initialCall.id}';
+
   @override
   void initState() {
     super.initState();
     widget.coordinator.addListener(_handleCoordinator);
     WidgetsBinding.instance.addPostFrameCallback((_) => _handleCoordinator());
+    unawaited(TurnaDisplayWakeLock.acquire(_wakeLockReason));
   }
 
   @override
   void dispose() {
     widget.coordinator.removeListener(_handleCoordinator);
+    unawaited(TurnaDisplayWakeLock.release(_wakeLockReason));
     super.dispose();
   }
 
@@ -3212,9 +3220,17 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
   Future<void> flipCamera() async {
     final track = localCameraTrack;
     if (track == null) return;
-    cameraPosition = cameraPosition.switched();
-    await track.setCameraPosition(cameraPosition);
+    final previousPosition = cameraPosition;
+    final nextPosition = previousPosition.switched();
+    cameraPosition = nextPosition;
     notifyListeners();
+    try {
+      await track.setCameraPosition(nextPosition);
+    } catch (err) {
+      cameraPosition = previousPosition;
+      notifyListeners();
+      turnaLog('livekit flip camera failed', err);
+    }
   }
 
   Future<void> toggleSpeaker() async {
@@ -3278,9 +3294,11 @@ class TurnaManagedCallSession extends ChangeNotifier {
   String? terminalMessage;
   int _durationSeconds = 0;
   Timer? _durationTicker;
+  bool _wakeLockHeld = false;
 
   bool get ended => _ended;
   int get durationSeconds => _durationSeconds;
+  String get _wakeLockReason => 'active-call:${call.id}';
 
   String formatDuration() {
     final minutes = (_durationSeconds ~/ 60).toString().padLeft(2, '0');
@@ -3291,6 +3309,7 @@ class TurnaManagedCallSession extends ChangeNotifier {
   Future<void> ensureStarted() async {
     if (_started) return;
     _started = true;
+    _acquireWakeLock();
     await adapter.connect();
   }
 
@@ -3311,6 +3330,7 @@ class TurnaManagedCallSession extends ChangeNotifier {
     coordinator.clearCall(call.id);
     await adapter.disconnect();
     await TurnaNativeCallManager.endCallUi(call.id);
+    _releaseWakeLock();
     _ended = true;
     terminalMessage = null;
     notifyListeners();
@@ -3334,6 +3354,7 @@ class TurnaManagedCallSession extends ChangeNotifier {
       'missed' => 'Cevap yok.',
       _ => 'Arama sonlandi.',
     };
+    _releaseWakeLock();
     _ended = true;
     unawaited(adapter.disconnect());
     unawaited(TurnaNativeCallManager.endCallUi(call.id));
@@ -3341,11 +3362,24 @@ class TurnaManagedCallSession extends ChangeNotifier {
     kTurnaCallUiController.clearEndedSession(this);
   }
 
+  void _acquireWakeLock() {
+    if (_wakeLockHeld) return;
+    _wakeLockHeld = true;
+    unawaited(TurnaDisplayWakeLock.acquire(_wakeLockReason));
+  }
+
+  void _releaseWakeLock() {
+    if (!_wakeLockHeld) return;
+    _wakeLockHeld = false;
+    unawaited(TurnaDisplayWakeLock.release(_wakeLockReason));
+  }
+
   @override
   void dispose() {
     adapter.removeListener(_handleAdapterChanged);
     coordinator.removeListener(_handleCoordinatorChanged);
     _durationTicker?.cancel();
+    _releaseWakeLock();
     adapter.dispose();
     super.dispose();
   }
@@ -3603,12 +3637,34 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
     }
   }
 
+  Widget _buildCallControlButton({
+    required String heroTag,
+    required VoidCallback? onPressed,
+    required Widget child,
+    Color backgroundColor = Colors.white12,
+  }) {
+    return SizedBox(
+      width: 56,
+      height: 56,
+      child: FloatingActionButton(
+        heroTag: heroTag,
+        backgroundColor: backgroundColor,
+        onPressed: onPressed,
+        child: child,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final adapter = _callSession.adapter;
     final remoteVideo = adapter.primaryRemoteVideoTrack;
     final localVideo = adapter.localVideoTrack;
     final isVideo = _callSession.call.type == TurnaCallType.video;
+    final localPreviewMirrorMode =
+        adapter.cameraPosition == lk.CameraPosition.front
+        ? lk.VideoViewMirrorMode.mirror
+        : lk.VideoViewMirrorMode.off;
 
     return PopScope(
       canPop: !isVideo,
@@ -3683,38 +3739,68 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
                     borderRadius: BorderRadius.circular(16),
                     child: ColoredBox(
                       color: Colors.black,
-                      child: lk.VideoTrackRenderer(localVideo),
+                      child: lk.VideoTrackRenderer(
+                        localVideo,
+                        key: ValueKey(
+                          'local-preview-${_callSession.call.id}-${adapter.cameraPosition.name}',
+                        ),
+                        mirrorMode: localPreviewMirrorMode,
+                      ),
+                    ),
+                  ),
+                ),
+              if (localVideo != null && isVideo && adapter.cameraEnabled)
+                Positioned(
+                  right: 16,
+                  top: 184,
+                  child: _buildCallControlButton(
+                    heroTag: 'flip_${_callSession.call.id}',
+                    backgroundColor: Colors.black54,
+                    onPressed: adapter.connecting
+                        ? null
+                        : () => adapter.flipCamera(),
+                    child: const Icon(
+                      Icons.cameraswitch_outlined,
+                      color: Colors.white,
                     ),
                   ),
                 ),
               Positioned(
-                left: 0,
-                right: 0,
+                right: 20,
                 bottom: 24,
                 child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    if (isVideo)
-                      FloatingActionButton(
-                        heroTag: 'flip_${_callSession.call.id}',
-                        backgroundColor: Colors.white12,
+                    if (isVideo) ...[
+                      _buildCallControlButton(
+                        heroTag: 'camera_${_callSession.call.id}',
                         onPressed: adapter.connecting
                             ? null
-                            : () => adapter.flipCamera(),
-                        child: const Icon(
-                          Icons.cameraswitch_outlined,
+                            : () => adapter.toggleCamera(),
+                        child: Icon(
+                          adapter.cameraEnabled
+                              ? Icons.videocam
+                              : Icons.videocam_off,
                           color: Colors.white,
                         ),
                       ),
-                    FloatingActionButton(
-                      heroTag: 'end_${_callSession.call.id}',
-                      backgroundColor: Colors.red.shade400,
-                      onPressed: _ending ? null : _endCall,
-                      child: const Icon(Icons.call_end, color: Colors.white),
+                      const SizedBox(width: 12),
+                    ],
+                    _buildCallControlButton(
+                      heroTag: 'speaker_${_callSession.call.id}',
+                      onPressed: adapter.connecting
+                          ? null
+                          : () => adapter.toggleSpeaker(),
+                      child: Icon(
+                        adapter.speakerEnabled
+                            ? Icons.volume_up
+                            : Icons.hearing,
+                        color: Colors.white,
+                      ),
                     ),
-                    FloatingActionButton(
+                    const SizedBox(width: 12),
+                    _buildCallControlButton(
                       heroTag: 'mute_${_callSession.call.id}',
-                      backgroundColor: Colors.white12,
                       onPressed: adapter.connecting
                           ? null
                           : () => adapter.toggleMicrophone(),
@@ -3722,6 +3808,13 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
                         adapter.microphoneEnabled ? Icons.mic : Icons.mic_off,
                         color: Colors.white,
                       ),
+                    ),
+                    const SizedBox(width: 12),
+                    _buildCallControlButton(
+                      heroTag: 'end_${_callSession.call.id}',
+                      backgroundColor: Colors.red.shade400,
+                      onPressed: _ending ? null : _endCall,
+                      child: const Icon(Icons.call_end, color: Colors.white),
                     ),
                   ],
                 ),
