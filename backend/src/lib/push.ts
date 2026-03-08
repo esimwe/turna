@@ -31,6 +31,7 @@ interface CallEndedPushParams {
 }
 
 let apnsBearerCache: { token: string; expiresAtEpochSeconds: number } | null = null;
+let apnsVoipKeyErrorLogged = false;
 const prismaDeviceToken = (prisma as unknown as { deviceToken: any }).deviceToken;
 
 function hasFirebaseCredentials(): boolean {
@@ -166,12 +167,25 @@ function createApnsBearerToken(): string | null {
   const signer = createSign("sha256");
   signer.update(unsignedToken);
   signer.end();
-  const signature = signer.sign(privateKey, "base64url");
+  let signature: string;
+  try {
+    signature = signer.sign(privateKey, "base64url");
+  } catch (error) {
+    if (!apnsVoipKeyErrorLogged) {
+      logError("apns voip bearer token create failed", {
+        error: error instanceof Error ? error.message : String(error),
+        hint: "Check APNS_VOIP_PRIVATE_KEY or APNS_VOIP_PRIVATE_KEY_BASE64 format. Apple .p8 key expected."
+      });
+      apnsVoipKeyErrorLogged = true;
+    }
+    return null;
+  }
   const token = `${unsignedToken}.${signature}`;
   apnsBearerCache = {
     token,
     expiresAtEpochSeconds: now + 50 * 60
   };
+  apnsVoipKeyErrorLogged = false;
   return token;
 }
 
