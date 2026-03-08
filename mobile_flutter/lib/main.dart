@@ -66,6 +66,40 @@ final TurnaActiveChatRegistry kTurnaActiveChatRegistry =
     TurnaActiveChatRegistry();
 final TurnaCallUiController kTurnaCallUiController = TurnaCallUiController();
 
+class TurnaColors {
+  static const primary50 = Color(0xFFEEF7FF);
+  static const primary100 = Color(0xFFD9EEFF);
+  static const primary200 = Color(0xFFBCE0FF);
+  static const primary400 = Color(0xFF5BB0FF);
+  static const primary = Color(0xFF2F80ED);
+  static const primaryStrong = Color(0xFF1F6FEB);
+  static const primaryDeep = Color(0xFF1B4ED8);
+  static const accent = Color(0xFF38BDF8);
+  static const accentStrong = Color(0xFF00C2FF);
+
+  static const background = Color(0xFFFFFFFF);
+  static const backgroundSoft = Color(0xFFF7F9FC);
+  static const backgroundMuted = Color(0xFFEEF4FB);
+  static const surface = Color(0xFFFFFFFF);
+  static const surfaceHover = Color(0xFFF3F8FF);
+  static const border = Color(0xFFD8E6F5);
+  static const divider = Color(0xFFE6EEF8);
+
+  static const text = Color(0xFF0F172A);
+  static const textSoft = Color(0xFF334155);
+  static const textMuted = Color(0xFF64748B);
+
+  static const chatOutgoing = Color(0xFF2F80ED);
+  static const chatOutgoingText = Color(0xFFFFFFFF);
+  static const chatIncoming = Color(0xFFE9F2FF);
+  static const chatIncomingText = Color(0xFF0F172A);
+
+  static const success = Color(0xFF22C55E);
+  static const warning = Color(0xFFF59E0B);
+  static const error = Color(0xFFEF4444);
+  static const info = Color(0xFF38BDF8);
+}
+
 void turnaLog(String message, [Object? data]) {
   if (!kTurnaDebugLogs) return;
   if (data != null) {
@@ -207,17 +241,19 @@ class _TurnaAppState extends State<TurnaApp> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     final theme = ThemeData(
       useMaterial3: true,
-      scaffoldBackgroundColor: const Color(0xFFF4F5F3),
+      scaffoldBackgroundColor: TurnaColors.backgroundSoft,
       colorScheme: ColorScheme.fromSeed(
-        seedColor: const Color(0xFF1FAA59),
-        primary: const Color(0xFF1FAA59),
+        seedColor: TurnaColors.primary,
+        primary: TurnaColors.primary,
+        surface: TurnaColors.surface,
+        onSurface: TurnaColors.text,
       ),
       appBarTheme: const AppBarTheme(
-        backgroundColor: Colors.white,
-        foregroundColor: Color(0xFF202124),
+        backgroundColor: TurnaColors.background,
+        foregroundColor: TurnaColors.text,
         centerTitle: false,
       ),
-      dividerColor: const Color(0xFFE8EAE8),
+      dividerColor: TurnaColors.divider,
     );
 
     return MaterialApp(
@@ -657,7 +693,7 @@ class _ChatsPageState extends State<ChatsPage> {
         title: const Text(
           'Turna',
           style: TextStyle(
-            color: Color(0xFF1FAA59),
+            color: TurnaColors.primary,
             fontWeight: FontWeight.w700,
           ),
         ),
@@ -730,7 +766,7 @@ class _ChatsPageState extends State<ChatsPage> {
                                 icon: const Icon(Icons.close),
                               ),
                         filled: true,
-                        fillColor: const Color(0xFFEFF1EE),
+                        fillColor: TurnaColors.backgroundMuted,
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(24),
                           borderSide: BorderSide.none,
@@ -797,7 +833,7 @@ class _ChatsPageState extends State<ChatsPage> {
                             vertical: 2,
                           ),
                           decoration: const BoxDecoration(
-                            color: Color(0xFF1FAA59),
+                            color: TurnaColors.primary,
                             borderRadius: BorderRadius.all(
                               Radius.circular(999),
                             ),
@@ -835,7 +871,7 @@ class _ChatsPageState extends State<ChatsPage> {
         },
       ),
       floatingActionButton: FloatingActionButton(
-        backgroundColor: const Color(0xFF1FAA59),
+        backgroundColor: TurnaColors.primary,
         foregroundColor: Colors.white,
         onPressed: () async {
           final created = await Navigator.push<bool>(
@@ -1167,7 +1203,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       mine: mine,
       status: msg.status,
     );
-    final bubbleColor = mine ? const Color(0xFFD9FDD3) : Colors.white;
+    final bubbleColor = mine
+        ? TurnaColors.chatOutgoing
+        : TurnaColors.chatIncoming;
     final bubbleRadius = BorderRadius.only(
       topLeft: const Radius.circular(18),
       topRight: const Radius.circular(18),
@@ -1225,8 +1263,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                     style: TextStyle(
                       fontSize: 11,
                       color: msg.status == ChatMessageStatus.failed
-                          ? Colors.red.shade600
-                          : const Color(0xFF6F756E),
+                          ? TurnaColors.error
+                          : TurnaColors.textMuted,
                     ),
                   ),
                 ),
@@ -1249,10 +1287,12 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                       ),
                       child: Text(
                         msg.text,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 16,
                           height: 1.28,
-                          color: Color(0xFF1E1F1F),
+                          color: mine
+                              ? TurnaColors.chatOutgoingText
+                              : TurnaColors.chatIncomingText,
                         ),
                       ),
                     ),
@@ -1285,14 +1325,14 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : const Icon(Icons.add, size: 28),
-              color: const Color(0xFF5D6660),
+              color: TurnaColors.textSoft,
             ),
             Expanded(
               child: Container(
                 constraints: const BoxConstraints(minHeight: 52),
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: TurnaColors.surface,
                   borderRadius: BorderRadius.circular(28),
                   boxShadow: [
                     BoxShadow(
@@ -1325,7 +1365,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                       IconButton(
                         onPressed: _attachmentBusy ? null : _pickCameraImage,
                         icon: const Icon(Icons.camera_alt_outlined),
-                        color: const Color(0xFF5D6660),
+                        color: TurnaColors.textSoft,
                       ),
                   ],
                 ),
@@ -1340,13 +1380,13 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                       width: 46,
                       height: 46,
                       decoration: const BoxDecoration(
-                        color: Color(0xFF20B15A),
+                        color: TurnaColors.primary,
                         shape: BoxShape.circle,
                       ),
                       child: IconButton(
                         onPressed: _attachmentBusy ? null : _handleSendPressed,
                         icon: const Icon(Icons.send_rounded),
-                        color: Colors.white,
+                        color: TurnaColors.surface,
                       ),
                     )
                   : Container(
@@ -1369,7 +1409,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                             ? null
                             : _showVoiceMessagePlaceholder,
                         icon: const Icon(Icons.mic_none_rounded),
-                        color: const Color(0xFF4E5651),
+                        color: TurnaColors.textSoft,
                       ),
                     ),
             ),
@@ -1685,9 +1725,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     final peerStatusText = _buildPeerStatusText();
 
     return Scaffold(
-      backgroundColor: const Color(0xFFEDE4D8),
+      backgroundColor: TurnaColors.backgroundSoft,
       appBar: AppBar(
-        backgroundColor: const Color(0xFFF7F5F0),
+        backgroundColor: TurnaColors.background,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         titleSpacing: 4,
@@ -1724,8 +1764,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                         style: TextStyle(
                           fontSize: 12.5,
                           color: _client.peerTyping
-                              ? const Color(0xFF1FAA59)
-                              : const Color(0xFF6E7572),
+                              ? TurnaColors.primary
+                              : TurnaColors.textMuted,
                           fontWeight: _client.peerTyping
                               ? FontWeight.w600
                               : FontWeight.w500,
@@ -1779,11 +1819,11 @@ class _ChatRoomPageState extends State<ChatRoomPage>
           if (_attachmentBusy)
             Container(
               width: double.infinity,
-              color: const Color(0xFFEAF6EE),
+              color: TurnaColors.primary50,
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               child: const Text(
                 'Medya yukleniyor. Mesaj hazirlaniyor...',
-                style: TextStyle(color: Color(0xFF1E6B3C)),
+                style: TextStyle(color: TurnaColors.primaryStrong),
               ),
             ),
           Expanded(
@@ -1835,7 +1875,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                               padding: const EdgeInsets.symmetric(vertical: 12),
                               child: DecoratedBox(
                                 decoration: BoxDecoration(
-                                  color: const Color(0xFFE7DDD3),
+                                  color: TurnaColors.backgroundMuted,
                                   borderRadius: BorderRadius.circular(999),
                                 ),
                                 child: Padding(
@@ -1846,7 +1886,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                                   child: Text(
                                     _formatDayLabel(msg.createdAt),
                                     style: const TextStyle(
-                                      color: Color(0xFF726C66),
+                                      color: TurnaColors.textMuted,
                                       fontSize: 12,
                                       fontWeight: FontWeight.w600,
                                     ),
@@ -1865,7 +1905,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                     bottom: 16,
                     child: FloatingActionButton.small(
                       backgroundColor: Colors.white,
-                      foregroundColor: const Color(0xFF1FAA59),
+                      foregroundColor: TurnaColors.primary,
                       onPressed: _jumpToBottom,
                       child: const Icon(Icons.keyboard_arrow_down),
                     ),
@@ -1898,23 +1938,34 @@ class _MessageMetaFooter extends StatelessWidget {
       children: [
         Text(
           timeLabel,
-          style: const TextStyle(fontSize: 11, color: Color(0xFF777C79)),
+          style: TextStyle(
+            fontSize: 11,
+            color: mine
+                ? Colors.white.withValues(alpha: 0.8)
+                : TurnaColors.textMuted,
+          ),
         ),
-        if (mine) ...[const SizedBox(width: 6), _StatusTick(status: status)],
+        if (mine) ...[
+          const SizedBox(width: 6),
+          _StatusTick(status: status, mine: mine),
+        ],
       ],
     );
   }
 }
 
 class _StatusTick extends StatelessWidget {
-  const _StatusTick({required this.status});
+  const _StatusTick({required this.status, this.mine = false});
 
   final ChatMessageStatus status;
+  final bool mine;
 
   @override
   Widget build(BuildContext context) {
     IconData icon = Icons.done;
-    Color color = const Color(0xFF7D8380);
+    Color color = mine
+        ? Colors.white.withValues(alpha: 0.82)
+        : TurnaColors.textMuted;
 
     if (status == ChatMessageStatus.sending) {
       icon = Icons.schedule;
@@ -1922,12 +1973,12 @@ class _StatusTick extends StatelessWidget {
       icon = Icons.cloud_off_outlined;
     } else if (status == ChatMessageStatus.failed) {
       icon = Icons.error_outline;
-      color = Colors.red.shade400;
+      color = TurnaColors.error;
     } else if (status == ChatMessageStatus.delivered) {
       icon = Icons.done_all;
     } else if (status == ChatMessageStatus.read) {
       icon = Icons.done_all;
-      color = const Color(0xFF1FA3E0);
+      color = mine ? TurnaColors.accent : TurnaColors.info;
     }
 
     return Icon(icon, size: 16, color: color);
@@ -1949,10 +2000,10 @@ class _ChatWallpaperPainter extends CustomPainter {
     final stroke = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1
-      ..color = const Color(0xFFCFC6B9).withValues(alpha: 0.34);
+      ..color = TurnaColors.border.withValues(alpha: 0.45);
     final fill = Paint()
       ..style = PaintingStyle.fill
-      ..color = Colors.white.withValues(alpha: 0.08);
+      ..color = TurnaColors.primary50.withValues(alpha: 0.22);
 
     const stepX = 72.0;
     const stepY = 78.0;
@@ -2077,7 +2128,7 @@ class _ChatAttachmentList extends StatelessWidget {
                       isVideo
                           ? Icons.play_circle_outline
                           : Icons.insert_drive_file_outlined,
-                      color: const Color(0xFF1FAA59),
+                      color: TurnaColors.primary,
                     ),
                   ),
                   const SizedBox(width: 10),
@@ -3438,7 +3489,7 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             decoration: BoxDecoration(
-              color: const Color(0xFF1FAA59),
+              color: TurnaColors.primary,
               borderRadius: BorderRadius.circular(20),
             ),
             child: Text(
@@ -3454,7 +3505,7 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
           IconButton(
             tooltip: 'Kirp',
             onPressed: _toggleCropMode,
-            color: _cropMode ? const Color(0xFF1FAA59) : null,
+            color: _cropMode ? TurnaColors.primary : null,
             icon: const Icon(Icons.crop_outlined),
           ),
           IconButton(
@@ -3467,7 +3518,7 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
           IconButton(
             tooltip: 'Ciz',
             onPressed: _cropMode ? null : _toggleDrawMode,
-            color: _drawMode ? const Color(0xFF1FAA59) : null,
+            color: _drawMode ? TurnaColors.primary : null,
             icon: const Icon(Icons.draw_outlined),
           ),
           IconButton(
@@ -3588,7 +3639,7 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
                           borderRadius: BorderRadius.circular(18),
                           border: Border.all(
                             color: selected
-                                ? const Color(0xFF1FAA59)
+                                ? TurnaColors.primary
                                 : Colors.transparent,
                             width: 2,
                           ),
@@ -3688,7 +3739,7 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
                     ),
                     FilledButton(
                       style: FilledButton.styleFrom(
-                        backgroundColor: const Color(0xFF1FAA59),
+                        backgroundColor: TurnaColors.primary,
                         foregroundColor: Colors.white,
                       ),
                       onPressed: _applyCropEditing,
@@ -3712,7 +3763,7 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
                         hintText: 'Aciklama ekle',
                         hintStyle: const TextStyle(color: Color(0xFF7C8380)),
                         filled: true,
-                        fillColor: const Color(0xFF1A1F1D),
+                        fillColor: const Color(0xFF162033),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(24),
                           borderSide: BorderSide.none,
@@ -3736,7 +3787,7 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
                           ),
                         ),
                       FloatingActionButton.small(
-                        backgroundColor: const Color(0xFF1FAA59),
+                        backgroundColor: TurnaColors.primary,
                         onPressed: _sending ? null : _send,
                         child: _sending
                             ? const SizedBox(
@@ -4279,7 +4330,7 @@ class _ComposerToolChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: selected ? const Color(0xFF1FAA59) : const Color(0xFF1A1F1D),
+      color: selected ? TurnaColors.primary : const Color(0xFF162033),
       borderRadius: BorderRadius.circular(999),
       child: InkWell(
         onTap: onTap,
@@ -4573,7 +4624,7 @@ class _NewChatPageState extends State<NewChatPage> {
                         icon: const Icon(Icons.close),
                       ),
                 filled: true,
-                fillColor: const Color(0xFFEFF1EE),
+                fillColor: TurnaColors.backgroundMuted,
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(24),
                   borderSide: BorderSide.none,
@@ -4733,13 +4784,13 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
               leading: Icon(
                 actions[index].icon,
-                color: const Color(0xFF5D6461),
+                color: TurnaColors.textMuted,
                 size: 21,
               ),
               title: Text(
                 actions[index].label,
                 style: TextStyle(
-                  color: const Color(0xFF1B1E1D),
+                  color: TurnaColors.text,
                   fontSize: 16.2,
                   fontWeight: FontWeight.w500,
                 ),
@@ -4761,7 +4812,7 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF3F3F2),
+      backgroundColor: TurnaColors.backgroundSoft,
       body: SafeArea(
         child: FutureBuilder<TurnaUserProfile>(
           future: _profileFuture,
@@ -4796,7 +4847,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   style: TextStyle(
                     fontSize: 25,
                     fontWeight: FontWeight.w700,
-                    color: Color(0xFF121514),
+                    color: TurnaColors.text,
                   ),
                 ),
                 const SizedBox(height: 14),
@@ -4834,7 +4885,7 @@ class _SettingsPageState extends State<SettingsPage> {
                                     vertical: 6,
                                   ),
                                   decoration: BoxDecoration(
-                                    color: const Color(0xFFF5F5F4),
+                                    color: TurnaColors.backgroundSoft,
                                     borderRadius: BorderRadius.circular(14),
                                   ),
                                   child: Row(
@@ -4842,7 +4893,7 @@ class _SettingsPageState extends State<SettingsPage> {
                                       const Icon(
                                         Icons.edit_note_rounded,
                                         size: 14,
-                                        color: Color(0xFF7B8280),
+                                        color: TurnaColors.textMuted,
                                       ),
                                       const SizedBox(width: 6),
                                       Expanded(
@@ -4851,7 +4902,7 @@ class _SettingsPageState extends State<SettingsPage> {
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
                                           style: const TextStyle(
-                                            color: Color(0xFF6D7471),
+                                            color: TurnaColors.textMuted,
                                             fontSize: 13.2,
                                             fontWeight: FontWeight.w500,
                                           ),
@@ -5053,7 +5104,7 @@ class _BottomProfileTabIcon extends StatelessWidget {
       decoration: BoxDecoration(
         shape: BoxShape.circle,
         border: Border.all(
-          color: selected ? const Color(0xFF1FAA59) : Colors.transparent,
+          color: selected ? TurnaColors.primary : Colors.transparent,
           width: 2,
         ),
       ),
@@ -5108,9 +5159,7 @@ class _TurnaBottomBar extends StatelessWidget {
                 iconBuilder: (selected) => Icon(
                   Icons.circle_outlined,
                   size: 22,
-                  color: selected
-                      ? const Color(0xFF1FAA59)
-                      : const Color(0xFF6F7673),
+                  color: selected ? TurnaColors.primary : TurnaColors.textMuted,
                 ),
                 onTap: () => onSelect(0),
               ),
@@ -5122,9 +5171,7 @@ class _TurnaBottomBar extends StatelessWidget {
                 iconBuilder: (selected) => Icon(
                   Icons.call_outlined,
                   size: 22,
-                  color: selected
-                      ? const Color(0xFF1FAA59)
-                      : const Color(0xFF6F7673),
+                  color: selected ? TurnaColors.primary : TurnaColors.textMuted,
                 ),
                 onTap: () => onSelect(1),
               ),
@@ -5136,9 +5183,7 @@ class _TurnaBottomBar extends StatelessWidget {
                 iconBuilder: (selected) => Icon(
                   Icons.business_center_outlined,
                   size: 22,
-                  color: selected
-                      ? const Color(0xFF1FAA59)
-                      : const Color(0xFF6F7673),
+                  color: selected ? TurnaColors.primary : TurnaColors.textMuted,
                 ),
                 onTap: () => onSelect(2),
               ),
@@ -5154,8 +5199,8 @@ class _TurnaBottomBar extends StatelessWidget {
                       Icons.chat_bubble_outline_rounded,
                       size: 22,
                       color: selected
-                          ? const Color(0xFF1FAA59)
-                          : const Color(0xFF6F7673),
+                          ? TurnaColors.primary
+                          : TurnaColors.textMuted,
                     ),
                     if (unreadChats > 0)
                       Positioned(
@@ -5168,7 +5213,7 @@ class _TurnaBottomBar extends StatelessWidget {
                           ),
                           constraints: const BoxConstraints(minWidth: 24),
                           decoration: BoxDecoration(
-                            color: const Color(0xFF1FAA59),
+                            color: TurnaColors.primary,
                             borderRadius: BorderRadius.circular(999),
                           ),
                           child: Text(
@@ -5218,7 +5263,7 @@ class _TurnaBottomBarItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = selected ? const Color(0xFF1FAA59) : const Color(0xFF6F7673);
+    final color = selected ? TurnaColors.primary : TurnaColors.textMuted;
     return InkWell(
       borderRadius: BorderRadius.circular(18),
       onTap: onTap,
@@ -5265,7 +5310,7 @@ class _ProfileAvatar extends StatelessWidget {
     if (trimmedUrl.isNotEmpty) {
       return CircleAvatar(
         radius: radius,
-        backgroundColor: const Color(0xFFDBEFE2),
+        backgroundColor: TurnaColors.primary100,
         backgroundImage: NetworkImage(
           trimmedUrl,
           headers: authToken == null || authToken!.trim().isEmpty
@@ -5281,11 +5326,11 @@ class _ProfileAvatar extends StatelessWidget {
         : safeLabel.characters.first.toUpperCase();
     return CircleAvatar(
       radius: radius,
-      backgroundColor: const Color(0xFFDBEFE2),
+      backgroundColor: TurnaColors.primary100,
       child: Text(
         initial,
         style: TextStyle(
-          color: const Color(0xFF1FAA59),
+          color: TurnaColors.primary,
           fontWeight: FontWeight.w700,
           fontSize: radius * 0.65,
         ),
@@ -5763,14 +5808,20 @@ class UserProfilePage extends StatefulWidget {
 
 class _UserProfilePageState extends State<UserProfilePage> {
   TurnaUserProfile? _profile;
+  _UserConversationStats? _conversationStats;
   bool _loading = true;
+  bool _statsLoading = true;
   bool _chatLockEnabled = false;
   String? _error;
 
   @override
   void initState() {
     super.initState();
-    _loadProfile();
+    _refreshData();
+  }
+
+  Future<void> _refreshData() async {
+    await Future.wait([_loadProfile(), _loadConversationStats()]);
   }
 
   Future<void> _loadProfile() async {
@@ -5791,6 +5842,65 @@ class _UserProfilePageState extends State<UserProfilePage> {
       setState(() {
         _loading = false;
         _error = error.toString();
+      });
+    }
+  }
+
+  Future<void> _loadConversationStats() async {
+    final chatId = ChatApi.buildDirectChatId(
+      widget.session.userId,
+      widget.userId,
+    );
+    if (mounted) {
+      setState(() {
+        _statsLoading = true;
+      });
+    }
+
+    try {
+      final allMessages = <ChatMessage>[];
+      String? before;
+      var hasMore = true;
+
+      while (hasMore) {
+        final page = await ChatApi.fetchMessagesPage(
+          widget.session.token,
+          chatId,
+          before: before,
+          limit: 100,
+        );
+        allMessages.addAll(page.items);
+        hasMore = page.hasMore;
+        before = page.nextBefore;
+        if (page.items.isEmpty) break;
+      }
+
+      var attachmentCount = 0;
+      var totalBytes = 0;
+      for (final message in allMessages) {
+        totalBytes += utf8.encode(message.text).length;
+        for (final attachment in message.attachments) {
+          attachmentCount += 1;
+          totalBytes += attachment.sizeBytes;
+        }
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _conversationStats = _UserConversationStats(
+          attachmentCount: attachmentCount,
+          totalBytes: totalBytes,
+        );
+        _statsLoading = false;
+      });
+    } catch (error) {
+      turnaLog('user profile conversation stats failed', {
+        'userId': widget.userId,
+        'error': error.toString(),
+      });
+      if (!mounted) return;
+      setState(() {
+        _statsLoading = false;
       });
     }
   }
@@ -5832,6 +5942,17 @@ class _UserProfilePageState extends State<UserProfilePage> {
     ).showSnackBar(SnackBar(content: Text('$label yakinda eklenecek.')));
   }
 
+  String _formatConversationCount() {
+    if (_statsLoading) return '...';
+    return '${_conversationStats?.attachmentCount ?? 0}';
+  }
+
+  String _formatConversationStorage() {
+    if (_statsLoading) return '...';
+    final bytes = _conversationStats?.totalBytes ?? 0;
+    return formatBytesLabel(bytes).replaceAll('.', ',');
+  }
+
   @override
   Widget build(BuildContext context) {
     final profile = _profile;
@@ -5840,9 +5961,9 @@ class _UserProfilePageState extends State<UserProfilePage> {
 
     if (_loading && profile == null) {
       return Scaffold(
-        backgroundColor: const Color(0xFFF3F4F3),
+        backgroundColor: TurnaColors.backgroundSoft,
         appBar: AppBar(
-          backgroundColor: const Color(0xFFF3F4F3),
+          backgroundColor: TurnaColors.backgroundSoft,
           surfaceTintColor: Colors.transparent,
           centerTitle: true,
           title: const Text('Kisi bilgisi'),
@@ -5853,9 +5974,9 @@ class _UserProfilePageState extends State<UserProfilePage> {
 
     if (profile == null) {
       return Scaffold(
-        backgroundColor: const Color(0xFFF3F4F3),
+        backgroundColor: TurnaColors.backgroundSoft,
         appBar: AppBar(
-          backgroundColor: const Color(0xFFF3F4F3),
+          backgroundColor: TurnaColors.backgroundSoft,
           surfaceTintColor: Colors.transparent,
           centerTitle: true,
           title: const Text('Kisi bilgisi'),
@@ -5889,9 +6010,9 @@ class _UserProfilePageState extends State<UserProfilePage> {
         : phone;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF3F4F3),
+      backgroundColor: TurnaColors.backgroundSoft,
       appBar: AppBar(
-        backgroundColor: const Color(0xFFF3F4F3),
+        backgroundColor: TurnaColors.backgroundSoft,
         surfaceTintColor: Colors.transparent,
         centerTitle: true,
         title: const Text(
@@ -5999,13 +6120,13 @@ class _UserProfilePageState extends State<UserProfilePage> {
               _UserProfileRow(
                 icon: Icons.photo_library_outlined,
                 title: 'Medya, baglanti ve belgeler',
-                trailingText: '27',
+                trailingText: _formatConversationCount(),
                 onTap: () => _showPlaceholderAction('Medya listesi'),
               ),
               _UserProfileRow(
                 icon: Icons.folder_outlined,
                 title: 'Depolama alanini yonet',
-                trailingText: '11,5 MB',
+                trailingText: _formatConversationStorage(),
                 onTap: () => _showPlaceholderAction('Depolama alani'),
               ),
               _UserProfileRow(
@@ -6070,9 +6191,9 @@ class _UserProfilePageState extends State<UserProfilePage> {
           ),
           const SizedBox(height: 16),
           OutlinedButton(
-            onPressed: _loadProfile,
+            onPressed: _refreshData,
             style: OutlinedButton.styleFrom(
-              foregroundColor: const Color(0xFF1FAA59),
+              foregroundColor: TurnaColors.primary,
               side: const BorderSide(color: Color(0xFFB7D9C4)),
               padding: const EdgeInsets.symmetric(vertical: 14),
               shape: RoundedRectangleBorder(
@@ -6110,7 +6231,7 @@ class _UserProfileActionButton extends StatelessWidget {
           padding: const EdgeInsets.symmetric(vertical: 14),
           child: Column(
             children: [
-              Icon(icon, color: const Color(0xFF20A355), size: 23),
+              Icon(icon, color: TurnaColors.primary, size: 23),
               const SizedBox(height: 8),
               Text(
                 label,
@@ -6126,6 +6247,16 @@ class _UserProfileActionButton extends StatelessWidget {
       ),
     );
   }
+}
+
+class _UserConversationStats {
+  const _UserConversationStats({
+    required this.attachmentCount,
+    required this.totalBytes,
+  });
+
+  final int attachmentCount;
+  final int totalBytes;
 }
 
 class _UserProfileGroupCard extends StatelessWidget {
@@ -6272,8 +6403,8 @@ class _UserProfileSwitchRow extends StatelessWidget {
           Switch.adaptive(
             value: value,
             onChanged: onChanged,
-            activeThumbColor: const Color(0xFF20A355),
-            activeTrackColor: const Color(0xFF9AD2AF),
+            activeThumbColor: TurnaColors.primary,
+            activeTrackColor: TurnaColors.primary100,
           ),
         ],
       ),
@@ -6352,7 +6483,7 @@ class _SecurityNotificationsPageState extends State<SecurityNotificationsPage> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          const Icon(Icons.lock, size: 54, color: Color(0xFF1FAA59)),
+          const Icon(Icons.lock, size: 54, color: TurnaColors.primary),
           const SizedBox(height: 12),
           const Text(
             'Your chats and calls are private',
@@ -8256,7 +8387,7 @@ class TurnaNativeCallManager {
         isShowLogo: false,
         ringtonePath: 'system_ringtone_default',
         backgroundColor: '#101314',
-        actionColor: '#1FAA59',
+        actionColor: '#2F80ED',
         textColor: '#ffffff',
         incomingCallNotificationChannelName: 'Turna Arama',
         missedCallNotificationChannelName: 'Turna Cevapsiz',
@@ -9165,7 +9296,7 @@ class _CallsPageState extends State<CallsPage> {
                         size: 16,
                         color: isMissed
                             ? Colors.red.shade400
-                            : const Color(0xFF1FAA59),
+                            : TurnaColors.primary,
                       ),
                       const SizedBox(width: 6),
                       Expanded(
@@ -9365,7 +9496,7 @@ class _IncomingCallPageState extends State<IncomingCallPage> {
                     ),
                     FloatingActionButton(
                       heroTag: 'accept_${call.id}',
-                      backgroundColor: const Color(0xFF1FAA59),
+                      backgroundColor: TurnaColors.primary,
                       onPressed: _busy ? null : _accept,
                       child: Icon(
                         isVideo ? Icons.videocam : Icons.call,
