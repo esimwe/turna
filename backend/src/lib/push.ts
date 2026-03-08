@@ -222,6 +222,37 @@ function getInvalidFcmTokenIds(
     .map((result) => result.id!);
 }
 
+function summarizeFcmFailures(
+  response: {
+    responses: Array<{
+      success: boolean;
+      error?: { code?: string; message?: string };
+    }>;
+  },
+  devices: PushDevice[]
+): Array<{
+  deviceId: string;
+  platform: string;
+  tokenKind: string;
+  code: string;
+  message: string;
+}> {
+  return response.responses
+    .map((result, index) => {
+      if (result.success) return null;
+      const device = devices[index];
+      if (!device) return null;
+      return {
+        deviceId: device.id,
+        platform: device.platform,
+        tokenKind: device.tokenKind,
+        code: result.error?.code ?? "unknown",
+        message: result.error?.message ?? ""
+      };
+    })
+    .filter((item): item is NonNullable<typeof item> => item != null);
+}
+
 async function findActiveDevices(userIds: string[]): Promise<PushDevice[]> {
   if (userIds.length === 0) return [];
   return prismaDeviceToken.findMany({
@@ -392,12 +423,14 @@ export async function sendChatMessagePush(params: {
     if (invalidTokenIds.length > 0) {
       await markInactiveDeviceTokens(invalidTokenIds);
     }
+    const failures = summarizeFcmFailures(response, devices);
     logInfo("chat push sent", {
       chatId: params.message.chatId,
       recipientUserIds: params.recipientUserIds,
       deviceCount: devices.length,
       successCount: response.successCount,
-      failureCount: response.failureCount
+      failureCount: response.failureCount,
+      failures
     });
   } catch (error) {
     logError("send chat push failed", error);
