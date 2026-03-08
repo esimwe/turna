@@ -1080,6 +1080,38 @@ ChatPreview buildDirectChatPreviewForCall(
   );
 }
 
+class _ChatTimelineEntry {
+  const _ChatTimelineEntry._({
+    required this.id,
+    required this.createdAt,
+    this.message,
+    this.call,
+  });
+
+  factory _ChatTimelineEntry.message(ChatMessage message) {
+    return _ChatTimelineEntry._(
+      id: 'message:${message.id}',
+      createdAt: message.createdAt,
+      message: message,
+    );
+  }
+
+  factory _ChatTimelineEntry.call(TurnaCallHistoryItem call) {
+    return _ChatTimelineEntry._(
+      id: 'call:${call.id}',
+      createdAt: call.createdAt ?? '',
+      call: call,
+    );
+  }
+
+  final String id;
+  final String createdAt;
+  final ChatMessage? message;
+  final TurnaCallHistoryItem? call;
+
+  bool get isMessage => message != null;
+}
+
 class _ChatRoomPageState extends State<ChatRoomPage>
     with WidgetsBindingObserver, RouteAware {
   late final TurnaSocketClient _client;
@@ -1090,13 +1122,15 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   bool _showScrollToBottom = false;
   bool _attachmentBusy = false;
   bool _hasComposerText = false;
+  bool _loadingPeerCalls = false;
   TurnaReplyPayload? _replyDraft;
   _PinnedMessageDraft? _pinnedMessage;
+  List<TurnaCallHistoryItem> _peerCalls = const [];
   Set<String> _starredMessageIds = <String>{};
   Set<String> _softDeletedMessageIds = <String>{};
   Set<String> _deletedMessageIds = <String>{};
   final Map<String, GlobalKey> _messageKeys = <String, GlobalKey>{};
-  int _lastRenderedMessageCount = 0;
+  int _lastRenderedTimelineCount = 0;
   Timer? _messageHighlightTimer;
   String? _highlightedMessageId;
   PageRoute<dynamic>? _route;
@@ -1129,11 +1163,13 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       onSessionExpired: widget.onSessionExpired,
     )..connect();
     _client.addListener(_refresh);
+    widget.callCoordinator.addListener(_handleCallCoordinatorChanged);
     _controller.addListener(_handleComposerChanged);
     _composerFocusNode.addListener(_refresh);
     _scrollController.addListener(_handleScroll);
     _loadPinnedMessage();
     _loadLocalMessageState();
+    unawaited(_loadPeerCallHistory());
   }
 
   @override
@@ -1151,11 +1187,13 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   @override
   void didPush() {
     kTurnaActiveChatRegistry.setCurrent(widget.chat);
+    unawaited(_loadPeerCallHistory());
   }
 
   @override
   void didPopNext() {
     kTurnaActiveChatRegistry.setCurrent(widget.chat);
+    unawaited(_loadPeerCallHistory());
   }
 
   @override
@@ -1174,12 +1212,17 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     if (mounted) {
       setState(() {});
     }
-    if (_client.messages.length != _lastRenderedMessageCount) {
-      _lastRenderedMessageCount = _client.messages.length;
+    final timelineCount = _buildTimelineEntries().length;
+    if (timelineCount != _lastRenderedTimelineCount) {
+      _lastRenderedTimelineCount = timelineCount;
       if (shouldSnapToBottom) {
         WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
       }
     }
+  }
+
+  void _handleCallCoordinatorChanged() {
+    unawaited(_loadPeerCallHistory());
   }
 
   void _handleComposerChanged() {
@@ -1316,10 +1359,16 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     return '$dd.$mm.${dt.year}';
   }
 
-  bool _shouldShowDayChip(List<ChatMessage> displayMessages, int index) {
-    if (index == displayMessages.length - 1) return true;
-    final current = DateTime.tryParse(displayMessages[index].createdAt);
-    final older = DateTime.tryParse(displayMessages[index + 1].createdAt);
+  String _timelineCreatedAt(_ChatTimelineEntry entry) {
+    if (entry.message != null) return entry.message!.createdAt;
+    final call = entry.call;
+    return call?.createdAt ?? call?.endedAt ?? call?.acceptedAt ?? '';
+  }
+
+  bool _shouldShowDayChip(List<_ChatTimelineEntry> entries, int index) {
+    if (index == entries.length - 1) return true;
+    final current = DateTime.tryParse(_timelineCreatedAt(entries[index]));
+    final older = DateTime.tryParse(_timelineCreatedAt(entries[index + 1]));
     if (current == null || older == null) return false;
     return current.year != older.year ||
         current.month != older.month ||
@@ -1330,6 +1379,40 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       guessContentTypeForFileName(fileName);
 
   String _formatFileSize(int bytes) => formatBytesLabel(bytes);
+
+  Future<void> _loadPeerCallHistory() async {
+    final peerUserId = _peerUserId;
+    if (peerUserId == null || _loadingPeerCalls) return;
+
+    _loadingPeerCalls = true;
+    final shouldSnapToBottom =
+        !_scrollController.hasClients || _scrollController.offset < 120;
+    final previousCount = _buildTimelineEntries().length;
+    try {
+      final calls = await CallApi.fetchCalls(widget.session);
+      if (!mounted) return;
+      final filtered =
+          calls.where((item) => item.peer.id == peerUserId).toList()
+            ..sort((a, b) {
+              final aTime = a.createdAt ?? a.endedAt ?? a.acceptedAt ?? '';
+              final bTime = b.createdAt ?? b.endedAt ?? b.acceptedAt ?? '';
+              return aTime.compareTo(bTime);
+            });
+      setState(() => _peerCalls = filtered);
+      final nextCount = _buildTimelineEntries().length;
+      _lastRenderedTimelineCount = nextCount;
+      if (shouldSnapToBottom && nextCount != previousCount) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
+      }
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      turnaLog('chat call history load failed', error);
+    } finally {
+      _loadingPeerCalls = false;
+    }
+  }
 
   void _showVoiceMessagePlaceholder() {
     ScaffoldMessenger.of(context).showSnackBar(
@@ -1946,15 +2029,18 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   }
 
   bool _isSameMessageGroup(
-    List<ChatMessage> displayMessages,
+    List<_ChatTimelineEntry> displayEntries,
     int currentIndex,
     int neighborIndex,
   ) {
-    if (neighborIndex < 0 || neighborIndex >= displayMessages.length) {
+    if (neighborIndex < 0 || neighborIndex >= displayEntries.length) {
       return false;
     }
-    final current = displayMessages[currentIndex];
-    final neighbor = displayMessages[neighborIndex];
+    final currentEntry = displayEntries[currentIndex];
+    final neighborEntry = displayEntries[neighborIndex];
+    final current = currentEntry.message;
+    final neighbor = neighborEntry.message;
+    if (current == null || neighbor == null) return false;
     if (current.senderId != neighbor.senderId) return false;
     final currentDate = DateTime.tryParse(current.createdAt);
     final neighborDate = DateTime.tryParse(neighbor.createdAt);
@@ -1965,12 +2051,12 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   }
 
   EdgeInsets _bubbleMarginFor(
-    List<ChatMessage> displayMessages,
+    List<_ChatTimelineEntry> displayEntries,
     int index,
     bool mine,
   ) {
-    final joinsOlder = _isSameMessageGroup(displayMessages, index, index + 1);
-    final joinsNewer = _isSameMessageGroup(displayMessages, index, index - 1);
+    final joinsOlder = _isSameMessageGroup(displayEntries, index, index + 1);
+    final joinsNewer = _isSameMessageGroup(displayEntries, index, index - 1);
     return EdgeInsets.only(
       left: mine ? 56 : 8,
       right: mine ? 8 : 56,
@@ -1984,6 +2070,17 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   List<ChatMessage> _currentDisplayMessages() => _client.messages.reversed
       .where((message) => !_deletedMessageIds.contains(message.id))
       .toList();
+
+  List<_ChatTimelineEntry> _buildTimelineEntries() {
+    final entries = <_ChatTimelineEntry>[
+      ..._currentDisplayMessages().map(_ChatTimelineEntry.message),
+      ..._peerCalls.map(_ChatTimelineEntry.call),
+    ];
+    entries.sort(
+      (a, b) => _timelineCreatedAt(a).compareTo(_timelineCreatedAt(b)),
+    );
+    return entries;
+  }
 
   GlobalKey _messageKeyFor(String messageId) =>
       _messageKeys.putIfAbsent(messageId, GlobalKey.new);
@@ -2099,8 +2196,157 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     _jumpToBottom();
   }
 
+  String _formatCallTimelineSubtitle(TurnaCallHistoryItem item) {
+    final duration = item.durationSeconds;
+    if (duration != null && duration > 0) {
+      final hours = duration ~/ 3600;
+      final minutes = (duration % 3600) ~/ 60;
+      final seconds = duration % 60;
+      if (hours > 0) {
+        return minutes > 0 ? '$hours sa $minutes dk' : '$hours sa';
+      }
+      if (minutes > 0) return '$minutes dk';
+      return '$seconds sn';
+    }
+
+    switch (item.status) {
+      case TurnaCallStatus.declined:
+        return 'Reddedildi';
+      case TurnaCallStatus.missed:
+        return 'Cevapsiz';
+      case TurnaCallStatus.cancelled:
+        return 'Iptal edildi';
+      case TurnaCallStatus.ringing:
+        return 'Caliyor';
+      case TurnaCallStatus.accepted:
+      case TurnaCallStatus.ended:
+        return 'Baglandi';
+    }
+  }
+
+  Widget _buildCallBubble(
+    List<_ChatTimelineEntry> displayEntries,
+    int index,
+    TurnaCallHistoryItem item,
+  ) {
+    final mine = item.direction == 'outgoing';
+    final bubbleColor = mine
+        ? TurnaColors.chatOutgoing.withValues(alpha: 0.14)
+        : TurnaColors.chatIncoming;
+    final iconBackground = mine
+        ? Colors.white.withValues(alpha: 0.2)
+        : Colors.white;
+    final iconColor = item.status == TurnaCallStatus.missed
+        ? TurnaColors.error
+        : mine
+        ? TurnaColors.chatOutgoingText
+        : TurnaColors.primary;
+    final textColor = mine ? TurnaColors.text : TurnaColors.chatIncomingText;
+    final title = item.type == TurnaCallType.video
+        ? 'Goruntulu arama'
+        : 'Sesli arama';
+
+    return Align(
+      alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        constraints: BoxConstraints(
+          maxWidth:
+              MediaQuery.of(context).size.width *
+              TurnaChatTokens.messageMaxWidthFactor,
+        ),
+        margin: _bubbleMarginFor(displayEntries, index, mine),
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+        decoration: BoxDecoration(
+          color: bubbleColor,
+          borderRadius: BorderRadius.only(
+            topLeft: const Radius.circular(TurnaChatTokens.bubbleRadius),
+            topRight: const Radius.circular(TurnaChatTokens.bubbleRadius),
+            bottomLeft: Radius.circular(
+              mine
+                  ? TurnaChatTokens.bubbleRadiusTail
+                  : TurnaChatTokens.bubbleRadius,
+            ),
+            bottomRight: Radius.circular(
+              mine
+                  ? TurnaChatTokens.bubbleRadius
+                  : TurnaChatTokens.bubbleRadiusTail,
+            ),
+          ),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: iconBackground,
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Icon(
+                item.type == TurnaCallType.video
+                    ? Icons.videocam_rounded
+                    : Icons.call_rounded,
+                color: iconColor,
+                size: 18,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(right: 44),
+                    child: Text(
+                      title,
+                      style: TextStyle(
+                        color: textColor,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Expanded(
+                        child: Text(
+                          _formatCallTimelineSubtitle(item),
+                          style: TextStyle(
+                            color: textColor.withValues(alpha: 0.82),
+                            fontSize: 13.5,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Text(
+                        _formatMessageTime(
+                          item.createdAt ??
+                              item.endedAt ??
+                              item.acceptedAt ??
+                              '',
+                        ),
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: textColor.withValues(alpha: 0.68),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildMessageBubble(
-    List<ChatMessage> displayMessages,
+    List<_ChatTimelineEntry> displayEntries,
     int index,
     ChatMessage msg,
     bool mine,
@@ -2173,7 +2419,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                 MediaQuery.of(context).size.width *
                 TurnaChatTokens.messageMaxWidthFactor,
           ),
-          margin: _bubbleMarginFor(displayMessages, index, mine),
+          margin: _bubbleMarginFor(displayEntries, index, mine),
           padding: EdgeInsets.fromLTRB(
             12,
             9,
@@ -2245,9 +2491,6 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                         style: TextStyle(
                           fontSize: 16,
                           height: 1.28,
-                          fontStyle: isDeletedPlaceholder
-                              ? FontStyle.italic
-                              : FontStyle.normal,
                           color: mine
                               ? TurnaColors.chatOutgoingText
                               : TurnaColors.chatIncomingText,
@@ -2738,6 +2981,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     kTurnaActiveChatRegistry.clearCurrent(widget.chat.chatId);
     _client.removeListener(_refresh);
     _client.dispose();
+    widget.callCoordinator.removeListener(_handleCallCoordinatorChanged);
     _controller.removeListener(_handleComposerChanged);
     _controller.dispose();
     _composerFocusNode.removeListener(_refresh);
@@ -2752,6 +2996,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _client.refreshConnection();
+      unawaited(_loadPeerCallHistory());
       return;
     }
 
@@ -2764,9 +3009,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
 
   @override
   Widget build(BuildContext context) {
-    final displayMessages = _client.messages.reversed
-        .where((message) => !_deletedMessageIds.contains(message.id))
-        .toList();
+    final timelineEntries = _buildTimelineEntries();
     final peerStatusText = _buildPeerStatusText();
 
     return Scaffold(
@@ -2883,9 +3126,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
             child: Stack(
               children: [
                 const Positioned.fill(child: _ChatWallpaper()),
-                if (_client.loadingInitial && displayMessages.isEmpty)
+                if (_client.loadingInitial && timelineEntries.isEmpty)
                   const Center(child: CircularProgressIndicator())
-                else if (displayMessages.isEmpty)
+                else if (timelineEntries.isEmpty)
                   const _CenteredState(
                     icon: Icons.chat_bubble_outline,
                     title: 'Henuz mesaj yok',
@@ -2896,9 +3139,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                     controller: _scrollController,
                     reverse: true,
                     padding: const EdgeInsets.fromLTRB(8, 14, 8, 18),
-                    itemCount: displayMessages.length + 1,
+                    itemCount: timelineEntries.length + 1,
                     itemBuilder: (context, index) {
-                      if (index == displayMessages.length) {
+                      if (index == timelineEntries.length) {
                         if (_client.loadingMore) {
                           return const Padding(
                             padding: EdgeInsets.symmetric(vertical: 12),
@@ -2919,25 +3162,31 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                         return const SizedBox(height: 24);
                       }
 
-                      final msg = displayMessages[index];
-                      final mine = msg.senderId == widget.session.userId;
+                      final entry = timelineEntries[index];
+                      final msg = entry.message;
+                      final call = entry.call;
                       return Column(
                         children: [
-                          if (_shouldShowDayChip(displayMessages, index))
+                          if (_shouldShowDayChip(timelineEntries, index))
                             Padding(
                               padding: const EdgeInsets.symmetric(
                                 vertical: TurnaChatTokens.dateGap / 2,
                               ),
                               child: _DateSeparatorChip(
-                                label: _formatDayLabel(msg.createdAt),
+                                label: _formatDayLabel(
+                                  _timelineCreatedAt(entry),
+                                ),
                               ),
                             ),
-                          _buildMessageBubble(
-                            displayMessages,
-                            index,
-                            msg,
-                            mine,
-                          ),
+                          if (msg != null)
+                            _buildMessageBubble(
+                              timelineEntries,
+                              index,
+                              msg,
+                              msg.senderId == widget.session.userId,
+                            )
+                          else if (call != null)
+                            _buildCallBubble(timelineEntries, index, call),
                         ],
                       );
                     },
