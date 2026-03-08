@@ -37,6 +37,7 @@ export interface CallJoinPayload {
   url: string;
   roomName: string;
   token: string;
+  e2eeKey: string;
   callId: string;
   type: AppCallType;
 }

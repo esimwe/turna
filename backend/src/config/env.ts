@@ -7,6 +7,8 @@ const resolvedEnv = {
   NODE_ENV: process.env.NODE_ENV,
   PORT: process.env.PORT,
   CORS_ORIGIN: process.env.CORS_ORIGIN,
+  TRUST_PROXY: process.env.TRUST_PROXY,
+  FORCE_HTTPS: process.env.FORCE_HTTPS,
   REDIS_URL: process.env.REDIS_URL ?? process.env.REDIS_PRIVATE_URL,
   DATABASE_URL:
     process.env.DATABASE_URL ??
@@ -29,6 +31,7 @@ const resolvedEnv = {
   APNS_USE_SANDBOX: process.env.APNS_USE_SANDBOX,
   APNS_VOIP_PRIVATE_KEY: process.env.APNS_VOIP_PRIVATE_KEY,
   APNS_VOIP_PRIVATE_KEY_BASE64: process.env.APNS_VOIP_PRIVATE_KEY_BASE64,
+  CALL_E2EE_SECRET: process.env.CALL_E2EE_SECRET,
   LIVEKIT_HOST: process.env.LIVEKIT_HOST,
   LIVEKIT_WS_URL: process.env.LIVEKIT_WS_URL,
   LIVEKIT_API_KEY: process.env.LIVEKIT_API_KEY,
@@ -39,6 +42,14 @@ const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().default(4000),
   CORS_ORIGIN: z.string().default("*"),
+  TRUST_PROXY: z
+    .string()
+    .optional()
+    .transform((value) => (value == null ? false : value === "true")),
+  FORCE_HTTPS: z
+    .string()
+    .optional()
+    .transform((value) => (value == null ? false : value === "true")),
   REDIS_URL: z.string().default("redis://localhost:6379"),
   DATABASE_URL: z.string().url(),
   JWT_SECRET: z.string().min(12).default("turna-dev-secret-change-me"),
@@ -60,6 +71,7 @@ const envSchema = z.object({
     .transform((value) => (value == null ? undefined : value === "true")),
   APNS_VOIP_PRIVATE_KEY: z.string().min(1).optional(),
   APNS_VOIP_PRIVATE_KEY_BASE64: z.string().min(1).optional(),
+  CALL_E2EE_SECRET: z.string().min(16).optional(),
   LIVEKIT_HOST: z.string().url().optional(),
   LIVEKIT_WS_URL: z.string().url().optional(),
   LIVEKIT_API_KEY: z.string().min(1).optional(),
