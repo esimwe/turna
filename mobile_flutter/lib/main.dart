@@ -419,6 +419,7 @@ class TurnaApp extends StatefulWidget {
 class _TurnaAppState extends State<TurnaApp> with WidgetsBindingObserver {
   AuthSession? _session;
   bool _bootstrapping = true;
+  static const Duration _minimumSplashDuration = Duration(milliseconds: 750);
 
   @override
   void initState() {
@@ -440,11 +441,18 @@ class _TurnaAppState extends State<TurnaApp> with WidgetsBindingObserver {
   }
 
   Future<void> _bootstrap() async {
+    final startedAt = DateTime.now();
     AuthSession? session;
     try {
       session = await AuthSession.load();
     } catch (error) {
       turnaLog('auth session load skipped', error);
+    }
+
+    final elapsed = DateTime.now().difference(startedAt);
+    final remaining = _minimumSplashDuration - elapsed;
+    if (!remaining.isNegative) {
+      await Future<void>.delayed(remaining);
     }
 
     if (mounted) {
@@ -522,12 +530,56 @@ class _TurnaLaunchPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Scaffold(
+    return Scaffold(
+      backgroundColor: TurnaColors.backgroundSoft,
       body: Center(
-        child: SizedBox(
-          width: 28,
-          height: 28,
-          child: CircularProgressIndicator(strokeWidth: 2.6),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 116,
+                height: 116,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(28),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x14305788),
+                      blurRadius: 30,
+                      offset: Offset(0, 16),
+                    ),
+                  ],
+                ),
+                padding: const EdgeInsets.all(14),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(20),
+                  child: Image.asset(
+                    'ios/Runner/Assets.xcassets/AppIcon.appiconset/180x180.jpg',
+                    fit: BoxFit.cover,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 22),
+              const Text(
+                'Turnalar selam goturur.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: TurnaColors.text,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -0.3,
+                ),
+              ),
+              const SizedBox(height: 18),
+              const SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(strokeWidth: 2.4),
+              ),
+            ],
+          ),
         ),
       ),
     );
