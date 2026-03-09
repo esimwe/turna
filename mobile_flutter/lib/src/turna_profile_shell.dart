@@ -51,6 +51,7 @@ class _SettingsPageState extends State<SettingsPage> {
       ProfilePage(
         session: widget.session,
         onProfileUpdated: widget.onSessionUpdated,
+        onSessionExpired: widget.onLogout,
       ),
     );
   }
@@ -696,10 +697,12 @@ class ProfilePage extends StatefulWidget {
     super.key,
     required this.session,
     required this.onProfileUpdated,
+    required this.onSessionExpired,
   });
 
   final AuthSession session;
   final void Function(AuthSession session) onProfileUpdated;
+  final VoidCallback onSessionExpired;
 
   @override
   State<ProfilePage> createState() => _ProfilePageState();
@@ -760,6 +763,10 @@ class _ProfilePageState extends State<ProfilePage> {
     _scheduleUsernameCheck();
   }
 
+  void _handleUnauthorized() {
+    widget.onSessionExpired();
+  }
+
   void _scheduleUsernameCheck() {
     final raw = _normalizeUsername(_usernameController.text);
     _usernameCheckDebounce?.cancel();
@@ -817,6 +824,10 @@ class _ProfilePageState extends State<ProfilePage> {
       } catch (error) {
         if (!mounted) return;
         if (_normalizeUsername(_usernameController.text) != raw) return;
+        if (error is TurnaUnauthorizedException) {
+          _handleUnauthorized();
+          return;
+        }
         setState(() {
           _usernameChecking = false;
           _usernameAvailable = false;
@@ -849,6 +860,9 @@ class _ProfilePageState extends State<ProfilePage> {
         _loading = false;
       });
       widget.onProfileUpdated(updatedSession);
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      _handleUnauthorized();
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -951,6 +965,9 @@ class _ProfilePageState extends State<ProfilePage> {
         updatedProfile,
         successMessage: 'Avatar güncellendi.',
       );
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      _handleUnauthorized();
     } catch (error) {
       if (!mounted) return;
       setState(() => _error = error.toString());
@@ -974,6 +991,9 @@ class _ProfilePageState extends State<ProfilePage> {
         updatedProfile,
         successMessage: 'Avatar kaldırıldı.',
       );
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      _handleUnauthorized();
     } catch (error) {
       if (!mounted) return;
       setState(() => _error = error.toString());
@@ -1034,6 +1054,10 @@ class _ProfilePageState extends State<ProfilePage> {
       if (!mounted) return;
       setState(() => _saving = false);
       unawaited(_loadProfile());
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      _handleUnauthorized();
     } catch (error) {
       if (!mounted) return;
       setState(() {

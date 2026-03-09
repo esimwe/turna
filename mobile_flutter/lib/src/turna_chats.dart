@@ -284,6 +284,16 @@ class _ChatsPageState extends State<ChatsPage> {
     setState(() => _selectedFilterId = filterId);
   }
 
+  void _handleActionError(Object error) {
+    if (error is TurnaUnauthorizedException) {
+      widget.onSessionExpired();
+      return;
+    }
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(error.toString())));
+  }
+
   Future<void> _handleChatsMenuAction(_ChatsMenuAction action) async {
     switch (action) {
       case _ChatsMenuAction.select:
@@ -318,9 +328,7 @@ class _ChatsPageState extends State<ChatsPage> {
     } catch (error) {
       if (!mounted) return;
       setState(() => _bulkActionBusy = false);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(error.toString())));
+      _handleActionError(error);
     }
   }
 
@@ -379,9 +387,7 @@ class _ChatsPageState extends State<ChatsPage> {
     } catch (error) {
       if (!mounted) return;
       setState(() => _bulkActionBusy = false);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(error.toString())));
+      _handleActionError(error);
     }
   }
 
@@ -410,9 +416,7 @@ class _ChatsPageState extends State<ChatsPage> {
     } catch (error) {
       if (!mounted) return;
       setState(() => _bulkActionBusy = false);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(error.toString())));
+      _handleActionError(error);
     }
   }
 
@@ -442,9 +446,7 @@ class _ChatsPageState extends State<ChatsPage> {
     } catch (error) {
       if (!mounted) return;
       setState(() => _bulkActionBusy = false);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(error.toString())));
+      _handleActionError(error);
     }
   }
 
@@ -477,9 +479,7 @@ class _ChatsPageState extends State<ChatsPage> {
     } catch (error) {
       if (!mounted) return;
       setState(() => _bulkActionBusy = false);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(error.toString())));
+      _handleActionError(error);
     }
   }
 
@@ -556,9 +556,7 @@ class _ChatsPageState extends State<ChatsPage> {
     } catch (error) {
       if (!mounted) return;
       setState(() => _bulkActionBusy = false);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(error.toString())));
+      _handleActionError(error);
     }
   }
 
@@ -618,9 +616,7 @@ class _ChatsPageState extends State<ChatsPage> {
       } catch (error) {
         if (!mounted) return;
         setState(() => _bulkActionBusy = false);
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(error.toString())));
+        _handleActionError(error);
         return;
       }
     } else if (action == '__clear__') {
@@ -653,9 +649,7 @@ class _ChatsPageState extends State<ChatsPage> {
     } catch (error) {
       if (!mounted) return;
       setState(() => _bulkActionBusy = false);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(error.toString())));
+      _handleActionError(error);
     }
   }
 

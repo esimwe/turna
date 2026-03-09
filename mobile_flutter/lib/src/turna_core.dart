@@ -2159,9 +2159,7 @@ class ProfileApi {
       Uri.parse('$kBackendBaseUrl/api/profile/me'),
       headers: {'Authorization': 'Bearer ${session.token}'},
     );
-    if (res.statusCode >= 400) {
-      throw TurnaApiException(_extractApiError(res.body, res.statusCode));
-    }
+    _throwIfApiError(res, label: 'fetchMe');
 
     final map = jsonDecode(res.body) as Map<String, dynamic>;
     final data = map['data'] as Map<String, dynamic>? ?? const {};
@@ -2176,9 +2174,7 @@ class ProfileApi {
       Uri.parse('$kBackendBaseUrl/api/profile/users/$userId'),
       headers: {'Authorization': 'Bearer ${session.token}'},
     );
-    if (res.statusCode >= 400) {
-      throw TurnaApiException(_extractApiError(res.body, res.statusCode));
-    }
+    _throwIfApiError(res, label: 'fetchUser');
 
     final map = jsonDecode(res.body) as Map<String, dynamic>;
     final data = map['data'] as Map<String, dynamic>? ?? const {};
@@ -2196,9 +2192,7 @@ class ProfileApi {
       ).replace(queryParameters: {'username': normalized}),
       headers: {'Authorization': 'Bearer ${session.token}'},
     );
-    if (res.statusCode >= 400) {
-      throw TurnaApiException(_extractApiError(res.body, res.statusCode));
-    }
+    _throwIfApiError(res, label: 'checkUsernameAvailability');
 
     final map = jsonDecode(res.body) as Map<String, dynamic>;
     final data = map['data'] as Map<String, dynamic>? ?? const {};
@@ -2227,9 +2221,7 @@ class ProfileApi {
         'email': email.trim(),
       }),
     );
-    if (res.statusCode >= 400) {
-      throw TurnaApiException(_extractApiError(res.body, res.statusCode));
-    }
+    _throwIfApiError(res, label: 'updateMe');
 
     final map = jsonDecode(res.body) as Map<String, dynamic>;
     final data = map['data'] as Map<String, dynamic>? ?? const {};
@@ -2254,9 +2246,7 @@ class ProfileApi {
         'about': about.trim(),
       }),
     );
-    if (res.statusCode >= 400) {
-      throw TurnaApiException(_extractApiError(res.body, res.statusCode));
-    }
+    _throwIfApiError(res, label: 'completeOnboarding');
 
     final map = jsonDecode(res.body) as Map<String, dynamic>;
     final data = map['data'] as Map<String, dynamic>? ?? const {};
@@ -2276,9 +2266,7 @@ class ProfileApi {
       },
       body: jsonEncode({'contentType': contentType, 'fileName': fileName}),
     );
-    if (res.statusCode >= 400) {
-      throw TurnaApiException(_extractApiError(res.body, res.statusCode));
-    }
+    _throwIfApiError(res, label: 'createAvatarUpload');
 
     final map = jsonDecode(res.body) as Map<String, dynamic>;
     final data = map['data'] as Map<String, dynamic>? ?? const {};
@@ -2297,9 +2285,7 @@ class ProfileApi {
       },
       body: jsonEncode({'objectKey': objectKey}),
     );
-    if (res.statusCode >= 400) {
-      throw TurnaApiException(_extractApiError(res.body, res.statusCode));
-    }
+    _throwIfApiError(res, label: 'completeAvatarUpload');
 
     final map = jsonDecode(res.body) as Map<String, dynamic>;
     final data = map['data'] as Map<String, dynamic>? ?? const {};
@@ -2311,13 +2297,29 @@ class ProfileApi {
       Uri.parse('$kBackendBaseUrl/api/profile/avatar'),
       headers: {'Authorization': 'Bearer ${session.token}'},
     );
-    if (res.statusCode >= 400) {
-      throw TurnaApiException(_extractApiError(res.body, res.statusCode));
-    }
+    _throwIfApiError(res, label: 'deleteAvatar');
 
     final map = jsonDecode(res.body) as Map<String, dynamic>;
     final data = map['data'] as Map<String, dynamic>? ?? const {};
     return TurnaUserProfile.fromMap(data);
+  }
+
+  static void _throwIfApiError(
+    http.Response response, {
+    required String label,
+  }) {
+    if (response.statusCode < 400) return;
+
+    turnaLog('profile api failed', {
+      'label': label,
+      'statusCode': response.statusCode,
+      'body': response.body,
+    });
+    final message = _extractApiError(response.body, response.statusCode);
+    if (response.statusCode == 401) {
+      throw TurnaUnauthorizedException(message);
+    }
+    throw TurnaApiException(message);
   }
 
   static String _extractApiError(String body, int statusCode) {
@@ -2411,6 +2413,10 @@ class ProfileApi {
           return 'Bu hesap kullanima kapatildi.';
         case 'otp_blocked':
           return 'Bu hesap icin dogrulama kapatildi.';
+        case 'unauthorized':
+        case 'invalid_token':
+        case 'session_revoked':
+          return 'Oturumun suresi doldu.';
         default:
           return error ?? 'İşlem başarısız ($statusCode)';
       }
