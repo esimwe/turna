@@ -3193,6 +3193,7 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
   int _stableQualityTicks = 0;
   int _poorQualityTicks = 0;
   bool _videoProfileChangeInFlight = false;
+  bool _cameraRetryScheduled = false;
   String? error;
 
   lk.Room get room {
@@ -3295,6 +3296,14 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
     lk.LocalParticipant localParticipant, {
     required String origin,
   }) async {
+    if (Platform.isIOS && origin == 'initial_connect') {
+      turnaLog('livekit camera waiting for active lifecycle', {
+        'lifecycle': kTurnaLifecycleState.value.name,
+      });
+      await _waitForActiveLifecycle();
+      await Future<void>.delayed(const Duration(milliseconds: 350));
+    }
+
     final attempts = <({
       String label,
       _AdaptiveCallVideoProfile? profile,
@@ -3354,7 +3363,60 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
       'origin': origin,
       'error': '$lastError',
     });
+    if (
+      Platform.isIOS &&
+      origin == 'initial_connect' &&
+      connected &&
+      !_cameraRetryScheduled
+    ) {
+      _cameraRetryScheduled = true;
+      unawaited(_retryCameraAfterDelay(localParticipant));
+    }
     return false;
+  }
+
+  Future<void> _waitForActiveLifecycle() async {
+    if (kTurnaLifecycleState.value == AppLifecycleState.resumed) {
+      return;
+    }
+
+    final completer = Completer<void>();
+    late VoidCallback listener;
+    Timer? timeout;
+    listener = () {
+      if (kTurnaLifecycleState.value == AppLifecycleState.resumed) {
+        timeout?.cancel();
+        kTurnaLifecycleState.removeListener(listener);
+        if (!completer.isCompleted) {
+          completer.complete();
+        }
+      }
+    };
+
+    timeout = Timer(const Duration(seconds: 3), () {
+      kTurnaLifecycleState.removeListener(listener);
+      if (!completer.isCompleted) {
+        completer.complete();
+      }
+    });
+
+    kTurnaLifecycleState.addListener(listener);
+    await completer.future;
+  }
+
+  Future<void> _retryCameraAfterDelay(lk.LocalParticipant localParticipant) async {
+    await Future<void>.delayed(const Duration(milliseconds: 900));
+    if (!connected || cameraEnabled) {
+      _cameraRetryScheduled = false;
+      return;
+    }
+    await _waitForActiveLifecycle();
+    await _enableCameraWithFallback(
+      localParticipant,
+      origin: 'initial_retry',
+    );
+    _cameraRetryScheduled = false;
+    notifyListeners();
   }
 
   @override
@@ -3401,6 +3463,7 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
 
       connected = true;
       connecting = false;
+      _cameraRetryScheduled = false;
       notifyListeners();
 
       if (videoEnabled) {
@@ -3581,6 +3644,7 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
     } catch (_) {}
     connected = false;
     connecting = false;
+    _cameraRetryScheduled = false;
     _resetVideoQualityCounters();
     notifyListeners();
   }

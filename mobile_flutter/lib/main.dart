@@ -80,6 +80,8 @@ final GlobalKey<NavigatorState> kTurnaNavigatorKey =
     GlobalKey<NavigatorState>();
 final RouteObserver<PageRoute<dynamic>> kTurnaRouteObserver =
     RouteObserver<PageRoute<dynamic>>();
+final ValueNotifier<AppLifecycleState> kTurnaLifecycleState =
+    ValueNotifier(AppLifecycleState.resumed);
 final TurnaActiveChatRegistry kTurnaActiveChatRegistry =
     TurnaActiveChatRegistry();
 final TurnaCallUiController kTurnaCallUiController = TurnaCallUiController();
@@ -438,6 +440,7 @@ class _TurnaAppState extends State<TurnaApp> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    kTurnaLifecycleState.value = state;
     turnaLog('app lifecycle', state.name);
   }
 
