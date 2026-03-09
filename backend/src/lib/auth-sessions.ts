@@ -1,5 +1,6 @@
 import type { Request } from "express";
 import { prisma } from "./prisma.js";
+import { emitSessionRevoked } from "../modules/chat/chat.realtime.js";
 
 const prismaAuthSession = (prisma as unknown as { authSession: any }).authSession;
 
@@ -30,6 +31,29 @@ export function getRequestPlatform(req: Request): string | null {
   return firstHeaderValue(req.headers["x-turna-platform"]);
 }
 
+async function revokeSessionIds(sessionIds: string[], reason: string): Promise<number> {
+  if (sessionIds.length === 0) return 0;
+
+  const result = await prismaAuthSession.updateMany({
+    where: {
+      id: { in: sessionIds },
+      revokedAt: null
+    },
+    data: {
+      revokedAt: new Date(),
+      revokeReason: reason
+    }
+  });
+
+  await Promise.all(
+    sessionIds.map((sessionId) =>
+      emitSessionRevoked(sessionId, reason).catch(() => undefined)
+    )
+  );
+
+  return result.count;
+}
+
 export async function createAuthSessionForRequest(
   userId: string,
   req: Request,
@@ -39,16 +63,19 @@ export async function createAuthSessionForRequest(
   } = {}
 ) {
   if (options.revokeExisting ?? true) {
-    await prismaAuthSession.updateMany({
+    const activeSessions = await prismaAuthSession.findMany({
       where: {
         userId,
         revokedAt: null
       },
-      data: {
-        revokedAt: new Date(),
-        revokeReason: options.revokeReason ?? "new_login"
+      select: {
+        id: true
       }
     });
+    await revokeSessionIds(
+      activeSessions.map((session: { id: string }) => session.id),
+      options.revokeReason ?? "new_login"
+    );
   }
 
   return prismaAuthSession.create({
@@ -63,30 +90,23 @@ export async function createAuthSessionForRequest(
 }
 
 export async function revokeAuthSession(sessionId: string, reason: string): Promise<void> {
-  await prismaAuthSession.updateMany({
-    where: {
-      id: sessionId,
-      revokedAt: null
-    },
-    data: {
-      revokedAt: new Date(),
-      revokeReason: reason
-    }
-  });
+  await revokeSessionIds([sessionId], reason);
 }
 
 export async function revokeAllAuthSessionsForUser(userId: string, reason: string): Promise<number> {
-  const result = await prismaAuthSession.updateMany({
+  const activeSessions = await prismaAuthSession.findMany({
     where: {
       userId,
       revokedAt: null
     },
-    data: {
-      revokedAt: new Date(),
-      revokeReason: reason
+    select: {
+      id: true
     }
   });
-  return result.count;
+  return revokeSessionIds(
+    activeSessions.map((session: { id: string }) => session.id),
+    reason
+  );
 }
 
 export async function findActiveAuthSession(sessionId: string) {

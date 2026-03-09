@@ -16,6 +16,7 @@ import {
   emitInboxUpdate,
   getSocketsInUserRoom,
   registerUserSocket,
+  sessionRoom,
   unregisterUserSocket,
   userRoom
 } from "./chat.realtime.js";
@@ -83,6 +84,7 @@ export function registerChatSocket(io: Server): void {
         }
       }
       socket.data.userId = claims.sub;
+      socket.data.sessionId = claims.sessionId;
       next();
     } catch (error) {
       next(new Error(error instanceof Error ? error.message : "invalid_token"));
@@ -91,8 +93,13 @@ export function registerChatSocket(io: Server): void {
 
   io.on("connection", async (socket: Socket) => {
     const userId = socket.data.userId as string;
+    const sessionId =
+      typeof socket.data.sessionId === "string" ? (socket.data.sessionId as string) : null;
     socket.join(userRoom(userId));
-    const becameOnline = registerUserSocket(userId, socket.id);
+    if (sessionId) {
+      socket.join(sessionRoom(sessionId));
+    }
+    const becameOnline = registerUserSocket(userId, socket.id, sessionId);
     logInfo("socket connected", { socketId: socket.id, userId, transport: socket.conn.transport.name });
 
     if (becameOnline) {
@@ -349,7 +356,7 @@ export function registerChatSocket(io: Server): void {
 
     socket.on("disconnect", async (reason) => {
       logInfo("socket disconnected", { socketId: socket.id, reason });
-      const becameOffline = unregisterUserSocket(userId, socket.id);
+      const becameOffline = unregisterUserSocket(userId, socket.id, sessionId);
       if (!becameOffline) return;
 
       try {

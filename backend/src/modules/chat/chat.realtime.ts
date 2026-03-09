@@ -4,6 +4,7 @@ import type { ChatMessage } from "./chat.types.js";
 
 let chatIo: Server | null = null;
 const socketIdsByUserId = new Map<string, Set<string>>();
+const socketIdsBySessionId = new Map<string, Set<string>>();
 
 export interface UserPresencePayload {
   userId: string;
@@ -15,15 +16,32 @@ export function attachChatRealtime(io: Server): void {
   chatIo = io;
 }
 
-export function registerUserSocket(userId: string, socketId: string): boolean {
+export function sessionRoom(sessionId: string): string {
+  return `session:${sessionId}`;
+}
+
+export function registerUserSocket(
+  userId: string,
+  socketId: string,
+  sessionId?: string | null
+): boolean {
   const socketIds = socketIdsByUserId.get(userId) ?? new Set<string>();
   const wasOnline = socketIds.size > 0;
   socketIds.add(socketId);
   socketIdsByUserId.set(userId, socketIds);
+  if (sessionId) {
+    const sessionSocketIds = socketIdsBySessionId.get(sessionId) ?? new Set<string>();
+    sessionSocketIds.add(socketId);
+    socketIdsBySessionId.set(sessionId, sessionSocketIds);
+  }
   return !wasOnline;
 }
 
-export function unregisterUserSocket(userId: string, socketId: string): boolean {
+export function unregisterUserSocket(
+  userId: string,
+  socketId: string,
+  sessionId?: string | null
+): boolean {
   const socketIds = socketIdsByUserId.get(userId);
   if (!socketIds) return false;
 
@@ -31,6 +49,14 @@ export function unregisterUserSocket(userId: string, socketId: string): boolean 
   socketIds.delete(socketId);
   if (socketIds.size === 0) {
     socketIdsByUserId.delete(userId);
+  }
+
+  if (sessionId) {
+    const sessionSocketIds = socketIdsBySessionId.get(sessionId);
+    sessionSocketIds?.delete(socketId);
+    if (sessionSocketIds && sessionSocketIds.size === 0) {
+      socketIdsBySessionId.delete(sessionId);
+    }
   }
 
   return wasOnline && !isUserOnline(userId);
@@ -87,6 +113,20 @@ export function emitChatMessage(chatId: string, message: ChatMessage, participan
 export async function getSocketsInUserRoom(userId: string) {
   if (!chatIo) return [];
   return chatIo.in(userRoom(userId)).fetchSockets();
+}
+
+export async function emitSessionRevoked(sessionId: string, reason: string): Promise<void> {
+  if (!chatIo) return;
+
+  const room = sessionRoom(sessionId);
+  chatIo.to(room).emit("auth:session_revoked", { reason });
+
+  const sockets = await chatIo.in(room).fetchSockets();
+  for (const socket of sockets) {
+    setTimeout(() => {
+      socket.disconnect(true);
+    }, 25);
+  }
 }
 
 export function emitChatStatus(params: {
