@@ -7,7 +7,7 @@ import {
   isChatAttachmentKeyOwnedByUser,
   isStorageConfigured
 } from "../../lib/storage.js";
-import { requireAuth } from "../../middleware/auth.js";
+import { requireAuth, requireMessagingAccess } from "../../middleware/auth.js";
 import { buildAvatarUrl } from "../profile/avatar-url.js";
 import {
   emitChatMessage,
@@ -79,6 +79,15 @@ const listMessagesQuerySchema = z.object({
 
 const messageIdParamSchema = z.object({
   messageId: z.string().trim().min(1).max(255)
+});
+
+const submitMessageReportSchema = z.object({
+  reasonCode: z.string().trim().min(2).max(50),
+  details: z
+    .preprocess(
+      (value) => (typeof value === "string" ? value.trim() : value),
+      z.string().max(1000).nullable().optional()
+    )
 });
 
 const bulkDeleteChatsSchema = z.object({
@@ -350,7 +359,7 @@ chatRouter.get("/directory/list", requireAuth, async (req, res) => {
   });
 });
 
-chatRouter.post("/attachments/upload-url", requireAuth, async (req, res) => {
+chatRouter.post("/attachments/upload-url", requireAuth, requireMessagingAccess, async (req, res) => {
   if (!isStorageConfigured()) {
     res.status(503).json({ error: "storage_not_configured" });
     return;
@@ -397,7 +406,7 @@ chatRouter.post("/attachments/upload-url", requireAuth, async (req, res) => {
   });
 });
 
-chatRouter.post("/messages", requireAuth, async (req, res) => {
+chatRouter.post("/messages", requireAuth, requireMessagingAccess, async (req, res) => {
   const parsed = sendMessageSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
@@ -486,6 +495,56 @@ chatRouter.post("/messages", requireAuth, async (req, res) => {
     logError("chat http send failed", error);
     res.status(500).json({ error: "failed_to_send_message" });
   }
+});
+
+chatRouter.post("/messages/:messageId/report", requireAuth, async (req, res) => {
+  const parsedParams = messageIdParamSchema.safeParse(req.params);
+  const parsedBody = submitMessageReportSchema.safeParse(req.body);
+  if (!parsedParams.success) {
+    res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+    return;
+  }
+  if (!parsedBody.success) {
+    res.status(400).json({ error: "validation_error", details: parsedBody.error.flatten() });
+    return;
+  }
+
+  const message = await chatService.getMessageById(parsedParams.data.messageId);
+  if (!message) {
+    res.status(404).json({ error: "message_not_found" });
+    return;
+  }
+
+  const hasAccess = await chatService.ensureChatAccess(message.chatId, req.authUserId!);
+  if (!hasAccess) {
+    res.status(403).json({ error: "forbidden_chat_access" });
+    return;
+  }
+
+  if (message.senderId === req.authUserId) {
+    res.status(400).json({ error: "cannot_report_own_message" });
+    return;
+  }
+
+  const existing = await chatService.findOpenMessageReport({
+    reporterUserId: req.authUserId!,
+    messageId: message.id
+  });
+  if (existing) {
+    res.status(409).json({ error: "report_already_exists" });
+    return;
+  }
+
+  const report = await chatService.createMessageReport({
+    reporterUserId: req.authUserId!,
+    messageId: message.id,
+    chatId: message.chatId,
+    reportedUserId: message.senderId,
+    reasonCode: parsedBody.data.reasonCode.trim().toUpperCase(),
+    details: parsedBody.data.details ?? null
+  });
+
+  res.status(201).json({ data: { id: report.id, status: report.status } });
 });
 
 chatRouter.post("/messages/:messageId/delete-for-everyone", requireAuth, async (req, res) => {

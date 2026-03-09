@@ -15,6 +15,7 @@ import { requireAuth } from "../../middleware/auth.js";
 import { buildAvatarUrl } from "./avatar-url.js";
 
 export const profileRouter = Router();
+const prismaReportCase = (prisma as unknown as { reportCase: any }).reportCase;
 
 const nullableTrimmedString = (maxLength: number) =>
   z.preprocess((value) => {
@@ -56,6 +57,11 @@ const avatarUploadInitSchema = z.object({
 
 const avatarUploadCompleteSchema = z.object({
   objectKey: z.string().trim().min(1).max(512)
+});
+
+const submitUserReportSchema = z.object({
+  reasonCode: z.string().trim().min(2).max(50),
+  details: nullableTrimmedString(1000)
 });
 
 function toProfileDto(
@@ -156,6 +162,64 @@ profileRouter.get("/users/:userId", requireAuth, async (req, res) => {
   }
 
   res.json({ data: toPublicProfileDto(req, user) });
+});
+
+profileRouter.post("/users/:userId/report", requireAuth, async (req, res) => {
+  const rawUserId = req.params.userId;
+  const userId = Array.isArray(rawUserId) ? rawUserId[0] : rawUserId;
+  if (!userId) {
+    res.status(400).json({ error: "user_id_required" });
+    return;
+  }
+
+  const parsed = submitUserReportSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
+    return;
+  }
+
+  if (userId === req.authUserId) {
+    res.status(400).json({ error: "cannot_report_self" });
+    return;
+  }
+
+  const reportedUser = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true }
+  });
+  if (!reportedUser) {
+    res.status(404).json({ error: "user_not_found" });
+    return;
+  }
+
+  const existing = await prismaReportCase.findFirst({
+    where: {
+      reporterUserId: req.authUserId!,
+      targetType: "USER",
+      reportedUserId: userId,
+      status: {
+        in: ["OPEN", "UNDER_REVIEW"]
+      }
+    },
+    select: { id: true }
+  });
+
+  if (existing) {
+    res.status(409).json({ error: "report_already_exists" });
+    return;
+  }
+
+  const report = await prismaReportCase.create({
+    data: {
+      reporterUserId: req.authUserId!,
+      targetType: "USER",
+      reportedUserId: userId,
+      reasonCode: parsed.data.reasonCode.trim().toUpperCase(),
+      details: parsed.data.details
+    }
+  });
+
+  res.status(201).json({ data: { id: report.id, status: report.status } });
 });
 
 profileRouter.put("/me", requireAuth, async (req, res) => {

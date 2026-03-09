@@ -1,9 +1,9 @@
 import { createServer } from "http";
-import { Redis } from "ioredis";
 import { Server } from "socket.io";
 import { createApp } from "./app.js";
 import { env } from "./config/env.js";
 import { logError, logInfo } from "./lib/logger.js";
+import { redis } from "./lib/redis.js";
 import { attachChatRealtime } from "./modules/chat/chat.realtime.js";
 import { registerChatSocket } from "./modules/chat/chat.socket.js";
 
@@ -20,7 +20,6 @@ const io = new Server(httpServer, {
 attachChatRealtime(io);
 registerChatSocket(io);
 
-const redis = new Redis(env.REDIS_URL, { lazyConnect: true, maxRetriesPerRequest: 1 });
 redis.connect().then(() => logInfo("redis connected")).catch((err: unknown) => logError("redis connect failed", err));
 
 httpServer.listen(env.PORT, () => {

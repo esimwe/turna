@@ -4,7 +4,7 @@ import { z } from "zod";
 import { env } from "../../config/env.js";
 import { logError, logInfo } from "../../lib/logger.js";
 import { sendCallEndedPush, sendIncomingCallPush } from "../../lib/push.js";
-import { requireAuth } from "../../middleware/auth.js";
+import { requireAuth, requireCallingAccess } from "../../middleware/auth.js";
 import { emitUserEvent } from "../chat/chat.realtime.js";
 import { buildAvatarUrlFromOrigin } from "../profile/avatar-url.js";
 import { callService } from "./call.service.js";
@@ -268,7 +268,7 @@ callRouter.post("/reconcile", requireAuth, async (req, res) => {
   }
 });
 
-callRouter.post("/start", requireAuth, async (req, res) => {
+callRouter.post("/start", requireAuth, requireCallingAccess, async (req, res) => {
   const origin = getRequestOrigin(req);
   const parsed = startCallSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -320,7 +320,7 @@ callRouter.post("/start", requireAuth, async (req, res) => {
   }
 });
 
-callRouter.post("/:callId/accept", requireAuth, async (req, res) => {
+callRouter.post("/:callId/accept", requireAuth, requireCallingAccess, async (req, res) => {
   const origin = getRequestOrigin(req);
   try {
     cancelCallTimeout(getRouteParam(req, "callId"));

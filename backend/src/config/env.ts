@@ -16,6 +16,10 @@ const resolvedEnv = {
     process.env.POSTGRES_URL_NON_POOLING ??
     process.env.DATABASE_PUBLIC_URL,
   JWT_SECRET: process.env.JWT_SECRET ?? process.env.AUTH_SECRET,
+  ADMIN_JWT_SECRET: process.env.ADMIN_JWT_SECRET ?? process.env.JWT_SECRET ?? process.env.AUTH_SECRET,
+  ADMIN_BOOTSTRAP_USERNAME: process.env.ADMIN_BOOTSTRAP_USERNAME,
+  ADMIN_BOOTSTRAP_PASSWORD: process.env.ADMIN_BOOTSTRAP_PASSWORD,
+  ADMIN_BOOTSTRAP_DISPLAY_NAME: process.env.ADMIN_BOOTSTRAP_DISPLAY_NAME,
   R2_ACCOUNT_ID: process.env.R2_ACCOUNT_ID,
   R2_BUCKET: process.env.R2_BUCKET,
   R2_ENDPOINT: process.env.R2_ENDPOINT,
@@ -34,7 +38,19 @@ const resolvedEnv = {
   LIVEKIT_HOST: process.env.LIVEKIT_HOST,
   LIVEKIT_WS_URL: process.env.LIVEKIT_WS_URL,
   LIVEKIT_API_KEY: process.env.LIVEKIT_API_KEY,
-  LIVEKIT_API_SECRET: process.env.LIVEKIT_API_SECRET
+  LIVEKIT_API_SECRET: process.env.LIVEKIT_API_SECRET,
+  SMS_PROVIDER: process.env.SMS_PROVIDER,
+  NETGSM_USERCODE: process.env.NETGSM_USERCODE,
+  NETGSM_PASSWORD: process.env.NETGSM_PASSWORD,
+  NETGSM_HEADER: process.env.NETGSM_HEADER,
+  OTP_SECRET: process.env.OTP_SECRET,
+  OTP_TTL_SECONDS: process.env.OTP_TTL_SECONDS,
+  OTP_RESEND_COOLDOWN_SECONDS: process.env.OTP_RESEND_COOLDOWN_SECONDS,
+  OTP_MAX_ATTEMPTS: process.env.OTP_MAX_ATTEMPTS,
+  OTP_PHONE_LIMIT_10M: process.env.OTP_PHONE_LIMIT_10M,
+  OTP_PHONE_LIMIT_24H: process.env.OTP_PHONE_LIMIT_24H,
+  OTP_IP_LIMIT_10M: process.env.OTP_IP_LIMIT_10M,
+  OTP_IP_LIMIT_24H: process.env.OTP_IP_LIMIT_24H
 };
 
 const envSchema = z.object({
@@ -52,6 +68,10 @@ const envSchema = z.object({
   REDIS_URL: z.string().default("redis://localhost:6379"),
   DATABASE_URL: z.string().url(),
   JWT_SECRET: z.string().min(12).default("turna-dev-secret-change-me"),
+  ADMIN_JWT_SECRET: z.string().min(12).default("turna-admin-dev-secret-change-me"),
+  ADMIN_BOOTSTRAP_USERNAME: z.string().min(3).max(64).optional(),
+  ADMIN_BOOTSTRAP_PASSWORD: z.string().min(8).max(255).optional(),
+  ADMIN_BOOTSTRAP_DISPLAY_NAME: z.string().min(1).max(120).optional(),
   R2_ACCOUNT_ID: z.string().min(1).optional(),
   R2_BUCKET: z.string().min(1).optional(),
   R2_ENDPOINT: z.string().url().optional(),
@@ -73,7 +93,19 @@ const envSchema = z.object({
   LIVEKIT_HOST: z.string().url().optional(),
   LIVEKIT_WS_URL: z.string().url().optional(),
   LIVEKIT_API_KEY: z.string().min(1).optional(),
-  LIVEKIT_API_SECRET: z.string().min(1).optional()
+  LIVEKIT_API_SECRET: z.string().min(1).optional(),
+  SMS_PROVIDER: z.enum(["netgsm_bulk", "netgsm_otp", "mock"]).default("mock"),
+  NETGSM_USERCODE: z.string().min(1).optional(),
+  NETGSM_PASSWORD: z.string().min(1).optional(),
+  NETGSM_HEADER: z.string().min(1).optional(),
+  OTP_SECRET: z.string().min(12).default("turna-otp-dev-secret-change-me"),
+  OTP_TTL_SECONDS: z.coerce.number().int().min(30).max(900).default(180),
+  OTP_RESEND_COOLDOWN_SECONDS: z.coerce.number().int().min(15).max(300).default(60),
+  OTP_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(5),
+  OTP_PHONE_LIMIT_10M: z.coerce.number().int().min(1).max(50).default(3),
+  OTP_PHONE_LIMIT_24H: z.coerce.number().int().min(1).max(200).default(10),
+  OTP_IP_LIMIT_10M: z.coerce.number().int().min(1).max(100).default(5),
+  OTP_IP_LIMIT_24H: z.coerce.number().int().min(1).max(500).default(20)
 });
 
 export const env = envSchema.parse(resolvedEnv);

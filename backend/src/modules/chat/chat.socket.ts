@@ -1,8 +1,13 @@
 import type { Server, Socket } from "socket.io";
 import { z } from "zod";
+import { findActiveAuthSession } from "../../lib/auth-sessions.js";
 import { logError, logInfo } from "../../lib/logger.js";
 import { verifyAccessToken } from "../../lib/jwt.js";
 import { sendChatMessagePush } from "../../lib/push.js";
+import {
+  assertUserCanAccessAppById,
+  assertUserCanSendMessagesById
+} from "../../lib/user-access.js";
 import {
   buildUserPresencePayload,
   emitChatMessage,
@@ -51,7 +56,7 @@ async function sendDirectPeerPresenceSnapshot(socket: Socket, chatId: string, us
 }
 
 export function registerChatSocket(io: Server): void {
-  io.use((socket, next) => {
+  io.use(async (socket, next) => {
     const authToken = socket.handshake.auth?.token;
     const headerToken = socket.handshake.headers.authorization;
     let token: string | null = null;
@@ -69,10 +74,18 @@ export function registerChatSocket(io: Server): void {
 
     try {
       const claims = verifyAccessToken(token);
+      await assertUserCanAccessAppById(claims.sub);
+      if (claims.sessionId) {
+        const session = await findActiveAuthSession(claims.sessionId);
+        if (!session || session.userId !== claims.sub) {
+          next(new Error("session_revoked"));
+          return;
+        }
+      }
       socket.data.userId = claims.sub;
       next();
-    } catch {
-      next(new Error("invalid_token"));
+    } catch (error) {
+      next(new Error(error instanceof Error ? error.message : "invalid_token"));
     }
   });
 
@@ -121,6 +134,7 @@ export function registerChatSocket(io: Server): void {
       }
 
       try {
+        await assertUserCanAccessAppById(userId);
         const hasAccess = await chatService.ensureChatAccess(parsed.data.chatId, userId);
         if (!hasAccess) {
           socket.emit("error:forbidden", { message: "forbidden_chat_access" });
@@ -152,6 +166,13 @@ export function registerChatSocket(io: Server): void {
           });
         }
       } catch (error) {
+        if (
+          error instanceof Error &&
+          (error.message === "account_suspended" || error.message === "account_banned")
+        ) {
+          socket.emit("error:forbidden", { message: error.message });
+          return;
+        }
         socket.emit("error:internal", { message: "failed_to_join_chat" });
         logInfo("chat:join failed", { socketId: socket.id, chatId: parsed.data.chatId, error });
       }
@@ -166,6 +187,7 @@ export function registerChatSocket(io: Server): void {
       }
 
       try {
+        await assertUserCanSendMessagesById(userId);
         const hasAccess = await chatService.ensureChatAccess(parsed.data.chatId, userId);
         if (!hasAccess) {
           socket.emit("error:forbidden", { message: "forbidden_chat_access" });
@@ -222,9 +244,19 @@ export function registerChatSocket(io: Server): void {
 
         emitInboxUpdate(participants.length > 0 ? participants : [userId]);
       } catch (error) {
-        if (error instanceof Error && error.message === "chat_blocked") {
-          socket.emit("error:forbidden", { message: "chat_blocked" });
-          return;
+        if (error instanceof Error) {
+          if (error.message === "chat_blocked") {
+            socket.emit("error:forbidden", { message: "chat_blocked" });
+            return;
+          }
+          if (
+            error.message === "account_suspended" ||
+            error.message === "account_banned" ||
+            error.message === "message_sending_restricted"
+          ) {
+            socket.emit("error:forbidden", { message: error.message });
+            return;
+          }
         }
         socket.emit("error:internal", { message: "failed_to_send_message" });
         logInfo("chat:send failed", { socketId: socket.id, chatId: parsed.data.chatId, error });
@@ -240,6 +272,7 @@ export function registerChatSocket(io: Server): void {
       }
 
       try {
+        await assertUserCanAccessAppById(userId);
         const hasAccess = await chatService.ensureChatAccess(parsed.data.chatId, userId);
         if (!hasAccess) {
           socket.emit("error:forbidden", { message: "forbidden_chat_access" });
@@ -260,6 +293,13 @@ export function registerChatSocket(io: Server): void {
           emitInboxUpdate(participants.length > 0 ? participants : [userId]);
         }
       } catch (error) {
+        if (
+          error instanceof Error &&
+          (error.message === "account_suspended" || error.message === "account_banned")
+        ) {
+          socket.emit("error:forbidden", { message: error.message });
+          return;
+        }
         socket.emit("error:internal", { message: "failed_to_mark_seen" });
         logInfo("chat:seen failed", { socketId: socket.id, chatId: parsed.data.chatId, error });
       }
@@ -274,6 +314,7 @@ export function registerChatSocket(io: Server): void {
       }
 
       try {
+        await assertUserCanSendMessagesById(userId);
         const hasAccess = await chatService.ensureChatAccess(parsed.data.chatId, userId);
         if (!hasAccess) {
           socket.emit("error:forbidden", { message: "forbidden_chat_access" });
@@ -287,9 +328,19 @@ export function registerChatSocket(io: Server): void {
           isTyping: parsed.data.isTyping
         });
       } catch (error) {
-        if (error instanceof Error && error.message === "chat_blocked") {
-          socket.emit("error:forbidden", { message: "chat_blocked" });
-          return;
+        if (error instanceof Error) {
+          if (error.message === "chat_blocked") {
+            socket.emit("error:forbidden", { message: "chat_blocked" });
+            return;
+          }
+          if (
+            error.message === "account_suspended" ||
+            error.message === "account_banned" ||
+            error.message === "message_sending_restricted"
+          ) {
+            socket.emit("error:forbidden", { message: error.message });
+            return;
+          }
         }
         socket.emit("error:internal", { message: "failed_to_publish_typing" });
         logInfo("chat:typing failed", { socketId: socket.id, chatId: parsed.data.chatId, error });

@@ -52,25 +52,80 @@ enum CallProvider {
   LIVEKIT
 }
 
+enum UserAccountStatus {
+  ACTIVE
+  SUSPENDED
+  BANNED
+}
+
+enum AdminRole {
+  SUPER_ADMIN
+  OPS_ADMIN
+  SUPPORT_ADMIN
+  MODERATOR
+  ANALYST
+}
+
+enum OtpCodePurpose {
+  LOGIN
+  PHONE_CHANGE
+}
+
+enum OtpProvider {
+  NETGSM_BULK
+  NETGSM_OTP
+  MOCK
+}
+
+enum SmsProvider {
+  NETGSM_BULK
+  NETGSM_OTP
+  MOCK
+}
+
+enum ReportTargetType {
+  USER
+  MESSAGE
+}
+
+enum ReportStatus {
+  OPEN
+  UNDER_REVIEW
+  ACTIONED
+  REJECTED
+  RESOLVED
+}
+
 model User {
-  id           String        @id @default(uuid())
-  username     String?       @unique
-  passwordHash String?
-  displayName  String
-  phone        String?       @unique
-  email        String?       @unique
-  avatarUrl    String?
-  about        String?
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
-  lastSeenAt   DateTime?
-  messages     Message[]
-  memberships  ChatMember[]
-  devices      DeviceToken[]
-  outgoingCalls Call[]       @relation("OutgoingCalls")
-  incomingCalls Call[]       @relation("IncomingCalls")
-  blockedUsers UserBlock[]   @relation("UserBlocks")
-  blockedByUsers UserBlock[] @relation("BlockedByUsers")
+  id                    String             @id @default(uuid())
+  username              String?            @unique
+  passwordHash          String?
+  displayName           String
+  phone                 String?            @unique
+  email                 String?            @unique
+  avatarUrl             String?
+  about                 String?
+  accountStatus         UserAccountStatus  @default(ACTIVE)
+  accountStatusReason   String?
+  otpBlocked            Boolean            @default(false)
+  sendRestricted        Boolean            @default(false)
+  callRestricted        Boolean            @default(false)
+  onboardingCompletedAt DateTime?
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+  lastSeenAt            DateTime?
+  messages              Message[]
+  memberships           ChatMember[]
+  devices               DeviceToken[]
+  authSessions          AuthSession[]
+  outgoingCalls         Call[]             @relation("OutgoingCalls")
+  incomingCalls         Call[]             @relation("IncomingCalls")
+  blockedUsers          UserBlock[]        @relation("UserBlocks")
+  blockedByUsers        UserBlock[]        @relation("BlockedByUsers")
+  submittedReports      ReportCase[]       @relation("SubmittedReports")
+  reportsAgainst        ReportCase[]       @relation("ReportedUsers")
+
+  @@index([accountStatus])
 }
 
 model Chat {
@@ -111,18 +166,19 @@ model UserBlock {
 }
 
 model Message {
-  id          String              @id @default(uuid())
-  chatId       String
-  senderId     String
-  text         String?
-  status       MessageStatus      @default(sent)
-  isViewOnce   Boolean            @default(false)
-  createdAt    DateTime           @default(now())
-  readAt       DateTime?
+  id           String              @id @default(uuid())
+  chatId        String
+  senderId      String
+  text          String?
+  status        MessageStatus      @default(sent)
+  isViewOnce    Boolean            @default(false)
+  createdAt     DateTime           @default(now())
+  readAt        DateTime?
 
-  chat         Chat               @relation(fields: [chatId], references: [id], onDelete: Cascade)
-  sender       User               @relation(fields: [senderId], references: [id], onDelete: Cascade)
-  attachments  MessageAttachment[]
+  chat          Chat               @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  sender        User               @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  attachments   MessageAttachment[]
+  reports       ReportCase[]
 
   @@index([chatId, createdAt(sort: Desc)])
 }
@@ -196,12 +252,135 @@ model CallEvent {
 }
 
 model OtpCode {
-  id        String   @id @default(uuid())
-  target    String
-  code      String
-  consumed  Boolean  @default(false)
-  expiresAt DateTime
-  createdAt DateTime @default(now())
+  id           String         @id @default(uuid())
+  phone        String
+  codeHash     String
+  nonce        String
+  purpose      OtpCodePurpose @default(LOGIN)
+  provider     OtpProvider    @default(MOCK)
+  consumedAt   DateTime?
+  attemptCount Int            @default(0)
+  expiresAt    DateTime
+  requestIp    String?
+  lastSentAt   DateTime       @default(now())
+  createdAt    DateTime       @default(now())
 
-  @@index([target, createdAt(sort: Desc)])
+  @@index([phone, createdAt(sort: Desc)])
+  @@index([phone, purpose, createdAt(sort: Desc)])
+}
+
+model AuthSession {
+  id           String   @id @default(uuid())
+  userId       String
+  deviceId     String?
+  platform     String?
+  ipAddress    String?
+  userAgent    String?
+  createdAt    DateTime @default(now())
+  lastSeenAt   DateTime @default(now())
+  revokedAt    DateTime?
+  revokeReason String?
+
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
+  @@index([revokedAt])
+}
+
+model AdminUser {
+  id                     String          @id @default(uuid())
+  username               String          @unique
+  passwordHash           String
+  displayName            String
+  role                   AdminRole       @default(SUPPORT_ADMIN)
+  isActive               Boolean         @default(true)
+  lastLoginAt            DateTime?
+  createdAt              DateTime        @default(now())
+  updatedAt              DateTime        @updatedAt
+  auditLogs              AdminAuditLog[] @relation("AdminAuditActor")
+  updatedFeatureFlags    FeatureFlag[]   @relation("FeatureFlagUpdatedBy")
+  updatedCountryPolicies CountryPolicy[] @relation("CountryPolicyUpdatedBy")
+  resolvedReports        ReportCase[]    @relation("ResolvedReports")
+}
+
+model AdminAuditLog {
+  id           String    @id @default(uuid())
+  actorAdminId String
+  action       String
+  targetType   String
+  targetId     String?
+  reason       String?
+  metadata     Json?
+  createdAt    DateTime  @default(now())
+
+  actorAdmin   AdminUser @relation("AdminAuditActor", fields: [actorAdminId], references: [id], onDelete: Cascade)
+
+  @@index([actorAdminId, createdAt(sort: Desc)])
+  @@index([targetType, targetId])
+}
+
+model FeatureFlag {
+  key              String     @id
+  enabled          Boolean    @default(false)
+  description      String?
+  metadata         Json?
+  updatedAt        DateTime   @updatedAt
+  updatedByAdminId String?
+
+  updatedByAdmin   AdminUser? @relation("FeatureFlagUpdatedBy", fields: [updatedByAdminId], references: [id], onDelete: SetNull)
+}
+
+model CountryPolicy {
+  countryIso           String      @id
+  countryName          String
+  dialCode             String?
+  isServiceEnabled     Boolean     @default(true)
+  isSignupEnabled      Boolean     @default(true)
+  isLoginEnabled       Boolean     @default(true)
+  isOtpEnabled         Boolean     @default(true)
+  isPhoneChangeEnabled Boolean     @default(true)
+  isMessagingEnabled   Boolean     @default(true)
+  isCallingEnabled     Boolean     @default(true)
+  isMediaUploadEnabled Boolean     @default(true)
+  smsProvider          SmsProvider @default(NETGSM_BULK)
+  otpCooldownSeconds   Int?
+  otpTtlSeconds        Int?
+  otpPhoneLimit10m     Int?
+  otpPhoneLimit24h     Int?
+  otpIpLimit10m        Int?
+  otpIpLimit24h        Int?
+  notes                String?
+  updatedAt            DateTime    @updatedAt
+  updatedByAdminId     String?
+
+  updatedByAdmin       AdminUser?  @relation("CountryPolicyUpdatedBy", fields: [updatedByAdminId], references: [id], onDelete: SetNull)
+}
+
+model ReportCase {
+  id               String           @id @default(uuid())
+  reporterUserId   String
+  targetType       ReportTargetType
+  reportedUserId   String?
+  messageId        String?
+  chatId           String?
+  reasonCode       String
+  details          String?
+  status           ReportStatus     @default(OPEN)
+  resolutionNote   String?
+  resolvedAt       DateTime?
+  resolvedByAdminId String?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  reporterUser     User             @relation("SubmittedReports", fields: [reporterUserId], references: [id], onDelete: Cascade)
+  reportedUser     User?            @relation("ReportedUsers", fields: [reportedUserId], references: [id], onDelete: SetNull)
+  message          Message?         @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  resolvedByAdmin  AdminUser?       @relation("ResolvedReports", fields: [resolvedByAdminId], references: [id], onDelete: SetNull)
+
+  @@index([reporterUserId, createdAt(sort: Desc)])
+  @@index([status, createdAt(sort: Desc)])
+  @@index([targetType, createdAt(sort: Desc)])
+  @@index([reportedUserId])
+  @@index([messageId])
+  @@index([chatId])
 }

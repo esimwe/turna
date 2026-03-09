@@ -18,6 +18,7 @@ import type {
 } from "./chat.types.js";
 
 const prismaUser = (prisma as unknown as { user: any }).user;
+const prismaReportCase = (prisma as unknown as { reportCase: any }).reportCase;
 const TURNA_DELETED_EVERYONE_MARKER = "[[turna-deleted-everyone]]";
 const DELETE_FOR_EVERYONE_WINDOW_MS = 10 * 60 * 1000;
 
@@ -679,6 +680,67 @@ export class ChatService {
       select: { displayName: true }
     });
     return user?.displayName ?? "Turna";
+  }
+
+  async getMessageById(messageId: string): Promise<{
+    id: string;
+    chatId: string;
+    senderId: string;
+    text: string | null;
+    createdAt: Date;
+  } | null> {
+    return prisma.message.findUnique({
+      where: { id: messageId },
+      select: {
+        id: true,
+        chatId: true,
+        senderId: true,
+        text: true,
+        createdAt: true
+      }
+    });
+  }
+
+  async findOpenMessageReport(input: {
+    reporterUserId: string;
+    messageId: string;
+  }): Promise<{ id: string } | null> {
+    return prismaReportCase.findFirst({
+      where: {
+        reporterUserId: input.reporterUserId,
+        targetType: "MESSAGE",
+        messageId: input.messageId,
+        status: {
+          in: ["OPEN", "UNDER_REVIEW"]
+        }
+      },
+      select: { id: true }
+    });
+  }
+
+  async createMessageReport(input: {
+    reporterUserId: string;
+    messageId: string;
+    chatId: string;
+    reportedUserId: string;
+    reasonCode: string;
+    details: string | null;
+  }) {
+    return prismaReportCase.create({
+      data: {
+        reporterUserId: input.reporterUserId,
+        targetType: "MESSAGE",
+        messageId: input.messageId,
+        chatId: input.chatId,
+        reportedUserId: input.reportedUserId,
+        reasonCode: input.reasonCode,
+        details: input.details
+      },
+      select: {
+        id: true,
+        status: true
+      }
+    });
   }
 
   private async prepareAttachments(

@@ -2,6 +2,7 @@ import cors from "cors";
 import express from "express";
 import helmet from "helmet";
 import { env } from "./config/env.js";
+import { adminRouter } from "./modules/admin/routes.js";
 import { authRouter } from "./modules/auth/routes.js";
 import { chatRouter } from "./modules/chat/routes.js";
 import { callRouter } from "./modules/calls/routes.js";
@@ -40,6 +41,7 @@ export function createApp() {
 
   app.use("/api", healthRouter);
   app.use("/api/auth", authRouter);
+  app.use("/api/admin", adminRouter);
   app.use("/api/profile", profileRouter);
   app.use("/api/chats", chatRouter);
   app.use("/api/calls", callRouter);
