@@ -746,6 +746,7 @@ class _ProfilePageState extends State<ProfilePage> {
       final profile = await ProfileApi.fetchMe(widget.session);
       final updatedSession = widget.session.copyWith(
         displayName: profile.displayName,
+        phone: profile.phone,
         avatarUrl: profile.avatarUrl,
         clearAvatarUrl: profile.avatarUrl == null,
       );
@@ -784,6 +785,7 @@ class _ProfilePageState extends State<ProfilePage> {
 
     final updatedSession = widget.session.copyWith(
       displayName: updatedProfile.displayName,
+      phone: updatedProfile.phone,
       avatarUrl: updatedProfile.avatarUrl,
       clearAvatarUrl: updatedProfile.avatarUrl == null,
     );
@@ -1033,10 +1035,12 @@ class _ProfilePageState extends State<ProfilePage> {
           const SizedBox(height: 12),
           TextField(
             controller: _phoneController,
+            readOnly: true,
             keyboardType: TextInputType.phone,
             textInputAction: TextInputAction.next,
             decoration: const InputDecoration(
               labelText: 'Telefon',
+              helperText: 'Numara degisikligi dogrulama ile yapilir.',
               border: OutlineInputBorder(),
             ),
           ),

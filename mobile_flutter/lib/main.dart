@@ -21,6 +21,7 @@ import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'package:url_launcher/url_launcher.dart';
 
 part 'src/turna_chats.dart';
+part 'src/turna_auth_flow.dart';
 part 'src/turna_profile_shell.dart';
 part 'src/turna_core.dart';
 
@@ -80,8 +81,9 @@ final GlobalKey<NavigatorState> kTurnaNavigatorKey =
     GlobalKey<NavigatorState>();
 final RouteObserver<PageRoute<dynamic>> kTurnaRouteObserver =
     RouteObserver<PageRoute<dynamic>>();
-final ValueNotifier<AppLifecycleState> kTurnaLifecycleState =
-    ValueNotifier(AppLifecycleState.resumed);
+final ValueNotifier<AppLifecycleState> kTurnaLifecycleState = ValueNotifier(
+  AppLifecycleState.resumed,
+);
 final TurnaActiveChatRegistry kTurnaActiveChatRegistry =
     TurnaActiveChatRegistry();
 final TurnaCallUiController kTurnaCallUiController = TurnaCallUiController();
@@ -309,10 +311,7 @@ class TurnaAppBadge {
   static Future<void> setCount(int count) async {
     final normalized = math.max(0, count);
     try {
-      await _channel.invokeMethod(
-        'setAppBadgeCount',
-        {'count': normalized},
-      );
+      await _channel.invokeMethod('setAppBadgeCount', {'count': normalized});
     } catch (error) {
       turnaLog('app badge update skipped', error);
     }
@@ -500,19 +499,21 @@ class _TurnaAppState extends State<TurnaApp> with WidgetsBindingObserver {
 
     if (timedOut) {
       unawaited(
-        sessionFuture.then((lateSession) {
-          if (!mounted || lateSession == null) return;
-          if (_session?.userId == lateSession.userId &&
-              _session?.token == lateSession.token) {
-            return;
-          }
-          setState(() => _session = lateSession);
-          turnaLog('auth session restored after timeout', {
-            'hasSession': true,
-          });
-        }).catchError((Object error) {
-          turnaLog('late auth session load skipped', error);
-        }),
+        sessionFuture
+            .then((lateSession) {
+              if (!mounted || lateSession == null) return;
+              if (_session?.userId == lateSession.userId &&
+                  _session?.token == lateSession.token) {
+                return;
+              }
+              setState(() => _session = lateSession);
+              turnaLog('auth session restored after timeout', {
+                'hasSession': true,
+              });
+            })
+            .catchError((Object error) {
+              turnaLog('late auth session load skipped', error);
+            }),
       );
     }
 
@@ -565,8 +566,15 @@ class _TurnaAppState extends State<TurnaApp> with WidgetsBindingObserver {
       home: _bootstrapping
           ? const _TurnaLaunchPage()
           : _session == null
-          ? AuthPage(
+          ? TurnaPhoneAuthPage(
               onAuthenticated: (session) => setState(() => _session = session),
+            )
+          : _session!.needsOnboarding
+          ? TurnaProfileOnboardingPage(
+              session: _session!,
+              onCompleted: (session) {
+                setState(() => _session = session);
+              },
             )
           : MainTabs(
               session: _session!,
@@ -574,6 +582,12 @@ class _TurnaAppState extends State<TurnaApp> with WidgetsBindingObserver {
                 setState(() => _session = session);
               },
               onLogout: () async {
+                final activeSession = _session;
+                if (activeSession != null) {
+                  try {
+                    await AuthApi.logout(activeSession);
+                  } catch (_) {}
+                }
                 await AuthSession.clear();
                 await TurnaAppBadge.setCount(0);
                 setState(() => _session = null);
@@ -688,10 +702,7 @@ class _AuthPageState extends State<AuthPage> {
 
     try {
       final endpoint = _isRegisterMode ? 'register' : 'login';
-      turnaLog('auth submit', {
-        'mode': endpoint,
-        'username': username,
-      });
+      turnaLog('auth submit', {'mode': endpoint, 'username': username});
       final payload = <String, dynamic>{
         'username': username,
         'password': password,

@@ -6640,36 +6640,48 @@ class NewChatPage extends StatefulWidget {
 }
 
 class _NewChatPageState extends State<NewChatPage> {
-  final TextEditingController _searchController = TextEditingController();
-  List<ChatUser> _users = const [];
-  bool _loading = true;
+  final TextEditingController _phoneController = TextEditingController();
+  TurnaUserProfile? _foundUser;
+  bool _loading = false;
   String? _error;
 
   @override
   void initState() {
     super.initState();
-    _loadDirectory();
-    _searchController.addListener(() => setState(() {}));
+    _phoneController.addListener(() => setState(() {}));
   }
 
   @override
   void dispose() {
-    _searchController.dispose();
+    _phoneController.dispose();
     super.dispose();
   }
 
-  Future<void> _loadDirectory() async {
+  Future<void> _searchByPhone() async {
+    final phone = _phoneController.text.trim();
+    if (phone.isEmpty) {
+      setState(() {
+        _error = 'Telefon numarasini ulke kodu ile birlikte gir.';
+        _foundUser = null;
+      });
+      return;
+    }
+
     setState(() {
       _loading = true;
       _error = null;
+      _foundUser = null;
     });
 
     try {
-      final users = await ChatApi.fetchDirectory(widget.session);
+      final user = await ChatApi.lookupUserByPhone(widget.session, phone);
       if (!mounted) return;
       setState(() {
-        _users = users;
+        _foundUser = user;
         _loading = false;
+        _error = user == null
+            ? 'Bu numarayla kayitli bir Turna hesabi bulunamadi.'
+            : null;
       });
     } catch (error) {
       if (!mounted) return;
@@ -6680,39 +6692,86 @@ class _NewChatPageState extends State<NewChatPage> {
     }
   }
 
+  Future<void> _openChat(TurnaUserProfile user) async {
+    final chat = ChatPreview(
+      chatId: ChatApi.buildDirectChatId(widget.session.userId, user.id),
+      name: user.displayName,
+      message: '',
+      time: '',
+      avatarUrl: user.avatarUrl,
+      peerId: user.id,
+    );
+    await Navigator.push(
+      context,
+      buildChatRoomRoute(
+        chat: chat,
+        session: widget.session,
+        callCoordinator: widget.callCoordinator,
+        onSessionExpired: widget.onSessionExpired,
+      ),
+    );
+    if (!mounted) return;
+    Navigator.of(context).pop(true);
+  }
+
   @override
   Widget build(BuildContext context) {
-    final q = _searchController.text.trim().toLowerCase();
-    final filtered = _users.where((u) {
-      if (q.isEmpty) return true;
-      return u.displayName.toLowerCase().contains(q) ||
-          u.id.toLowerCase().contains(q);
-    }).toList();
+    final phoneInput = _phoneController.text.trim();
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Yeni Sohbet')),
+      appBar: AppBar(title: const Text('Telefon ile sohbet')),
       body: Column(
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-            child: TextField(
-              controller: _searchController,
-              decoration: InputDecoration(
-                hintText: 'Isim veya kullanici ID ara',
-                prefixIcon: const Icon(Icons.search),
-                suffixIcon: q.isEmpty
-                    ? null
-                    : IconButton(
-                        onPressed: () => _searchController.clear(),
-                        icon: const Icon(Icons.close),
-                      ),
-                filled: true,
-                fillColor: TurnaColors.backgroundMuted,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(24),
-                  borderSide: BorderSide.none,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Tum kullanicilar listelenmez. Sohbet baslatmak icin telefon numarasini tam olarak gir.',
+                  style: TextStyle(
+                    fontSize: 13,
+                    height: 1.4,
+                    color: TurnaColors.textMuted,
+                  ),
                 ),
-              ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _phoneController,
+                  keyboardType: TextInputType.phone,
+                  decoration: InputDecoration(
+                    hintText: '+905413432140',
+                    prefixIcon: const Icon(Icons.phone_outlined),
+                    suffixIcon: phoneInput.isEmpty
+                        ? null
+                        : IconButton(
+                            onPressed: () {
+                              _phoneController.clear();
+                              setState(() {
+                                _foundUser = null;
+                                _error = null;
+                              });
+                            },
+                            icon: const Icon(Icons.close),
+                          ),
+                    filled: true,
+                    fillColor: TurnaColors.backgroundMuted,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(24),
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
+                  onSubmitted: (_) => _searchByPhone(),
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton(
+                    onPressed: _loading ? null : _searchByPhone,
+                    child: Text(_loading ? 'Araniyor...' : 'Kisiyi bul'),
+                  ),
+                ),
+              ],
             ),
           ),
           Expanded(
@@ -6725,69 +6784,112 @@ class _NewChatPageState extends State<NewChatPage> {
                         : Icons.person_search_outlined,
                     title: _error!.contains('Oturum')
                         ? 'Oturumun suresi doldu'
-                        : 'Kisi listesi yuklenemedi',
+                        : 'Kullanici bulunamadi',
                     message: _error!,
                     primaryLabel: _error!.contains('Oturum')
                         ? 'Yeniden giris yap'
-                        : 'Tekrar dene',
+                        : 'Tekrar ara',
                     onPrimary: _error!.contains('Oturum')
                         ? widget.onSessionExpired
-                        : _loadDirectory,
+                        : _searchByPhone,
                   )
-                : filtered.isEmpty
+                : _foundUser == null
                 ? _CenteredState(
-                    icon: _users.isEmpty
-                        ? Icons.group_outlined
-                        : Icons.search_off,
-                    title: _users.isEmpty
-                        ? 'Henuz baska kullanici yok'
-                        : 'Sonuc bulunamadi',
-                    message: _users.isEmpty
-                        ? 'Diger kullanicilar kayit oldukca burada listelenecek.'
-                        : '"${_searchController.text.trim()}" icin eslesen kisi yok.',
-                    primaryLabel: _users.isEmpty ? 'Yenile' : 'Aramayi temizle',
-                    onPrimary: _users.isEmpty
-                        ? _loadDirectory
-                        : _searchController.clear,
-                  )
-                : ListView.builder(
-                    itemCount: filtered.length,
-                    itemBuilder: (context, index) {
-                      final user = filtered[index];
-                      return ListTile(
-                        leading: _ProfileAvatar(
-                          label: user.displayName,
-                          avatarUrl: user.avatarUrl,
-                          authToken: widget.session.token,
-                          radius: 22,
-                        ),
-                        title: Text(user.displayName),
-                        subtitle: Text(user.id),
-                        onTap: () async {
-                          final chat = ChatPreview(
-                            chatId: ChatApi.buildDirectChatId(
-                              widget.session.userId,
-                              user.id,
-                            ),
-                            name: user.displayName,
-                            message: '',
-                            time: '',
-                            avatarUrl: user.avatarUrl,
-                          );
-                          await Navigator.push(
-                            context,
-                            buildChatRoomRoute(
-                              chat: chat,
-                              session: widget.session,
-                              callCoordinator: widget.callCoordinator,
-                              onSessionExpired: widget.onSessionExpired,
-                            ),
-                          );
-                          if (!mounted) return;
-                          Navigator.of(this.context).pop(true);
-                        },
-                      );
+                    icon: Icons.phone_forwarded_outlined,
+                    title: 'Telefon numarasi ile ara',
+                    message:
+                        'Kayitli bir kullaniciyi bulmak icin ulke kodu ile birlikte numarasini yaz.',
+                    primaryLabel: 'Ornek doldur',
+                    onPrimary: () {
+                      _phoneController.text = '+905413432140';
                     },
+                  )
+                : ListView(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(18),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(24),
+                          border: Border.all(color: TurnaColors.divider),
+                        ),
+                        child: Column(
+                          children: [
+                            _ProfileAvatar(
+                              label: _foundUser!.displayName,
+                              avatarUrl: _foundUser!.avatarUrl,
+                              authToken: widget.session.token,
+                              radius: 34,
+                            ),
+                            const SizedBox(height: 12),
+                            Text(
+                              _foundUser!.displayName,
+                              style: const TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              _foundUser!.phone ?? '',
+                              style: const TextStyle(
+                                color: TurnaColors.textMuted,
+                              ),
+                            ),
+                            if ((_foundUser!.about ?? '')
+                                .trim()
+                                .isNotEmpty) ...[
+                              const SizedBox(height: 10),
+                              Text(
+                                _foundUser!.about!.trim(),
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(
+                                  color: TurnaColors.textSoft,
+                                  height: 1.4,
+                                ),
+                              ),
+                            ],
+                            const SizedBox(height: 18),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: OutlinedButton(
+                                    onPressed: () async {
+                                      await Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (_) => UserProfilePage(
+                                            session: widget.session,
+                                            userId: _foundUser!.id,
+                                            fallbackName:
+                                                _foundUser!.displayName,
+                                            fallbackAvatarUrl:
+                                                _foundUser!.avatarUrl,
+                                            callCoordinator:
+                                                widget.callCoordinator,
+                                            onSessionExpired:
+                                                widget.onSessionExpired,
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                    child: const Text('Profili ac'),
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: FilledButton(
+                                    onPressed: () => _openChat(_foundUser!),
+                                    child: const Text('Sohbet baslat'),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
           ),
         ],

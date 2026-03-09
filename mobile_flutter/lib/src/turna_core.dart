@@ -40,6 +40,7 @@ class TurnaUserProfile {
     this.email,
     this.about,
     this.avatarUrl,
+    this.onboardingCompletedAt,
     this.createdAt,
   });
 
@@ -49,6 +50,7 @@ class TurnaUserProfile {
   final String? email;
   final String? about;
   final String? avatarUrl;
+  final String? onboardingCompletedAt;
   final String? createdAt;
 
   factory TurnaUserProfile.fromMap(Map<String, dynamic> map) {
@@ -59,6 +61,7 @@ class TurnaUserProfile {
       email: _nullableString(map['email']),
       about: _nullableString(map['about']),
       avatarUrl: _nullableString(map['avatarUrl']),
+      onboardingCompletedAt: _nullableString(map['onboardingCompletedAt']),
       createdAt: _nullableString(map['createdAt']),
     );
   }
@@ -1063,25 +1066,33 @@ class AuthSession {
     required this.token,
     required this.userId,
     required this.displayName,
+    this.phone,
     this.avatarUrl,
+    this.needsOnboarding = false,
   });
 
   final String token;
   final String userId;
   final String displayName;
+  final String? phone;
   final String? avatarUrl;
+  final bool needsOnboarding;
 
   static const _tokenKey = 'turna_auth_token';
   static const _userIdKey = 'turna_auth_user_id';
   static const _displayNameKey = 'turna_auth_display_name';
+  static const _phoneKey = 'turna_auth_phone';
   static const _avatarUrlKey = 'turna_auth_avatar_url';
+  static const _needsOnboardingKey = 'turna_auth_needs_onboarding';
 
   static Future<AuthSession?> load() async {
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString(_tokenKey);
     final userId = prefs.getString(_userIdKey);
     final displayName = prefs.getString(_displayNameKey);
+    final phone = prefs.getString(_phoneKey);
     final avatarUrl = prefs.getString(_avatarUrlKey);
+    final needsOnboarding = prefs.getBool(_needsOnboardingKey) ?? false;
     if (token == null || userId == null || displayName == null) {
       return null;
     }
@@ -1090,7 +1101,9 @@ class AuthSession {
       token: token,
       userId: userId,
       displayName: displayName,
+      phone: phone,
       avatarUrl: avatarUrl,
+      needsOnboarding: needsOnboarding,
     );
   }
 
@@ -1098,14 +1111,19 @@ class AuthSession {
     String? token,
     String? userId,
     String? displayName,
+    String? phone,
     String? avatarUrl,
+    bool? needsOnboarding,
+    bool clearPhone = false,
     bool clearAvatarUrl = false,
   }) {
     return AuthSession(
       token: token ?? this.token,
       userId: userId ?? this.userId,
       displayName: displayName ?? this.displayName,
+      phone: clearPhone ? null : (phone ?? this.phone),
       avatarUrl: clearAvatarUrl ? null : (avatarUrl ?? this.avatarUrl),
+      needsOnboarding: needsOnboarding ?? this.needsOnboarding,
     );
   }
 
@@ -1114,11 +1132,17 @@ class AuthSession {
     await prefs.setString(_tokenKey, token);
     await prefs.setString(_userIdKey, userId);
     await prefs.setString(_displayNameKey, displayName);
+    if (phone == null || phone!.trim().isEmpty) {
+      await prefs.remove(_phoneKey);
+    } else {
+      await prefs.setString(_phoneKey, phone!);
+    }
     if (avatarUrl == null || avatarUrl!.trim().isEmpty) {
       await prefs.remove(_avatarUrlKey);
     } else {
       await prefs.setString(_avatarUrlKey, avatarUrl!);
     }
+    await prefs.setBool(_needsOnboardingKey, needsOnboarding);
   }
 
   static Future<void> clear() async {
@@ -1126,7 +1150,122 @@ class AuthSession {
     await prefs.remove(_tokenKey);
     await prefs.remove(_userIdKey);
     await prefs.remove(_displayNameKey);
+    await prefs.remove(_phoneKey);
     await prefs.remove(_avatarUrlKey);
+    await prefs.remove(_needsOnboardingKey);
+  }
+}
+
+class TurnaOtpRequestTicket {
+  TurnaOtpRequestTicket({
+    required this.phone,
+    required this.expiresInSeconds,
+    required this.retryAfterSeconds,
+  });
+
+  final String phone;
+  final int expiresInSeconds;
+  final int retryAfterSeconds;
+}
+
+class TurnaAuthResult {
+  TurnaAuthResult({
+    required this.session,
+    required this.isNewUser,
+    required this.needsOnboarding,
+  });
+
+  final AuthSession session;
+  final bool isNewUser;
+  final bool needsOnboarding;
+}
+
+class AuthApi {
+  static Future<TurnaOtpRequestTicket> requestOtp({
+    required String countryIso,
+    required String dialCode,
+    required String nationalNumber,
+  }) async {
+    final res = await http.post(
+      Uri.parse('$kBackendBaseUrl/api/auth/request-otp'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'countryIso': countryIso,
+        'dialCode': dialCode,
+        'nationalNumber': nationalNumber,
+      }),
+    );
+    if (res.statusCode >= 400) {
+      throw TurnaApiException(
+        ProfileApi._extractApiError(res.body, res.statusCode),
+      );
+    }
+
+    final map = jsonDecode(res.body) as Map<String, dynamic>;
+    final data = map['data'] as Map<String, dynamic>? ?? const {};
+    return TurnaOtpRequestTicket(
+      phone: (data['phone'] ?? '').toString(),
+      expiresInSeconds: (data['expiresInSeconds'] as num?)?.toInt() ?? 180,
+      retryAfterSeconds: (data['retryAfterSeconds'] as num?)?.toInt() ?? 60,
+    );
+  }
+
+  static Future<TurnaAuthResult> verifyOtp({
+    required String phone,
+    required String code,
+  }) async {
+    final res = await http.post(
+      Uri.parse('$kBackendBaseUrl/api/auth/verify-otp'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'phone': phone, 'code': code}),
+    );
+    if (res.statusCode >= 400) {
+      throw TurnaApiException(
+        ProfileApi._extractApiError(res.body, res.statusCode),
+      );
+    }
+
+    final map = jsonDecode(res.body) as Map<String, dynamic>;
+    final user = map['user'] as Map<String, dynamic>? ?? const {};
+    final token = map['accessToken']?.toString();
+    final userId = user['id']?.toString();
+    final displayName = user['displayName']?.toString();
+    if (token == null || userId == null || displayName == null) {
+      throw TurnaApiException('Sunucu yaniti gecersiz.');
+    }
+
+    final needsOnboarding =
+        map['needsOnboarding'] == true || map['isNewUser'] == true;
+    final session = AuthSession(
+      token: token,
+      userId: userId,
+      displayName: displayName,
+      phone: TurnaUserProfile._nullableString(user['phone']),
+      avatarUrl: TurnaUserProfile._nullableString(user['avatarUrl']),
+      needsOnboarding: needsOnboarding,
+    );
+
+    return TurnaAuthResult(
+      session: session,
+      isNewUser: map['isNewUser'] == true,
+      needsOnboarding: needsOnboarding,
+    );
+  }
+
+  static Future<void> logout(AuthSession session) async {
+    final res = await http.post(
+      Uri.parse('$kBackendBaseUrl/api/auth/logout'),
+      headers: {
+        'Authorization': 'Bearer ${session.token}',
+        'Content-Type': 'application/json',
+      },
+    );
+
+    if (res.statusCode >= 400 && res.statusCode != 401) {
+      throw TurnaApiException(
+        ProfileApi._extractApiError(res.body, res.statusCode),
+      );
+    }
   }
 }
 
@@ -1947,6 +2086,28 @@ class ProfileApi {
     return TurnaUserProfile.fromMap(data);
   }
 
+  static Future<TurnaUserProfile> completeOnboarding(
+    AuthSession session, {
+    required String displayName,
+    required String about,
+  }) async {
+    final res = await http.put(
+      Uri.parse('$kBackendBaseUrl/api/profile/onboarding'),
+      headers: {
+        'Authorization': 'Bearer ${session.token}',
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode({'displayName': displayName, 'about': about.trim()}),
+    );
+    if (res.statusCode >= 400) {
+      throw TurnaApiException(_extractApiError(res.body, res.statusCode));
+    }
+
+    final map = jsonDecode(res.body) as Map<String, dynamic>;
+    final data = map['data'] as Map<String, dynamic>? ?? const {};
+    return TurnaUserProfile.fromMap(data);
+  }
+
   static Future<AvatarUploadTicket> createAvatarUpload(
     AuthSession session, {
     required String contentType,
@@ -2011,12 +2172,36 @@ class ProfileApi {
       switch (error) {
         case 'phone_already_in_use':
           return 'Bu telefon başka bir hesapta kullanılıyor.';
+        case 'phone_change_requires_verification':
+          return 'Numara değişikliği için doğrulama gerekiyor.';
         case 'email_already_in_use':
           return 'Bu email başka bir hesapta kullanılıyor.';
         case 'validation_error':
           return 'Girilen bilgiler geçersiz.';
         case 'user_not_found':
           return 'Kullanıcı bulunamadı.';
+        case 'phone_required':
+          return 'Telefon numarasi gerekli.';
+        case 'invalid_phone':
+          return 'Gecerli bir telefon numarasi gir.';
+        case 'invalid_otp_code':
+          return 'Kod 6 haneli olmali.';
+        case 'otp_cooldown':
+          return 'Lutfen biraz bekleyip tekrar dene.';
+        case 'otp_rate_limited':
+          return 'Cok fazla deneme yapildi. Daha sonra tekrar dene.';
+        case 'otp_invalid':
+          return 'Kod hatali. Yeniden dene.';
+        case 'otp_expired':
+          return 'Kodun suresi doldu. Yeni kod iste.';
+        case 'otp_attempts_exceeded':
+          return 'Cok fazla hatali deneme yapildi. Yeni kod iste.';
+        case 'otp_not_found':
+          return 'Dogrulama kodu bulunamadi. Yeni kod iste.';
+        case 'otp_temporarily_unavailable':
+        case 'login_temporarily_unavailable':
+        case 'signup_temporarily_unavailable':
+          return 'Dogrulama su an kullanilamiyor.';
         case 'storage_not_configured':
           return 'Dosya depolama servisi hazır değil.';
         case 'invalid_avatar_key':
@@ -2047,6 +2232,12 @@ class ProfileApi {
           return 'Bu arama artik cevaplanamaz.';
         case 'call_not_active':
           return 'Arama zaten sonlanmis.';
+        case 'account_suspended':
+          return 'Hesap gecici olarak durduruldu.';
+        case 'account_banned':
+          return 'Bu hesap kullanima kapatildi.';
+        case 'otp_blocked':
+          return 'Bu hesap icin dogrulama kapatildi.';
         default:
           return error ?? 'İşlem başarısız ($statusCode)';
       }
@@ -2261,6 +2452,31 @@ class ChatApi {
       rethrow;
     } catch (_) {
       throw TurnaApiException('Kisi listesine ulasilamadi.');
+    }
+  }
+
+  static Future<TurnaUserProfile?> lookupUserByPhone(
+    AuthSession session,
+    String phone,
+  ) async {
+    try {
+      final headers = {'Authorization': 'Bearer ${session.token}'};
+      final uri = Uri.parse(
+        '$kBackendBaseUrl/api/chats/directory/lookup',
+      ).replace(queryParameters: {'phone': phone.trim()});
+      final res = await http.get(uri, headers: headers);
+      if (res.statusCode == 404) {
+        return null;
+      }
+      _throwIfApiError(res);
+
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = map['data'] as Map<String, dynamic>? ?? const {};
+      return TurnaUserProfile.fromMap(data);
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Kullanici aranamadi.');
     }
   }
 
