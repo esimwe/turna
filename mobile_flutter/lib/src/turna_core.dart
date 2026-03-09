@@ -2185,6 +2185,26 @@ class ProfileApi {
     return TurnaUserProfile.fromMap(data);
   }
 
+  static Future<bool> checkUsernameAvailability(
+    AuthSession session,
+    String username,
+  ) async {
+    final normalized = username.trim().toLowerCase().replaceAll('@', '');
+    final res = await http.get(
+      Uri.parse(
+        '$kBackendBaseUrl/api/profile/username-availability',
+      ).replace(queryParameters: {'username': normalized}),
+      headers: {'Authorization': 'Bearer ${session.token}'},
+    );
+    if (res.statusCode >= 400) {
+      throw TurnaApiException(_extractApiError(res.body, res.statusCode));
+    }
+
+    final map = jsonDecode(res.body) as Map<String, dynamic>;
+    final data = map['data'] as Map<String, dynamic>? ?? const {};
+    return data['available'] == true;
+  }
+
   static Future<TurnaUserProfile> updateMe(
     AuthSession session, {
     required String displayName,
@@ -2313,6 +2333,8 @@ class ProfileApi {
           return 'Bu email başka bir hesapta kullanılıyor.';
         case 'username_already_in_use':
           return 'Bu kullanici adi baska bir hesapta kullaniliyor.';
+        case 'invalid_username':
+          return 'Kullanici adi uygun degil.';
         case 'validation_error':
           return 'Girilen bilgiler geçersiz.';
         case 'user_not_found':

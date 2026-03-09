@@ -706,6 +706,8 @@ class ProfilePage extends StatefulWidget {
 }
 
 class _ProfilePageState extends State<ProfilePage> {
+  static final RegExp _usernamePattern = RegExp(r'^[a-z][a-z0-9._]{2,23}$');
+
   final _displayNameController = TextEditingController();
   final _usernameController = TextEditingController();
   final _aboutController = TextEditingController();
@@ -717,18 +719,25 @@ class _ProfilePageState extends State<ProfilePage> {
   bool _loading = true;
   bool _saving = false;
   bool _avatarBusy = false;
+  bool _usernameChecking = false;
+  bool? _usernameAvailable;
   String? _error;
+  String? _usernameMessage;
+  Timer? _usernameCheckDebounce;
 
   @override
   void initState() {
     super.initState();
     _displayNameController.addListener(_refreshPreview);
+    _usernameController.addListener(_handleUsernameChanged);
     _loadProfile();
   }
 
   @override
   void dispose() {
     _displayNameController.removeListener(_refreshPreview);
+    _usernameController.removeListener(_handleUsernameChanged);
+    _usernameCheckDebounce?.cancel();
     _displayNameController.dispose();
     _usernameController.dispose();
     _aboutController.dispose();
@@ -740,6 +749,81 @@ class _ProfilePageState extends State<ProfilePage> {
   void _refreshPreview() {
     if (!mounted) return;
     setState(() {});
+  }
+
+  String _normalizeUsername(String value) {
+    return value.trim().toLowerCase().replaceAll('@', '');
+  }
+
+  void _handleUsernameChanged() {
+    if (!mounted) return;
+    _scheduleUsernameCheck();
+  }
+
+  void _scheduleUsernameCheck() {
+    final raw = _normalizeUsername(_usernameController.text);
+    _usernameCheckDebounce?.cancel();
+
+    if (raw.isEmpty) {
+      setState(() {
+        _usernameChecking = false;
+        _usernameAvailable = null;
+        _usernameMessage = null;
+      });
+      return;
+    }
+
+    if (!_usernamePattern.hasMatch(raw)) {
+      setState(() {
+        _usernameChecking = false;
+        _usernameAvailable = false;
+        _usernameMessage =
+            'En az 3 karakter; kucuk harf, rakam, nokta veya alt cizgi kullan.';
+      });
+      return;
+    }
+
+    final currentUsername = _normalizeUsername(_profile?.username ?? '');
+    if (raw == currentUsername) {
+      setState(() {
+        _usernameChecking = false;
+        _usernameAvailable = true;
+        _usernameMessage = 'Kullanici adi uygun.';
+      });
+      return;
+    }
+
+    setState(() {
+      _usernameChecking = true;
+      _usernameAvailable = null;
+      _usernameMessage = 'Kontrol ediliyor...';
+    });
+
+    _usernameCheckDebounce = Timer(const Duration(milliseconds: 350), () async {
+      try {
+        final available = await ProfileApi.checkUsernameAvailability(
+          widget.session,
+          raw,
+        );
+        if (!mounted) return;
+        if (_normalizeUsername(_usernameController.text) != raw) return;
+        setState(() {
+          _usernameChecking = false;
+          _usernameAvailable = available;
+          _usernameMessage = available
+              ? 'Kullanici adi uygun.'
+              : 'Bu kullanici adi kullaniliyor.';
+        });
+      } catch (error) {
+        if (!mounted) return;
+        if (_normalizeUsername(_usernameController.text) != raw) return;
+        setState(() {
+          _usernameChecking = false;
+          _usernameAvailable = false;
+          _usernameMessage = error.toString();
+        });
+      }
+    });
   }
 
   Future<void> _loadProfile() async {
@@ -780,6 +864,7 @@ class _ProfilePageState extends State<ProfilePage> {
     _aboutController.text = profile.about ?? '';
     _phoneController.text = profile.phone ?? '';
     _emailController.text = profile.email ?? '';
+    _scheduleUsernameCheck();
   }
 
   Future<void> _commitProfile(
@@ -905,9 +990,24 @@ class _ProfilePageState extends State<ProfilePage> {
       setState(() => _error = 'Ad en az 2 karakter olmalı.');
       return;
     }
-    final username = _usernameController.text.trim();
+    final username = _normalizeUsername(_usernameController.text);
     if (username.length < 3) {
       setState(() => _error = 'Kullanici adi en az 3 karakter olmali.');
+      return;
+    }
+    if (!_usernamePattern.hasMatch(username)) {
+      setState(() {
+        _error =
+            'Kullanici adi uygun degil. Kucuk harf, rakam, nokta ve alt cizgi kullan.';
+      });
+      return;
+    }
+    if (_usernameChecking) {
+      setState(() => _error = 'Kullanici adi kontrolu tamamlanmadi.');
+      return;
+    }
+    if (_usernameAvailable == false) {
+      setState(() => _error = 'Bu kullanici adi kullaniliyor.');
       return;
     }
 
@@ -933,6 +1033,7 @@ class _ProfilePageState extends State<ProfilePage> {
       );
       if (!mounted) return;
       setState(() => _saving = false);
+      unawaited(_loadProfile());
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -1054,10 +1155,35 @@ class _ProfilePageState extends State<ProfilePage> {
                 );
               }),
             ],
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               labelText: 'Kullanıcı adı',
               prefixText: '@',
-              border: OutlineInputBorder(),
+              border: const OutlineInputBorder(),
+              helperText: _usernameMessage,
+              helperStyle: TextStyle(
+                color: _usernameAvailable == true
+                    ? TurnaColors.success
+                    : _usernameAvailable == false
+                    ? TurnaColors.error
+                    : TurnaColors.textMuted,
+              ),
+              suffixIcon: _usernameChecking
+                  ? const Padding(
+                      padding: EdgeInsets.all(12),
+                      child: SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    )
+                  : _usernameAvailable == true
+                  ? const Icon(
+                      Icons.check_circle_rounded,
+                      color: TurnaColors.success,
+                    )
+                  : _usernameAvailable == false
+                  ? const Icon(Icons.cancel_rounded, color: TurnaColors.error)
+                  : null,
             ),
           ),
           const SizedBox(height: 12),
@@ -1101,11 +1227,6 @@ class _ProfilePageState extends State<ProfilePage> {
           FilledButton(
             onPressed: (_saving || _avatarBusy) ? null : _saveProfile,
             child: Text(_saving ? 'Kaydediliyor...' : 'Kaydet'),
-          ),
-          const SizedBox(height: 8),
-          OutlinedButton(
-            onPressed: (_saving || _avatarBusy) ? null : _loadProfile,
-            child: const Text('Sunucudan yenile'),
           ),
         ],
       ),
@@ -1519,19 +1640,6 @@ class _UserProfilePageState extends State<UserProfilePage> {
                 onTap: () => _showPlaceholderAction('Sifreleme bilgisi'),
               ),
             ],
-          ),
-          const SizedBox(height: 16),
-          OutlinedButton(
-            onPressed: _refreshData,
-            style: OutlinedButton.styleFrom(
-              foregroundColor: TurnaColors.primary,
-              side: const BorderSide(color: Color(0xFFB7D9C4)),
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(18),
-              ),
-            ),
-            child: const Text('Sunucudan yenile'),
           ),
         ],
       ),
