@@ -1,5 +1,6 @@
 import AVFAudio
 import CallKit
+import FirebaseCore
 import Flutter
 import PushKit
 import UIKit
@@ -14,6 +15,9 @@ import flutter_callkit_incoming
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
+    if FirebaseApp.app() == nil {
+      FirebaseApp.configure()
+    }
     GeneratedPluginRegistrant.register(with: self)
 
     let voipRegistry = PKPushRegistry(queue: .main)
