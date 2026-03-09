@@ -315,6 +315,11 @@ String formatTurnaDisplayPhone(String? raw) {
   return '+$country ${groups.join(' ')}'.trim();
 }
 
+Widget buildTurnaSessionExpiredRedirect(VoidCallback onSessionExpired) {
+  WidgetsBinding.instance.addPostFrameCallback((_) => onSessionExpired());
+  return const Center(child: CircularProgressIndicator());
+}
+
 class TurnaDisplayWakeLock {
   static const MethodChannel _channel = MethodChannel('turna/display');
   static final Set<String> _holders = <String>{};

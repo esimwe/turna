@@ -737,16 +737,15 @@ class _ChatsPageState extends State<ChatsPage> {
           if (snapshot.hasError) {
             final error = snapshot.error;
             final isAuthError = error is TurnaUnauthorizedException;
+            if (isAuthError) {
+              return buildTurnaSessionExpiredRedirect(widget.onSessionExpired);
+            }
             return _CenteredState(
-              icon: isAuthError ? Icons.lock_outline : Icons.cloud_off_outlined,
-              title: isAuthError
-                  ? 'Oturumun suresi doldu'
-                  : 'Sohbetler yuklenemedi',
+              icon: Icons.cloud_off_outlined,
+              title: 'Sohbetler yuklenemedi',
               message: error.toString(),
-              primaryLabel: isAuthError ? 'Yeniden giris yap' : 'Tekrar dene',
-              onPrimary: isAuthError
-                  ? widget.onSessionExpired
-                  : () => setState(() => _refreshTick++),
+              primaryLabel: 'Tekrar dene',
+              onPrimary: () => setState(() => _refreshTick++),
             );
           }
 
@@ -6777,21 +6776,15 @@ class _NewChatPageState extends State<NewChatPage> {
           Expanded(
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
+                : _error != null && _error!.contains('Oturum')
+                ? buildTurnaSessionExpiredRedirect(widget.onSessionExpired)
                 : _error != null
                 ? _CenteredState(
-                    icon: _error!.contains('Oturum')
-                        ? Icons.lock_outline
-                        : Icons.person_search_outlined,
-                    title: _error!.contains('Oturum')
-                        ? 'Oturumun suresi doldu'
-                        : 'Kullanici bulunamadi',
+                    icon: Icons.person_search_outlined,
+                    title: 'Kullanici bulunamadi',
                     message: _error!,
-                    primaryLabel: _error!.contains('Oturum')
-                        ? 'Yeniden giris yap'
-                        : 'Tekrar ara',
-                    onPrimary: _error!.contains('Oturum')
-                        ? widget.onSessionExpired
-                        : _searchByPhone,
+                    primaryLabel: 'Tekrar ara',
+                    onPrimary: _searchByPhone,
                   )
                 : _foundUser == null
                 ? _CenteredState(

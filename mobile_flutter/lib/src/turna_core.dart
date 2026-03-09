@@ -3010,18 +3010,15 @@ class _CallsPageState extends State<CallsPage> {
           if (snapshot.hasError) {
             final error = snapshot.error;
             final isAuthError = error is TurnaUnauthorizedException;
+            if (isAuthError) {
+              return buildTurnaSessionExpiredRedirect(widget.onSessionExpired);
+            }
             return _CenteredState(
-              icon: isAuthError
-                  ? Icons.lock_outline
-                  : Icons.call_missed_outgoing,
-              title: isAuthError
-                  ? 'Oturumun suresi doldu'
-                  : 'Aramalar yuklenemedi',
+              icon: Icons.call_missed_outgoing,
+              title: 'Aramalar yuklenemedi',
               message: error.toString(),
-              primaryLabel: isAuthError ? 'Yeniden giris yap' : 'Tekrar dene',
-              onPrimary: isAuthError
-                  ? widget.onSessionExpired
-                  : () => setState(() => _refreshTick++),
+              primaryLabel: 'Tekrar dene',
+              onPrimary: () => setState(() => _refreshTick++),
             );
           }
 
