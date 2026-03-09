@@ -23,6 +23,13 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
   final _inboxUpdateNotifier = ValueNotifier<int>(0);
   final _callCoordinator = TurnaCallCoordinator();
   String? _activeIncomingCallId;
+  bool _endingSession = false;
+
+  void _handleSessionExpired() {
+    if (_endingSession) return;
+    _endingSession = true;
+    widget.onLogout();
+  }
 
   @override
   void initState() {
@@ -32,13 +39,14 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
     TurnaNativeCallManager.bindSession(
       session: widget.session,
       coordinator: _callCoordinator,
-      onSessionExpired: widget.onLogout,
+      onSessionExpired: _handleSessionExpired,
     );
     TurnaAnalytics.logEvent('app_session_started', {
       'user_id': widget.session.userId,
     });
     _presenceClient = PresenceSocketClient(
       token: widget.session.token,
+      onSessionExpired: _handleSessionExpired,
       onInboxUpdate: () {
         _inboxUpdateNotifier.value++;
       },
@@ -56,11 +64,12 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.session.token != widget.session.token ||
         oldWidget.session.userId != widget.session.userId) {
+      _endingSession = false;
       TurnaPushManager.syncSession(widget.session);
       TurnaNativeCallManager.bindSession(
         session: widget.session,
         coordinator: _callCoordinator,
-        onSessionExpired: widget.onLogout,
+        onSessionExpired: _handleSessionExpired,
       );
     }
   }
@@ -116,7 +125,7 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
               session: widget.session,
               coordinator: _callCoordinator,
               incoming: incoming,
-              onSessionExpired: widget.onLogout,
+              onSessionExpired: _handleSessionExpired,
               returnChatOnExit: shouldOpenChatOnExit ? returnChat : null,
             ),
           ),
@@ -136,14 +145,14 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
       CallsPage(
         session: widget.session,
         callCoordinator: _callCoordinator,
-        onSessionExpired: widget.onLogout,
+        onSessionExpired: _handleSessionExpired,
       ),
       const PlaceholderPage(title: 'Araclar'),
       ChatsPage(
         session: widget.session,
         inboxUpdateNotifier: _inboxUpdateNotifier,
         callCoordinator: _callCoordinator,
-        onSessionExpired: widget.onLogout,
+        onSessionExpired: _handleSessionExpired,
         onUnreadChanged: (count) {
           if (_totalUnreadChats == count || !mounted) return;
           setState(() => _totalUnreadChats = count);
@@ -153,7 +162,7 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
       SettingsPage(
         session: widget.session,
         onSessionUpdated: widget.onSessionUpdated,
-        onLogout: widget.onLogout,
+        onLogout: _handleSessionExpired,
       ),
     ];
 

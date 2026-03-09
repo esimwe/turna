@@ -320,6 +320,13 @@ class TurnaSocketClient extends ChangeNotifier {
     return text;
   }
 
+  bool _isSessionExpiredSignal(Object? data) {
+    final raw = '$data';
+    return raw.contains('invalid_token') ||
+        raw.contains('unauthorized') ||
+        raw.contains('session_revoked');
+  }
+
   void connect() {
     loadingInitial = true;
     error = null;
@@ -353,8 +360,7 @@ class TurnaSocketClient extends ChangeNotifier {
     _socket!.onConnectError((data) {
       isConnected = false;
       turnaLog('socket connect_error', data);
-      final raw = '$data';
-      if (raw.contains('invalid_token') || raw.contains('unauthorized')) {
+      if (_isSessionExpiredSignal(data)) {
         error = 'Oturumun suresi doldu.';
         notifyListeners();
         onSessionExpired?.call();
@@ -369,6 +375,13 @@ class TurnaSocketClient extends ChangeNotifier {
 
     _socket!.onError((data) {
       turnaLog('socket error', data);
+    });
+
+    _socket!.on('auth:session_revoked', (data) {
+      turnaLog('socket auth:session_revoked', data);
+      error = 'Oturumun suresi doldu.';
+      notifyListeners();
+      onSessionExpired?.call();
     });
 
     _socket!.on('error:validation', (data) {
@@ -936,6 +949,7 @@ class TurnaSocketClient extends ChangeNotifier {
 class PresenceSocketClient {
   PresenceSocketClient({
     required this.token,
+    this.onSessionExpired,
     this.onInboxUpdate,
     this.onIncomingCall,
     this.onCallAccepted,
@@ -945,6 +959,7 @@ class PresenceSocketClient {
   });
 
   final String token;
+  final VoidCallback? onSessionExpired;
   final VoidCallback? onInboxUpdate;
   final void Function(Map<String, dynamic> payload)? onIncomingCall;
   final void Function(Map<String, dynamic> payload)? onCallAccepted;
@@ -959,6 +974,13 @@ class PresenceSocketClient {
       return Map<String, dynamic>.from(data);
     }
     return null;
+  }
+
+  bool _isSessionExpiredSignal(Object? data) {
+    final raw = '$data';
+    return raw.contains('invalid_token') ||
+        raw.contains('unauthorized') ||
+        raw.contains('session_revoked');
   }
 
   void connect() {
@@ -979,7 +1001,16 @@ class PresenceSocketClient {
     _socket!.onDisconnect(
       (reason) => turnaLog('presence disconnected', {'reason': reason}),
     );
-    _socket!.onConnectError((data) => turnaLog('presence connect_error', data));
+    _socket!.onConnectError((data) {
+      turnaLog('presence connect_error', data);
+      if (_isSessionExpiredSignal(data)) {
+        onSessionExpired?.call();
+      }
+    });
+    _socket!.on('auth:session_revoked', (data) {
+      turnaLog('presence auth:session_revoked', data);
+      onSessionExpired?.call();
+    });
 
     _socket!.on('chat:inbox:update', (_) {
       turnaLog('presence inbox:update received');
