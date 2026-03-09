@@ -14,6 +14,11 @@ export interface ChatAttachment {
   url: string | null;
 }
 
+export interface ChatMessageEditHistoryEntry {
+  text: string;
+  editedAt: string;
+}
+
 export interface ChatMessage {
   id: string;
   chatId: string;
@@ -21,6 +26,9 @@ export interface ChatMessage {
   text: string;
   createdAt: string;
   status: ChatMessageStatus;
+  editedAt: string | null;
+  isEdited: boolean;
+  editHistory: ChatMessageEditHistoryEntry[];
   attachments: ChatAttachment[];
 }
 
@@ -59,11 +67,17 @@ export interface ChatSummary {
   peerUpdatedAt: string | null;
   isMuted: boolean;
   isBlockedByMe: boolean;
+  isArchived: boolean;
+  folderId: string | null;
+  folderName: string | null;
 }
 
 export interface DirectoryUser {
   id: string;
   displayName: string;
+  username: string | null;
+  phone: string | null;
+  about: string | null;
   avatarKey: string | null;
   updatedAt: string;
 }

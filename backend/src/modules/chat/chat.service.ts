@@ -10,6 +10,7 @@ import {
 import type {
   ChatAttachment,
   ChatMessage,
+  ChatMessageEditHistoryEntry,
   ChatMessagePage,
   ChatSummary,
   DirectoryUser,
@@ -21,6 +22,8 @@ const prismaUser = (prisma as unknown as { user: any }).user;
 const prismaReportCase = (prisma as unknown as { reportCase: any }).reportCase;
 const TURNA_DELETED_EVERYONE_MARKER = "[[turna-deleted-everyone]]";
 const DELETE_FOR_EVERYONE_WINDOW_MS = 10 * 60 * 1000;
+const EDIT_MESSAGE_WINDOW_MS = 10 * 60 * 1000;
+const CHAT_FOLDER_LIMIT = 3;
 
 type MessageRow = {
   id: string;
@@ -29,6 +32,8 @@ type MessageRow = {
   text: string | null;
   createdAt: Date;
   status: MessageStatus;
+  editedAt: Date | null;
+  editHistory: unknown;
   attachments: Array<{
     id: string;
     objectKey: string;
@@ -117,6 +122,21 @@ function latestDate(a: Date | null | undefined, b: Date | null | undefined): Dat
   return a ?? b ?? null;
 }
 
+function toEditHistoryEntries(value: unknown): ChatMessageEditHistoryEntry[] {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const map = item as Record<string, unknown>;
+      const text = typeof map.text === "string" ? map.text : null;
+      const editedAt = typeof map.editedAt === "string" ? map.editedAt : null;
+      if (!text || !editedAt) return null;
+      return { text, editedAt };
+    })
+    .filter((item): item is ChatMessageEditHistoryEntry => item != null);
+}
+
 async function toChatMessage(row: MessageRow): Promise<ChatMessage> {
   const attachments = await Promise.all(row.attachments.map((attachment) => toChatAttachment(attachment)));
   return {
@@ -126,6 +146,9 @@ async function toChatMessage(row: MessageRow): Promise<ChatMessage> {
     text: row.text ?? "",
     createdAt: row.createdAt.toISOString(),
     status: row.status,
+    editedAt: row.editedAt ? row.editedAt.toISOString() : null,
+    isEdited: row.editedAt != null,
+    editHistory: toEditHistoryEntries(row.editHistory),
     attachments
   };
 }
@@ -134,14 +157,18 @@ export class ChatService {
   private async getMembershipState(chatId: string, userId: string): Promise<{
     hiddenAt: Date | null;
     clearedAt: Date | null;
+    archivedAt: Date | null;
     muted: boolean;
+    folderId: string | null;
   } | null> {
     return prisma.chatMember.findUnique({
       where: { chatId_userId: { chatId, userId } },
       select: {
         hiddenAt: true,
         clearedAt: true,
-        muted: true
+        archivedAt: true,
+        muted: true,
+        folderId: true
       }
     });
   }
@@ -344,6 +371,78 @@ export class ChatService {
     return toChatMessage(updated);
   }
 
+  async editMessage(
+    messageId: string,
+    requesterId: string,
+    nextText: string
+  ): Promise<ChatMessage> {
+    const existing = await prisma.message.findUnique({
+      where: { id: messageId },
+      include: {
+        attachments: {
+          orderBy: { createdAt: "asc" }
+        }
+      }
+    });
+
+    if (!existing) {
+      throw new Error("message_not_found");
+    }
+
+    const hasAccess = await this.ensureChatAccess(existing.chatId, requesterId);
+    if (!hasAccess) {
+      throw new Error("forbidden_chat_access");
+    }
+
+    if (existing.senderId !== requesterId) {
+      throw new Error("message_edit_not_allowed");
+    }
+
+    if ((existing.text ?? "").trim() === TURNA_DELETED_EVERYONE_MARKER) {
+      throw new Error("message_edit_not_allowed");
+    }
+
+    if (!(existing.text ?? "").trim()) {
+      throw new Error("message_edit_not_allowed");
+    }
+
+    if (Date.now() - existing.createdAt.getTime() > EDIT_MESSAGE_WINDOW_MS) {
+      throw new Error("message_edit_window_expired");
+    }
+
+    const trimmedText = nextText.trim();
+    if (!trimmedText) {
+      throw new Error("message_edit_text_required");
+    }
+
+    if (trimmedText === (existing.text ?? "").trim()) {
+      return toChatMessage(existing);
+    }
+
+    const history = toEditHistoryEntries(existing.editHistory);
+    history.push({
+      text: existing.text ?? "",
+      editedAt: new Date().toISOString()
+    });
+
+    const updated = await prisma.message.update({
+      where: { id: messageId },
+      data: {
+        text: trimmedText,
+        editedAt: new Date(),
+        editCount: (existing.editCount ?? 0) + 1,
+        editHistory: history as unknown as any
+      },
+      include: {
+        attachments: {
+          orderBy: { createdAt: "asc" }
+        }
+      }
+    });
+
+    return toChatMessage(updated as MessageRow);
+  }
+
   async markMessagesDelivered(chatId: string, userId: string): Promise<string[]> {
     const membership = await this.getMembershipState(chatId, userId);
     const cutoff = latestDate(membership?.hiddenAt, membership?.clearedAt);
@@ -468,7 +567,15 @@ export class ChatService {
         joinedAt: true,
         hiddenAt: true,
         clearedAt: true,
+        archivedAt: true,
         muted: true,
+        folderId: true,
+        folder: {
+          select: {
+            id: true,
+            name: true
+          }
+        },
         chat: {
           include: {
             members: {
@@ -531,6 +638,9 @@ export class ChatService {
           peerUpdatedAt: peer?.updatedAt ? peer.updatedAt.toISOString() : null,
           isMuted: membership.muted,
           isBlockedByMe: peer ? blockedPeerIds.has(peer.id) : false,
+          isArchived: membership.archivedAt != null,
+          folderId: membership.folderId,
+          folderName: membership.folder?.name ?? null,
           joinedAt: membership.joinedAt
         };
       })
@@ -552,12 +662,23 @@ export class ChatService {
   async getUserDirectory(userId: string): Promise<DirectoryUser[]> {
     const users = await prisma.user.findMany({
       where: { id: { not: userId } },
-      select: { id: true, displayName: true, avatarUrl: true, updatedAt: true },
+      select: {
+        id: true,
+        displayName: true,
+        username: true,
+        phone: true,
+        about: true,
+        avatarUrl: true,
+        updatedAt: true
+      },
       orderBy: { createdAt: "desc" }
     });
     return users.map((user) => ({
       id: user.id,
       displayName: user.displayName,
+      username: user.username,
+      phone: user.phone,
+      about: user.about,
       avatarKey: user.avatarUrl,
       updatedAt: user.updatedAt.toISOString()
     }));
@@ -596,6 +717,78 @@ export class ChatService {
     return ownedChatIds;
   }
 
+  async listFolders(userId: string): Promise<Array<{ id: string; name: string; sortOrder: number }>> {
+    return prisma.chatFolder.findMany({
+      where: { userId },
+      select: {
+        id: true,
+        name: true,
+        sortOrder: true
+      },
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }]
+    });
+  }
+
+  async createFolder(userId: string, rawName: string): Promise<{ id: string; name: string; sortOrder: number }> {
+    const name = rawName.trim();
+    if (!name) {
+      throw new Error("chat_folder_name_required");
+    }
+
+    const existingFolders = await this.listFolders(userId);
+    if (existingFolders.length >= CHAT_FOLDER_LIMIT) {
+      throw new Error("chat_folder_limit_reached");
+    }
+
+    const normalizedName = name.toLowerCase();
+    if (existingFolders.some((item) => item.name.trim().toLowerCase() === normalizedName)) {
+      throw new Error("chat_folder_exists");
+    }
+
+    return prisma.chatFolder.create({
+      data: {
+        userId,
+        name,
+        sortOrder: existingFolders.length
+      },
+      select: {
+        id: true,
+        name: true,
+        sortOrder: true
+      }
+    });
+  }
+
+  async deleteFolder(userId: string, folderId: string): Promise<void> {
+    const folder = await prisma.chatFolder.findFirst({
+      where: {
+        id: folderId,
+        userId
+      },
+      select: { id: true }
+    });
+
+    if (!folder) {
+      throw new Error("chat_folder_not_found");
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await tx.chatMember.updateMany({
+        where: {
+          userId,
+          folderId
+        },
+        data: {
+          folderId: null
+        }
+      });
+
+      await tx.chatFolder.delete({
+        where: { id: folderId }
+      });
+    });
+  }
+
   async clearChatForUser(chatId: string, userId: string): Promise<void> {
     const hasAccess = await this.ensureChatAccess(chatId, userId);
     if (!hasAccess) {
@@ -611,6 +804,64 @@ export class ChatService {
         hiddenAt: null
       }
     });
+  }
+
+  async setChatArchived(chatId: string, userId: string, archived: boolean): Promise<boolean> {
+    const hasAccess = await this.ensureChatAccess(chatId, userId);
+    if (!hasAccess) {
+      throw new Error("forbidden_chat_access");
+    }
+
+    await prisma.chatMember.update({
+      where: {
+        chatId_userId: { chatId, userId }
+      },
+      data: {
+        archivedAt: archived ? new Date() : null
+      }
+    });
+
+    return archived;
+  }
+
+  async setChatFolder(
+    chatId: string,
+    userId: string,
+    folderId: string | null
+  ): Promise<{ folderId: string | null; folderName: string | null }> {
+    const hasAccess = await this.ensureChatAccess(chatId, userId);
+    if (!hasAccess) {
+      throw new Error("forbidden_chat_access");
+    }
+
+    let folderName: string | null = null;
+    if (folderId != null) {
+      const folder = await prisma.chatFolder.findFirst({
+        where: {
+          id: folderId,
+          userId
+        },
+        select: {
+          id: true,
+          name: true
+        }
+      });
+      if (!folder) {
+        throw new Error("chat_folder_not_found");
+      }
+      folderName = folder.name;
+    }
+
+    await prisma.chatMember.update({
+      where: {
+        chatId_userId: { chatId, userId }
+      },
+      data: {
+        folderId
+      }
+    });
+
+    return { folderId, folderName };
   }
 
   async setChatMuted(chatId: string, userId: string, muted: boolean): Promise<boolean> {

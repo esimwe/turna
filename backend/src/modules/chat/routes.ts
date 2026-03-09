@@ -10,6 +10,7 @@ import {
 } from "../../lib/storage.js";
 import { requireAuth, requireMessagingAccess } from "../../middleware/auth.js";
 import { buildAvatarUrl } from "../profile/avatar-url.js";
+import { normalizeUsername } from "../profile/username.js";
 import { normalizeE164Phone } from "../auth/phone.js";
 import {
   emitChatMessage,
@@ -92,6 +93,14 @@ const submitMessageReportSchema = z.object({
     )
 });
 
+const editMessageSchema = z.object({
+  text: z
+    .preprocess(
+      (value) => (typeof value === "string" ? value.trim() : value),
+      z.string().min(1).max(4000)
+    )
+});
+
 const bulkDeleteChatsSchema = z.object({
   chatIds: z.array(z.string().trim().min(1).max(255)).min(1).max(200)
 });
@@ -106,6 +115,22 @@ const setChatMutedSchema = z.object({
 
 const setChatBlockedSchema = z.object({
   blocked: z.boolean()
+});
+
+const setChatArchivedSchema = z.object({
+  archived: z.boolean()
+});
+
+const setChatFolderSchema = z.object({
+  folderId: z.string().trim().min(1).max(255).nullable()
+});
+
+const createFolderSchema = z.object({
+  name: z.string().trim().min(1).max(24)
+});
+
+const folderIdParamSchema = z.object({
+  folderId: z.string().trim().min(1).max(255)
 });
 
 chatRouter.get("/:chatId/messages", requireAuth, async (req, res) => {
@@ -144,7 +169,10 @@ chatRouter.get("/:chatId/messages", requireAuth, async (req, res) => {
 
 chatRouter.get("/", requireAuth, async (req, res) => {
   const userId = req.authUserId!;
-  const chats = await chatService.getChatSummaries(userId);
+  const [chats, folders] = await Promise.all([
+    chatService.getChatSummaries(userId),
+    chatService.listFolders(userId)
+  ]);
   res.json({
     data: chats.map((chat) => ({
       chatId: chat.chatId,
@@ -155,12 +183,78 @@ chatRouter.get("/", requireAuth, async (req, res) => {
       peerId: chat.peerId,
       isMuted: chat.isMuted,
       isBlockedByMe: chat.isBlockedByMe,
+      isArchived: chat.isArchived,
+      folderId: chat.folderId,
+      folderName: chat.folderName,
       avatarUrl:
         chat.peerId && chat.peerAvatarKey && chat.peerUpdatedAt
           ? buildAvatarUrl(req, chat.peerId, new Date(chat.peerUpdatedAt))
           : null
+    })),
+    folders: folders.map((folder) => ({
+      id: folder.id,
+      name: folder.name,
+      sortOrder: folder.sortOrder
     }))
   });
+});
+
+chatRouter.get("/folders", requireAuth, async (req, res) => {
+  const folders = await chatService.listFolders(req.authUserId!);
+  res.json({ data: folders });
+});
+
+chatRouter.post("/folders", requireAuth, async (req, res) => {
+  const parsed = createFolderSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
+    return;
+  }
+
+  try {
+    const folder = await chatService.createFolder(req.authUserId!, parsed.data.name);
+    emitInboxUpdate([req.authUserId!]);
+    res.status(201).json({ data: folder });
+  } catch (error) {
+    if (error instanceof Error) {
+      switch (error.message) {
+        case "chat_folder_limit_reached":
+          res.status(409).json({ error: error.message });
+          return;
+        case "chat_folder_exists":
+          res.status(409).json({ error: error.message });
+          return;
+        case "chat_folder_name_required":
+          res.status(400).json({ error: error.message });
+          return;
+      }
+    }
+
+    logError("chat folder create failed", error);
+    res.status(500).json({ error: "failed_to_create_chat_folder" });
+  }
+});
+
+chatRouter.delete("/folders/:folderId", requireAuth, async (req, res) => {
+  const parsed = folderIdParamSchema.safeParse(req.params);
+  if (!parsed.success) {
+    res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
+    return;
+  }
+
+  try {
+    await chatService.deleteFolder(req.authUserId!, parsed.data.folderId);
+    emitInboxUpdate([req.authUserId!]);
+    res.json({ data: { deleted: true } });
+  } catch (error) {
+    if (error instanceof Error && error.message === "chat_folder_not_found") {
+      res.status(404).json({ error: error.message });
+      return;
+    }
+
+    logError("chat folder delete failed", error);
+    res.status(500).json({ error: "failed_to_delete_chat_folder" });
+  }
 });
 
 chatRouter.post("/read-all", requireAuth, async (req, res) => {
@@ -308,6 +402,84 @@ chatRouter.post("/:chatId/clear", requireAuth, async (req, res) => {
   }
 });
 
+chatRouter.post("/:chatId/archive", requireAuth, async (req, res) => {
+  const parsedParams = chatIdParamSchema.safeParse(req.params);
+  const parsedBody = setChatArchivedSchema.safeParse(req.body);
+  if (!parsedParams.success) {
+    res.status(400).json({
+      error: "validation_error",
+      details: parsedParams.error.flatten()
+    });
+    return;
+  }
+  if (!parsedBody.success) {
+    res.status(400).json({
+      error: "validation_error",
+      details: parsedBody.error.flatten()
+    });
+    return;
+  }
+
+  try {
+    const archived = await chatService.setChatArchived(
+      parsedParams.data.chatId,
+      req.authUserId!,
+      parsedBody.data.archived
+    );
+    emitInboxUpdate([req.authUserId!]);
+    res.json({ data: { archived } });
+  } catch (error) {
+    if (error instanceof Error && error.message === "forbidden_chat_access") {
+      res.status(403).json({ error: error.message });
+      return;
+    }
+    logError("chat archive update failed", error);
+    res.status(500).json({ error: "failed_to_update_chat_archive" });
+  }
+});
+
+chatRouter.post("/:chatId/folder", requireAuth, async (req, res) => {
+  const parsedParams = chatIdParamSchema.safeParse(req.params);
+  const parsedBody = setChatFolderSchema.safeParse(req.body);
+  if (!parsedParams.success) {
+    res.status(400).json({
+      error: "validation_error",
+      details: parsedParams.error.flatten()
+    });
+    return;
+  }
+  if (!parsedBody.success) {
+    res.status(400).json({
+      error: "validation_error",
+      details: parsedBody.error.flatten()
+    });
+    return;
+  }
+
+  try {
+    const folder = await chatService.setChatFolder(
+      parsedParams.data.chatId,
+      req.authUserId!,
+      parsedBody.data.folderId
+    );
+    emitInboxUpdate([req.authUserId!]);
+    res.json({ data: folder });
+  } catch (error) {
+    if (error instanceof Error) {
+      if (error.message === "forbidden_chat_access") {
+        res.status(403).json({ error: error.message });
+        return;
+      }
+      if (error.message === "chat_folder_not_found") {
+        res.status(404).json({ error: error.message });
+        return;
+      }
+    }
+    logError("chat folder update failed", error);
+    res.status(500).json({ error: "failed_to_update_chat_folder" });
+  }
+});
+
 chatRouter.post("/:chatId/block", requireAuth, async (req, res) => {
   const parsedParams = chatIdParamSchema.safeParse(req.params);
   const parsedBody = setChatBlockedSchema.safeParse(req.body);
@@ -356,41 +528,78 @@ chatRouter.get("/directory/list", requireAuth, async (req, res) => {
     data: users.map((user) => ({
       id: user.id,
       displayName: user.displayName,
+      username: user.username,
+      phone: user.phone,
+      about: user.about,
       avatarUrl: user.avatarKey ? buildAvatarUrl(req, user.id, new Date(user.updatedAt)) : null
     }))
   });
 });
 
 chatRouter.get("/directory/lookup", requireAuth, async (req, res) => {
-  const rawPhone = Array.isArray(req.query.phone) ? req.query.phone[0] : req.query.phone;
-  if (typeof rawPhone !== "string" || rawPhone.trim().length === 0) {
-    res.status(400).json({ error: "phone_required" });
+  type LookupUser = {
+    id: string;
+    displayName: string;
+    username: string | null;
+    phone: string | null;
+    about: string | null;
+    avatarUrl: string | null;
+    updatedAt: Date;
+  };
+
+  const rawQuery =
+    (Array.isArray(req.query.q) ? req.query.q[0] : req.query.q) ??
+    (Array.isArray(req.query.phone) ? req.query.phone[0] : req.query.phone);
+  if (typeof rawQuery !== "string" || rawQuery.trim().length === 0) {
+    res.status(400).json({ error: "lookup_query_required" });
     return;
   }
 
-  let phone: string;
-  try {
-    phone = normalizeE164Phone(rawPhone);
-  } catch (_error) {
-    res.status(400).json({ error: "invalid_phone" });
-    return;
-  }
+  const query = rawQuery.trim();
+  let user: LookupUser | null = null;
 
-  const user = await prisma.user.findFirst({
-    where: {
-      phone,
-      id: { not: req.authUserId! },
-      accountStatus: "ACTIVE"
-    },
-    select: {
-      id: true,
-      displayName: true,
-      phone: true,
-      about: true,
-      avatarUrl: true,
-      updatedAt: true
+  if (query.startsWith("+")) {
+    try {
+      const phone = normalizeE164Phone(query);
+      user = await prisma.user.findFirst({
+        where: {
+          phone,
+          id: { not: req.authUserId! },
+          accountStatus: "ACTIVE"
+        },
+        select: {
+          id: true,
+          displayName: true,
+          username: true,
+          phone: true,
+          about: true,
+          avatarUrl: true,
+          updatedAt: true
+        }
+      });
+    } catch (_error) {
+      res.status(400).json({ error: "invalid_phone" });
+      return;
     }
-  });
+  } else {
+    const username = normalizeUsername(query);
+    user = await prisma.user.findFirst({
+      where: {
+        username,
+        id: { not: req.authUserId! },
+        accountStatus: "ACTIVE"
+      },
+      select: {
+        id: true,
+        displayName: true,
+        username: true,
+        phone: true,
+        about: true,
+        avatarUrl: true,
+        updatedAt: true
+      }
+    });
+  }
 
   if (!user) {
     res.status(404).json({ error: "user_not_found" });
@@ -401,6 +610,7 @@ chatRouter.get("/directory/lookup", requireAuth, async (req, res) => {
     data: {
       id: user.id,
       displayName: user.displayName,
+      username: user.username,
       phone: user.phone,
       about: user.about,
       avatarUrl: user.avatarUrl ? buildAvatarUrl(req, user.id, user.updatedAt) : null
@@ -594,6 +804,55 @@ chatRouter.post("/messages/:messageId/report", requireAuth, async (req, res) => 
   });
 
   res.status(201).json({ data: { id: report.id, status: report.status } });
+});
+
+chatRouter.put("/messages/:messageId", requireAuth, async (req, res) => {
+  const parsedParams = messageIdParamSchema.safeParse(req.params);
+  const parsedBody = editMessageSchema.safeParse(req.body);
+  if (!parsedParams.success) {
+    res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+    return;
+  }
+  if (!parsedBody.success) {
+    res.status(400).json({ error: "validation_error", details: parsedBody.error.flatten() });
+    return;
+  }
+
+  const userId = req.authUserId!;
+  try {
+    const message = await chatService.editMessage(
+      parsedParams.data.messageId,
+      userId,
+      parsedBody.data.text
+    );
+    const participants = await chatService.getChatParticipantIds(message.chatId);
+    emitChatMessage(message.chatId, message, participants);
+    emitInboxUpdate(participants.length > 0 ? participants : [userId]);
+    res.json({ data: message });
+  } catch (error) {
+    if (error instanceof Error) {
+      switch (error.message) {
+        case "message_not_found":
+          res.status(404).json({ error: error.message });
+          return;
+        case "message_edit_not_allowed":
+          res.status(403).json({ error: error.message });
+          return;
+        case "message_edit_window_expired":
+          res.status(409).json({ error: error.message });
+          return;
+        case "message_edit_text_required":
+          res.status(400).json({ error: error.message });
+          return;
+        case "forbidden_chat_access":
+          res.status(403).json({ error: error.message });
+          return;
+      }
+    }
+
+    logError("chat edit failed", error);
+    res.status(500).json({ error: "failed_to_edit_message" });
+  }
 });
 
 chatRouter.post("/messages/:messageId/delete-for-everyone", requireAuth, async (req, res) => {

@@ -14,6 +14,7 @@ import {
 } from "../../lib/storage.js";
 import { requireAuth } from "../../middleware/auth.js";
 import { buildAvatarUrl } from "./avatar-url.js";
+import { isValidUsername, normalizeUsername } from "./username.js";
 
 export const profileRouter = Router();
 const prismaUser = (prisma as unknown as { user: any }).user;
@@ -38,8 +39,16 @@ const nullableEmail = z.preprocess((value) => {
   return trimmed.length === 0 ? null : trimmed;
 }, z.string().email().max(255).nullable());
 
+const normalizedUsernameSchema = z.preprocess((value) => {
+  if (typeof value !== "string") return value;
+  return normalizeUsername(value);
+}, z.string().min(3).max(24).refine((item) => isValidUsername(item), {
+  message: "invalid_username"
+}));
+
 const updateProfileSchema = z.object({
   displayName: z.string().trim().min(2).max(80),
+  username: normalizedUsernameSchema,
   about: nullableTrimmedString(160),
   phone: nullableTrimmedPhone,
   email: nullableEmail
@@ -47,6 +56,7 @@ const updateProfileSchema = z.object({
 
 const completeOnboardingSchema = z.object({
   displayName: z.string().trim().min(3).max(80),
+  username: normalizedUsernameSchema,
   about: nullableTrimmedString(160)
 });
 
@@ -82,11 +92,16 @@ const confirmPhoneChangeSchema = z.object({
   code: z.string().trim().min(4).max(8)
 });
 
+const usernameAvailabilityQuerySchema = z.object({
+  username: normalizedUsernameSchema
+});
+
 function toProfileDto(
   req: Request,
   user: {
     id: string;
     displayName: string;
+    username: string | null;
     phone: string | null;
     email: string | null;
     about: string | null;
@@ -99,6 +114,7 @@ function toProfileDto(
   return {
     id: user.id,
     displayName: user.displayName,
+    username: user.username,
     phone: user.phone,
     email: user.email,
     about: user.about,
@@ -116,6 +132,7 @@ function toPublicProfileDto(
   user: {
     id: string;
     displayName: string;
+    username: string | null;
     phone: string | null;
     about: string | null;
     avatarUrl: string | null;
@@ -126,6 +143,7 @@ function toPublicProfileDto(
   return {
     id: user.id,
     displayName: user.displayName,
+    username: user.username,
     phone: user.phone,
     about: user.about,
     avatarUrl: user.avatarUrl ? buildAvatarUrl(req, user.id, user.updatedAt) : null,
@@ -134,12 +152,25 @@ function toPublicProfileDto(
   };
 }
 
+async function ensureUsernameAvailable(username: string, excludeUserId?: string) {
+  const existing = await prismaUser.findFirst({
+    where: {
+      username,
+      ...(excludeUserId ? { id: { not: excludeUserId } } : {})
+    },
+    select: { id: true }
+  });
+
+  return !existing;
+}
+
 profileRouter.get("/me", requireAuth, async (req, res) => {
   const user = await prisma.user.findUnique({
     where: { id: req.authUserId! },
     select: {
       id: true,
       displayName: true,
+      username: true,
       phone: true,
       email: true,
       about: true,
@@ -158,6 +189,36 @@ profileRouter.get("/me", requireAuth, async (req, res) => {
   res.json({ data: toProfileDto(req, user) });
 });
 
+profileRouter.get("/username-availability", requireAuth, async (req, res) => {
+  const parsed = usernameAvailabilityQuerySchema.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
+    return;
+  }
+
+  const username = parsed.data.username;
+  const currentUser = await prismaUser.findUnique({
+    where: { id: req.authUserId! },
+    select: { username: true }
+  });
+  if (!currentUser) {
+    res.status(404).json({ error: "user_not_found" });
+    return;
+  }
+
+  const currentUsername = currentUser.username?.trim() ?? null;
+  const available =
+    currentUsername === username ||
+    (await ensureUsernameAvailable(username, req.authUserId!));
+
+  res.json({
+    data: {
+      username,
+      available
+    }
+  });
+});
+
 profileRouter.put("/onboarding", requireAuth, async (req, res) => {
   const parsed = completeOnboardingSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -165,16 +226,27 @@ profileRouter.put("/onboarding", requireAuth, async (req, res) => {
     return;
   }
 
+  const usernameAvailable = await ensureUsernameAvailable(
+    parsed.data.username,
+    req.authUserId!
+  );
+  if (!usernameAvailable) {
+    res.status(409).json({ error: "username_already_in_use" });
+    return;
+  }
+
   const user = await prismaUser.update({
     where: { id: req.authUserId! },
     data: {
       displayName: parsed.data.displayName,
+      username: parsed.data.username,
       about: parsed.data.about,
       onboardingCompletedAt: new Date()
     },
     select: {
       id: true,
       displayName: true,
+      username: true,
       phone: true,
       email: true,
       about: true,
@@ -201,6 +273,7 @@ profileRouter.get("/users/:userId", requireAuth, async (req, res) => {
     select: {
       id: true,
       displayName: true,
+      username: true,
       phone: true,
       about: true,
       avatarUrl: true,
@@ -337,7 +410,7 @@ profileRouter.put("/me", requireAuth, async (req, res) => {
 
   const currentUser = await prismaUser.findUnique({
     where: { id: userId },
-    select: { id: true, phone: true }
+    select: { id: true, phone: true, username: true }
   });
   if (!currentUser) {
     res.status(404).json({ error: "user_not_found" });
@@ -365,10 +438,20 @@ profileRouter.put("/me", requireAuth, async (req, res) => {
     }
   }
 
+  const normalizedCurrentUsername = currentUser.username?.trim() || null;
+  if (parsed.data.username !== normalizedCurrentUsername) {
+    const usernameAvailable = await ensureUsernameAvailable(parsed.data.username, userId);
+    if (!usernameAvailable) {
+      res.status(409).json({ error: "username_already_in_use" });
+      return;
+    }
+  }
+
   const user = await prismaUser.update({
     where: { id: userId },
     data: {
       displayName: parsed.data.displayName,
+      username: parsed.data.username,
       about: parsed.data.about,
       phone: parsed.data.phone,
       email: parsed.data.email
@@ -376,6 +459,7 @@ profileRouter.put("/me", requireAuth, async (req, res) => {
     select: {
       id: true,
       displayName: true,
+      username: true,
       phone: true,
       email: true,
       about: true,
@@ -492,6 +576,7 @@ profileRouter.post("/avatar/complete", requireAuth, async (req, res) => {
     select: {
       id: true,
       displayName: true,
+      username: true,
       phone: true,
       email: true,
       about: true,
@@ -524,6 +609,7 @@ profileRouter.delete("/avatar", requireAuth, async (req, res) => {
     select: {
       id: true,
       displayName: true,
+      username: true,
       phone: true,
       email: true,
       about: true,

@@ -486,6 +486,7 @@ export class OtpService {
       select: {
         id: true,
         displayName: true,
+        username: true,
         phone: true,
         email: true,
         about: true,
