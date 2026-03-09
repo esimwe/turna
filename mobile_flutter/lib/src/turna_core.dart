@@ -2435,7 +2435,6 @@ class TurnaCallConnectPayload {
     required this.url,
     required this.roomName,
     required this.token,
-    required this.e2eeKey,
     required this.callId,
     required this.type,
   });
@@ -2444,7 +2443,6 @@ class TurnaCallConnectPayload {
   final String url;
   final String roomName;
   final String token;
-  final String e2eeKey;
   final String callId;
   final TurnaCallType type;
 
@@ -2454,7 +2452,6 @@ class TurnaCallConnectPayload {
       url: (map['url'] ?? '').toString(),
       roomName: (map['roomName'] ?? '').toString(),
       token: (map['token'] ?? '').toString(),
-      e2eeKey: (map['e2eeKey'] ?? '').toString(),
       callId: (map['callId'] ?? '').toString(),
       type: ((map['type'] ?? '').toString().toLowerCase() == 'video')
           ? TurnaCallType.video
@@ -3105,6 +3102,13 @@ extension _AdaptiveCallVideoProfileX on _AdaptiveCallVideoProfile {
     _AdaptiveCallVideoProfile.standard => '720p',
     _AdaptiveCallVideoProfile.high => '1080p',
   };
+
+  lk.VideoParameters get parameters => switch (this) {
+    _AdaptiveCallVideoProfile.low => lk.VideoParametersPresets.h360_169,
+    _AdaptiveCallVideoProfile.medium => lk.VideoParametersPresets.h540_169,
+    _AdaptiveCallVideoProfile.standard => lk.VideoParametersPresets.h720_169,
+    _AdaptiveCallVideoProfile.high => lk.VideoParametersPresets.h1080_169,
+  };
 }
 
 class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
@@ -3115,7 +3119,6 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
   final TurnaCallConnectPayload connectPayload;
   final bool videoEnabled;
   lk.Room? _room;
-  lk.BaseKeyProvider? _e2eeKeyProvider;
   lk.EventsListener<lk.RoomEvent>? _listener;
   bool connecting = false;
   bool connected = false;
@@ -3125,6 +3128,10 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
   lk.CameraPosition cameraPosition = lk.CameraPosition.front;
   _AdaptiveCallVideoProfile _videoProfile = _initialVideoProfile;
   bool _cameraRetryScheduled = false;
+  bool _videoProfileUpdateInFlight = false;
+  int _excellentQualityStreak = 0;
+  int _goodQualityStreak = 0;
+  int _poorQualityStreak = 0;
   String? error;
   String? mediaError;
 
@@ -3136,8 +3143,7 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
     return current;
   }
 
-  bool get e2eeEnabled => _e2eeKeyProvider != null;
-  String get videoQualityLabel => 'Auto';
+  String get videoQualityLabel => _videoProfile.label;
 
   Iterable<lk.RemoteParticipant> get remoteParticipants =>
       _room?.remoteParticipants.values ?? const <lk.RemoteParticipant>[];
@@ -3180,26 +3186,14 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
     return null;
   }
 
-  Future<lk.BaseKeyProvider?> _createE2eeKeyProvider() async {
-    final encodedKey = connectPayload.e2eeKey.trim();
-    if (encodedKey.isEmpty) return null;
-
-    final keyProvider = await lk.BaseKeyProvider.create(sharedKey: true);
-    await keyProvider.setRawKey(base64Decode(encodedKey));
-    return keyProvider;
-  }
-
   Future<lk.Room> _buildRoom() async {
-    final e2eeKeyProvider = await _createE2eeKeyProvider();
-    _e2eeKeyProvider = e2eeKeyProvider;
     return lk.Room(
       roomOptions: lk.RoomOptions(
         adaptiveStream: true,
         dynacast: false,
-        encryption: e2eeKeyProvider == null
-            ? null
-            : lk.E2EEOptions(keyProvider: e2eeKeyProvider),
-        defaultCameraCaptureOptions: const lk.CameraCaptureOptions(),
+        defaultCameraCaptureOptions: lk.CameraCaptureOptions(
+          params: _initialVideoProfile.parameters,
+        ),
         defaultAudioCaptureOptions: const lk.AudioCaptureOptions(
           echoCancellation: true,
           noiseSuppression: true,
@@ -3239,7 +3233,10 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
       (
         label: 'safe_default',
         profile: _videoProfile,
-        options: lk.CameraCaptureOptions(cameraPosition: cameraPosition),
+        options: lk.CameraCaptureOptions(
+          cameraPosition: cameraPosition,
+          params: _videoProfile.parameters,
+        ),
       ),
       (label: 'default', profile: null, options: null),
     ];
@@ -3332,6 +3329,45 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
     notifyListeners();
   }
 
+  void _resetConnectionQualityState() {
+    _excellentQualityStreak = 0;
+    _goodQualityStreak = 0;
+    _poorQualityStreak = 0;
+  }
+
+  Future<void> _applyVideoProfile(
+    _AdaptiveCallVideoProfile nextProfile, {
+    required String reason,
+  }) async {
+    if (_videoProfileUpdateInFlight || _videoProfile == nextProfile) return;
+    final track = localCameraTrack;
+    if (track == null) return;
+
+    _videoProfileUpdateInFlight = true;
+    try {
+      await track.restartTrack(
+        lk.CameraCaptureOptions(
+          cameraPosition: cameraPosition,
+          params: nextProfile.parameters,
+        ),
+      );
+      _videoProfile = nextProfile;
+      turnaLog('livekit video profile changed', {
+        'reason': reason,
+        'profile': nextProfile.label,
+      });
+      notifyListeners();
+    } catch (err) {
+      turnaLog('livekit video profile change failed', {
+        'reason': reason,
+        'profile': nextProfile.label,
+        'error': '$err',
+      });
+    } finally {
+      _videoProfileUpdateInFlight = false;
+    }
+  }
+
   @override
   Future<void> connect() async {
     if (connecting || connected) return;
@@ -3363,13 +3399,11 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
 
       await room.prepareConnection(connectPayload.url, connectPayload.token);
       await room.connect(connectPayload.url, connectPayload.token);
-      if (e2eeEnabled) {
-        await room.setE2EEEnabled(true);
-      }
       connected = true;
       connecting = false;
       error = null;
       _cameraRetryScheduled = false;
+      _resetConnectionQualityState();
       notifyListeners();
 
       final localParticipant = room.localParticipant;
@@ -3474,7 +3508,83 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
 
   void _handleConnectionQualityUpdated(
     lk.ParticipantConnectionQualityUpdatedEvent event,
-  ) {}
+  ) {
+    final localParticipant = _room?.localParticipant;
+    if (localParticipant == null) return;
+    if (event.participant.identity != localParticipant.identity) return;
+    if (!videoEnabled || !cameraEnabled) return;
+
+    switch (event.connectionQuality) {
+      case lk.ConnectionQuality.excellent:
+        _excellentQualityStreak += 1;
+        _goodQualityStreak += 1;
+        _poorQualityStreak = 0;
+        if (_videoProfile != _AdaptiveCallVideoProfile.high &&
+            _excellentQualityStreak >= 3) {
+          unawaited(
+            _applyVideoProfile(
+              _AdaptiveCallVideoProfile.high,
+              reason: 'excellent_stable',
+            ),
+          );
+        }
+        break;
+      case lk.ConnectionQuality.good:
+        _excellentQualityStreak = 0;
+        _goodQualityStreak += 1;
+        _poorQualityStreak = 0;
+        if (_videoProfile == _AdaptiveCallVideoProfile.low &&
+            _goodQualityStreak >= 2) {
+          unawaited(
+            _applyVideoProfile(
+              _AdaptiveCallVideoProfile.medium,
+              reason: 'recover_from_low',
+            ),
+          );
+        } else if (_videoProfile == _AdaptiveCallVideoProfile.medium &&
+            _goodQualityStreak >= 3) {
+          unawaited(
+            _applyVideoProfile(
+              _AdaptiveCallVideoProfile.standard,
+              reason: 'recover_to_standard',
+            ),
+          );
+        }
+        break;
+      case lk.ConnectionQuality.poor:
+      case lk.ConnectionQuality.lost:
+        _excellentQualityStreak = 0;
+        _goodQualityStreak = 0;
+        _poorQualityStreak += 1;
+        if (_videoProfile == _AdaptiveCallVideoProfile.high) {
+          unawaited(
+            _applyVideoProfile(
+              _AdaptiveCallVideoProfile.standard,
+              reason: 'drop_from_high',
+            ),
+          );
+        } else if (_videoProfile == _AdaptiveCallVideoProfile.standard &&
+            _poorQualityStreak >= 2) {
+          unawaited(
+            _applyVideoProfile(
+              _AdaptiveCallVideoProfile.medium,
+              reason: 'degrade_to_medium',
+            ),
+          );
+        } else if (_videoProfile == _AdaptiveCallVideoProfile.medium &&
+            _poorQualityStreak >= 3) {
+          unawaited(
+            _applyVideoProfile(
+              _AdaptiveCallVideoProfile.low,
+              reason: 'degrade_to_low',
+            ),
+          );
+        }
+        break;
+      case lk.ConnectionQuality.unknown:
+        break;
+    }
+  }
 
   @override
   Future<void> disconnect() async {
@@ -3484,6 +3594,7 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
     connected = false;
     connecting = false;
     _cameraRetryScheduled = false;
+    _resetConnectionQualityState();
     notifyListeners();
   }
 
