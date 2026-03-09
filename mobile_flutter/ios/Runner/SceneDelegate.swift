@@ -31,6 +31,13 @@ class SceneDelegate: FlutterSceneDelegate {
           UIApplication.shared.isIdleTimerDisabled = enabled
           result(nil)
         }
+      case "setAppBadgeCount":
+        let args = call.arguments as? [String: Any]
+        let count = args?["count"] as? Int ?? 0
+        DispatchQueue.main.async {
+          UIApplication.shared.applicationIconBadgeNumber = max(0, count)
+          result(nil)
+        }
       default:
         result(FlutterMethodNotImplemented)
       }
