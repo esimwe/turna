@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { logError } from "../../lib/logger.js";
+import { prisma } from "../../lib/prisma.js";
 import { sendChatMessagePush } from "../../lib/push.js";
 import {
   createChatAttachmentUploadUrl,
@@ -9,6 +10,7 @@ import {
 } from "../../lib/storage.js";
 import { requireAuth, requireMessagingAccess } from "../../middleware/auth.js";
 import { buildAvatarUrl } from "../profile/avatar-url.js";
+import { normalizeE164Phone } from "../auth/phone.js";
 import {
   emitChatMessage,
   emitChatStatus,
@@ -356,6 +358,53 @@ chatRouter.get("/directory/list", requireAuth, async (req, res) => {
       displayName: user.displayName,
       avatarUrl: user.avatarKey ? buildAvatarUrl(req, user.id, new Date(user.updatedAt)) : null
     }))
+  });
+});
+
+chatRouter.get("/directory/lookup", requireAuth, async (req, res) => {
+  const rawPhone = Array.isArray(req.query.phone) ? req.query.phone[0] : req.query.phone;
+  if (typeof rawPhone !== "string" || rawPhone.trim().length === 0) {
+    res.status(400).json({ error: "phone_required" });
+    return;
+  }
+
+  let phone: string;
+  try {
+    phone = normalizeE164Phone(rawPhone);
+  } catch (_error) {
+    res.status(400).json({ error: "invalid_phone" });
+    return;
+  }
+
+  const user = await prisma.user.findFirst({
+    where: {
+      phone,
+      id: { not: req.authUserId! },
+      accountStatus: "ACTIVE"
+    },
+    select: {
+      id: true,
+      displayName: true,
+      phone: true,
+      about: true,
+      avatarUrl: true,
+      updatedAt: true
+    }
+  });
+
+  if (!user) {
+    res.status(404).json({ error: "user_not_found" });
+    return;
+  }
+
+  res.json({
+    data: {
+      id: user.id,
+      displayName: user.displayName,
+      phone: user.phone,
+      about: user.about,
+      avatarUrl: user.avatarUrl ? buildAvatarUrl(req, user.id, user.updatedAt) : null
+    }
   });
 });
 

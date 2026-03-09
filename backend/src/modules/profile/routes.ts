@@ -45,6 +45,11 @@ const updateProfileSchema = z.object({
   email: nullableEmail
 });
 
+const completeOnboardingSchema = z.object({
+  displayName: z.string().trim().min(3).max(80),
+  about: nullableTrimmedString(160)
+});
+
 const avatarUploadInitSchema = z.object({
   contentType: z
     .string()
@@ -86,6 +91,7 @@ function toProfileDto(
     email: string | null;
     about: string | null;
     avatarUrl: string | null;
+    onboardingCompletedAt: Date | null;
     createdAt: Date;
     updatedAt: Date;
   }
@@ -97,6 +103,9 @@ function toProfileDto(
     email: user.email,
     about: user.about,
     avatarUrl: user.avatarUrl ? buildAvatarUrl(req, user.id, user.updatedAt) : null,
+    onboardingCompletedAt: user.onboardingCompletedAt
+      ? user.onboardingCompletedAt.toISOString()
+      : null,
     createdAt: user.createdAt.toISOString(),
     updatedAt: user.updatedAt.toISOString()
   };
@@ -135,6 +144,7 @@ profileRouter.get("/me", requireAuth, async (req, res) => {
       email: true,
       about: true,
       avatarUrl: true,
+      onboardingCompletedAt: true,
       createdAt: true,
       updatedAt: true
     }
@@ -144,6 +154,36 @@ profileRouter.get("/me", requireAuth, async (req, res) => {
     res.status(404).json({ error: "user_not_found" });
     return;
   }
+
+  res.json({ data: toProfileDto(req, user) });
+});
+
+profileRouter.put("/onboarding", requireAuth, async (req, res) => {
+  const parsed = completeOnboardingSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
+    return;
+  }
+
+  const user = await prismaUser.update({
+    where: { id: req.authUserId! },
+    data: {
+      displayName: parsed.data.displayName,
+      about: parsed.data.about,
+      onboardingCompletedAt: new Date()
+    },
+    select: {
+      id: true,
+      displayName: true,
+      phone: true,
+      email: true,
+      about: true,
+      avatarUrl: true,
+      onboardingCompletedAt: true,
+      createdAt: true,
+      updatedAt: true
+    }
+  });
 
   res.json({ data: toProfileDto(req, user) });
 });
@@ -340,6 +380,7 @@ profileRouter.put("/me", requireAuth, async (req, res) => {
       email: true,
       about: true,
       avatarUrl: true,
+      onboardingCompletedAt: true,
       createdAt: true,
       updatedAt: true
     }
@@ -455,6 +496,7 @@ profileRouter.post("/avatar/complete", requireAuth, async (req, res) => {
       email: true,
       about: true,
       avatarUrl: true,
+      onboardingCompletedAt: true,
       createdAt: true,
       updatedAt: true
     }
@@ -486,6 +528,7 @@ profileRouter.delete("/avatar", requireAuth, async (req, res) => {
       email: true,
       about: true,
       avatarUrl: true,
+      onboardingCompletedAt: true,
       createdAt: true,
       updatedAt: true
     }

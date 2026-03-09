@@ -324,6 +324,7 @@ export class OtpService {
       avatarUrl: string | null;
     };
     isNewUser: boolean;
+    needsOnboarding: boolean;
   }> {
     const phone = normalizeE164Phone(input.phone);
     const code = normalizeOtpCode(input.code);
@@ -341,6 +342,7 @@ export class OtpService {
         displayName: true,
         phone: true,
         avatarUrl: true,
+        onboardingCompletedAt: true,
         accountStatus: true,
         otpBlocked: true,
         sendRestricted: true,
@@ -362,6 +364,7 @@ export class OtpService {
           displayName: true,
           phone: true,
           avatarUrl: true,
+          onboardingCompletedAt: true,
           accountStatus: true,
           otpBlocked: true,
           sendRestricted: true,
@@ -371,6 +374,10 @@ export class OtpService {
     }
 
     assertUserCanAccessApp(user);
+    const needsOnboarding =
+      isNewUser ||
+      (!user.onboardingCompletedAt &&
+        user.displayName === buildDefaultDisplayName(user.phone ?? phone));
 
     const session = await createAuthSessionForRequest(user.id, req, {
       revokeExisting: true,
@@ -387,7 +394,8 @@ export class OtpService {
         username: user.username ?? null,
         avatarUrl: user.avatarUrl ?? null
       },
-      isNewUser
+      isNewUser,
+      needsOnboarding
     };
   }
 
