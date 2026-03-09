@@ -259,14 +259,39 @@ class _TurnaPhoneAuthPageState extends State<TurnaPhoneAuthPage> {
   }
 
   String _formatPhonePreview({
+    required String countryIso,
     required String dialCode,
     required String nationalNumber,
   }) {
-    final chunks = <String>[];
-    for (var i = 0; i < nationalNumber.length; i += 3) {
-      final end = math.min(i + 3, nationalNumber.length);
-      chunks.add(nationalNumber.substring(i, end));
+    List<int> pattern;
+    switch (countryIso.toUpperCase()) {
+      case 'TR':
+        pattern = const [3, 3, 2, 2];
+        break;
+      case 'GB':
+        pattern = const [4, 6];
+        break;
+      case 'US':
+      case 'CA':
+        pattern = const [3, 3, 4];
+        break;
+      default:
+        pattern = const [3, 3, 4];
+        break;
     }
+
+    final chunks = <String>[];
+    var cursor = 0;
+    for (final size in pattern) {
+      if (cursor >= nationalNumber.length) break;
+      final end = math.min(cursor + size, nationalNumber.length);
+      chunks.add(nationalNumber.substring(cursor, end));
+      cursor = end;
+    }
+    if (cursor < nationalNumber.length) {
+      chunks.add(nationalNumber.substring(cursor));
+    }
+
     return '$dialCode ${chunks.join(' ')}'.trim();
   }
 
@@ -291,28 +316,60 @@ class _TurnaPhoneAuthPageState extends State<TurnaPhoneAuthPage> {
       context: context,
       builder: (context) {
         final preview = _formatPhonePreview(
+          countryIso: _selectedCountry!.iso,
           dialCode: _selectedCountry!.dialCode,
           nationalNumber: _nationalNumber,
         );
-        return AlertDialog(
+        return Dialog(
+          insetPadding: const EdgeInsets.symmetric(horizontal: 34),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(24),
           ),
-          title: const Text('Bu numara doğru mu?'),
-          content: Text(
-            preview,
-            style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w700),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 272),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 14),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Bu numara doğru mu?',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w400,
+                      color: Color(0xFF3C4043),
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  Text(
+                    preview,
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.1,
+                      color: Color(0xFF202124),
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      TextButton(
+                        onPressed: () => Navigator.of(context).pop(false),
+                        child: const Text('Düzenle'),
+                      ),
+                      const SizedBox(width: 4),
+                      TextButton(
+                        onPressed: () => Navigator.of(context).pop(true),
+                        child: const Text('Evet'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('Düzenle'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('Evet'),
-            ),
-          ],
         );
       },
     );
@@ -865,7 +922,23 @@ class _TurnaPhoneAuthPageState extends State<TurnaPhoneAuthPage> {
 
   Widget _buildOtpStep() {
     final phone = _requestedPhone ?? '';
+    final otpWidth = math.min(MediaQuery.of(context).size.width - 56, 286.0);
+    final formattedPhone =
+        _selectedCountry != null && _nationalNumber.isNotEmpty
+        ? _formatPhonePreview(
+            countryIso: _selectedCountry!.iso,
+            dialCode: _selectedCountry!.dialCode,
+            nationalNumber: _nationalNumber,
+          )
+        : phone;
     final digits = _otpController.text.padRight(6);
+    final filledCount = _otpController.text.length.clamp(0, 6);
+    const cellWidth = 16.0;
+    const cellGap = 8.0;
+    const cellCount = 6;
+    const indicatorWidth =
+        (cellWidth * cellCount) + (cellGap * (cellCount - 1));
+    final cursorLeft = ((indicatorWidth - 2) / cellCount) * filledCount;
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -879,100 +952,144 @@ class _TurnaPhoneAuthPageState extends State<TurnaPhoneAuthPage> {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(28, 16, 28, 32),
           children: [
-            const Text(
-              'Numaranız doğrulanıyor',
-              style: TextStyle(
-                fontSize: 30,
-                fontWeight: FontWeight.w400,
-                color: Color(0xFF202124),
-              ),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              '$phone numaralı telefona SMS yoluyla gönderilen 6 haneli kodu otomatik olarak algılaması bekleniyor.',
-              style: const TextStyle(
-                fontSize: 15,
-                height: 1.45,
-                color: Color(0xFF6B7280),
-              ),
-            ),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton(
-                onPressed: () {
-                  setState(() {
-                    _step = _TurnaAuthStep.phone;
-                    _otpController.clear();
-                  });
-                },
-                child: const Text('Numara yanlış mı?'),
-              ),
-            ),
-            const SizedBox(height: 24),
-            GestureDetector(
-              onTap: () => _otpFocusNode.requestFocus(),
+            Center(
               child: SizedBox(
-                height: 86,
-                child: Stack(
-                  alignment: Alignment.center,
+                width: otpWidth,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    Opacity(
-                      opacity: 0.02,
-                      child: TextField(
-                        controller: _otpController,
-                        focusNode: _otpFocusNode,
-                        keyboardType: TextInputType.number,
-                        textInputAction: TextInputAction.done,
-                        autofillHints: const [AutofillHints.oneTimeCode],
-                        inputFormatters: [
-                          FilteringTextInputFormatter.digitsOnly,
-                          LengthLimitingTextInputFormatter(6),
-                        ],
-                        decoration: const InputDecoration(
-                          border: InputBorder.none,
-                          counterText: '',
+                    const Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        'Numaranız doğrulanıyor',
+                        style: TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w400,
+                          color: Color(0xFF202124),
                         ),
                       ),
                     ),
-                    IgnorePointer(
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.start,
-                        children: List.generate(6, (index) {
-                          final char = digits[index].trim();
-                          return Container(
-                            width: 34,
-                            margin: EdgeInsets.only(right: index == 5 ? 0 : 10),
-                            padding: const EdgeInsets.only(bottom: 8),
-                            decoration: const BoxDecoration(
-                              border: Border(
-                                bottom: BorderSide(
-                                  color: Color(0xFF2E7D5B),
-                                  width: 2,
+                    const SizedBox(height: 14),
+                    Text.rich(
+                      TextSpan(
+                        text:
+                            '$formattedPhone numaralı telefona SMS yoluyla gönderilen 6 haneli kodu otomatik olarak algılaması bekleniyor. ',
+                        style: const TextStyle(
+                          fontSize: 14,
+                          height: 1.4,
+                          color: Color(0xFF6B7280),
+                        ),
+                        children: [
+                          TextSpan(
+                            text: 'Numara yanlış mı?',
+                            style: const TextStyle(
+                              color: TurnaColors.primary,
+                              fontWeight: FontWeight.w600,
+                            ),
+                            recognizer: TapGestureRecognizer()
+                              ..onTap = () {
+                                setState(() {
+                                  _step = _TurnaAuthStep.phone;
+                                  _otpController.clear();
+                                });
+                              },
+                          ),
+                        ],
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 28),
+                    GestureDetector(
+                      onTap: () => _otpFocusNode.requestFocus(),
+                      child: SizedBox(
+                        width: indicatorWidth,
+                        height: 56,
+                        child: Stack(
+                          children: [
+                            Positioned.fill(
+                              child: Opacity(
+                                opacity: 0.02,
+                                child: TextField(
+                                  controller: _otpController,
+                                  focusNode: _otpFocusNode,
+                                  keyboardType: TextInputType.number,
+                                  textInputAction: TextInputAction.done,
+                                  autofillHints: const [
+                                    AutofillHints.oneTimeCode,
+                                  ],
+                                  inputFormatters: [
+                                    FilteringTextInputFormatter.digitsOnly,
+                                    LengthLimitingTextInputFormatter(6),
+                                  ],
+                                  decoration: const InputDecoration(
+                                    border: InputBorder.none,
+                                    counterText: '',
+                                  ),
                                 ),
                               ),
                             ),
-                            child: Text(
-                              char.isEmpty ? '' : char,
-                              textAlign: TextAlign.center,
-                              style: const TextStyle(
-                                fontSize: 26,
-                                fontWeight: FontWeight.w500,
-                                letterSpacing: 1,
+                            Positioned(
+                              left: 0,
+                              right: 0,
+                              bottom: 7,
+                              child: Container(
+                                height: 1.2,
+                                color: const Color(0xFFC8CDD1),
                               ),
                             ),
-                          );
-                        }),
+                            if (filledCount < 6)
+                              Positioned(
+                                left: cursorLeft,
+                                top: 4,
+                                child: Container(
+                                  width: 2,
+                                  height: 28,
+                                  color: const Color(0xFF2E7D5B),
+                                ),
+                              ),
+                            Positioned(
+                              left: 0,
+                              right: 0,
+                              top: 0,
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: List.generate(cellCount, (index) {
+                                  final char = digits[index].trim();
+                                  return SizedBox(
+                                    width: cellWidth,
+                                    child: Padding(
+                                      padding: EdgeInsets.only(
+                                        right: index == cellCount - 1
+                                            ? 0
+                                            : cellGap,
+                                      ),
+                                      child: Text(
+                                        char.isEmpty ? '—' : char,
+                                        textAlign: TextAlign.center,
+                                        style: TextStyle(
+                                          fontSize: 21,
+                                          fontWeight: FontWeight.w500,
+                                          color: char.isEmpty
+                                              ? const Color(0xFF5F6368)
+                                              : const Color(0xFF202124),
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                }),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
+                    ),
+                    const SizedBox(height: 28),
+                    TextButton(
+                      onPressed: _showResendSheet,
+                      child: const Text('Kodu almadınız mı?'),
                     ),
                   ],
                 ),
-              ),
-            ),
-            const SizedBox(height: 20),
-            Center(
-              child: TextButton(
-                onPressed: _showResendSheet,
-                child: const Text('Kodu almadınız mı?'),
               ),
             ),
           ],

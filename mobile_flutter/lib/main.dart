@@ -8,6 +8,7 @@ import 'package:firebase_analytics/firebase_analytics.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_callkit_incoming/entities/entities.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
@@ -277,6 +278,41 @@ String formatTurnaLocalClock(String? raw) {
   final hh = dt.hour.toString().padLeft(2, '0');
   final mm = dt.minute.toString().padLeft(2, '0');
   return '$hh:$mm';
+}
+
+String formatTurnaDisplayPhone(String? raw) {
+  final source = raw?.trim() ?? '';
+  if (source.isEmpty || !source.startsWith('+')) return source;
+
+  final digits = source.replaceAll(RegExp(r'\D+'), '');
+  if (digits.length < 7) return source;
+
+  if (digits.startsWith('90') && digits.length == 12) {
+    final national = digits.substring(2);
+    return '+90 ${national.substring(0, 3)} ${national.substring(3, 6)} ${national.substring(6, 8)} ${national.substring(8, 10)}';
+  }
+
+  if (digits.startsWith('44') && digits.length == 12) {
+    final national = digits.substring(2);
+    return '+44 ${national.substring(0, 4)} ${national.substring(4)}';
+  }
+
+  final countryLength = digits.length > 11 ? 3 : 2;
+  final country = digits.substring(0, countryLength);
+  final national = digits.substring(countryLength);
+  final groups = <String>[];
+  var cursor = 0;
+  while (cursor < national.length) {
+    final remaining = national.length - cursor;
+    final take = remaining > 4
+        ? 3
+        : remaining > 2
+        ? 2
+        : remaining;
+    groups.add(national.substring(cursor, cursor + take));
+    cursor += take;
+  }
+  return '+$country ${groups.join(' ')}'.trim();
 }
 
 class TurnaDisplayWakeLock {

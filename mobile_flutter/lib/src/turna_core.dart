@@ -2266,9 +2266,10 @@ class ChatApi {
       final chatsData = (chatsMap['data'] as List<dynamic>? ?? []);
       return chatsData.map((item) {
         final map = item as Map<String, dynamic>;
+        final rawTitle = map['title']?.toString() ?? 'Chat';
         return ChatPreview(
           chatId: map['chatId'].toString(),
-          name: map['title']?.toString() ?? 'Chat',
+          name: formatTurnaDisplayPhone(rawTitle),
           message: sanitizeTurnaChatPreviewText(
             map['lastMessage']?.toString() ?? '',
           ),

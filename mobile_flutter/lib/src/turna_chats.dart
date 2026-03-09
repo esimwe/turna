@@ -6695,7 +6695,7 @@ class _NewChatPageState extends State<NewChatPage> {
   Future<void> _openChat(TurnaUserProfile user) async {
     final chat = ChatPreview(
       chatId: ChatApi.buildDirectChatId(widget.session.userId, user.id),
-      name: user.displayName,
+      name: formatTurnaDisplayPhone(user.phone ?? user.displayName),
       message: '',
       time: '',
       avatarUrl: user.avatarUrl,
