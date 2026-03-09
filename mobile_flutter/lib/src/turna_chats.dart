@@ -1889,6 +1889,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   Timer? _voiceRecordTimer;
   String? _voiceRecordingPath;
   double _voiceSlideProgress = 0;
+  final GlobalKey _voiceMicKey = GlobalKey();
+  int? _voicePointerId;
+  Offset? _voicePointerOriginGlobal;
 
   String? get _peerUserId =>
       ChatApi.extractPeerUserId(widget.chat.chatId, widget.session.userId);
@@ -2281,15 +2284,10 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     }
   }
 
-  void _handleVoiceRecordingMove(LongPressMoveUpdateDetails details) {
+  void _updateVoiceRecordingGesture(Offset delta) {
     if (!_voiceRecording || _voiceRecordingLocked) return;
-    final slideProgress =
-        ((-details.offsetFromOrigin.dx) / _voiceCancelThreshold).clamp(
-          0.0,
-          1.0,
-        );
-    final lockProgress = ((-details.offsetFromOrigin.dy) / _voiceLockThreshold)
-        .clamp(0.0, 1.0);
+    final slideProgress = ((-delta.dx) / _voiceCancelThreshold).clamp(0.0, 1.0);
+    final lockProgress = ((-delta.dy) / _voiceLockThreshold).clamp(0.0, 1.0);
     if (lockProgress >= 1) {
       setState(() {
         _voiceRecordingLocked = true;
@@ -2302,6 +2300,51 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       _voiceSlideProgress = slideProgress;
       _voiceSlideCancelArmed = slideProgress >= 1;
     });
+  }
+
+  bool _isVoiceMicHit(Offset globalPosition) {
+    final context = _voiceMicKey.currentContext;
+    if (context == null) return false;
+    final box = context.findRenderObject() as RenderBox?;
+    if (box == null || !box.attached) return false;
+    final origin = box.localToGlobal(Offset.zero);
+    final rect = origin & box.size;
+    return rect.contains(globalPosition);
+  }
+
+  void _handleComposerPointerDown(PointerDownEvent event) {
+    if (_attachmentBusy ||
+        _voiceRecorderBusy ||
+        _hasComposerText ||
+        _editingDraft != null) {
+      return;
+    }
+    if (!_isVoiceMicHit(event.position)) return;
+    _voicePointerId = event.pointer;
+    _voicePointerOriginGlobal = event.position;
+  }
+
+  void _handleComposerPointerMove(PointerMoveEvent event) {
+    if (_voicePointerId != event.pointer) return;
+    final origin = _voicePointerOriginGlobal;
+    if (origin == null) return;
+    _updateVoiceRecordingGesture(event.position - origin);
+  }
+
+  Future<void> _handleComposerPointerUp(PointerUpEvent event) async {
+    if (_voicePointerId != event.pointer) return;
+    _voicePointerId = null;
+    _voicePointerOriginGlobal = null;
+    if (!_voiceRecording || _voiceRecordingLocked) return;
+    await _handleVoiceRecordingRelease();
+  }
+
+  Future<void> _handleComposerPointerCancel(PointerCancelEvent event) async {
+    if (_voicePointerId != event.pointer) return;
+    _voicePointerId = null;
+    _voicePointerOriginGlobal = null;
+    if (!_voiceRecording || _voiceRecordingLocked) return;
+    await _cancelVoiceRecording();
   }
 
   Future<void> _handleVoiceRecordingRelease() async {
@@ -3642,200 +3685,220 @@ class _ChatRoomPageState extends State<ChatRoomPage>
 
   Widget _buildComposer() {
     final focused = _composerFocusNode.hasFocus;
-    if (_voiceRecording) {
-      return SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 160),
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(28),
-              border: Border.all(
-                color: _voiceSlideCancelArmed
-                    ? TurnaColors.error.withValues(alpha: 0.32)
-                    : TurnaColors.border,
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.05),
-                  blurRadius: 10,
-                  offset: const Offset(0, 1),
+    final child = _voiceRecording
+        ? SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 160),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 12,
                 ),
-              ],
-            ),
-            child: _voiceRecordingLocked
-                ? _buildLockedVoiceRecorderComposer()
-                : _buildHoldVoiceRecorderComposer(),
-          ),
-        ),
-      );
-    }
-
-    return SafeArea(
-      top: false,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(8, 6, 8, 10),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (_editingDraft != null)
-              Padding(
-                padding: const EdgeInsets.only(left: 48, right: 54, bottom: 8),
-                child: _ComposerEditBanner(
-                  draft: _editingDraft!,
-                  onClose: _cancelEditingMessage,
-                ),
-              ),
-            if (_replyDraft != null)
-              Padding(
-                padding: const EdgeInsets.only(left: 48, right: 54, bottom: 8),
-                child: _ComposerReplyBanner(
-                  reply: _replyDraft!,
-                  onClose: () => setState(() => _replyDraft = null),
-                ),
-              ),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                IconButton(
-                  onPressed: _attachmentBusy ? null : _showAttachmentSheet,
-                  icon: _attachmentBusy
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.add, size: 28),
-                  color: TurnaColors.textSoft,
-                ),
-                Expanded(
-                  child: Container(
-                    constraints: const BoxConstraints(minHeight: 52),
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    decoration: BoxDecoration(
-                      color: TurnaColors.backgroundSoft,
-                      borderRadius: BorderRadius.circular(28),
-                      border: Border.all(
-                        color: focused
-                            ? TurnaColors.primary
-                            : TurnaColors.border,
-                        width: focused ? 1.4 : 1,
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: TurnaColors.primary.withValues(
-                            alpha: focused ? 0.08 : 0.03,
-                          ),
-                          blurRadius: focused ? 16 : 8,
-                          offset: const Offset(0, 1.5),
-                        ),
-                      ],
-                    ),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: _controller,
-                            focusNode: _composerFocusNode,
-                            minLines: 1,
-                            maxLines: 5,
-                            textCapitalization: TextCapitalization.sentences,
-                            decoration: InputDecoration(
-                              hintText: _editingDraft == null
-                                  ? 'Mesaj'
-                                  : 'Duzenlenmis mesaji yaz',
-                              border: InputBorder.none,
-                              contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 14,
-                              ),
-                            ),
-                          ),
-                        ),
-                        if (!_hasComposerText && _editingDraft == null)
-                          IconButton(
-                            onPressed: _attachmentBusy
-                                ? null
-                                : _pickCameraImage,
-                            icon: const Icon(Icons.camera_alt_outlined),
-                            color: TurnaColors.textSoft,
-                          ),
-                      ],
-                    ),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(28),
+                  border: Border.all(
+                    color: _voiceSlideCancelArmed
+                        ? TurnaColors.error.withValues(alpha: 0.32)
+                        : TurnaColors.border,
                   ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.05),
+                      blurRadius: 10,
+                      offset: const Offset(0, 1),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 8),
-                AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 160),
-                  child: _hasComposerText
-                      ? Container(
-                          key: const ValueKey('send'),
-                          width: 46,
-                          height: 46,
-                          decoration: const BoxDecoration(
-                            color: TurnaColors.primary,
-                            shape: BoxShape.circle,
-                          ),
-                          child: IconButton(
-                            onPressed: _attachmentBusy
-                                ? null
-                                : _handleSendPressed,
-                            icon: const Icon(Icons.send_rounded),
-                            color: TurnaColors.surface,
-                          ),
-                        )
-                      : SizedBox(
-                          key: const ValueKey('mic'),
-                          width: 46,
-                          height: 46,
-                          child: GestureDetector(
-                            behavior: HitTestBehavior.opaque,
-                            onTap: _attachmentBusy
-                                ? null
-                                : _showVoiceMessageHint,
-                            onLongPressStart: _attachmentBusy
-                                ? null
-                                : (_) => unawaited(_startVoiceRecording()),
-                            onLongPressMoveUpdate: _attachmentBusy
-                                ? null
-                                : _handleVoiceRecordingMove,
-                            onLongPressEnd: _attachmentBusy
-                                ? null
-                                : (_) =>
-                                      unawaited(_handleVoiceRecordingRelease()),
-                            child: Container(
-                              width: 46,
-                              height: 46,
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                shape: BoxShape.circle,
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withValues(alpha: 0.05),
-                                    blurRadius: 8,
-                                    offset: const Offset(0, 1),
-                                  ),
-                                ],
-                              ),
-                              child: Icon(
-                                Icons.mic_none_rounded,
-                                color: _voiceRecorderBusy
-                                    ? TurnaColors.textMuted
-                                    : TurnaColors.textSoft,
-                              ),
+                child: _voiceRecordingLocked
+                    ? _buildLockedVoiceRecorderComposer()
+                    : _buildHoldVoiceRecorderComposer(),
+              ),
+            ),
+          )
+        : SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(8, 6, 8, 10),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (_editingDraft != null)
+                    Padding(
+                      padding: const EdgeInsets.only(
+                        left: 48,
+                        right: 54,
+                        bottom: 8,
+                      ),
+                      child: _ComposerEditBanner(
+                        draft: _editingDraft!,
+                        onClose: _cancelEditingMessage,
+                      ),
+                    ),
+                  if (_replyDraft != null)
+                    Padding(
+                      padding: const EdgeInsets.only(
+                        left: 48,
+                        right: 54,
+                        bottom: 8,
+                      ),
+                      child: _ComposerReplyBanner(
+                        reply: _replyDraft!,
+                        onClose: () => setState(() => _replyDraft = null),
+                      ),
+                    ),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      IconButton(
+                        onPressed: _attachmentBusy
+                            ? null
+                            : _showAttachmentSheet,
+                        icon: _attachmentBusy
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.add, size: 28),
+                        color: TurnaColors.textSoft,
+                      ),
+                      Expanded(
+                        child: Container(
+                          constraints: const BoxConstraints(minHeight: 52),
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          decoration: BoxDecoration(
+                            color: TurnaColors.backgroundSoft,
+                            borderRadius: BorderRadius.circular(28),
+                            border: Border.all(
+                              color: focused
+                                  ? TurnaColors.primary
+                                  : TurnaColors.border,
+                              width: focused ? 1.4 : 1,
                             ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: TurnaColors.primary.withValues(
+                                  alpha: focused ? 0.08 : 0.03,
+                                ),
+                                blurRadius: focused ? 16 : 8,
+                                offset: const Offset(0, 1.5),
+                              ),
+                            ],
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              Expanded(
+                                child: TextField(
+                                  controller: _controller,
+                                  focusNode: _composerFocusNode,
+                                  minLines: 1,
+                                  maxLines: 5,
+                                  textCapitalization:
+                                      TextCapitalization.sentences,
+                                  decoration: InputDecoration(
+                                    hintText: _editingDraft == null
+                                        ? 'Mesaj'
+                                        : 'Duzenlenmis mesaji yaz',
+                                    border: InputBorder.none,
+                                    contentPadding: const EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                      vertical: 14,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              if (!_hasComposerText && _editingDraft == null)
+                                IconButton(
+                                  onPressed: _attachmentBusy
+                                      ? null
+                                      : _pickCameraImage,
+                                  icon: const Icon(Icons.camera_alt_outlined),
+                                  color: TurnaColors.textSoft,
+                                ),
+                            ],
                           ),
                         ),
-                ),
-              ],
+                      ),
+                      const SizedBox(width: 8),
+                      AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 160),
+                        child: _hasComposerText
+                            ? Container(
+                                key: const ValueKey('send'),
+                                width: 46,
+                                height: 46,
+                                decoration: const BoxDecoration(
+                                  color: TurnaColors.primary,
+                                  shape: BoxShape.circle,
+                                ),
+                                child: IconButton(
+                                  onPressed: _attachmentBusy
+                                      ? null
+                                      : _handleSendPressed,
+                                  icon: const Icon(Icons.send_rounded),
+                                  color: TurnaColors.surface,
+                                ),
+                              )
+                            : SizedBox(
+                                key: const ValueKey('mic'),
+                                width: 46,
+                                height: 46,
+                                child: GestureDetector(
+                                  behavior: HitTestBehavior.opaque,
+                                  onTap: _attachmentBusy
+                                      ? null
+                                      : _showVoiceMessageHint,
+                                  onLongPressStart: _attachmentBusy
+                                      ? null
+                                      : (_) =>
+                                            unawaited(_startVoiceRecording()),
+                                  child: Container(
+                                    key: _voiceMicKey,
+                                    width: 46,
+                                    height: 46,
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      shape: BoxShape.circle,
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black.withValues(
+                                            alpha: 0.05,
+                                          ),
+                                          blurRadius: 8,
+                                          offset: const Offset(0, 1),
+                                        ),
+                                      ],
+                                    ),
+                                    child: Icon(
+                                      Icons.mic_none_rounded,
+                                      color: _voiceRecorderBusy
+                                          ? TurnaColors.textMuted
+                                          : TurnaColors.textSoft,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
-          ],
-        ),
-      ),
+          );
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: _handleComposerPointerDown,
+      onPointerMove: _handleComposerPointerMove,
+      onPointerUp: (event) => unawaited(_handleComposerPointerUp(event)),
+      onPointerCancel: (event) =>
+          unawaited(_handleComposerPointerCancel(event)),
+      child: child,
     );
   }
 
@@ -4453,16 +4516,6 @@ class _ChatRoomPageState extends State<ChatRoomPage>
               child: Text(
                 _client.error!,
                 style: const TextStyle(color: Color(0xFF7A4B00)),
-              ),
-            ),
-          if (!_client.isConnected)
-            Container(
-              width: double.infinity,
-              color: const Color(0xFFEAF2FF),
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              child: const Text(
-                'Canli baglanti yok. Yazdiklarin siraya alinip tekrar denenecek.',
-                style: TextStyle(color: Color(0xFF234B8F)),
               ),
             ),
           if (_attachmentBusy)
