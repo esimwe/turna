@@ -63,6 +63,52 @@ class ChatUser {
   final String? avatarUrl;
 }
 
+class TurnaRegisteredContact {
+  TurnaRegisteredContact({
+    required this.id,
+    required this.displayName,
+    required this.contactName,
+    this.username,
+    this.phone,
+    this.about,
+    this.avatarUrl,
+  });
+
+  final String id;
+  final String displayName;
+  final String contactName;
+  final String? username;
+  final String? phone;
+  final String? about;
+  final String? avatarUrl;
+
+  String get resolvedTitle =>
+      contactName.trim().isEmpty ? displayName : contactName;
+
+  factory TurnaRegisteredContact.fromMap(Map<String, dynamic> map) {
+    return TurnaRegisteredContact(
+      id: (map['id'] ?? '').toString(),
+      displayName: (map['displayName'] ?? '').toString(),
+      contactName: (map['contactName'] ?? '').toString(),
+      username: TurnaUserProfile._nullableString(map['username']),
+      phone: TurnaUserProfile._nullableString(map['phone']),
+      about: TurnaUserProfile._nullableString(map['about']),
+      avatarUrl: TurnaUserProfile._nullableString(map['avatarUrl']),
+    );
+  }
+
+  TurnaUserProfile toUserProfile() {
+    return TurnaUserProfile(
+      id: id,
+      displayName: resolvedTitle,
+      username: username,
+      phone: phone,
+      about: about,
+      avatarUrl: avatarUrl,
+    );
+  }
+}
+
 class TurnaUserProfile {
   TurnaUserProfile({
     required this.id,
@@ -2306,6 +2352,23 @@ class ProfileApi {
     return TurnaUserProfile.fromMap(data);
   }
 
+  static Future<void> syncContacts(
+    AuthSession session,
+    List<TurnaContactSyncEntry> contacts,
+  ) async {
+    final res = await http.post(
+      Uri.parse('$kBackendBaseUrl/api/profile/contacts/sync'),
+      headers: {
+        'Authorization': 'Bearer ${session.token}',
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode({
+        'contacts': contacts.map((item) => item.toMap()).toList(),
+      }),
+    );
+    _throwIfApiError(res, label: 'syncContacts');
+  }
+
   static void _throwIfApiError(
     http.Response response, {
     required String label,
@@ -2676,6 +2739,32 @@ class ChatApi {
       rethrow;
     } catch (_) {
       throw TurnaApiException('Kullanici aranamadi.');
+    }
+  }
+
+  static Future<List<TurnaRegisteredContact>> fetchRegisteredContacts(
+    AuthSession session,
+  ) async {
+    try {
+      final res = await http.get(
+        Uri.parse('$kBackendBaseUrl/api/chats/directory/contacts'),
+        headers: {'Authorization': 'Bearer ${session.token}'},
+      );
+      _throwIfApiError(res);
+
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = (map['data'] as List<dynamic>? ?? const []);
+      return data
+          .whereType<Map>()
+          .map(
+            (item) =>
+                TurnaRegisteredContact.fromMap(Map<String, dynamic>.from(item)),
+          )
+          .toList();
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Rehber kisileri yuklenemedi.');
     }
   }
 

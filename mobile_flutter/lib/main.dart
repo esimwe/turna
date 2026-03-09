@@ -365,7 +365,15 @@ class TurnaContactsDirectory {
 
   static Future<void>? _pendingLoad;
   static Map<String, String> _labelsByPhoneKey = <String, String>{};
+  static List<TurnaContactSyncEntry> _syncEntries =
+      const <TurnaContactSyncEntry>[];
   static bool _permissionGranted = false;
+
+  static bool get permissionGranted => _permissionGranted;
+
+  static List<TurnaContactSyncEntry> snapshotForSync() {
+    return List<TurnaContactSyncEntry>.unmodifiable(_syncEntries);
+  }
 
   static Future<void> ensureLoaded({bool force = false}) async {
     if (!force && _permissionGranted) return;
@@ -408,9 +416,13 @@ class TurnaContactsDirectory {
     try {
       final granted = await FlutterContacts.requestPermission(readonly: true);
       if (!granted) {
-        final hadData = _labelsByPhoneKey.isNotEmpty || _permissionGranted;
+        final hadData =
+            _labelsByPhoneKey.isNotEmpty ||
+            _syncEntries.isNotEmpty ||
+            _permissionGranted;
         _permissionGranted = false;
         _labelsByPhoneKey = <String, String>{};
+        _syncEntries = const <TurnaContactSyncEntry>[];
         if (hadData) {
           revision.value++;
         }
@@ -422,13 +434,24 @@ class TurnaContactsDirectory {
         withPhoto: false,
       );
       final next = <String, String>{};
+      final syncEntries = <TurnaContactSyncEntry>[];
       for (final contact in contacts) {
         final displayName = contact.displayName.trim();
         if (displayName.isEmpty) continue;
+        final phones = <String>[];
         for (final phone in contact.phones) {
+          final rawNumber = phone.number.trim();
+          if (rawNumber.isNotEmpty) {
+            phones.add(rawNumber);
+          }
           for (final key in _phoneLookupKeys(phone.number)) {
             next.putIfAbsent(key, () => displayName);
           }
+        }
+        if (phones.isNotEmpty) {
+          syncEntries.add(
+            TurnaContactSyncEntry(displayName: displayName, phones: phones),
+          );
         }
       }
 
@@ -437,9 +460,11 @@ class TurnaContactsDirectory {
           next.entries.any(
             (entry) => _labelsByPhoneKey[entry.key] != entry.value,
           ) ||
+          syncEntries.length != _syncEntries.length ||
           !_permissionGranted;
       _permissionGranted = true;
       _labelsByPhoneKey = next;
+      _syncEntries = syncEntries;
       if (changed) {
         revision.value++;
       }
@@ -479,6 +504,21 @@ class TurnaContactsDirectory {
 
     return keys;
   }
+}
+
+class TurnaContactSyncEntry {
+  const TurnaContactSyncEntry({
+    required this.displayName,
+    required this.phones,
+  });
+
+  final String displayName;
+  final List<String> phones;
+
+  Map<String, dynamic> toMap() => {
+    'displayName': displayName,
+    'phones': phones,
+  };
 }
 
 Widget buildTurnaSessionExpiredRedirect(VoidCallback onSessionExpired) {

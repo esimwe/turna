@@ -8164,22 +8164,39 @@ class NewChatPage extends StatefulWidget {
 class _NewChatPageState extends State<NewChatPage> {
   final TextEditingController _lookupController = TextEditingController();
   TurnaUserProfile? _foundUser;
+  List<TurnaRegisteredContact> _registeredContacts =
+      const <TurnaRegisteredContact>[];
   bool _loading = false;
-  String? _error;
+  bool _syncingContacts = false;
+  String? _lookupError;
+  String? _directoryError;
 
   @override
   void initState() {
     super.initState();
-    _lookupController.addListener(() => setState(() {}));
+    _lookupController.addListener(_handleLookupChanged);
     TurnaContactsDirectory.revision.addListener(_handleContactsChanged);
-    unawaited(TurnaContactsDirectory.ensureLoaded());
+    unawaited(_refreshRegisteredContacts());
   }
 
   @override
   void dispose() {
     TurnaContactsDirectory.revision.removeListener(_handleContactsChanged);
+    _lookupController.removeListener(_handleLookupChanged);
     _lookupController.dispose();
     super.dispose();
+  }
+
+  void _handleLookupChanged() {
+    if (!mounted) return;
+    setState(() {
+      if (_lookupError != null) {
+        _lookupError = null;
+      }
+      if (_foundUser != null) {
+        _foundUser = null;
+      }
+    });
   }
 
   void _handleContactsChanged() {
@@ -8187,11 +8204,69 @@ class _NewChatPageState extends State<NewChatPage> {
     setState(() {});
   }
 
+  Future<void> _refreshRegisteredContacts({
+    bool forceContactReload = false,
+  }) async {
+    if (_syncingContacts) return;
+    setState(() {
+      _syncingContacts = true;
+      _directoryError = null;
+    });
+
+    try {
+      await TurnaContactsDirectory.ensureLoaded(force: forceContactReload);
+      if (!mounted) return;
+
+      if (!TurnaContactsDirectory.permissionGranted) {
+        setState(() {
+          _registeredContacts = const <TurnaRegisteredContact>[];
+          _syncingContacts = false;
+        });
+        return;
+      }
+
+      final contacts = TurnaContactsDirectory.snapshotForSync();
+      await ProfileApi.syncContacts(widget.session, contacts);
+      final registered = await ChatApi.fetchRegisteredContacts(widget.session);
+      if (!mounted) return;
+      setState(() {
+        _registeredContacts = registered;
+        _syncingContacts = false;
+      });
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      setState(() => _syncingContacts = false);
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _syncingContacts = false;
+        _directoryError = error.toString();
+      });
+    }
+  }
+
+  List<TurnaRegisteredContact> get _filteredRegisteredContacts {
+    final query = _lookupController.text.trim().toLowerCase();
+    if (query.isEmpty) return _registeredContacts;
+    final digitsQuery = query.replaceAll(RegExp(r'\D+'), '');
+    return _registeredContacts.where((contact) {
+      final title = contact.resolvedTitle.toLowerCase();
+      final username = (contact.username ?? '').toLowerCase();
+      final phone = (contact.phone ?? '').toLowerCase();
+      final phoneDigits = phone.replaceAll(RegExp(r'\D+'), '');
+      return title.contains(query) ||
+          username.contains(query.replaceAll('@', '')) ||
+          phone.contains(query) ||
+          (digitsQuery.isNotEmpty && phoneDigits.contains(digitsQuery));
+    }).toList();
+  }
+
   Future<void> _searchUser() async {
     final query = _lookupController.text.trim();
     if (query.isEmpty) {
       setState(() {
-        _error = 'Telefon numarasi veya kullanici adi gir.';
+        _lookupError = 'Telefon numarasi veya kullanici adi gir.';
         _foundUser = null;
       });
       return;
@@ -8199,7 +8274,7 @@ class _NewChatPageState extends State<NewChatPage> {
 
     setState(() {
       _loading = true;
-      _error = null;
+      _lookupError = null;
       _foundUser = null;
     });
 
@@ -8209,15 +8284,19 @@ class _NewChatPageState extends State<NewChatPage> {
       setState(() {
         _foundUser = user;
         _loading = false;
-        _error = user == null
+        _lookupError = user == null
             ? 'Bu sorguyla kayitli bir Turna hesabi bulunamadi.'
             : null;
       });
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      widget.onSessionExpired();
     } catch (error) {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _error = error.toString();
+        _lookupError = error.toString();
       });
     }
   }
@@ -8252,6 +8331,104 @@ class _NewChatPageState extends State<NewChatPage> {
     Navigator.of(context).pop(true);
   }
 
+  Widget _buildRegisteredContactsSection() {
+    if (!TurnaContactsDirectory.permissionGranted) {
+      return _CenteredState(
+        icon: Icons.perm_contact_calendar_outlined,
+        title: 'Rehber izni gerekli',
+        message:
+            'Rehberinde kayitli ve Turna kullanan kisileri gormek icin rehber izni ver.',
+        primaryLabel: 'Rehber iznini iste',
+        onPrimary: () => _refreshRegisteredContacts(forceContactReload: true),
+      );
+    }
+
+    if (_directoryError != null) {
+      return _CenteredState(
+        icon: Icons.sync_problem_outlined,
+        title: 'Rehber senkronize edilemedi',
+        message: _directoryError!,
+        primaryLabel: 'Kisileri yenile',
+        onPrimary: () => _refreshRegisteredContacts(forceContactReload: true),
+      );
+    }
+
+    if (_syncingContacts && _registeredContacts.isEmpty) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    final contacts = _filteredRegisteredContacts;
+    if (contacts.isEmpty) {
+      return _CenteredState(
+        icon: Icons.perm_contact_calendar_outlined,
+        title: 'Kayitli rehber kisisi bulunamadi',
+        message: _lookupController.text.trim().isEmpty
+            ? 'Rehberinde kayitli ve Turna kullanan kisiler burada listelenecek.'
+            : 'Arama metnine uyan rehber kisisi bulunamadi.',
+        primaryLabel: _lookupController.text.trim().isEmpty
+            ? 'Kisileri yenile'
+            : 'Kisiyi bul',
+        onPrimary: _lookupController.text.trim().isEmpty
+            ? () => _refreshRegisteredContacts(forceContactReload: true)
+            : _searchUser,
+      );
+    }
+
+    return ListView.separated(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+      itemCount: contacts.length,
+      separatorBuilder: (context, index) => const Divider(height: 1),
+      itemBuilder: (context, index) {
+        final contact = contacts[index];
+        final subtitleParts = <String>[
+          if ((contact.username ?? '').trim().isNotEmpty)
+            '@${contact.username!.trim()}',
+          if ((contact.phone ?? '').trim().isNotEmpty)
+            formatTurnaDisplayPhone(contact.phone!),
+        ];
+        return ListTile(
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 4,
+            vertical: 6,
+          ),
+          leading: _ProfileAvatar(
+            label: contact.resolvedTitle,
+            avatarUrl: contact.avatarUrl,
+            authToken: widget.session.token,
+            radius: 24,
+          ),
+          title: Text(
+            contact.resolvedTitle,
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+          subtitle: subtitleParts.isEmpty
+              ? null
+              : Text(
+                  subtitleParts.join('  •  '),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+          onTap: () => _openChat(contact.toUserProfile()),
+          onLongPress: () async {
+            await Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => UserProfilePage(
+                  session: widget.session,
+                  userId: contact.id,
+                  fallbackName: contact.resolvedTitle,
+                  fallbackAvatarUrl: contact.avatarUrl,
+                  callCoordinator: widget.callCoordinator,
+                  onSessionExpired: widget.onSessionExpired,
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final lookupInput = _lookupController.text.trim();
@@ -8263,7 +8440,24 @@ class _NewChatPageState extends State<NewChatPage> {
           );
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Telefon veya kullanıcı adı')),
+      appBar: AppBar(
+        title: const Text('Yeni sohbet'),
+        actions: [
+          PopupMenuButton<String>(
+            onSelected: (value) {
+              if (value == 'refresh_contacts') {
+                unawaited(_refreshRegisteredContacts(forceContactReload: true));
+              }
+            },
+            itemBuilder: (context) => const [
+              PopupMenuItem<String>(
+                value: 'refresh_contacts',
+                child: Text('Kişileri Yenile'),
+              ),
+            ],
+          ),
+        ],
+      ),
       body: Column(
         children: [
           Padding(
@@ -8272,7 +8466,7 @@ class _NewChatPageState extends State<NewChatPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  'Tum kullanicilar listelenmez. Sohbet baslatmak icin telefon numarasi veya kullanici adini tam olarak gir.',
+                  'Rehberinde kayitli ve Turna kullanan kisiler asagida listelenir. Istersen telefon numarasi veya kullanici adi ile de arayabilirsin.',
                   style: TextStyle(
                     fontSize: 13,
                     height: 1.4,
@@ -8293,7 +8487,7 @@ class _NewChatPageState extends State<NewChatPage> {
                               _lookupController.clear();
                               setState(() {
                                 _foundUser = null;
-                                _error = null;
+                                _lookupError = null;
                               });
                             },
                             icon: const Icon(Icons.close),
@@ -8312,127 +8506,127 @@ class _NewChatPageState extends State<NewChatPage> {
                   width: double.infinity,
                   child: FilledButton(
                     onPressed: _loading ? null : _searchUser,
-                    child: Text(_loading ? 'Araniyor...' : 'Kisiyi bul'),
+                    child: Text(
+                      _loading
+                          ? 'Araniyor...'
+                          : _syncingContacts
+                          ? 'Kisiler yenileniyor...'
+                          : 'Kisiyi bul',
+                    ),
                   ),
                 ),
+                if (_lookupError != null) ...[
+                  const SizedBox(height: 10),
+                  Text(
+                    _lookupError!,
+                    style: const TextStyle(
+                      color: TurnaColors.error,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
           Expanded(
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
-                : _error != null && _error!.contains('Oturum')
-                ? buildTurnaSessionExpiredRedirect(widget.onSessionExpired)
-                : _error != null
-                ? _CenteredState(
-                    icon: Icons.person_search_outlined,
-                    title: 'Kullanici bulunamadi',
-                    message: _error!,
-                    primaryLabel: 'Tekrar ara',
-                    onPrimary: _searchUser,
-                  )
-                : _foundUser == null
-                ? _CenteredState(
-                    icon: Icons.phone_forwarded_outlined,
-                    title: 'Telefon veya kullanıcı adı ile ara',
-                    message:
-                        'Kayitli bir kullaniciyi bulmak icin ulke kodu ile birlikte numarasini veya @kullanici adini yaz.',
-                    primaryLabel: 'Ornek doldur',
-                    onPrimary: () {
-                      _lookupController.text = '@turna';
-                    },
-                  )
-                : ListView(
-                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+                : Column(
                     children: [
-                      Container(
-                        padding: const EdgeInsets.all(18),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(24),
-                          border: Border.all(color: TurnaColors.divider),
-                        ),
-                        child: Column(
-                          children: [
-                            _ProfileAvatar(
-                              label: foundUserName ?? _foundUser!.displayName,
-                              avatarUrl: _foundUser!.avatarUrl,
-                              authToken: widget.session.token,
-                              radius: 34,
+                      if (_foundUser != null)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+                          child: Container(
+                            padding: const EdgeInsets.all(18),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(24),
+                              border: Border.all(color: TurnaColors.divider),
                             ),
-                            const SizedBox(height: 12),
-                            Text(
-                              foundUserName ?? _foundUser!.displayName,
-                              style: const TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                            if ((_foundUser!.username ?? '')
-                                .trim()
-                                .isNotEmpty) ...[
-                              const SizedBox(height: 4),
-                              Text(
-                                '@${_foundUser!.username!.trim()}',
-                                style: const TextStyle(
-                                  color: TurnaColors.textMuted,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ],
-                            if ((_foundUser!.about ?? '')
-                                .trim()
-                                .isNotEmpty) ...[
-                              const SizedBox(height: 10),
-                              Text(
-                                _foundUser!.about!.trim(),
-                                textAlign: TextAlign.center,
-                                style: const TextStyle(
-                                  color: TurnaColors.textSoft,
-                                  height: 1.4,
-                                ),
-                              ),
-                            ],
-                            const SizedBox(height: 18),
-                            Row(
+                            child: Column(
                               children: [
-                                Expanded(
-                                  child: OutlinedButton(
-                                    onPressed: () async {
-                                      await Navigator.push(
-                                        context,
-                                        MaterialPageRoute(
-                                          builder: (_) => UserProfilePage(
-                                            session: widget.session,
-                                            userId: _foundUser!.id,
-                                            fallbackName:
-                                                foundUserName ??
-                                                _foundUser!.displayName,
-                                            fallbackAvatarUrl:
-                                                _foundUser!.avatarUrl,
-                                            callCoordinator:
-                                                widget.callCoordinator,
-                                            onSessionExpired:
-                                                widget.onSessionExpired,
-                                          ),
-                                        ),
-                                      );
-                                    },
-                                    child: const Text('Profili ac'),
+                                _ProfileAvatar(
+                                  label:
+                                      foundUserName ?? _foundUser!.displayName,
+                                  avatarUrl: _foundUser!.avatarUrl,
+                                  authToken: widget.session.token,
+                                  radius: 34,
+                                ),
+                                const SizedBox(height: 12),
+                                Text(
+                                  foundUserName ?? _foundUser!.displayName,
+                                  style: const TextStyle(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w700,
                                   ),
                                 ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: FilledButton(
-                                    onPressed: () => _openChat(_foundUser!),
-                                    child: const Text('Sohbet baslat'),
+                                if ((_foundUser!.username ?? '')
+                                    .trim()
+                                    .isNotEmpty) ...[
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    '@${_foundUser!.username!.trim()}',
+                                    style: const TextStyle(
+                                      color: TurnaColors.textMuted,
+                                      fontWeight: FontWeight.w500,
+                                    ),
                                   ),
+                                ],
+                                if ((_foundUser!.about ?? '')
+                                    .trim()
+                                    .isNotEmpty) ...[
+                                  const SizedBox(height: 10),
+                                  Text(
+                                    _foundUser!.about!.trim(),
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(
+                                      color: TurnaColors.textSoft,
+                                      height: 1.4,
+                                    ),
+                                  ),
+                                ],
+                                const SizedBox(height: 18),
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: OutlinedButton(
+                                        onPressed: () async {
+                                          await Navigator.push(
+                                            context,
+                                            MaterialPageRoute(
+                                              builder: (_) => UserProfilePage(
+                                                session: widget.session,
+                                                userId: _foundUser!.id,
+                                                fallbackName:
+                                                    foundUserName ??
+                                                    _foundUser!.displayName,
+                                                fallbackAvatarUrl:
+                                                    _foundUser!.avatarUrl,
+                                                callCoordinator:
+                                                    widget.callCoordinator,
+                                                onSessionExpired:
+                                                    widget.onSessionExpired,
+                                              ),
+                                            ),
+                                          );
+                                        },
+                                        child: const Text('Profili ac'),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: FilledButton(
+                                        onPressed: () => _openChat(_foundUser!),
+                                        child: const Text('Sohbet baslat'),
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ],
                             ),
-                          ],
+                          ),
                         ),
-                      ),
+                      Expanded(child: _buildRegisteredContactsSection()),
                     ],
                   ),
           ),
