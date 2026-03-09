@@ -17,7 +17,7 @@ class MainTabs extends StatefulWidget {
 }
 
 class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
-  int _index = 0;
+  int _index = 3;
   int _totalUnreadChats = 0;
   late final PresenceSocketClient _presenceClient;
   final _inboxUpdateNotifier = ValueNotifier<int>(0);
@@ -147,6 +147,7 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
         onUnreadChanged: (count) {
           if (_totalUnreadChats == count || !mounted) return;
           setState(() => _totalUnreadChats = count);
+          unawaited(TurnaAppBadge.setCount(count));
         },
       ),
       SettingsPage(

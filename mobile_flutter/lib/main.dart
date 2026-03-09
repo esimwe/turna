@@ -303,6 +303,22 @@ class TurnaDisplayWakeLock {
   }
 }
 
+class TurnaAppBadge {
+  static const MethodChannel _channel = MethodChannel('turna/display');
+
+  static Future<void> setCount(int count) async {
+    final normalized = math.max(0, count);
+    try {
+      await _channel.invokeMethod(
+        'setAppBadgeCount',
+        {'count': normalized},
+      );
+    } catch (error) {
+      turnaLog('app badge update skipped', error);
+    }
+  }
+}
+
 String? guessContentTypeForFileName(String fileName) {
   final lower = fileName.toLowerCase();
   if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
@@ -463,6 +479,10 @@ class _TurnaAppState extends State<TurnaApp> with WidgetsBindingObserver {
       turnaLog('app init', {'hasSession': _session != null});
     }
 
+    if (session == null) {
+      unawaited(TurnaAppBadge.setCount(0));
+    }
+
     unawaited(_initializeServices());
   }
 
@@ -518,6 +538,7 @@ class _TurnaAppState extends State<TurnaApp> with WidgetsBindingObserver {
               },
               onLogout: () async {
                 await AuthSession.clear();
+                await TurnaAppBadge.setCount(0);
                 setState(() => _session = null);
               },
             ),
