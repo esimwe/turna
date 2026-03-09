@@ -162,9 +162,17 @@ export class ChatService {
   async ensureChatAccess(chatId: string, userId: string): Promise<boolean> {
     const member = await prisma.chatMember.findUnique({
       where: { chatId_userId: { chatId, userId } },
-      select: { chatId: true }
+      select: { chatId: true, hiddenAt: true }
     });
-    if (member) return true;
+    if (member) {
+      if (member.hiddenAt) {
+        await prisma.chatMember.update({
+          where: { chatId_userId: { chatId, userId } },
+          data: { hiddenAt: null }
+        });
+      }
+      return true;
+    }
 
     const participants = this.extractDirectParticipants(chatId);
     if (!participants || !participants.includes(userId)) return false;
@@ -341,6 +349,25 @@ export class ChatService {
     return messageIds;
   }
 
+  async markAllChatsRead(
+    userId: string
+  ): Promise<Array<{ chatId: string; messageIds: string[] }>> {
+    const memberships = await prisma.chatMember.findMany({
+      where: { userId },
+      select: { chatId: true }
+    });
+
+    const results: Array<{ chatId: string; messageIds: string[] }> = [];
+    for (const membership of memberships) {
+      const messageIds = await this.markMessagesRead(membership.chatId, userId);
+      if (messageIds.length > 0) {
+        results.push({ chatId: membership.chatId, messageIds });
+      }
+    }
+
+    return results;
+  }
+
   async getMessages(chatId: string): Promise<ChatMessage[]> {
     const page = await this.getMessagePage(chatId, { limit: 30 });
     return page.items;
@@ -386,7 +413,10 @@ export class ChatService {
   async getChatSummaries(userId: string): Promise<ChatSummary[]> {
     const memberships = await prisma.chatMember.findMany({
       where: { userId },
-      include: {
+      select: {
+        chatId: true,
+        joinedAt: true,
+        hiddenAt: true,
         chat: {
           include: {
             members: {
@@ -413,11 +443,16 @@ export class ChatService {
         const chat = membership.chat;
         const peer = chat.members.find((m) => m.userId !== userId)?.user;
         const last = chat.messages[0];
+        const hiddenAt = membership.hiddenAt;
+        if (hiddenAt && (!last || last.createdAt <= hiddenAt)) {
+          return null;
+        }
         const unreadCount = await prisma.message.count({
           where: {
             chatId: chat.id,
             senderId: { not: userId },
-            status: { not: MessageStatus.read }
+            status: { not: MessageStatus.read },
+            ...(hiddenAt ? { createdAt: { gt: hiddenAt } } : {})
           }
         });
 
@@ -435,13 +470,17 @@ export class ChatService {
       })
     );
 
-    items.sort((a, b) => {
+    const visibleItems = items.filter(
+      (item): item is NonNullable<typeof item> => item != null
+    );
+
+    visibleItems.sort((a, b) => {
       const aTime = a.lastMessageAt ? new Date(a.lastMessageAt).getTime() : a.joinedAt.getTime();
       const bTime = b.lastMessageAt ? new Date(b.lastMessageAt).getTime() : b.joinedAt.getTime();
       return bTime - aTime;
     });
 
-    return items.map(({ joinedAt: _joinedAt, ...summary }) => summary);
+    return visibleItems.map(({ joinedAt: _joinedAt, ...summary }) => summary);
   }
 
   async getUserDirectory(userId: string): Promise<DirectoryUser[]> {
@@ -464,6 +503,31 @@ export class ChatService {
       select: { chatId: true }
     });
     return memberships.map((m) => m.chatId);
+  }
+
+  async hideChatsForUser(userId: string, chatIds: string[]): Promise<string[]> {
+    const membershipRows = await prisma.chatMember.findMany({
+      where: {
+        userId,
+        chatId: { in: chatIds }
+      },
+      select: { chatId: true }
+    });
+
+    const ownedChatIds = membershipRows.map((row) => row.chatId);
+    if (ownedChatIds.length === 0) return [];
+
+    await prisma.chatMember.updateMany({
+      where: {
+        userId,
+        chatId: { in: ownedChatIds }
+      },
+      data: {
+        hiddenAt: new Date()
+      }
+    });
+
+    return ownedChatIds;
   }
 
   async getPresenceAudienceUserIds(userId: string): Promise<string[]> {

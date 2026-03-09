@@ -81,6 +81,10 @@ const messageIdParamSchema = z.object({
   messageId: z.string().trim().min(1).max(255)
 });
 
+const bulkDeleteChatsSchema = z.object({
+  chatIds: z.array(z.string().trim().min(1).max(255)).min(1).max(200)
+});
+
 chatRouter.get("/:chatId/messages", requireAuth, async (req, res) => {
   const rawChatId = req.params.chatId;
   const chatId = Array.isArray(rawChatId) ? rawChatId[0] : rawChatId;
@@ -128,6 +132,60 @@ chatRouter.get("/", requireAuth, async (req, res) => {
           : null
     }))
   });
+});
+
+chatRouter.post("/read-all", requireAuth, async (req, res) => {
+  const userId = req.authUserId!;
+
+  try {
+    const results = await chatService.markAllChatsRead(userId);
+
+    for (const result of results) {
+      const participants = await chatService.getChatParticipantIds(result.chatId);
+      const senderIds = participants.filter((participantId) => participantId !== userId);
+      emitChatStatus({
+        chatId: result.chatId,
+        status: "read",
+        messageIds: result.messageIds,
+        userIds: senderIds
+      });
+    }
+
+    emitInboxUpdate([userId]);
+    res.json({
+      data: {
+        updatedChatCount: results.length,
+        updatedMessageCount: results.reduce((sum, item) => sum + item.messageIds.length, 0)
+      }
+    });
+  } catch (error) {
+    logError("chat mark all read failed", error);
+    res.status(500).json({ error: "failed_to_mark_all_read" });
+  }
+});
+
+chatRouter.post("/delete", requireAuth, async (req, res) => {
+  const parsed = bulkDeleteChatsSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
+    return;
+  }
+
+  const userId = req.authUserId!;
+
+  try {
+    const uniqueChatIds = Array.from(new Set(parsed.data.chatIds));
+    const hiddenChatIds = await chatService.hideChatsForUser(userId, uniqueChatIds);
+    emitInboxUpdate([userId]);
+    res.json({
+      data: {
+        chatIds: hiddenChatIds
+      }
+    });
+  } catch (error) {
+    logError("chat bulk delete failed", error);
+    res.status(500).json({ error: "failed_to_delete_chats" });
+  }
 });
 
 chatRouter.get("/directory/list", requireAuth, async (req, res) => {

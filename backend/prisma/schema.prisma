@@ -83,12 +83,14 @@ model ChatMember {
   chatId    String
   userId    String
   joinedAt  DateTime @default(now())
+  hiddenAt  DateTime?
 
   chat      Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@id([chatId, userId])
   @@index([userId])
+  @@index([userId, hiddenAt])
 }
 
 model Message {
