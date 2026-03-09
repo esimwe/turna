@@ -8,6 +8,7 @@ import {
 } from "../lib/user-access.js";
 import { findActiveAuthSession } from "../lib/auth-sessions.js";
 import { verifyAccessToken } from "../lib/jwt.js";
+import { logInfo } from "../lib/logger.js";
 
 declare global {
   namespace Express {
@@ -19,13 +20,26 @@ declare global {
   }
 }
 
-function respondForbidden(res: Response, error: string): void {
+function logAuthFailure(req: Request, reason: string, meta?: Record<string, unknown>): void {
+  logInfo("requireAuth failed", {
+    method: req.method,
+    path: req.originalUrl || req.path,
+    ip: req.ip,
+    reason,
+    hasAuthorizationHeader: Boolean(req.header("authorization")),
+    ...meta
+  });
+}
+
+function respondForbidden(req: Request, res: Response, error: string): void {
+  logAuthFailure(req, error);
   res.status(403).json({ error });
 }
 
 export async function requireAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
   const authorization = req.header("authorization");
   if (!authorization?.startsWith("Bearer ")) {
+    logAuthFailure(req, "unauthorized");
     res.status(401).json({ error: "unauthorized" });
     return;
   }
@@ -37,13 +51,17 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     const access = await requireUserAccessState(claims.sub);
     const accountError = getAccountAccessError(access);
     if (accountError) {
-      respondForbidden(res, accountError);
+      respondForbidden(req, res, accountError);
       return;
     }
 
     if (claims.sessionId) {
       const session = await findActiveAuthSession(claims.sessionId);
       if (!session || session.userId !== claims.sub) {
+        logAuthFailure(req, "session_revoked", {
+          userId: claims.sub,
+          hasSessionId: true
+        });
         res.status(401).json({ error: "session_revoked" });
         return;
       }
@@ -55,9 +73,13 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     next();
   } catch (error) {
     if (error instanceof Error && error.message === "user_not_found") {
+      logAuthFailure(req, "user_not_found");
       res.status(401).json({ error: "user_not_found" });
       return;
     }
+    logAuthFailure(req, "invalid_token", {
+      message: error instanceof Error ? error.message : String(error)
+    });
     res.status(401).json({ error: "invalid_token" });
   }
 }
@@ -65,6 +87,7 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
 export function requireMessagingAccess(req: Request, res: Response, next: NextFunction): void {
   const access = req.authUserAccess;
   if (!access) {
+    logAuthFailure(req, "unauthorized");
     res.status(401).json({ error: "unauthorized" });
     return;
   }
@@ -73,13 +96,18 @@ export function requireMessagingAccess(req: Request, res: Response, next: NextFu
     assertUserCanSendMessages(access);
     next();
   } catch (error) {
-    respondForbidden(res, error instanceof Error ? error.message : "message_sending_restricted");
+    respondForbidden(
+      req,
+      res,
+      error instanceof Error ? error.message : "message_sending_restricted"
+    );
   }
 }
 
 export function requireCallingAccess(req: Request, res: Response, next: NextFunction): void {
   const access = req.authUserAccess;
   if (!access) {
+    logAuthFailure(req, "unauthorized");
     res.status(401).json({ error: "unauthorized" });
     return;
   }
@@ -88,6 +116,10 @@ export function requireCallingAccess(req: Request, res: Response, next: NextFunc
     assertUserCanStartOrAcceptCalls(access);
     next();
   } catch (error) {
-    respondForbidden(res, error instanceof Error ? error.message : "calling_restricted");
+    respondForbidden(
+      req,
+      res,
+      error instanceof Error ? error.message : "calling_restricted"
+    );
   }
 }
