@@ -461,6 +461,7 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await TurnaFirebase.ensureInitialized();
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
   runApp(const TurnaApp());
 }
@@ -476,7 +477,7 @@ class _TurnaAppState extends State<TurnaApp> with WidgetsBindingObserver {
   AuthSession? _session;
   bool _bootstrapping = true;
   static const Duration _minimumSplashDuration = Duration(milliseconds: 750);
-  static const Duration _maximumBootstrapWait = Duration(milliseconds: 1800);
+  static const Duration _maximumBootstrapWait = Duration(seconds: 6);
 
   @override
   void initState() {
