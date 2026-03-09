@@ -3291,6 +3291,72 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
     );
   }
 
+  Future<bool> _enableCameraWithFallback(
+    lk.LocalParticipant localParticipant, {
+    required String origin,
+  }) async {
+    final attempts = <({
+      String label,
+      _AdaptiveCallVideoProfile? profile,
+      lk.CameraCaptureOptions? options,
+    })>[
+      (
+        label: 'current_${_videoProfile.label}',
+        profile: _videoProfile,
+        options: _videoProfile.captureOptions(cameraPosition: cameraPosition),
+      ),
+      (
+        label: 'medium_${_AdaptiveCallVideoProfile.medium.label}',
+        profile: _AdaptiveCallVideoProfile.medium,
+        options: _AdaptiveCallVideoProfile.medium.captureOptions(
+          cameraPosition: cameraPosition,
+        ),
+      ),
+      (
+        label: 'low_${_AdaptiveCallVideoProfile.low.label}',
+        profile: _AdaptiveCallVideoProfile.low,
+        options: _AdaptiveCallVideoProfile.low.captureOptions(
+          cameraPosition: cameraPosition,
+        ),
+      ),
+      (label: 'default', profile: null, options: null),
+    ];
+
+    Object? lastError;
+    for (final attempt in attempts) {
+      try {
+        await localParticipant.setCameraEnabled(
+          true,
+          cameraCaptureOptions: attempt.options,
+        );
+        cameraEnabled = true;
+        if (attempt.profile != null) {
+          _videoProfile = attempt.profile!;
+        }
+        turnaLog('livekit camera enabled', {
+          'origin': origin,
+          'attempt': attempt.label,
+          'profile': _videoProfile.label,
+        });
+        return true;
+      } catch (err) {
+        lastError = err;
+        turnaLog('livekit camera enable failed', {
+          'origin': origin,
+          'attempt': attempt.label,
+          'error': '$err',
+        });
+      }
+    }
+
+    cameraEnabled = false;
+    turnaLog('livekit camera enable exhausted', {
+      'origin': origin,
+      'error': '$lastError',
+    });
+    return false;
+  }
+
   @override
   Future<void> connect() async {
     if (connecting || connected) return;
@@ -3331,23 +3397,21 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
       await localParticipant.setMicrophoneEnabled(true);
       microphoneEnabled = true;
       speakerEnabled = false;
-
-      if (videoEnabled) {
-        await localParticipant.setCameraEnabled(
-          true,
-          cameraCaptureOptions: _videoProfile.captureOptions(
-            cameraPosition: cameraPosition,
-          ),
-        );
-        cameraEnabled = true;
-      }
-
       await room.setSpeakerOn(false);
 
       connected = true;
       connecting = false;
       notifyListeners();
+
+      if (videoEnabled) {
+        await _enableCameraWithFallback(
+          localParticipant,
+          origin: 'initial_connect',
+        );
+        notifyListeners();
+      }
     } catch (err) {
+      connected = false;
       connecting = false;
       error = 'Cagri baglantisi kurulamadi.';
       turnaLog('livekit connect failed', err);
@@ -3368,15 +3432,18 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
     final next = !cameraEnabled;
     final localParticipant = room.localParticipant;
     if (localParticipant == null) return;
-    await localParticipant.setCameraEnabled(
-      next,
-      cameraCaptureOptions: _videoProfile.captureOptions(
-        cameraPosition: cameraPosition,
-      ),
-    );
-    cameraEnabled = next;
     if (next) {
-      _resetVideoQualityCounters();
+      final enabled = await _enableCameraWithFallback(
+        localParticipant,
+        origin: 'toggle_camera',
+      );
+      cameraEnabled = enabled;
+      if (enabled) {
+        _resetVideoQualityCounters();
+      }
+    } else {
+      await localParticipant.setCameraEnabled(false);
+      cameraEnabled = false;
     }
     notifyListeners();
   }
