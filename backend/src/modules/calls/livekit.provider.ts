@@ -1,4 +1,3 @@
-import { createHmac } from "crypto";
 import { AccessToken, RoomServiceClient } from "livekit-server-sdk";
 import { env } from "../../config/env.js";
 import { logError } from "../../lib/logger.js";
@@ -13,12 +12,6 @@ import type { CallJoinPayload } from "./call.types.js";
 
 export class LiveKitCallProvider implements CallProvider {
   readonly name = "livekit" as const;
-
-  private buildE2eeSharedKey(callId: string): string {
-    return createHmac("sha256", env.CALL_E2EE_SECRET ?? env.JWT_SECRET)
-      .update(`turna-call-e2ee:${callId}`)
-      .digest("base64");
-  }
 
   private get roomService(): RoomServiceClient {
     if (!this.isConfigured()) {
@@ -85,7 +78,6 @@ export class LiveKitCallProvider implements CallProvider {
       url: env.LIVEKIT_WS_URL!,
       roomName: input.roomName,
       token: await token.toJwt(),
-      e2eeKey: this.buildE2eeSharedKey(input.callId),
       callId: input.callId,
       type: input.type
     };
