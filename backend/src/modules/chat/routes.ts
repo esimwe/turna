@@ -10,6 +10,7 @@ import {
 } from "../../lib/storage.js";
 import { requireAuth, requireMessagingAccess } from "../../middleware/auth.js";
 import { buildAvatarUrl } from "../profile/avatar-url.js";
+import { findLookupDisplayName } from "../profile/contact-lookup.js";
 import { normalizeUsername } from "../profile/username.js";
 import { normalizeE164Phone } from "../auth/phone.js";
 import {
@@ -21,6 +22,7 @@ import {
 import { chatService } from "./chat.service.js";
 
 export const chatRouter = Router();
+const prismaUserContact = (prisma as unknown as { userContact: any }).userContact;
 
 const sendMessageAttachmentSchema = z.object({
   objectKey: z.string().trim().min(1).max(512),
@@ -534,6 +536,69 @@ chatRouter.get("/directory/list", requireAuth, async (req, res) => {
       avatarUrl: user.avatarKey ? buildAvatarUrl(req, user.id, new Date(user.updatedAt)) : null
     }))
   });
+});
+
+chatRouter.get("/directory/contacts", requireAuth, async (req, res) => {
+  const ownerId = req.authUserId!;
+  const syncedContacts = await prismaUserContact.findMany({
+    where: { ownerId },
+    select: {
+      lookupKey: true,
+      displayName: true
+    }
+  });
+
+  if (syncedContacts.length === 0) {
+    res.json({ data: [] });
+    return;
+  }
+
+  const labelsByKey = new Map<string, string>();
+  for (const row of syncedContacts) {
+    if (!labelsByKey.has(row.lookupKey)) {
+      labelsByKey.set(row.lookupKey, row.displayName);
+    }
+  }
+
+  const users = await prisma.user.findMany({
+    where: {
+      id: { not: ownerId },
+      accountStatus: "ACTIVE",
+      phone: { not: null }
+    },
+    select: {
+      id: true,
+      displayName: true,
+      username: true,
+      phone: true,
+      about: true,
+      avatarUrl: true,
+      updatedAt: true
+    }
+  });
+
+  const matchedUsers = users
+    .map((user) => {
+      const contactName = findLookupDisplayName(user.phone, labelsByKey);
+      if (!contactName) return null;
+      return {
+        id: user.id,
+        displayName: user.displayName,
+        contactName,
+        username: user.username,
+        phone: user.phone,
+        about: user.about,
+        avatarUrl: user.avatarUrl ? buildAvatarUrl(req, user.id, user.updatedAt) : null
+      };
+    })
+    .filter((item): item is NonNullable<typeof item> => item != null)
+    .sort((left, right) => {
+      const labelCompare = left.contactName.localeCompare(right.contactName, "tr");
+      if (labelCompare !== 0) return labelCompare;
+      return left.displayName.localeCompare(right.displayName, "tr");
+    });
+
+  res.json({ data: matchedUsers });
 });
 
 chatRouter.get("/directory/lookup", requireAuth, async (req, res) => {

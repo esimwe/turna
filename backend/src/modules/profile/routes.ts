@@ -14,10 +14,12 @@ import {
 } from "../../lib/storage.js";
 import { requireAuth } from "../../middleware/auth.js";
 import { buildAvatarUrl } from "./avatar-url.js";
+import { buildPhoneLookupKeys } from "./contact-lookup.js";
 import { isValidUsername, normalizeUsername } from "./username.js";
 
 export const profileRouter = Router();
 const prismaUser = (prisma as unknown as { user: any }).user;
+const prismaUserContact = (prisma as unknown as { userContact: any }).userContact;
 const prismaReportCase = (prisma as unknown as { reportCase: any }).reportCase;
 
 const nullableTrimmedString = (maxLength: number) =>
@@ -94,6 +96,15 @@ const confirmPhoneChangeSchema = z.object({
 
 const usernameAvailabilityQuerySchema = z.object({
   username: normalizedUsernameSchema
+});
+
+const syncContactsSchema = z.object({
+  contacts: z.array(
+    z.object({
+      displayName: z.string().trim().min(1).max(120),
+      phones: z.array(z.string().trim().min(3).max(40)).max(20)
+    })
+  ).max(5000)
 });
 
 function toProfileDto(
@@ -215,6 +226,75 @@ profileRouter.get("/username-availability", requireAuth, async (req, res) => {
     data: {
       username,
       available
+    }
+  });
+});
+
+profileRouter.post("/contacts/sync", requireAuth, async (req, res) => {
+  const parsed = syncContactsSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
+    return;
+  }
+
+  const ownerId = req.authUserId!;
+  const labelsByKey = new Map<string, string>();
+
+  for (const contact of parsed.data.contacts) {
+    const displayName = contact.displayName.trim();
+    if (!displayName) continue;
+
+    for (const rawPhone of contact.phones) {
+      for (const key of buildPhoneLookupKeys(rawPhone)) {
+        if (!labelsByKey.has(key)) {
+          labelsByKey.set(key, displayName);
+        }
+      }
+    }
+  }
+
+  const createData = Array.from(labelsByKey.entries()).map(([lookupKey, displayName]) => ({
+    ownerId,
+    lookupKey,
+    displayName
+  }));
+
+  await prisma.$transaction(async (tx) => {
+    const txClient = tx as unknown as { userContact: any };
+    await txClient.userContact.deleteMany({ where: { ownerId } });
+    if (createData.length > 0) {
+      await txClient.userContact.createMany({ data: createData });
+    }
+  });
+
+  const users = await prismaUser.findMany({
+    where: {
+      id: { not: ownerId },
+      accountStatus: "ACTIVE",
+      phone: { not: null }
+    },
+    select: {
+      id: true,
+      phone: true
+    }
+  });
+
+  const matchedUserIds = new Set<string>();
+  for (const user of users) {
+    if (!user.phone) continue;
+    for (const key of buildPhoneLookupKeys(user.phone)) {
+      if (labelsByKey.has(key)) {
+        matchedUserIds.add(user.id);
+        break;
+      }
+    }
+  }
+
+  res.json({
+    data: {
+      syncedContactCount: parsed.data.contacts.length,
+      syncedLookupKeyCount: createData.length,
+      registeredContactCount: matchedUserIds.size
     }
   });
 });

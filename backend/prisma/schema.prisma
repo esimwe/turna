@@ -123,10 +123,26 @@ model User {
   incomingCalls         Call[]             @relation("IncomingCalls")
   blockedUsers          UserBlock[]        @relation("UserBlocks")
   blockedByUsers        UserBlock[]        @relation("BlockedByUsers")
+  syncedContacts        UserContact[]
   submittedReports      ReportCase[]       @relation("SubmittedReports")
   reportsAgainst        ReportCase[]       @relation("ReportedUsers")
 
   @@index([accountStatus])
+}
+
+model UserContact {
+  id          String   @id @default(uuid())
+  ownerId     String
+  displayName String
+  lookupKey   String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  owner       User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@unique([ownerId, lookupKey])
+  @@index([ownerId, displayName])
+  @@index([ownerId, updatedAt])
 }
 
 model Chat {
