@@ -85,6 +85,18 @@ const bulkDeleteChatsSchema = z.object({
   chatIds: z.array(z.string().trim().min(1).max(255)).min(1).max(200)
 });
 
+const chatIdParamSchema = z.object({
+  chatId: z.string().trim().min(1).max(255)
+});
+
+const setChatMutedSchema = z.object({
+  muted: z.boolean()
+});
+
+const setChatBlockedSchema = z.object({
+  blocked: z.boolean()
+});
+
 chatRouter.get("/:chatId/messages", requireAuth, async (req, res) => {
   const rawChatId = req.params.chatId;
   const chatId = Array.isArray(rawChatId) ? rawChatId[0] : rawChatId;
@@ -106,7 +118,10 @@ chatRouter.get("/:chatId/messages", requireAuth, async (req, res) => {
     return;
   }
 
-  const page = await chatService.getMessagePage(chatId, parsedQuery.data);
+  const page = await chatService.getMessagePage(chatId, {
+    ...parsedQuery.data,
+    userId
+  });
   res.json({
     data: page.items,
     pageInfo: {
@@ -126,6 +141,9 @@ chatRouter.get("/", requireAuth, async (req, res) => {
       lastMessage: chat.lastMessage,
       lastMessageAt: chat.lastMessageAt,
       unreadCount: chat.unreadCount,
+      peerId: chat.peerId,
+      isMuted: chat.isMuted,
+      isBlockedByMe: chat.isBlockedByMe,
       avatarUrl:
         chat.peerId && chat.peerAvatarKey && chat.peerUpdatedAt
           ? buildAvatarUrl(req, chat.peerId, new Date(chat.peerUpdatedAt))
@@ -188,6 +206,138 @@ chatRouter.post("/delete", requireAuth, async (req, res) => {
   }
 });
 
+chatRouter.post("/:chatId/read", requireAuth, async (req, res) => {
+  const parsed = chatIdParamSchema.safeParse(req.params);
+  if (!parsed.success) {
+    res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
+    return;
+  }
+
+  const userId = req.authUserId!;
+  const hasAccess = await chatService.ensureChatAccess(parsed.data.chatId, userId);
+  if (!hasAccess) {
+    res.status(403).json({ error: "forbidden_chat_access" });
+    return;
+  }
+
+  try {
+    const messageIds = await chatService.markMessagesRead(parsed.data.chatId, userId);
+    if (messageIds.length > 0) {
+      const participants = await chatService.getChatParticipantIds(parsed.data.chatId);
+      const senderIds = participants.filter((participantId) => participantId !== userId);
+      emitChatStatus({
+        chatId: parsed.data.chatId,
+        status: "read",
+        messageIds,
+        userIds: senderIds
+      });
+      emitInboxUpdate(participants.length > 0 ? participants : [userId]);
+    }
+
+    res.json({ data: { updatedMessageCount: messageIds.length } });
+  } catch (error) {
+    logError("chat mark read failed", error);
+    res.status(500).json({ error: "failed_to_mark_chat_read" });
+  }
+});
+
+chatRouter.post("/:chatId/mute", requireAuth, async (req, res) => {
+  const parsedParams = chatIdParamSchema.safeParse(req.params);
+  const parsedBody = setChatMutedSchema.safeParse(req.body);
+  if (!parsedParams.success) {
+    res.status(400).json({
+      error: "validation_error",
+      details: parsedParams.error.flatten()
+    });
+    return;
+  }
+  if (!parsedBody.success) {
+    res.status(400).json({
+      error: "validation_error",
+      details: parsedBody.error.flatten()
+    });
+    return;
+  }
+
+  try {
+    const muted = await chatService.setChatMuted(
+      parsedParams.data.chatId,
+      req.authUserId!,
+      parsedBody.data.muted
+    );
+    res.json({ data: { muted } });
+  } catch (error) {
+    if (error instanceof Error && error.message === "forbidden_chat_access") {
+      res.status(403).json({ error: error.message });
+      return;
+    }
+    logError("chat mute update failed", error);
+    res.status(500).json({ error: "failed_to_update_chat_mute" });
+  }
+});
+
+chatRouter.post("/:chatId/clear", requireAuth, async (req, res) => {
+  const parsed = chatIdParamSchema.safeParse(req.params);
+  if (!parsed.success) {
+    res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
+    return;
+  }
+
+  try {
+    await chatService.clearChatForUser(parsed.data.chatId, req.authUserId!);
+    emitInboxUpdate([req.authUserId!]);
+    res.json({ data: { cleared: true } });
+  } catch (error) {
+    if (error instanceof Error && error.message === "forbidden_chat_access") {
+      res.status(403).json({ error: error.message });
+      return;
+    }
+    logError("chat clear failed", error);
+    res.status(500).json({ error: "failed_to_clear_chat" });
+  }
+});
+
+chatRouter.post("/:chatId/block", requireAuth, async (req, res) => {
+  const parsedParams = chatIdParamSchema.safeParse(req.params);
+  const parsedBody = setChatBlockedSchema.safeParse(req.body);
+  if (!parsedParams.success) {
+    res.status(400).json({
+      error: "validation_error",
+      details: parsedParams.error.flatten()
+    });
+    return;
+  }
+  if (!parsedBody.success) {
+    res.status(400).json({
+      error: "validation_error",
+      details: parsedBody.error.flatten()
+    });
+    return;
+  }
+
+  try {
+    const blocked = await chatService.setDirectChatBlocked(
+      parsedParams.data.chatId,
+      req.authUserId!,
+      parsedBody.data.blocked
+    );
+    res.json({ data: { blocked } });
+  } catch (error) {
+    if (error instanceof Error) {
+      if (error.message === "forbidden_chat_access") {
+        res.status(403).json({ error: error.message });
+        return;
+      }
+      if (error.message === "invalid_block_target") {
+        res.status(400).json({ error: error.message });
+        return;
+      }
+    }
+    logError("chat block update failed", error);
+    res.status(500).json({ error: "failed_to_update_chat_block" });
+  }
+});
+
 chatRouter.get("/directory/list", requireAuth, async (req, res) => {
   const userId = req.authUserId!;
   const users = await chatService.getUserDirectory(userId);
@@ -216,6 +366,17 @@ chatRouter.post("/attachments/upload-url", requireAuth, async (req, res) => {
   const hasAccess = await chatService.ensureChatAccess(parsed.data.chatId, userId);
   if (!hasAccess) {
     res.status(403).json({ error: "forbidden_chat_access" });
+    return;
+  }
+  try {
+    await chatService.ensureCanInteract(parsed.data.chatId, userId);
+  } catch (error) {
+    if (error instanceof Error && error.message === "chat_blocked") {
+      res.status(403).json({ error: "chat_blocked" });
+      return;
+    }
+    logError("chat attachment access check failed", error);
+    res.status(500).json({ error: "failed_to_prepare_attachment_upload" });
     return;
   }
 
@@ -315,6 +476,10 @@ chatRouter.post("/messages", requireAuth, async (req, res) => {
     }
     if (error instanceof Error && error.message === "invalid_attachment_key") {
       res.status(403).json({ error: "invalid_attachment_key" });
+      return;
+    }
+    if (error instanceof Error && error.message === "chat_blocked") {
+      res.status(403).json({ error: "chat_blocked" });
       return;
     }
 

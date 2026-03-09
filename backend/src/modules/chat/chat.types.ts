@@ -57,6 +57,8 @@ export interface ChatSummary {
   peerId: string | null;
   peerAvatarKey: string | null;
   peerUpdatedAt: string | null;
+  isMuted: boolean;
+  isBlockedByMe: boolean;
 }
 
 export interface DirectoryUser {

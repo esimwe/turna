@@ -69,6 +69,8 @@ model User {
   devices      DeviceToken[]
   outgoingCalls Call[]       @relation("OutgoingCalls")
   incomingCalls Call[]       @relation("IncomingCalls")
+  blockedUsers UserBlock[]   @relation("UserBlocks")
+  blockedByUsers UserBlock[] @relation("BlockedByUsers")
 }
 
 model Chat {
@@ -84,6 +86,8 @@ model ChatMember {
   userId    String
   joinedAt  DateTime @default(now())
   hiddenAt  DateTime?
+  clearedAt DateTime?
+  muted     Boolean  @default(false)
 
   chat      Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -91,6 +95,19 @@ model ChatMember {
   @@id([chatId, userId])
   @@index([userId])
   @@index([userId, hiddenAt])
+  @@index([userId, clearedAt])
+}
+
+model UserBlock {
+  blockerId     String
+  blockedUserId String
+  createdAt     DateTime @default(now())
+
+  blocker       User     @relation("UserBlocks", fields: [blockerId], references: [id], onDelete: Cascade)
+  blockedUser   User     @relation("BlockedByUsers", fields: [blockedUserId], references: [id], onDelete: Cascade)
+
+  @@id([blockerId, blockedUserId])
+  @@index([blockedUserId])
 }
 
 model Message {

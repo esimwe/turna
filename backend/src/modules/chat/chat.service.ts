@@ -2,6 +2,11 @@ import { AttachmentKind, ChatType, MessageStatus } from "@prisma/client";
 import { logError } from "../../lib/logger.js";
 import { prisma } from "../../lib/prisma.js";
 import { createObjectReadUrl, deleteObject, getObjectHead } from "../../lib/storage.js";
+import {
+  areUsersBlocked,
+  getBlockedUserIdsByUser,
+  setUserBlocked
+} from "../../lib/user-relationship.js";
 import type {
   ChatAttachment,
   ChatMessage,
@@ -104,6 +109,13 @@ async function toChatAttachment(
   };
 }
 
+function latestDate(a: Date | null | undefined, b: Date | null | undefined): Date | null {
+  if (a && b) {
+    return a.getTime() >= b.getTime() ? a : b;
+  }
+  return a ?? b ?? null;
+}
+
 async function toChatMessage(row: MessageRow): Promise<ChatMessage> {
   const attachments = await Promise.all(row.attachments.map((attachment) => toChatAttachment(attachment)));
   return {
@@ -118,6 +130,21 @@ async function toChatMessage(row: MessageRow): Promise<ChatMessage> {
 }
 
 export class ChatService {
+  private async getMembershipState(chatId: string, userId: string): Promise<{
+    hiddenAt: Date | null;
+    clearedAt: Date | null;
+    muted: boolean;
+  } | null> {
+    return prisma.chatMember.findUnique({
+      where: { chatId_userId: { chatId, userId } },
+      select: {
+        hiddenAt: true,
+        clearedAt: true,
+        muted: true
+      }
+    });
+  }
+
   private extractDirectParticipants(chatId: string): [string, string] | null {
     if (!chatId.startsWith("direct_")) return null;
     const key = chatId.replace("direct_", "").trim();
@@ -159,11 +186,17 @@ export class ChatService {
     return peer ?? null;
   }
 
+  async ensureCanInteract(chatId: string, userId: string): Promise<void> {
+    const peerId = this.getDirectPeerId(chatId, userId);
+    if (!peerId) return;
+
+    if (await areUsersBlocked(userId, peerId)) {
+      throw new Error("chat_blocked");
+    }
+  }
+
   async ensureChatAccess(chatId: string, userId: string): Promise<boolean> {
-    const member = await prisma.chatMember.findUnique({
-      where: { chatId_userId: { chatId, userId } },
-      select: { chatId: true, hiddenAt: true }
-    });
+    const member = await this.getMembershipState(chatId, userId);
     if (member) {
       if (member.hiddenAt) {
         await prisma.chatMember.update({
@@ -210,6 +243,7 @@ export class ChatService {
     if (!hasAccess) {
       throw new Error("forbidden_chat_access");
     }
+    await this.ensureCanInteract(payload.chatId, payload.senderId);
 
     const preparedAttachments = await this.prepareAttachments(
       payload.chatId,
@@ -310,11 +344,14 @@ export class ChatService {
   }
 
   async markMessagesDelivered(chatId: string, userId: string): Promise<string[]> {
+    const membership = await this.getMembershipState(chatId, userId);
+    const cutoff = latestDate(membership?.hiddenAt, membership?.clearedAt);
     const targetRows = await prisma.message.findMany({
       where: {
         chatId,
         senderId: { not: userId },
-        status: MessageStatus.sent
+        status: MessageStatus.sent,
+        ...(cutoff ? { createdAt: { gt: cutoff } } : {})
       },
       select: { id: true }
     });
@@ -330,11 +367,14 @@ export class ChatService {
   }
 
   async markMessagesRead(chatId: string, userId: string): Promise<string[]> {
+    const membership = await this.getMembershipState(chatId, userId);
+    const cutoff = latestDate(membership?.hiddenAt, membership?.clearedAt);
     const targetRows = await prisma.message.findMany({
       where: {
         chatId,
         senderId: { not: userId },
-        status: { in: [MessageStatus.sent, MessageStatus.delivered] }
+        status: { in: [MessageStatus.sent, MessageStatus.delivered] },
+        ...(cutoff ? { createdAt: { gt: cutoff } } : {})
       },
       select: { id: true }
     });
@@ -378,6 +418,7 @@ export class ChatService {
     options: {
       before?: string | null;
       limit?: number;
+      userId?: string | null;
     } = {}
   ): Promise<ChatMessagePage> {
     const limit = Math.min(Math.max(options.limit ?? 30, 1), 100);
@@ -385,11 +426,19 @@ export class ChatService {
       options.before && !Number.isNaN(Date.parse(options.before))
         ? new Date(options.before)
         : null;
+    const membership =
+      options.userId != null
+        ? await this.getMembershipState(chatId, options.userId)
+        : null;
+    const clearedAt = membership?.clearedAt ?? null;
 
     const rows = await prisma.message.findMany({
       where: {
         chatId,
-        ...(beforeDate ? { createdAt: { lt: beforeDate } } : {})
+        createdAt: {
+          ...(beforeDate ? { lt: beforeDate } : {}),
+          ...(clearedAt ? { gt: clearedAt } : {})
+        }
       },
       include: {
         attachments: {
@@ -417,6 +466,8 @@ export class ChatService {
         chatId: true,
         joinedAt: true,
         hiddenAt: true,
+        clearedAt: true,
+        muted: true,
         chat: {
           include: {
             members: {
@@ -438,33 +489,47 @@ export class ChatService {
       orderBy: { joinedAt: "desc" }
     });
 
+    const peerIds = memberships
+      .map((membership) => membership.chat.members.find((m) => m.userId !== userId)?.user.id)
+      .filter((peerId): peerId is string => Boolean(peerId));
+    const blockedPeerIds = await getBlockedUserIdsByUser(
+      userId,
+      Array.from(new Set(peerIds))
+    );
+
     const items = await Promise.all(
       memberships.map(async (membership) => {
         const chat = membership.chat;
         const peer = chat.members.find((m) => m.userId !== userId)?.user;
         const last = chat.messages[0];
         const hiddenAt = membership.hiddenAt;
+        const clearedAt = membership.clearedAt;
         if (hiddenAt && (!last || last.createdAt <= hiddenAt)) {
           return null;
         }
+        const unreadCutoff = latestDate(hiddenAt, clearedAt);
+        const visibleLast =
+          last && (!clearedAt || last.createdAt > clearedAt) ? last : null;
         const unreadCount = await prisma.message.count({
           where: {
             chatId: chat.id,
             senderId: { not: userId },
             status: { not: MessageStatus.read },
-            ...(hiddenAt ? { createdAt: { gt: hiddenAt } } : {})
+            ...(unreadCutoff ? { createdAt: { gt: unreadCutoff } } : {})
           }
         });
 
         return {
           chatId: chat.id,
           title: peer?.displayName ?? "New Chat",
-          lastMessage: last ? summarizeMessage(last) : "Sohbet baslat",
-          lastMessageAt: last ? last.createdAt.toISOString() : null,
+          lastMessage: visibleLast ? summarizeMessage(visibleLast) : "Sohbet baslat",
+          lastMessageAt: visibleLast ? visibleLast.createdAt.toISOString() : null,
           unreadCount,
           peerId: peer?.id ?? null,
           peerAvatarKey: peer?.avatarUrl ?? null,
           peerUpdatedAt: peer?.updatedAt ? peer.updatedAt.toISOString() : null,
+          isMuted: membership.muted,
+          isBlockedByMe: peer ? blockedPeerIds.has(peer.id) : false,
           joinedAt: membership.joinedAt
         };
       })
@@ -528,6 +593,52 @@ export class ChatService {
     });
 
     return ownedChatIds;
+  }
+
+  async clearChatForUser(chatId: string, userId: string): Promise<void> {
+    const hasAccess = await this.ensureChatAccess(chatId, userId);
+    if (!hasAccess) {
+      throw new Error("forbidden_chat_access");
+    }
+
+    await prisma.chatMember.update({
+      where: {
+        chatId_userId: { chatId, userId }
+      },
+      data: {
+        clearedAt: new Date(),
+        hiddenAt: null
+      }
+    });
+  }
+
+  async setChatMuted(chatId: string, userId: string, muted: boolean): Promise<boolean> {
+    const hasAccess = await this.ensureChatAccess(chatId, userId);
+    if (!hasAccess) {
+      throw new Error("forbidden_chat_access");
+    }
+
+    await prisma.chatMember.update({
+      where: {
+        chatId_userId: { chatId, userId }
+      },
+      data: { muted }
+    });
+    return muted;
+  }
+
+  async setDirectChatBlocked(chatId: string, userId: string, blocked: boolean): Promise<boolean> {
+    const hasAccess = await this.ensureChatAccess(chatId, userId);
+    if (!hasAccess) {
+      throw new Error("forbidden_chat_access");
+    }
+
+    const peerId = this.getDirectPeerId(chatId, userId);
+    if (!peerId) {
+      throw new Error("invalid_block_target");
+    }
+
+    return setUserBlocked(userId, peerId, blocked);
   }
 
   async getPresenceAudienceUserIds(userId: string): Promise<string[]> {

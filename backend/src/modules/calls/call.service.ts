@@ -1,4 +1,5 @@
 import { prisma } from "../../lib/prisma.js";
+import { areUsersBlocked } from "../../lib/user-relationship.js";
 import type { CallProvider } from "./call.provider.js";
 import { livekitCallProvider } from "./livekit.provider.js";
 import {
@@ -398,6 +399,9 @@ export class CallService {
     }
 
     await this.ensureUsersExist([params.callerId, params.calleeId]);
+    if (await areUsersBlocked(params.callerId, params.calleeId)) {
+      throw new Error("call_blocked");
+    }
     await this.ensureNoActiveConflict([params.callerId, params.calleeId]);
 
     const created = await prismaCall.create({

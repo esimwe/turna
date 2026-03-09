@@ -128,7 +128,10 @@ export function registerChatSocket(io: Server): void {
         }
 
         socket.join(parsed.data.chatId);
-        const historyPage = await chatService.getMessagePage(parsed.data.chatId, { limit: 30 });
+        const historyPage = await chatService.getMessagePage(parsed.data.chatId, {
+          limit: 30,
+          userId
+        });
         logInfo("chat:join ok", {
           socketId: socket.id,
           chatId: parsed.data.chatId,
@@ -168,6 +171,7 @@ export function registerChatSocket(io: Server): void {
           socket.emit("error:forbidden", { message: "forbidden_chat_access" });
           return;
         }
+        await chatService.ensureCanInteract(parsed.data.chatId, userId);
 
         const message = await chatService.sendMessage({
           chatId: parsed.data.chatId,
@@ -218,6 +222,10 @@ export function registerChatSocket(io: Server): void {
 
         emitInboxUpdate(participants.length > 0 ? participants : [userId]);
       } catch (error) {
+        if (error instanceof Error && error.message === "chat_blocked") {
+          socket.emit("error:forbidden", { message: "chat_blocked" });
+          return;
+        }
         socket.emit("error:internal", { message: "failed_to_send_message" });
         logInfo("chat:send failed", { socketId: socket.id, chatId: parsed.data.chatId, error });
       }
@@ -271,6 +279,7 @@ export function registerChatSocket(io: Server): void {
           socket.emit("error:forbidden", { message: "forbidden_chat_access" });
           return;
         }
+        await chatService.ensureCanInteract(parsed.data.chatId, userId);
 
         socket.to(parsed.data.chatId).emit("chat:typing", {
           chatId: parsed.data.chatId,
@@ -278,6 +287,10 @@ export function registerChatSocket(io: Server): void {
           isTyping: parsed.data.isTyping
         });
       } catch (error) {
+        if (error instanceof Error && error.message === "chat_blocked") {
+          socket.emit("error:forbidden", { message: "chat_blocked" });
+          return;
+        }
         socket.emit("error:internal", { message: "failed_to_publish_typing" });
         logInfo("chat:typing failed", { socketId: socket.id, chatId: parsed.data.chatId, error });
       }

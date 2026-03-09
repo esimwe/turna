@@ -131,6 +131,9 @@ function respondCallError(res: Response, error: unknown): boolean {
     case "call_conflict":
       res.status(409).json({ error: "call_conflict" });
       return true;
+    case "call_blocked":
+      res.status(403).json({ error: "call_blocked" });
+      return true;
     case "call_not_found":
       res.status(404).json({ error: "call_not_found" });
       return true;

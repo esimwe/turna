@@ -6,6 +6,7 @@ import * as http2 from "node:http2";
 import { env } from "../config/env.js";
 import { logError, logInfo } from "./logger.js";
 import { prisma } from "./prisma.js";
+import { areUsersBlocked } from "./user-relationship.js";
 import type { ChatMessage } from "../modules/chat/chat.types.js";
 import type { AppCallType } from "../modules/calls/call.types.js";
 
@@ -34,6 +35,7 @@ interface CallEndedPushParams {
 let apnsBearerCache: { token: string; expiresAtEpochSeconds: number } | null = null;
 let apnsVoipKeyErrorLogged = false;
 const prismaDeviceToken = (prisma as unknown as { deviceToken: any }).deviceToken;
+const prismaChatMember = (prisma as unknown as { chatMember: any }).chatMember;
 
 function hasFirebaseCredentials(): boolean {
   return Boolean(
@@ -272,19 +274,59 @@ async function findActiveDevices(userIds: string[]): Promise<PushDevice[]> {
 }
 
 async function countUnreadMessagesForUser(userId: string): Promise<number> {
-  return prisma.message.count({
-    where: {
-      senderId: { not: userId },
-      status: { not: MessageStatus.read },
-      chat: {
-        members: {
-          some: {
-            userId
-          }
-        }
-      }
+  const memberships = await prismaChatMember.findMany({
+    where: { userId },
+    select: {
+      chatId: true,
+      hiddenAt: true,
+      clearedAt: true
     }
   });
+
+  let total = 0;
+  for (const membership of memberships) {
+    const cutoff =
+      membership.hiddenAt && membership.clearedAt
+        ? (membership.hiddenAt > membership.clearedAt
+            ? membership.hiddenAt
+            : membership.clearedAt)
+        : (membership.hiddenAt ?? membership.clearedAt ?? null);
+
+    total += await prisma.message.count({
+      where: {
+        chatId: membership.chatId,
+        senderId: { not: userId },
+        status: { not: MessageStatus.read },
+        ...(cutoff ? { createdAt: { gt: cutoff } } : {})
+      }
+    });
+  }
+
+  return total;
+}
+
+async function getEligibleChatPushRecipients(params: {
+  chatId: string;
+  senderId: string;
+  recipientUserIds: string[];
+}): Promise<string[]> {
+  const membershipRows = await prismaChatMember.findMany({
+    where: {
+      chatId: params.chatId,
+      userId: { in: params.recipientUserIds },
+      muted: false
+    },
+    select: { userId: true }
+  });
+
+  const eligibleUserIds: string[] = [];
+  for (const row of membershipRows) {
+    if (!(await areUsersBlocked(params.senderId, row.userId))) {
+      eligibleUserIds.push(row.userId);
+    }
+  }
+
+  return eligibleUserIds;
 }
 
 async function sendApnsVoipPayload(
@@ -378,11 +420,17 @@ export async function sendChatMessagePush(params: {
   senderDisplayName: string;
   recipientUserIds: string[];
 }): Promise<void> {
-  if (!hasFirebaseCredentials() || params.recipientUserIds.length === 0) {
+  const eligibleRecipientUserIds = await getEligibleChatPushRecipients({
+    chatId: params.message.chatId,
+    senderId: params.message.senderId,
+    recipientUserIds: params.recipientUserIds
+  });
+
+  if (!hasFirebaseCredentials() || eligibleRecipientUserIds.length === 0) {
     logInfo("chat push skipped", {
       reason: !hasFirebaseCredentials() ? "firebase_not_configured" : "no_recipients",
       chatId: params.message.chatId,
-      recipientCount: params.recipientUserIds.length
+      recipientCount: eligibleRecipientUserIds.length
     });
     return;
   }
@@ -396,14 +444,14 @@ export async function sendChatMessagePush(params: {
     return;
   }
 
-  const devices = (await findActiveDevices(params.recipientUserIds)).filter(
+  const devices = (await findActiveDevices(eligibleRecipientUserIds)).filter(
     (device) => device.tokenKind === "STANDARD"
   );
   if (devices.length === 0) {
     logInfo("chat push skipped", {
       reason: "no_active_standard_devices",
       chatId: params.message.chatId,
-      recipientUserIds: params.recipientUserIds
+      recipientUserIds: eligibleRecipientUserIds
     });
     return;
   }
@@ -427,7 +475,7 @@ export async function sendChatMessagePush(params: {
     }> = [];
     const invalidTokenIds: string[] = [];
 
-    for (const recipientUserId of params.recipientUserIds) {
+    for (const recipientUserId of eligibleRecipientUserIds) {
       const recipientDevices = groupedDevices.get(recipientUserId) ?? [];
       if (recipientDevices.length === 0) continue;
 
@@ -477,7 +525,7 @@ export async function sendChatMessagePush(params: {
 
     logInfo("chat push sent", {
       chatId: params.message.chatId,
-      recipientUserIds: params.recipientUserIds,
+      recipientUserIds: eligibleRecipientUserIds,
       deviceCount: devices.length,
       successCount: totalSuccessCount,
       failureCount: totalFailureCount,
