@@ -1,4 +1,4 @@
-import { PushPlatform } from "@prisma/client";
+import { MessageStatus, PushPlatform } from "@prisma/client";
 import { cert, getApps, initializeApp } from "firebase-admin/app";
 import { getMessaging } from "firebase-admin/messaging";
 import { createSign } from "node:crypto";
@@ -11,6 +11,7 @@ import type { AppCallType } from "../modules/calls/call.types.js";
 
 interface PushDevice {
   id: string;
+  userId: string;
   token: string;
   platform: PushPlatform;
   tokenKind: "STANDARD" | "VOIP";
@@ -262,9 +263,26 @@ async function findActiveDevices(userIds: string[]): Promise<PushDevice[]> {
     },
     select: {
       id: true,
+      userId: true,
       token: true,
       platform: true,
       tokenKind: true
+    }
+  });
+}
+
+async function countUnreadMessagesForUser(userId: string): Promise<number> {
+  return prisma.message.count({
+    where: {
+      senderId: { not: userId },
+      status: { not: MessageStatus.read },
+      chat: {
+        members: {
+          some: {
+            userId
+          }
+        }
+      }
     }
   });
 }
@@ -391,46 +409,79 @@ export async function sendChatMessagePush(params: {
   }
 
   try {
-    const response = await getMessaging(app).sendEachForMulticast({
-      tokens: devices.map((device) => device.token),
-      notification: {
-        title: params.senderDisplayName,
-        body: buildPushBody(params.message)
-      },
-      data: {
-        type: "chat_message",
-        chatId: params.message.chatId,
-        senderId: params.message.senderId,
-        senderDisplayName: params.senderDisplayName,
-        body: buildPushBody(params.message)
-      },
-      android: {
-        priority: "high"
-      },
-      apns: {
-        headers: {
-          "apns-priority": "10"
+    const groupedDevices = new Map<string, PushDevice[]>();
+    for (const device of devices) {
+      const current = groupedDevices.get(device.userId) ?? [];
+      current.push(device);
+      groupedDevices.set(device.userId, current);
+    }
+
+    let totalSuccessCount = 0;
+    let totalFailureCount = 0;
+    const allFailures: Array<{
+      deviceId: string;
+      platform: string;
+      tokenKind: string;
+      code: string;
+      message: string;
+    }> = [];
+    const invalidTokenIds: string[] = [];
+
+    for (const recipientUserId of params.recipientUserIds) {
+      const recipientDevices = groupedDevices.get(recipientUserId) ?? [];
+      if (recipientDevices.length === 0) continue;
+
+      const unreadTotal = await countUnreadMessagesForUser(recipientUserId);
+      const response = await getMessaging(app).sendEachForMulticast({
+        tokens: recipientDevices.map((device) => device.token),
+        notification: {
+          title: params.senderDisplayName,
+          body: buildPushBody(params.message)
         },
-        payload: {
-          aps: {
-            sound: "default"
+        data: {
+          type: "chat_message",
+          chatId: params.message.chatId,
+          senderId: params.message.senderId,
+          senderDisplayName: params.senderDisplayName,
+          body: buildPushBody(params.message),
+          unreadTotal: unreadTotal.toString()
+        },
+        android: {
+          priority: "high",
+          notification: {
+            notificationCount: unreadTotal
+          }
+        },
+        apns: {
+          headers: {
+            "apns-priority": "10"
+          },
+          payload: {
+            aps: {
+              sound: "default",
+              badge: unreadTotal
+            }
           }
         }
-      }
-    });
+      });
 
-    const invalidTokenIds = getInvalidFcmTokenIds(response, devices);
-    if (invalidTokenIds.length > 0) {
-      await markInactiveDeviceTokens(invalidTokenIds);
+      totalSuccessCount += response.successCount;
+      totalFailureCount += response.failureCount;
+      invalidTokenIds.push(...getInvalidFcmTokenIds(response, recipientDevices));
+      allFailures.push(...summarizeFcmFailures(response, recipientDevices));
     }
-    const failures = summarizeFcmFailures(response, devices);
+
+    if (invalidTokenIds.length > 0) {
+      await markInactiveDeviceTokens([...new Set(invalidTokenIds)]);
+    }
+
     logInfo("chat push sent", {
       chatId: params.message.chatId,
       recipientUserIds: params.recipientUserIds,
       deviceCount: devices.length,
-      successCount: response.successCount,
-      failureCount: response.failureCount,
-      failures
+      successCount: totalSuccessCount,
+      failureCount: totalFailureCount,
+      failures: allFailures
     });
   } catch (error) {
     logError("send chat push failed", error);
