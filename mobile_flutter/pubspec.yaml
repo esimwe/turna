@@ -71,6 +71,7 @@ flutter:
 
   assets:
     - ios/Runner/Assets.xcassets/AppIcon.appiconset/180x180.png
+    - assets/turna-icon.png
 
   # To add assets to your application, add an assets section, like this:
   # assets:
