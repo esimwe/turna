@@ -32,7 +32,7 @@ String _normalizeTurnaBaseUrl(String value) {
   return trimmed;
 }
 
-const String _kDefaultBackendBaseUrl = 'http://178.104.8.155:4000';
+const String _kDefaultBackendBaseUrl = 'https://api.turna.im';
 final String kBackendBaseUrl = _normalizeTurnaBaseUrl(
   const String.fromEnvironment(
     'TURNA_BACKEND_URL',
