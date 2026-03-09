@@ -8218,10 +8218,7 @@ class _NewChatPageState extends State<NewChatPage> {
       if (!mounted) return;
 
       if (!TurnaContactsDirectory.permissionGranted) {
-        setState(() {
-          _registeredContacts = const <TurnaRegisteredContact>[];
-          _syncingContacts = false;
-        });
+        setState(() => _syncingContacts = false);
         return;
       }
 
@@ -8332,7 +8329,8 @@ class _NewChatPageState extends State<NewChatPage> {
   }
 
   Widget _buildRegisteredContactsSection() {
-    if (!TurnaContactsDirectory.permissionGranted) {
+    if (!TurnaContactsDirectory.permissionGranted &&
+        _registeredContacts.isEmpty) {
       return _CenteredState(
         icon: Icons.perm_contact_calendar_outlined,
         title: 'Rehber izni gerekli',

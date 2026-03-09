@@ -416,16 +416,7 @@ class TurnaContactsDirectory {
     try {
       final granted = await FlutterContacts.requestPermission(readonly: true);
       if (!granted) {
-        final hadData =
-            _labelsByPhoneKey.isNotEmpty ||
-            _syncEntries.isNotEmpty ||
-            _permissionGranted;
         _permissionGranted = false;
-        _labelsByPhoneKey = <String, String>{};
-        _syncEntries = const <TurnaContactSyncEntry>[];
-        if (hadData) {
-          revision.value++;
-        }
         return;
       }
 
