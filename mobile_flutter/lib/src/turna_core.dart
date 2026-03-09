@@ -3105,46 +3105,6 @@ extension _AdaptiveCallVideoProfileX on _AdaptiveCallVideoProfile {
     _AdaptiveCallVideoProfile.standard => '720p',
     _AdaptiveCallVideoProfile.high => '1080p',
   };
-
-  lk.VideoParameters get parameters => switch (this) {
-    _AdaptiveCallVideoProfile.low => lk.VideoParameters(
-      dimensions: lk.VideoParametersPresets.h360_169.dimensions,
-      encoding: const lk.VideoEncoding(
-        maxBitrate: 450 * 1000,
-        maxFramerate: 15,
-        bitratePriority: lk.Priority.low,
-        networkPriority: lk.Priority.low,
-      ),
-    ),
-    _AdaptiveCallVideoProfile.medium => lk.VideoParameters(
-      dimensions: lk.VideoParametersPresets.h540_169.dimensions,
-      encoding: const lk.VideoEncoding(
-        maxBitrate: 800 * 1000,
-        maxFramerate: 24,
-        bitratePriority: lk.Priority.low,
-        networkPriority: lk.Priority.low,
-      ),
-    ),
-    _AdaptiveCallVideoProfile.standard => lk.VideoParameters(
-      dimensions: lk.VideoParametersPresets.h720_169.dimensions,
-      encoding: const lk.VideoEncoding(
-        maxBitrate: 1000 * 1000,
-        maxFramerate: 30,
-        bitratePriority: lk.Priority.medium,
-        networkPriority: lk.Priority.medium,
-      ),
-    ),
-    _AdaptiveCallVideoProfile.high => lk.VideoParameters(
-      dimensions: lk.VideoParametersPresets.h1080_169.dimensions,
-      encoding: const lk.VideoEncoding(
-        maxBitrate: 2500 * 1000,
-        maxFramerate: 30,
-        bitratePriority: lk.Priority.medium,
-        networkPriority: lk.Priority.medium,
-      ),
-    ),
-  };
-
 }
 
 class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
@@ -3235,7 +3195,7 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
     return lk.Room(
       roomOptions: lk.RoomOptions(
         adaptiveStream: true,
-        dynacast: true,
+        dynacast: false,
         encryption: e2eeKeyProvider == null
             ? null
             : lk.E2EEOptions(keyProvider: e2eeKeyProvider),
@@ -3244,11 +3204,6 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
-        ),
-        defaultVideoPublishOptions: lk.VideoPublishOptions(
-          degradationPreference: lk.DegradationPreference.maintainResolution,
-          videoEncoding: _initialVideoProfile.parameters.encoding,
-          simulcast: true,
         ),
         defaultAudioPublishOptions: const lk.AudioPublishOptions(
           encoding: lk.AudioEncoding(
