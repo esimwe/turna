@@ -15,25 +15,25 @@ class _TurnaCountry {
 }
 
 const List<_TurnaCountry> _kTurnaCountries = [
-  _TurnaCountry(iso: 'TR', name: 'Turkiye', dialCode: '+90'),
-  _TurnaCountry(iso: 'GB', name: 'Birlesik Krallik', dialCode: '+44'),
-  _TurnaCountry(iso: 'US', name: 'Amerika Birlesik Devletleri', dialCode: '+1'),
+  _TurnaCountry(iso: 'TR', name: 'Türkiye', dialCode: '+90'),
+  _TurnaCountry(iso: 'GB', name: 'Birleşik Krallık', dialCode: '+44'),
+  _TurnaCountry(iso: 'US', name: 'Amerika Birleşik Devletleri', dialCode: '+1'),
   _TurnaCountry(iso: 'CA', name: 'Kanada', dialCode: '+1'),
   _TurnaCountry(iso: 'DE', name: 'Almanya', dialCode: '+49'),
   _TurnaCountry(iso: 'FR', name: 'Fransa', dialCode: '+33'),
   _TurnaCountry(iso: 'NL', name: 'Hollanda', dialCode: '+31'),
-  _TurnaCountry(iso: 'BE', name: 'Belcika', dialCode: '+32'),
-  _TurnaCountry(iso: 'CH', name: 'Isvicre', dialCode: '+41'),
+  _TurnaCountry(iso: 'BE', name: 'Belçika', dialCode: '+32'),
+  _TurnaCountry(iso: 'CH', name: 'İsviçre', dialCode: '+41'),
   _TurnaCountry(iso: 'AT', name: 'Avusturya', dialCode: '+43'),
-  _TurnaCountry(iso: 'ES', name: 'Ispanya', dialCode: '+34'),
-  _TurnaCountry(iso: 'IT', name: 'Italya', dialCode: '+39'),
-  _TurnaCountry(iso: 'IE', name: 'Irlanda', dialCode: '+353'),
-  _TurnaCountry(iso: 'SE', name: 'Isvec', dialCode: '+46'),
-  _TurnaCountry(iso: 'NO', name: 'Norvec', dialCode: '+47'),
+  _TurnaCountry(iso: 'ES', name: 'İspanya', dialCode: '+34'),
+  _TurnaCountry(iso: 'IT', name: 'İtalya', dialCode: '+39'),
+  _TurnaCountry(iso: 'IE', name: 'İrlanda', dialCode: '+353'),
+  _TurnaCountry(iso: 'SE', name: 'İsveç', dialCode: '+46'),
+  _TurnaCountry(iso: 'NO', name: 'Norveç', dialCode: '+47'),
   _TurnaCountry(iso: 'DK', name: 'Danimarka', dialCode: '+45'),
   _TurnaCountry(iso: 'FI', name: 'Finlandiya', dialCode: '+358'),
   _TurnaCountry(iso: 'PL', name: 'Polonya', dialCode: '+48'),
-  _TurnaCountry(iso: 'CZ', name: 'Cekya', dialCode: '+420'),
+  _TurnaCountry(iso: 'CZ', name: 'Çekya', dialCode: '+420'),
   _TurnaCountry(iso: 'RO', name: 'Romanya', dialCode: '+40'),
   _TurnaCountry(iso: 'BG', name: 'Bulgaristan', dialCode: '+359'),
   _TurnaCountry(iso: 'GR', name: 'Yunanistan', dialCode: '+30'),
@@ -43,24 +43,24 @@ const List<_TurnaCountry> _kTurnaCountries = [
   _TurnaCountry(iso: 'AZ', name: 'Azerbaycan', dialCode: '+994'),
   _TurnaCountry(iso: 'GE', name: 'Gurcistan', dialCode: '+995'),
   _TurnaCountry(iso: 'AM', name: 'Ermenistan', dialCode: '+374'),
-  _TurnaCountry(iso: 'AE', name: 'Birlesik Arap Emirlikleri', dialCode: '+971'),
+  _TurnaCountry(iso: 'AE', name: 'Birleşik Arap Emirlikleri', dialCode: '+971'),
   _TurnaCountry(iso: 'SA', name: 'Suudi Arabistan', dialCode: '+966'),
   _TurnaCountry(iso: 'QA', name: 'Katar', dialCode: '+974'),
   _TurnaCountry(iso: 'KW', name: 'Kuveyt', dialCode: '+965'),
   _TurnaCountry(iso: 'BH', name: 'Bahreyn', dialCode: '+973'),
   _TurnaCountry(iso: 'OM', name: 'Umman', dialCode: '+968'),
   _TurnaCountry(iso: 'IQ', name: 'Irak', dialCode: '+964'),
-  _TurnaCountry(iso: 'JO', name: 'Urdun', dialCode: '+962'),
-  _TurnaCountry(iso: 'LB', name: 'Luban', dialCode: '+961'),
-  _TurnaCountry(iso: 'EG', name: 'Misir', dialCode: '+20'),
+  _TurnaCountry(iso: 'JO', name: 'Ürdün', dialCode: '+962'),
+  _TurnaCountry(iso: 'LB', name: 'Lübnan', dialCode: '+961'),
+  _TurnaCountry(iso: 'EG', name: 'Mısır', dialCode: '+20'),
   _TurnaCountry(iso: 'TN', name: 'Tunus', dialCode: '+216'),
   _TurnaCountry(iso: 'DZ', name: 'Cezayir', dialCode: '+213'),
   _TurnaCountry(iso: 'MA', name: 'Fas', dialCode: '+212'),
   _TurnaCountry(iso: 'PK', name: 'Pakistan', dialCode: '+92'),
   _TurnaCountry(iso: 'IN', name: 'Hindistan', dialCode: '+91'),
-  _TurnaCountry(iso: 'CN', name: 'Cin', dialCode: '+86'),
+  _TurnaCountry(iso: 'CN', name: 'Çin', dialCode: '+86'),
   _TurnaCountry(iso: 'JP', name: 'Japonya', dialCode: '+81'),
-  _TurnaCountry(iso: 'KR', name: 'Guney Kore', dialCode: '+82'),
+  _TurnaCountry(iso: 'KR', name: 'Güney Kore', dialCode: '+82'),
   _TurnaCountry(iso: 'ID', name: 'Endonezya', dialCode: '+62'),
   _TurnaCountry(iso: 'MY', name: 'Malezya', dialCode: '+60'),
   _TurnaCountry(iso: 'SG', name: 'Singapur', dialCode: '+65'),
@@ -71,7 +71,7 @@ const List<_TurnaCountry> _kTurnaCountries = [
   _TurnaCountry(iso: 'BR', name: 'Brezilya', dialCode: '+55'),
   _TurnaCountry(iso: 'AR', name: 'Arjantin', dialCode: '+54'),
   _TurnaCountry(iso: 'MX', name: 'Meksika', dialCode: '+52'),
-  _TurnaCountry(iso: 'ZA', name: 'Guney Afrika', dialCode: '+27'),
+  _TurnaCountry(iso: 'ZA', name: 'Güney Afrika', dialCode: '+27'),
   _TurnaCountry(iso: 'NG', name: 'Nijerya', dialCode: '+234'),
   _TurnaCountry(iso: 'KE', name: 'Kenya', dialCode: '+254'),
   _TurnaCountry(iso: 'ET', name: 'Etiyopya', dialCode: '+251'),
@@ -298,7 +298,7 @@ class _TurnaPhoneAuthPageState extends State<TurnaPhoneAuthPage> {
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(24),
           ),
-          title: const Text('Bu numara dogru mu?'),
+          title: const Text('Bu numara doğru mu?'),
           content: Text(
             preview,
             style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w700),
@@ -306,7 +306,7 @@ class _TurnaPhoneAuthPageState extends State<TurnaPhoneAuthPage> {
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('Duzenle'),
+              child: const Text('Düzenle'),
             ),
             FilledButton(
               onPressed: () => Navigator.of(context).pop(true),
@@ -325,7 +325,7 @@ class _TurnaPhoneAuthPageState extends State<TurnaPhoneAuthPage> {
   Future<void> _requestOtp() async {
     if (_selectedCountry == null || _requestingOtp) return;
     setState(() => _requestingOtp = true);
-    _showBlockingProgress('Kod gonderiliyor...');
+    _showBlockingProgress('Kod gönderiliyor...');
 
     try {
       final ticket = await AuthApi.requestOtp(
@@ -376,7 +376,7 @@ class _TurnaPhoneAuthPageState extends State<TurnaPhoneAuthPage> {
     final requestedPhone = _requestedPhone;
     if (requestedPhone == null || _verifyingOtp) return;
     setState(() => _verifyingOtp = true);
-    _showBlockingProgress('Numara dogrulaniyor...');
+    _showBlockingProgress('Numara doğrulanıyor...');
 
     try {
       final result = await AuthApi.verifyOtp(phone: requestedPhone, code: code);
@@ -410,7 +410,7 @@ class _TurnaPhoneAuthPageState extends State<TurnaPhoneAuthPage> {
             mainAxisSize: MainAxisSize.min,
             children: [
               const Text(
-                'Kodu almadiniz mi?',
+                'Kodu almadınız mı?',
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
               ),
               const SizedBox(height: 18),
@@ -418,8 +418,8 @@ class _TurnaPhoneAuthPageState extends State<TurnaPhoneAuthPage> {
                 leading: const Icon(Icons.sms_outlined),
                 title: Text(
                   _retryAfterSeconds > 0
-                      ? 'SMS\'i tekrar gonder ($_retryAfterSeconds sn)'
-                      : 'SMS\'i tekrar gonder',
+                      ? 'SMS’i tekrar gönder ($_retryAfterSeconds sn)'
+                      : 'SMS’i tekrar gönder',
                 ),
                 enabled: _retryAfterSeconds == 0 && !_requestingOtp,
                 onTap: _retryAfterSeconds > 0 || _requestingOtp
@@ -428,7 +428,7 @@ class _TurnaPhoneAuthPageState extends State<TurnaPhoneAuthPage> {
               ),
               ListTile(
                 leading: const Icon(Icons.edit_outlined),
-                title: const Text('Numarayi duzenle'),
+                title: const Text('Numarayı düzenle'),
                 onTap: () => Navigator.of(context).pop('edit'),
               ),
             ],
@@ -455,7 +455,7 @@ class _TurnaPhoneAuthPageState extends State<TurnaPhoneAuthPage> {
       context: context,
       builder: (context) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        title: const Text('Islem basarisiz'),
+        title: const Text('İşlem başarısız'),
         content: Text(message),
         actions: [
           FilledButton(
@@ -495,13 +495,13 @@ class _TurnaPhoneAuthPageState extends State<TurnaPhoneAuthPage> {
 
   String _friendlyError(String raw) {
     final text = raw.replaceFirst('Exception: ', '').trim();
-    if (text.contains('Kod hatali')) {
-      return 'Kod hatali, yeniden dene.';
+    if (text.contains('Kod hatalı')) {
+      return 'Kod hatalı, yeniden dene.';
     }
-    if (text.contains('Lutfen biraz bekleyip tekrar dene')) {
+    if (text.contains('Lütfen biraz bekleyip tekrar dene')) {
       return text;
     }
-    if (text.contains('Dogrulama su an kullanilamiyor')) {
+    if (text.contains('Doğrulama şu an kullanılamıyor')) {
       return text;
     }
     return text;
@@ -535,7 +535,7 @@ class _TurnaPhoneAuthPageState extends State<TurnaPhoneAuthPage> {
               ),
               const SizedBox(height: 48),
               const Text(
-                "Turna'ya Hos Geldiniz",
+                "Turna'ya Hoş Geldiniz",
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontSize: 20,
@@ -545,7 +545,7 @@ class _TurnaPhoneAuthPageState extends State<TurnaPhoneAuthPage> {
               ),
               const SizedBox(height: 14),
               const Text(
-                'Aileniz, arkadaslariniz ve hizmetlerinizle guvenli sekilde iletisim kurmak icin telefon numaranizi dogrulamaniz gerekir.',
+                'Aileniz, arkadaşlarınız ve hizmetlerinizle güvenli şekilde iletişim kurmak için telefon numaranızı doğrulamanız gerekir.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontSize: 14,
@@ -562,7 +562,7 @@ class _TurnaPhoneAuthPageState extends State<TurnaPhoneAuthPage> {
               const Text.rich(
                 TextSpan(
                   text:
-                      'Gizlilik Ilkemizi okuyun. Hizmet Kosullarini kabul etmek icin ',
+                      'Gizlilik İlkemizi okuyun. Hizmet Koşullarını kabul etmek için ',
                   style: TextStyle(
                     fontSize: 13,
                     height: 1.45,
@@ -573,7 +573,7 @@ class _TurnaPhoneAuthPageState extends State<TurnaPhoneAuthPage> {
                       text: '"Kabul et ve devam et"',
                       style: TextStyle(fontWeight: FontWeight.w700),
                     ),
-                    TextSpan(text: ' dugmesine dokunun.'),
+                    TextSpan(text: ' düğmesine dokunun.'),
                   ],
                 ),
                 textAlign: TextAlign.center,
@@ -594,7 +594,7 @@ class _TurnaPhoneAuthPageState extends State<TurnaPhoneAuthPage> {
                     Icon(Icons.language, size: 18),
                     SizedBox(width: 8),
                     Text(
-                      'Turkce',
+                      'Türkçe',
                       style: TextStyle(fontWeight: FontWeight.w600),
                     ),
                     SizedBox(width: 6),
@@ -627,8 +627,9 @@ class _TurnaPhoneAuthPageState extends State<TurnaPhoneAuthPage> {
   }
 
   Widget _buildPhoneStep() {
-    final countryLabel = _selectedCountry?.name ?? 'Gecersiz ulke';
+    final countryLabel = _selectedCountry?.name ?? 'Geçersiz ülke';
     final isInvalidCountry = _selectedCountry == null;
+    final formWidth = math.min(MediaQuery.of(context).size.width - 56, 286.0);
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -643,162 +644,220 @@ class _TurnaPhoneAuthPageState extends State<TurnaPhoneAuthPage> {
         ],
       ),
       body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(28, 16, 28, 32),
-          children: [
-            const Text(
-              'Telefon numaranizi girin',
-              style: TextStyle(
-                fontSize: 30,
-                fontWeight: FontWeight.w400,
-                color: Color(0xFF202124),
-              ),
+        child: LayoutBuilder(
+          builder: (context, constraints) => SingleChildScrollView(
+            padding: EdgeInsets.only(
+              bottom: MediaQuery.of(context).viewInsets.bottom + 24,
             ),
-            const SizedBox(height: 18),
-            const Text.rich(
-              TextSpan(
-                text:
-                    "Turna'nin telefon numaranizi dogrulamasi gerekecek. Operatorunuz tarafindan ucret uygulanabilir. ",
-                style: TextStyle(
-                  fontSize: 15,
-                  height: 1.45,
-                  color: Color(0xFF6B7280),
-                ),
-                children: [
-                  TextSpan(
-                    text: 'Numaram nedir?',
-                    style: TextStyle(
-                      color: TurnaColors.primary,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 28),
-            InkWell(
-              onTap: _pickCountry,
-              borderRadius: BorderRadius.circular(12),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                child: Column(
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            countryLabel,
-                            textAlign: TextAlign.center,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: constraints.maxHeight),
+              child: IntrinsicHeight(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(28, 14, 28, 20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      const SizedBox(height: 16),
+                      SizedBox(
+                        width: formWidth,
+                        child: const Text(
+                          'Telefon numaranızı girin',
+                          style: TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w400,
+                            color: Color(0xFF202124),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      SizedBox(
+                        width: formWidth,
+                        child: const Text.rich(
+                          TextSpan(
+                            text:
+                                "Turna'nın telefon numaranızı doğrulaması gerekecek. Operatörünüz tarafından ücret uygulanabilir. ",
                             style: TextStyle(
-                              fontSize: 19,
-                              color: isInvalidCountry
-                                  ? TurnaColors.error
-                                  : const Color(0xFF202124),
+                              fontSize: 14,
+                              height: 1.4,
+                              color: Color(0xFF6B7280),
+                            ),
+                            children: [
+                              TextSpan(
+                                text: 'Numaram nedir?',
+                                style: TextStyle(
+                                  color: TurnaColors.primary,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 26),
+                      SizedBox(
+                        width: formWidth,
+                        child: InkWell(
+                          onTap: _pickCountry,
+                          borderRadius: BorderRadius.circular(12),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 6),
+                            child: Column(
+                              children: [
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        countryLabel,
+                                        textAlign: TextAlign.center,
+                                        style: TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w500,
+                                          color: isInvalidCountry
+                                              ? TurnaColors.error
+                                              : const Color(0xFF202124),
+                                        ),
+                                      ),
+                                    ),
+                                    const Icon(
+                                      Icons.arrow_drop_down,
+                                      color: TurnaColors.primary,
+                                      size: 20,
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 6),
+                                Container(
+                                  height: 1.2,
+                                  color: TurnaColors.primary,
+                                ),
+                              ],
                             ),
                           ),
                         ),
-                        const Icon(
-                          Icons.arrow_drop_down,
-                          color: TurnaColors.primary,
+                      ),
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        width: formWidth,
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            SizedBox(
+                              width: 74,
+                              child: TextField(
+                                controller: _dialCodeController,
+                                keyboardType: TextInputType.number,
+                                inputFormatters: [
+                                  FilteringTextInputFormatter.digitsOnly,
+                                ],
+                                decoration: const InputDecoration(
+                                  prefixText: '+',
+                                  hintText: '90',
+                                  isDense: true,
+                                  enabledBorder: UnderlineInputBorder(
+                                    borderSide: BorderSide(
+                                      color: TurnaColors.primary,
+                                      width: 1.2,
+                                    ),
+                                  ),
+                                  focusedBorder: UnderlineInputBorder(
+                                    borderSide: BorderSide(
+                                      color: TurnaColors.primary,
+                                      width: 1.6,
+                                    ),
+                                  ),
+                                ),
+                                style: const TextStyle(fontSize: 18),
+                              ),
+                            ),
+                            const SizedBox(width: 14),
+                            Expanded(
+                              child: TextField(
+                                controller: _nationalNumberController,
+                                keyboardType: TextInputType.phone,
+                                inputFormatters: [
+                                  FilteringTextInputFormatter.digitsOnly,
+                                ],
+                                decoration: const InputDecoration(
+                                  hintText: 'Telefon numarası',
+                                  isDense: true,
+                                  enabledBorder: UnderlineInputBorder(
+                                    borderSide: BorderSide(
+                                      color: TurnaColors.primary,
+                                      width: 1.2,
+                                    ),
+                                  ),
+                                  focusedBorder: UnderlineInputBorder(
+                                    borderSide: BorderSide(
+                                      color: TurnaColors.primary,
+                                      width: 1.6,
+                                    ),
+                                  ),
+                                ),
+                                style: const TextStyle(fontSize: 18),
+                                onSubmitted: (_) => _confirmPhone(),
+                              ),
+                            ),
+                          ],
                         ),
-                      ],
-                    ),
-                    const SizedBox(height: 6),
-                    Container(height: 1.5, color: TurnaColors.primary),
-                  ],
+                      ),
+                      const Spacer(),
+                      SizedBox(
+                        width: double.infinity,
+                        child: FilledButton(
+                          style: FilledButton.styleFrom(
+                            backgroundColor: _canContinuePhoneStep
+                                ? TurnaColors.primary
+                                : const Color(0xFFE9ECEF),
+                            foregroundColor: _canContinuePhoneStep
+                                ? Colors.white
+                                : const Color(0xFF9AA1A9),
+                            padding: const EdgeInsets.symmetric(vertical: 16),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(28),
+                            ),
+                          ),
+                          onPressed: _canContinuePhoneStep
+                              ? _confirmPhone
+                              : null,
+                          child: const Text('İleri'),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      const Text.rich(
+                        TextSpan(
+                          text: 'Kaydolmak için ',
+                          style: TextStyle(
+                            fontSize: 13,
+                            height: 1.4,
+                            color: Color(0xFF6B7280),
+                          ),
+                          children: [
+                            TextSpan(
+                              text: 'en az 13 yaşında',
+                              style: TextStyle(
+                                color: TurnaColors.primary,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            TextSpan(text: ' olmanız gerekir. Turna’nın '),
+                            TextSpan(
+                              text: 'WOW GLOBAL',
+                              style: TextStyle(
+                                color: TurnaColors.primary,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            TextSpan(text: ' ile nasıl çalıştığını öğrenin.'),
+                          ],
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
-            const SizedBox(height: 12),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                SizedBox(
-                  width: 90,
-                  child: TextField(
-                    controller: _dialCodeController,
-                    keyboardType: TextInputType.number,
-                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                    decoration: const InputDecoration(
-                      prefixText: '+',
-                      hintText: '90',
-                      isDense: true,
-                      enabledBorder: UnderlineInputBorder(
-                        borderSide: BorderSide(color: TurnaColors.primary),
-                      ),
-                      focusedBorder: UnderlineInputBorder(
-                        borderSide: BorderSide(
-                          color: TurnaColors.primary,
-                          width: 2,
-                        ),
-                      ),
-                    ),
-                    style: const TextStyle(fontSize: 26),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: TextField(
-                    controller: _nationalNumberController,
-                    keyboardType: TextInputType.phone,
-                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                    decoration: const InputDecoration(
-                      hintText: 'Telefon numarasi',
-                      enabledBorder: UnderlineInputBorder(
-                        borderSide: BorderSide(color: TurnaColors.primary),
-                      ),
-                      focusedBorder: UnderlineInputBorder(
-                        borderSide: BorderSide(
-                          color: TurnaColors.primary,
-                          width: 2,
-                        ),
-                      ),
-                    ),
-                    style: const TextStyle(fontSize: 26),
-                    onSubmitted: (_) => _confirmPhone(),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 40),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton(
-                style: FilledButton.styleFrom(
-                  backgroundColor: _canContinuePhoneStep
-                      ? TurnaColors.primary
-                      : const Color(0xFFE9ECEF),
-                  foregroundColor: _canContinuePhoneStep
-                      ? Colors.white
-                      : const Color(0xFF9AA1A9),
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(28),
-                  ),
-                ),
-                onPressed: _canContinuePhoneStep ? _confirmPhone : null,
-                child: const Text('Ileri'),
-              ),
-            ),
-            const SizedBox(height: 20),
-            const Text.rich(
-              TextSpan(
-                text: 'Kaydolmak icin ',
-                style: TextStyle(fontSize: 13, color: Color(0xFF6B7280)),
-                children: [
-                  TextSpan(
-                    text: 'en az 13 yasinda',
-                    style: TextStyle(
-                      color: TurnaColors.primary,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  TextSpan(text: ' olmaniz gerekir.'),
-                ],
-              ),
-              textAlign: TextAlign.center,
-            ),
-          ],
+          ),
         ),
       ),
     );
@@ -821,7 +880,7 @@ class _TurnaPhoneAuthPageState extends State<TurnaPhoneAuthPage> {
           padding: const EdgeInsets.fromLTRB(28, 16, 28, 32),
           children: [
             const Text(
-              'Numaraniz dogrulaniyor',
+              'Numaranız doğrulanıyor',
               style: TextStyle(
                 fontSize: 30,
                 fontWeight: FontWeight.w400,
@@ -830,7 +889,7 @@ class _TurnaPhoneAuthPageState extends State<TurnaPhoneAuthPage> {
             ),
             const SizedBox(height: 16),
             Text(
-              '$phone numarali telefona SMS yoluyla gonderilen 6 haneli kodu otomatik olarak algilamasi bekleniyor.',
+              '$phone numaralı telefona SMS yoluyla gönderilen 6 haneli kodu otomatik olarak algılaması bekleniyor.',
               style: const TextStyle(
                 fontSize: 15,
                 height: 1.45,
@@ -846,7 +905,7 @@ class _TurnaPhoneAuthPageState extends State<TurnaPhoneAuthPage> {
                     _otpController.clear();
                   });
                 },
-                child: const Text('Numara yanlis mi?'),
+                child: const Text('Numara yanlış mı?'),
               ),
             ),
             const SizedBox(height: 24),
@@ -913,7 +972,7 @@ class _TurnaPhoneAuthPageState extends State<TurnaPhoneAuthPage> {
             Center(
               child: TextButton(
                 onPressed: _showResendSheet,
-                child: const Text('Kodu almadiniz mi?'),
+                child: const Text('Kodu almadınız mı?'),
               ),
             ),
           ],
