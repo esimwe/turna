@@ -13,6 +13,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_callkit_incoming/entities/entities.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
+import 'package:flutter_contacts/flutter_contacts.dart' hide Event;
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:image/image.dart' as img;
@@ -357,6 +358,127 @@ String formatTurnaDisplayPhone(String? raw) {
     cursor += take;
   }
   return '+$country ${groups.join(' ')}'.trim();
+}
+
+class TurnaContactsDirectory {
+  static final ValueNotifier<int> revision = ValueNotifier<int>(0);
+
+  static Future<void>? _pendingLoad;
+  static Map<String, String> _labelsByPhoneKey = <String, String>{};
+  static bool _permissionGranted = false;
+
+  static Future<void> ensureLoaded({bool force = false}) async {
+    if (!force && _permissionGranted) return;
+    if (_pendingLoad != null) {
+      await _pendingLoad;
+      return;
+    }
+
+    final future = _loadContacts();
+    _pendingLoad = future;
+    try {
+      await future;
+    } finally {
+      if (identical(_pendingLoad, future)) {
+        _pendingLoad = null;
+      }
+    }
+  }
+
+  static String resolveDisplayLabel({
+    String? phone,
+    required String fallbackName,
+  }) {
+    final label = lookupLabel(phone);
+    if (label == null || label.trim().isEmpty) return fallbackName;
+    return label;
+  }
+
+  static String? lookupLabel(String? phone) {
+    for (final key in _phoneLookupKeys(phone)) {
+      final label = _labelsByPhoneKey[key];
+      if (label != null && label.trim().isNotEmpty) {
+        return label;
+      }
+    }
+    return null;
+  }
+
+  static Future<void> _loadContacts() async {
+    try {
+      final granted = await FlutterContacts.requestPermission(readonly: true);
+      if (!granted) {
+        final hadData = _labelsByPhoneKey.isNotEmpty || _permissionGranted;
+        _permissionGranted = false;
+        _labelsByPhoneKey = <String, String>{};
+        if (hadData) {
+          revision.value++;
+        }
+        return;
+      }
+
+      final contacts = await FlutterContacts.getContacts(
+        withProperties: true,
+        withPhoto: false,
+      );
+      final next = <String, String>{};
+      for (final contact in contacts) {
+        final displayName = contact.displayName.trim();
+        if (displayName.isEmpty) continue;
+        for (final phone in contact.phones) {
+          for (final key in _phoneLookupKeys(phone.number)) {
+            next.putIfAbsent(key, () => displayName);
+          }
+        }
+      }
+
+      final changed =
+          next.length != _labelsByPhoneKey.length ||
+          next.entries.any(
+            (entry) => _labelsByPhoneKey[entry.key] != entry.value,
+          ) ||
+          !_permissionGranted;
+      _permissionGranted = true;
+      _labelsByPhoneKey = next;
+      if (changed) {
+        revision.value++;
+      }
+    } catch (error) {
+      turnaLog('contacts load failed', error);
+    }
+  }
+
+  static List<String> _phoneLookupKeys(String? raw) {
+    final source = raw?.trim() ?? '';
+    if (source.isEmpty) return const <String>[];
+
+    final digits = source.replaceAll(RegExp(r'\D+'), '');
+    if (digits.length < 7) return const <String>[];
+
+    final keys = <String>[];
+    void addKey(String value) {
+      final normalized = value.trim();
+      if (normalized.length < 7 || keys.contains(normalized)) return;
+      keys.add(normalized);
+    }
+
+    addKey(digits);
+    if (digits.startsWith('00') && digits.length > 2) {
+      addKey(digits.substring(2));
+    }
+    if (digits.startsWith('90') && digits.length == 12) {
+      addKey(digits.substring(2));
+      addKey('0${digits.substring(2)}');
+    }
+    if (digits.startsWith('1') && digits.length == 11) {
+      addKey(digits.substring(1));
+    }
+    if (digits.length > 10) {
+      addKey(digits.substring(digits.length - 10));
+    }
+
+    return keys;
+  }
 }
 
 Widget buildTurnaSessionExpiredRedirect(VoidCallback onSessionExpired) {

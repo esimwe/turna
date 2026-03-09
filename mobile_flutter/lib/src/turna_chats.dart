@@ -215,6 +215,8 @@ class _ChatsPageState extends State<ChatsPage> {
     super.initState();
     widget.inboxUpdateNotifier?.addListener(_onInboxUpdate);
     _searchController.addListener(_onSearchChanged);
+    TurnaContactsDirectory.revision.addListener(_onContactsChanged);
+    unawaited(TurnaContactsDirectory.ensureLoaded());
   }
 
   void _onInboxUpdate() {
@@ -227,10 +229,16 @@ class _ChatsPageState extends State<ChatsPage> {
     setState(() {});
   }
 
+  void _onContactsChanged() {
+    if (!mounted) return;
+    setState(() => _refreshTick++);
+  }
+
   @override
   void dispose() {
     widget.inboxUpdateNotifier?.removeListener(_onInboxUpdate);
     _searchController.removeListener(_onSearchChanged);
+    TurnaContactsDirectory.revision.removeListener(_onContactsChanged);
     _searchController.dispose();
     super.dispose();
   }
@@ -1312,6 +1320,24 @@ class _ArchivedChatsPageState extends State<ArchivedChatsPage> {
   int _refreshTick = 0;
 
   @override
+  void initState() {
+    super.initState();
+    TurnaContactsDirectory.revision.addListener(_onContactsChanged);
+    unawaited(TurnaContactsDirectory.ensureLoaded());
+  }
+
+  @override
+  void dispose() {
+    TurnaContactsDirectory.revision.removeListener(_onContactsChanged);
+    super.dispose();
+  }
+
+  void _onContactsChanged() {
+    if (!mounted) return;
+    setState(() => _refreshTick++);
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
@@ -1866,6 +1892,10 @@ class _ChatRoomPageState extends State<ChatRoomPage>
 
   String? get _peerUserId =>
       ChatApi.extractPeerUserId(widget.chat.chatId, widget.session.userId);
+  String get _chatDisplayName => TurnaContactsDirectory.resolveDisplayLabel(
+    phone: widget.chat.phone,
+    fallbackName: widget.chat.name,
+  );
 
   String get _pinnedMessageKey => 'turna_pinned_message_${widget.chat.chatId}';
   String get _starredMessagesKey =>
@@ -1896,8 +1926,10 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     _controller.addListener(_handleComposerChanged);
     _composerFocusNode.addListener(_refresh);
     _scrollController.addListener(_handleScroll);
+    TurnaContactsDirectory.revision.addListener(_refresh);
     _loadPinnedMessage();
     _loadLocalMessageState();
+    unawaited(TurnaContactsDirectory.ensureLoaded());
     unawaited(_loadPeerCallHistory());
   }
 
@@ -2001,7 +2033,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         builder: (_) => UserProfilePage(
           session: widget.session,
           userId: peerUserId,
-          fallbackName: widget.chat.name,
+          fallbackName: _chatDisplayName,
           fallbackAvatarUrl: widget.chat.avatarUrl,
           callCoordinator: widget.callCoordinator,
           onSessionExpired: widget.onSessionExpired,
@@ -2570,7 +2602,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     final mine = msg.senderId == widget.session.userId;
     return TurnaReplyPayload(
       messageId: msg.id,
-      senderLabel: mine ? 'Sen' : widget.chat.name,
+      senderLabel: mine ? 'Sen' : _chatDisplayName,
       previewText: _previewSnippetForMessage(msg),
     );
   }
@@ -4302,6 +4334,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     }
     kTurnaActiveChatRegistry.clearCurrent(widget.chat.chatId);
     _client.removeListener(_refresh);
+    TurnaContactsDirectory.revision.removeListener(_refresh);
     _client.dispose();
     widget.callCoordinator.removeListener(_handleCallCoordinatorChanged);
     _controller.removeListener(_handleComposerChanged);
@@ -4352,7 +4385,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
           child: Row(
             children: [
               _ProfileAvatar(
-                label: widget.chat.name,
+                label: _chatDisplayName,
                 avatarUrl: widget.chat.avatarUrl,
                 authToken: widget.session.token,
                 radius: 19,
@@ -4364,7 +4397,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      widget.chat.name,
+                      _chatDisplayName,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
@@ -8085,12 +8118,20 @@ class _NewChatPageState extends State<NewChatPage> {
   void initState() {
     super.initState();
     _lookupController.addListener(() => setState(() {}));
+    TurnaContactsDirectory.revision.addListener(_handleContactsChanged);
+    unawaited(TurnaContactsDirectory.ensureLoaded());
   }
 
   @override
   void dispose() {
+    TurnaContactsDirectory.revision.removeListener(_handleContactsChanged);
     _lookupController.dispose();
     super.dispose();
+  }
+
+  void _handleContactsChanged() {
+    if (!mounted) return;
+    setState(() {});
   }
 
   Future<void> _searchUser() async {
@@ -8129,11 +8170,19 @@ class _NewChatPageState extends State<NewChatPage> {
   }
 
   Future<void> _openChat(TurnaUserProfile user) async {
+    final phone = user.phone;
+    final fallbackName = phone == null || phone.trim().isEmpty
+        ? user.displayName
+        : formatTurnaDisplayPhone(phone);
     final chat = ChatPreview(
       chatId: ChatApi.buildDirectChatId(widget.session.userId, user.id),
-      name: formatTurnaDisplayPhone(user.phone ?? user.displayName),
+      name: TurnaContactsDirectory.resolveDisplayLabel(
+        phone: phone,
+        fallbackName: fallbackName,
+      ),
       message: '',
       time: '',
+      phone: phone,
       avatarUrl: user.avatarUrl,
       peerId: user.id,
     );
@@ -8153,6 +8202,12 @@ class _NewChatPageState extends State<NewChatPage> {
   @override
   Widget build(BuildContext context) {
     final lookupInput = _lookupController.text.trim();
+    final foundUserName = _foundUser == null
+        ? null
+        : TurnaContactsDirectory.resolveDisplayLabel(
+            phone: _foundUser!.phone,
+            fallbackName: _foundUser!.displayName,
+          );
 
     return Scaffold(
       appBar: AppBar(title: const Text('Telefon veya kullanıcı adı')),
@@ -8247,14 +8302,14 @@ class _NewChatPageState extends State<NewChatPage> {
                         child: Column(
                           children: [
                             _ProfileAvatar(
-                              label: _foundUser!.displayName,
+                              label: foundUserName ?? _foundUser!.displayName,
                               avatarUrl: _foundUser!.avatarUrl,
                               authToken: widget.session.token,
                               radius: 34,
                             ),
                             const SizedBox(height: 12),
                             Text(
-                              _foundUser!.displayName,
+                              foundUserName ?? _foundUser!.displayName,
                               style: const TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.w700,
@@ -8298,6 +8353,7 @@ class _NewChatPageState extends State<NewChatPage> {
                                             session: widget.session,
                                             userId: _foundUser!.id,
                                             fallbackName:
+                                                foundUserName ??
                                                 _foundUser!.displayName,
                                             fallbackAvatarUrl:
                                                 _foundUser!.avatarUrl,

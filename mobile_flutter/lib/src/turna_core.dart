@@ -6,6 +6,7 @@ class ChatPreview {
     required this.name,
     required this.message,
     required this.time,
+    this.phone,
     this.avatarUrl,
     this.peerId,
     this.unreadCount = 0,
@@ -20,6 +21,7 @@ class ChatPreview {
   final String name;
   final String message;
   final String time;
+  final String? phone;
   final String? avatarUrl;
   final String? peerId;
   final int unreadCount;
@@ -2447,13 +2449,21 @@ class ChatApi {
       final chats = chatsData.map((item) {
         final map = item as Map<String, dynamic>;
         final rawTitle = map['title']?.toString() ?? 'Chat';
+        final phone = rawTitle.trim().startsWith('+') ? rawTitle.trim() : null;
+        final fallbackName = phone == null
+            ? rawTitle
+            : formatTurnaDisplayPhone(phone);
         return ChatPreview(
           chatId: map['chatId'].toString(),
-          name: formatTurnaDisplayPhone(rawTitle),
+          name: TurnaContactsDirectory.resolveDisplayLabel(
+            phone: phone,
+            fallbackName: fallbackName,
+          ),
           message: sanitizeTurnaChatPreviewText(
             map['lastMessage']?.toString() ?? '',
           ),
           time: _formatTime(map['lastMessageAt']?.toString()),
+          phone: phone,
           avatarUrl: _nullableString(map['avatarUrl']),
           peerId: _nullableString(map['peerId']),
           unreadCount: (map['unreadCount'] as num?)?.toInt() ?? 0,
