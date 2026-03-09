@@ -189,9 +189,14 @@ class ChatsPage extends StatefulWidget {
   State<ChatsPage> createState() => _ChatsPageState();
 }
 
+enum _ChatsMenuAction { select, markAllRead }
+
 class _ChatsPageState extends State<ChatsPage> {
   int _refreshTick = 0;
+  bool _selectionMode = false;
+  bool _bulkActionBusy = false;
   final TextEditingController _searchController = TextEditingController();
+  final Set<String> _selectedChatIds = <String>{};
 
   @override
   void initState() {
@@ -218,25 +223,509 @@ class _ChatsPageState extends State<ChatsPage> {
     super.dispose();
   }
 
+  Future<void> _openNewChatPage() async {
+    final created = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => NewChatPage(
+          session: widget.session,
+          callCoordinator: widget.callCoordinator,
+          onSessionExpired: widget.onSessionExpired,
+        ),
+      ),
+    );
+    if (created == true && mounted) {
+      setState(() => _refreshTick++);
+    }
+  }
+
+  void _enterSelectionMode([String? initialChatId]) {
+    setState(() {
+      _selectionMode = true;
+      _selectedChatIds
+        ..clear()
+        ..addAll(initialChatId == null ? const <String>[] : [initialChatId]);
+    });
+  }
+
+  void _exitSelectionMode() {
+    if (!_selectionMode && _selectedChatIds.isEmpty) return;
+    setState(() {
+      _selectionMode = false;
+      _selectedChatIds.clear();
+    });
+  }
+
+  void _toggleChatSelection(String chatId) {
+    setState(() {
+      if (_selectedChatIds.contains(chatId)) {
+        _selectedChatIds.remove(chatId);
+      } else {
+        _selectedChatIds.add(chatId);
+      }
+    });
+  }
+
+  Future<void> _handleChatsMenuAction(_ChatsMenuAction action) async {
+    switch (action) {
+      case _ChatsMenuAction.select:
+        _enterSelectionMode();
+        break;
+      case _ChatsMenuAction.markAllRead:
+        await _markAllChatsRead();
+        break;
+    }
+  }
+
+  Future<void> _markAllChatsRead() async {
+    if (_bulkActionBusy) return;
+    setState(() => _bulkActionBusy = true);
+
+    try {
+      final updatedCount = await ChatApi.markAllChatsRead(widget.session);
+      if (!mounted) return;
+      setState(() {
+        _bulkActionBusy = false;
+        _refreshTick++;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            updatedCount > 0
+                ? '$updatedCount sohbet okundu olarak isaretlendi.'
+                : 'Okunmamis sohbet yok.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _bulkActionBusy = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
+  Future<void> _deleteSelectedChats() async {
+    if (_selectedChatIds.isEmpty || _bulkActionBusy) return;
+
+    final selectedCount = _selectedChatIds.length;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Sohbetleri sil'),
+          content: Text(
+            selectedCount == 1
+                ? 'Secili sohbet listeden kaldirilsin mi? Yeni mesaj gelirse yeniden gorunur.'
+                : '$selectedCount secili sohbet listeden kaldirilsin mi? Yeni mesaj gelirse yeniden gorunur.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Vazgec'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Sil'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true) return;
+
+    setState(() => _bulkActionBusy = true);
+    try {
+      final deletedCount = await ChatApi.deleteChats(
+        widget.session,
+        _selectedChatIds.toList(),
+      );
+      if (!mounted) return;
+      setState(() {
+        _bulkActionBusy = false;
+        _selectionMode = false;
+        _selectedChatIds.clear();
+        _refreshTick++;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            deletedCount > 0
+                ? '$deletedCount sohbet silindi.'
+                : 'Secili sohbetler silinemedi.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _bulkActionBusy = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
+  Future<void> _markChatRead(ChatPreview chat) async {
+    if (_bulkActionBusy) return;
+    setState(() => _bulkActionBusy = true);
+    try {
+      final updatedCount = await ChatApi.markChatRead(
+        widget.session,
+        chat.chatId,
+      );
+      if (!mounted) return;
+      setState(() {
+        _bulkActionBusy = false;
+        _refreshTick++;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            updatedCount > 0
+                ? '"${chat.name}" okundu olarak isaretlendi.'
+                : 'Okunmamis mesaj yok.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _bulkActionBusy = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
+  Future<void> _toggleChatMute(ChatPreview chat) async {
+    if (_bulkActionBusy) return;
+    setState(() => _bulkActionBusy = true);
+    try {
+      final muted = await ChatApi.setChatMuted(
+        widget.session,
+        chatId: chat.chatId,
+        muted: !chat.isMuted,
+      );
+      if (!mounted) return;
+      setState(() {
+        _bulkActionBusy = false;
+        _refreshTick++;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            muted
+                ? '"${chat.name}" sessize alindi.'
+                : '"${chat.name}" icin bildirimler yeniden acildi.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _bulkActionBusy = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
+  Future<void> _clearChat(ChatPreview chat) async {
+    if (_bulkActionBusy) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Sohbeti temizle'),
+          content: Text(
+            '"${chat.name}" sohbetinin icerigi bu cihazda temizlenecek. Karsi tarafta kalmaya devam edecek.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Vazgec'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Temizle'),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true) return;
+
+    setState(() => _bulkActionBusy = true);
+    try {
+      await ChatApi.clearChat(widget.session, chat.chatId);
+      if (!mounted) return;
+      setState(() {
+        _bulkActionBusy = false;
+        _refreshTick++;
+      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('"${chat.name}" temizlendi.')));
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _bulkActionBusy = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
+  Future<void> _toggleBlockChat(ChatPreview chat) async {
+    if (_bulkActionBusy) return;
+
+    final willBlock = !chat.isBlockedByMe;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: Text(willBlock ? 'Kisiyi engelle' : 'Engeli kaldir'),
+          content: Text(
+            willBlock
+                ? '"${chat.name}" artik sana mesaj gonderemez ve seni arayamaz.'
+                : '"${chat.name}" ile iletisim yeniden acilsin mi?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Vazgec'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: Text(willBlock ? 'Engelle' : 'Kaldir'),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true) return;
+
+    setState(() => _bulkActionBusy = true);
+    try {
+      final blocked = await ChatApi.setChatBlocked(
+        widget.session,
+        chatId: chat.chatId,
+        blocked: willBlock,
+      );
+      if (!mounted) return;
+      setState(() {
+        _bulkActionBusy = false;
+        _refreshTick++;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            blocked
+                ? '"${chat.name}" engellendi.'
+                : '"${chat.name}" engeli kaldirildi.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _bulkActionBusy = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
+  Future<void> _deleteSingleChat(ChatPreview chat) async {
+    if (_bulkActionBusy) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Sohbeti sil'),
+          content: Text(
+            '"${chat.name}" sohbeti sadece senden silinecek. Karsi tarafta kalmaya devam edecek.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Vazgec'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Sil'),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true) return;
+
+    setState(() => _bulkActionBusy = true);
+    try {
+      final deletedCount = await ChatApi.deleteChats(widget.session, [
+        chat.chatId,
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _bulkActionBusy = false;
+        _refreshTick++;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            deletedCount > 0 ? '"${chat.name}" silindi.' : 'Sohbet silinemedi.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _bulkActionBusy = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
+  Future<void> _showChatActions(ChatPreview chat) async {
+    if (_bulkActionBusy) return;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.white,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _ChatListActionTile(
+                icon: Icons.mark_chat_read_outlined,
+                title: 'Okundu olarak isaretle',
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  _markChatRead(chat);
+                },
+              ),
+              _ChatListActionTile(
+                icon: chat.isMuted
+                    ? Icons.notifications_active_outlined
+                    : Icons.notifications_off_outlined,
+                title: chat.isMuted ? 'Sessizi kapat' : 'Sessiz',
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  _toggleChatMute(chat);
+                },
+              ),
+              if (chat.peerId != null)
+                _ChatListActionTile(
+                  icon: chat.isBlockedByMe
+                      ? Icons.person_add_alt_1_outlined
+                      : Icons.block_outlined,
+                  title: chat.isBlockedByMe
+                      ? 'Engeli kaldir'
+                      : 'Kisiyi engelle',
+                  destructive: !chat.isBlockedByMe,
+                  onTap: () {
+                    Navigator.of(sheetContext).pop();
+                    _toggleBlockChat(chat);
+                  },
+                ),
+              _ChatListActionTile(
+                icon: Icons.layers_clear_outlined,
+                title: 'Sohbeti temizle',
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  _clearChat(chat);
+                },
+              ),
+              _ChatListActionTile(
+                icon: Icons.delete_outline,
+                title: 'Sohbeti sil',
+                destructive: true,
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  _deleteSingleChat(chat);
+                },
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text(
-          'Turna',
-          style: TextStyle(
-            color: TurnaColors.primary,
+        automaticallyImplyLeading: false,
+        leadingWidth: 56,
+        leading: _selectionMode
+            ? IconButton(
+                onPressed: _bulkActionBusy ? null : _exitSelectionMode,
+                icon: const Icon(Icons.close),
+              )
+            : PopupMenuButton<_ChatsMenuAction>(
+                onSelected: _handleChatsMenuAction,
+                position: PopupMenuPosition.under,
+                itemBuilder: (context) => const [
+                  PopupMenuItem(
+                    value: _ChatsMenuAction.select,
+                    child: Text('Sec'),
+                  ),
+                  PopupMenuItem(
+                    value: _ChatsMenuAction.markAllRead,
+                    child: Text('Tumu okundu'),
+                  ),
+                ],
+                child: const Padding(
+                  padding: EdgeInsets.only(
+                    left: 12,
+                    right: 6,
+                    top: 8,
+                    bottom: 8,
+                  ),
+                  child: _ChatsMenuAnchorIcon(),
+                ),
+              ),
+        title: Text(
+          _selectionMode
+              ? (_selectedChatIds.isEmpty
+                    ? 'Sohbet sec'
+                    : '${_selectedChatIds.length} secildi')
+              : 'Sohbetler',
+          style: const TextStyle(
+            color: TurnaColors.text,
+            fontSize: 18.5,
             fontWeight: FontWeight.w700,
           ),
         ),
-        actions: const [
-          Icon(Icons.qr_code_scanner_outlined),
-          SizedBox(width: 12),
-          Icon(Icons.camera_alt_outlined),
-          SizedBox(width: 12),
-          Icon(Icons.more_vert),
-          SizedBox(width: 8),
-        ],
+        actions: _selectionMode
+            ? [
+                IconButton(
+                  onPressed: _selectedChatIds.isEmpty || _bulkActionBusy
+                      ? null
+                      : _deleteSelectedChats,
+                  icon: _bulkActionBusy
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.delete_outline),
+                ),
+                const SizedBox(width: 4),
+              ]
+            : [
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 6),
+                  child: Icon(Icons.camera_alt_outlined, size: 21),
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(left: 8, right: 12),
+                  child: _ChatsNewChatActionButton(onTap: _openNewChatPage),
+                ),
+              ],
       ),
       body: FutureBuilder<List<ChatPreview>>(
         future: ChatApi.fetchChats(widget.session, refreshTick: _refreshTick),
@@ -314,7 +803,7 @@ class _ChatsPageState extends State<ChatsPage> {
                       icon: Icons.chat_bubble_outline,
                       title: 'Henuz sohbet yok',
                       message:
-                          'Ilk konusmayi baslatmak icin sag alttaki butondan kisi sec.',
+                          'Ilk konusmayi baslatmak icin sag ustteki artidan kisi sec.',
                     );
                   }
                   return _CenteredListState(
@@ -326,102 +815,358 @@ class _ChatsPageState extends State<ChatsPage> {
                 }
 
                 final chat = filteredChats[index - 1];
-                return ListTile(
-                  leading: _ProfileAvatar(
-                    label: chat.name,
-                    avatarUrl: chat.avatarUrl,
-                    authToken: widget.session.token,
-                    radius: 22,
-                  ),
-                  title: Text(
-                    chat.name,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
+                final isLastItem = index == filteredChats.length;
+                final isSelected = _selectedChatIds.contains(chat.chatId);
+                return Material(
+                  color: isSelected
+                      ? TurnaColors.primary.withValues(alpha: 0.08)
+                      : Colors.transparent,
+                  child: InkWell(
+                    onLongPress: () {
+                      if (_selectionMode) return;
+                      _showChatActions(chat);
+                    },
+                    onTap: () {
+                      if (_selectionMode) {
+                        _toggleChatSelection(chat.chatId);
+                        return;
+                      }
+                      Navigator.push(
+                        context,
+                        buildChatRoomRoute(
+                          chat: chat,
+                          session: widget.session,
+                          callCoordinator: widget.callCoordinator,
+                          onSessionExpired: widget.onSessionExpired,
+                        ),
+                      );
+                    },
+                    child: Column(
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.only(top: 2),
+                                child: Stack(
+                                  clipBehavior: Clip.none,
+                                  children: [
+                                    _ProfileAvatar(
+                                      label: chat.name,
+                                      avatarUrl: chat.avatarUrl,
+                                      authToken: widget.session.token,
+                                      radius: 23,
+                                    ),
+                                    if (isSelected)
+                                      Positioned(
+                                        right: -2,
+                                        bottom: -2,
+                                        child: Container(
+                                          width: 18,
+                                          height: 18,
+                                          decoration: BoxDecoration(
+                                            color: TurnaColors.primary,
+                                            shape: BoxShape.circle,
+                                            border: Border.all(
+                                              color: Colors.white,
+                                              width: 1.6,
+                                            ),
+                                          ),
+                                          child: const Icon(
+                                            Icons.check,
+                                            size: 11,
+                                            color: Colors.white,
+                                          ),
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            chat.name,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                              fontSize: 16,
+                                              fontWeight: FontWeight.w700,
+                                              color: TurnaColors.text,
+                                              height: 1.1,
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 10),
+                                        _ChatPreviewMeta(chat: chat),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 4),
+                                    _ChatPreviewSubtitle(text: chat.message),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (!isLastItem)
+                          const Divider(
+                            height: 1,
+                            thickness: 0.8,
+                            indent: 74,
+                            endIndent: 16,
+                            color: TurnaColors.divider,
+                          ),
+                      ],
                     ),
                   ),
-                  subtitle: Text(
-                    chat.message,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  trailing: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Text(
-                        chat.time,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Color(0xFF777C79),
-                        ),
-                      ),
-                      if (chat.unreadCount > 0) ...[
-                        const SizedBox(height: 6),
-                        Container(
-                          constraints: const BoxConstraints(minWidth: 20),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 2,
-                          ),
-                          decoration: const BoxDecoration(
-                            color: TurnaColors.primary,
-                            borderRadius: BorderRadius.all(
-                              Radius.circular(999),
-                            ),
-                          ),
-                          child: Text(
-                            chat.unreadCount > 99
-                                ? '99+'
-                                : '${chat.unreadCount}',
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 11,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      buildChatRoomRoute(
-                        chat: chat,
-                        session: widget.session,
-                        callCoordinator: widget.callCoordinator,
-                        onSessionExpired: widget.onSessionExpired,
-                      ),
-                    );
-                  },
                 );
               },
             ),
           );
         },
       ),
-      floatingActionButton: FloatingActionButton(
-        backgroundColor: TurnaColors.primary,
-        foregroundColor: Colors.white,
-        onPressed: () async {
-          final created = await Navigator.push<bool>(
-            context,
-            MaterialPageRoute(
-              builder: (_) => NewChatPage(
-                session: widget.session,
-                callCoordinator: widget.callCoordinator,
-                onSessionExpired: widget.onSessionExpired,
+    );
+  }
+}
+
+class _ChatsMenuAnchorIcon extends StatelessWidget {
+  const _ChatsMenuAnchorIcon();
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Container(
+          width: 34,
+          height: 34,
+          padding: const EdgeInsets.all(3),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: TurnaColors.border.withValues(alpha: 0.9),
+            ),
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(9),
+            child: Image.asset('assets/turna-icon.png', fit: BoxFit.cover),
+          ),
+        ),
+        Positioned(
+          top: -4,
+          right: -6,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1.5),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(
+                color: TurnaColors.border.withValues(alpha: 0.9),
+              ),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x120F172A),
+                  blurRadius: 8,
+                  offset: Offset(0, 2),
+                ),
+              ],
+            ),
+            child: const Text(
+              '...',
+              style: TextStyle(
+                color: TurnaColors.textMuted,
+                fontSize: 8.5,
+                fontWeight: FontWeight.w700,
+                height: 1,
               ),
             ),
-          );
-          if (created == true && mounted) {
-            setState(() => _refreshTick++);
-          }
-        },
-        child: const Icon(Icons.add),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ChatListActionTile extends StatelessWidget {
+  const _ChatListActionTile({
+    required this.icon,
+    required this.title,
+    required this.onTap,
+    this.destructive = false,
+  });
+
+  final IconData icon;
+  final String title;
+  final VoidCallback onTap;
+  final bool destructive;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = destructive ? TurnaColors.error : TurnaColors.text;
+    return ListTile(
+      leading: Icon(icon, color: color),
+      title: Text(
+        title,
+        style: TextStyle(
+          color: color,
+          fontSize: 15,
+          fontWeight: FontWeight.w500,
+        ),
       ),
+      onTap: onTap,
+    );
+  }
+}
+
+class _ChatsNewChatActionButton extends StatelessWidget {
+  const _ChatsNewChatActionButton({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: TurnaColors.primary,
+      borderRadius: BorderRadius.circular(999),
+      elevation: 0,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(999),
+        child: const Padding(
+          padding: EdgeInsets.all(8),
+          child: Icon(Icons.add, size: 18, color: Colors.white),
+        ),
+      ),
+    );
+  }
+}
+
+class _ChatPreviewMeta extends StatelessWidget {
+  const _ChatPreviewMeta({required this.chat});
+
+  final ChatPreview chat;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasUnread = chat.unreadCount > 0;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        Text(
+          chat.time,
+          style: TextStyle(
+            fontSize: 11.5,
+            fontWeight: FontWeight.w400,
+            color: hasUnread ? TurnaColors.primary : const Color(0xFF8C959F),
+            height: 1.1,
+          ),
+        ),
+        if (hasUnread) ...[
+          const SizedBox(height: 7),
+          Container(
+            constraints: const BoxConstraints(minWidth: 19),
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: const BoxDecoration(
+              color: TurnaColors.primary,
+              borderRadius: BorderRadius.all(Radius.circular(999)),
+            ),
+            child: Text(
+              chat.unreadCount > 99 ? '99+' : '${chat.unreadCount}',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 10.5,
+                fontWeight: FontWeight.w700,
+                height: 1.1,
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _ChatPreviewSubtitleParts {
+  const _ChatPreviewSubtitleParts({this.sender, required this.message});
+
+  final String? sender;
+  final String message;
+}
+
+class _ChatPreviewSubtitle extends StatelessWidget {
+  const _ChatPreviewSubtitle({required this.text});
+
+  final String text;
+
+  static _ChatPreviewSubtitleParts _parse(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) {
+      return const _ChatPreviewSubtitleParts(message: 'Sohbet baslat');
+    }
+
+    final dividerIndex = trimmed.indexOf(':');
+    if (dividerIndex <= 0 || dividerIndex >= 32) {
+      return _ChatPreviewSubtitleParts(message: trimmed);
+    }
+
+    final sender = trimmed.substring(0, dividerIndex).trim();
+    final message = trimmed.substring(dividerIndex + 1).trim();
+    if (sender.isEmpty ||
+        message.isEmpty ||
+        sender.contains('://') ||
+        sender.contains('@')) {
+      return _ChatPreviewSubtitleParts(message: trimmed);
+    }
+
+    return _ChatPreviewSubtitleParts(sender: sender, message: message);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final parts = _parse(text);
+    final baseStyle = const TextStyle(
+      fontSize: 13.5,
+      fontWeight: FontWeight.w400,
+      color: TurnaColors.textMuted,
+      height: 1.2,
+    );
+
+    if (parts.sender == null) {
+      return Text(
+        parts.message,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: baseStyle,
+      );
+    }
+
+    return Text.rich(
+      TextSpan(
+        children: [
+          TextSpan(
+            text: '${parts.sender}: ',
+            style: baseStyle.copyWith(
+              color: TurnaColors.textSoft,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          TextSpan(text: parts.message, style: baseStyle),
+        ],
+      ),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
     );
   }
 }
@@ -1472,10 +2217,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       ..._peerCalls.map(_ChatTimelineEntry.call),
     ];
     entries.sort(
-      (a, b) => compareTurnaTimestamps(
-        _timelineCreatedAt(b),
-        _timelineCreatedAt(a),
-      ),
+      (a, b) =>
+          compareTurnaTimestamps(_timelineCreatedAt(b), _timelineCreatedAt(a)),
     );
     return entries;
   }

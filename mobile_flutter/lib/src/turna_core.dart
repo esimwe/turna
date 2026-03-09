@@ -7,7 +7,10 @@ class ChatPreview {
     required this.message,
     required this.time,
     this.avatarUrl,
+    this.peerId,
     this.unreadCount = 0,
+    this.isMuted = false,
+    this.isBlockedByMe = false,
   });
 
   final String chatId;
@@ -15,7 +18,10 @@ class ChatPreview {
   final String message;
   final String time;
   final String? avatarUrl;
+  final String? peerId;
   final int unreadCount;
+  final bool isMuted;
+  final bool isBlockedByMe;
 }
 
 class ChatUser {
@@ -2077,13 +2083,156 @@ class ChatApi {
           ),
           time: _formatTime(map['lastMessageAt']?.toString()),
           avatarUrl: _nullableString(map['avatarUrl']),
+          peerId: _nullableString(map['peerId']),
           unreadCount: (map['unreadCount'] as num?)?.toInt() ?? 0,
+          isMuted: map['isMuted'] == true,
+          isBlockedByMe: map['isBlockedByMe'] == true,
         );
       }).toList();
     } on TurnaApiException {
       rethrow;
     } catch (_) {
       throw TurnaApiException('Sunucuya baglanilamadi.');
+    }
+  }
+
+  static Future<int> markAllChatsRead(AuthSession session) async {
+    try {
+      final res = await http.post(
+        Uri.parse('$kBackendBaseUrl/api/chats/read-all'),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+      );
+      _throwIfApiError(res);
+
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = map['data'] as Map<String, dynamic>? ?? const {};
+      return (data['updatedChatCount'] as num?)?.toInt() ?? 0;
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Mesajlar okundu olarak isaretlenemedi.');
+    }
+  }
+
+  static Future<int> markChatRead(AuthSession session, String chatId) async {
+    try {
+      final res = await http.post(
+        Uri.parse('$kBackendBaseUrl/api/chats/$chatId/read'),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+      );
+      _throwIfApiError(res);
+
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = map['data'] as Map<String, dynamic>? ?? const {};
+      return (data['updatedMessageCount'] as num?)?.toInt() ?? 0;
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Sohbet okundu olarak isaretlenemedi.');
+    }
+  }
+
+  static Future<bool> setChatMuted(
+    AuthSession session, {
+    required String chatId,
+    required bool muted,
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse('$kBackendBaseUrl/api/chats/$chatId/mute'),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'muted': muted}),
+      );
+      _throwIfApiError(res);
+
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = map['data'] as Map<String, dynamic>? ?? const {};
+      return data['muted'] == true;
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Sohbet sessize alinamadi.');
+    }
+  }
+
+  static Future<void> clearChat(AuthSession session, String chatId) async {
+    try {
+      final res = await http.post(
+        Uri.parse('$kBackendBaseUrl/api/chats/$chatId/clear'),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+      );
+      _throwIfApiError(res);
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Sohbet temizlenemedi.');
+    }
+  }
+
+  static Future<bool> setChatBlocked(
+    AuthSession session, {
+    required String chatId,
+    required bool blocked,
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse('$kBackendBaseUrl/api/chats/$chatId/block'),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'blocked': blocked}),
+      );
+      _throwIfApiError(res);
+
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = map['data'] as Map<String, dynamic>? ?? const {};
+      return data['blocked'] == true;
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException(
+        blocked ? 'Kisi engellenemedi.' : 'Engel kaldirilamadi.',
+      );
+    }
+  }
+
+  static Future<int> deleteChats(
+    AuthSession session,
+    List<String> chatIds,
+  ) async {
+    try {
+      final uniqueChatIds = chatIds.toSet().toList();
+      final res = await http.post(
+        Uri.parse('$kBackendBaseUrl/api/chats/delete'),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'chatIds': uniqueChatIds}),
+      );
+      _throwIfApiError(res);
+
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = map['data'] as Map<String, dynamic>? ?? const {};
+      final deleted = (data['chatIds'] as List<dynamic>? ?? const []);
+      return deleted.length;
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Sohbetler silinemedi.');
     }
   }
 
@@ -2281,7 +2430,7 @@ class ChatApi {
       response.body,
       response.statusCode,
     );
-    if (response.statusCode == 401 || response.statusCode == 403) {
+    if (response.statusCode == 401) {
       throw TurnaUnauthorizedException(message);
     }
     throw TurnaApiException(message);
@@ -3088,12 +3237,7 @@ abstract class CallProviderAdapter {
   Future<void> disconnect();
 }
 
-enum _AdaptiveCallVideoProfile {
-  low,
-  medium,
-  standard,
-  high,
-}
+enum _AdaptiveCallVideoProfile { low, medium, standard, high }
 
 extension _AdaptiveCallVideoProfileX on _AdaptiveCallVideoProfile {
   String get label => switch (this) {
@@ -3114,7 +3258,10 @@ extension _AdaptiveCallVideoProfileX on _AdaptiveCallVideoProfile {
 class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
   static const _initialVideoProfile = _AdaptiveCallVideoProfile.standard;
 
-  LiveKitCallAdapter({required this.connectPayload, required this.videoEnabled});
+  LiveKitCallAdapter({
+    required this.connectPayload,
+    required this.videoEnabled,
+  });
 
   final TurnaCallConnectPayload connectPayload;
   final bool videoEnabled;
@@ -3225,21 +3372,24 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
       await Future<void>.delayed(const Duration(milliseconds: 350));
     }
 
-    final attempts = <({
-      String label,
-      _AdaptiveCallVideoProfile? profile,
-      lk.CameraCaptureOptions? options,
-    })>[
-      (
-        label: 'safe_default',
-        profile: _videoProfile,
-        options: lk.CameraCaptureOptions(
-          cameraPosition: cameraPosition,
-          params: _videoProfile.parameters,
-        ),
-      ),
-      (label: 'default', profile: null, options: null),
-    ];
+    final attempts =
+        <
+          ({
+            String label,
+            _AdaptiveCallVideoProfile? profile,
+            lk.CameraCaptureOptions? options,
+          })
+        >[
+          (
+            label: 'safe_default',
+            profile: _videoProfile,
+            options: lk.CameraCaptureOptions(
+              cameraPosition: cameraPosition,
+              params: _videoProfile.parameters,
+            ),
+          ),
+          (label: 'default', profile: null, options: null),
+        ];
 
     Object? lastError;
     for (final attempt in attempts) {
@@ -3273,12 +3423,10 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
       'origin': origin,
       'error': '$lastError',
     });
-    if (
-      Platform.isIOS &&
-      origin == 'initial_connect' &&
-      connected &&
-      !_cameraRetryScheduled
-    ) {
+    if (Platform.isIOS &&
+        origin == 'initial_connect' &&
+        connected &&
+        !_cameraRetryScheduled) {
       _cameraRetryScheduled = true;
       unawaited(_retryCameraAfterDelay(localParticipant));
     }
@@ -3314,17 +3462,16 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
     await completer.future;
   }
 
-  Future<void> _retryCameraAfterDelay(lk.LocalParticipant localParticipant) async {
+  Future<void> _retryCameraAfterDelay(
+    lk.LocalParticipant localParticipant,
+  ) async {
     await Future<void>.delayed(const Duration(milliseconds: 900));
     if (!connected || cameraEnabled) {
       _cameraRetryScheduled = false;
       return;
     }
     await _waitForActiveLifecycle();
-    await _enableCameraWithFallback(
-      localParticipant,
-      origin: 'initial_retry',
-    );
+    await _enableCameraWithFallback(localParticipant, origin: 'initial_retry');
     _cameraRetryScheduled = false;
     notifyListeners();
   }
@@ -4053,10 +4200,7 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
                   : (adapter.connected
                         ? _callSession.formatDuration()
                         : (adapter.error ?? 'Arama hazirlaniyor')),
-              style: const TextStyle(
-                color: Color(0xFFB7BCB9),
-                fontSize: 16,
-              ),
+              style: const TextStyle(color: Color(0xFFB7BCB9), fontSize: 16),
             ),
           ],
         ),
