@@ -70,7 +70,7 @@ flutter:
   uses-material-design: true
 
   assets:
-    - ios/Runner/Assets.xcassets/AppIcon.appiconset/180x180.jpg
+    - ios/Runner/Assets.xcassets/AppIcon.appiconset/180x180.png
 
   # To add assets to your application, add an assets section, like this:
   # assets:

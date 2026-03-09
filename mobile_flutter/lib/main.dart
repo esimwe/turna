@@ -436,6 +436,7 @@ class _TurnaAppState extends State<TurnaApp> with WidgetsBindingObserver {
   AuthSession? _session;
   bool _bootstrapping = true;
   static const Duration _minimumSplashDuration = Duration(milliseconds: 750);
+  static const Duration _maximumBootstrapWait = Duration(milliseconds: 1800);
 
   @override
   void initState() {
@@ -458,11 +459,21 @@ class _TurnaAppState extends State<TurnaApp> with WidgetsBindingObserver {
 
   Future<void> _bootstrap() async {
     final startedAt = DateTime.now();
+    final sessionFuture = _loadStoredSession();
     AuthSession? session;
+    var timedOut = false;
+
     try {
-      session = await AuthSession.load();
+      session = await sessionFuture.timeout(_maximumBootstrapWait);
     } catch (error) {
-      turnaLog('auth session load skipped', error);
+      if (error is TimeoutException) {
+        timedOut = true;
+        turnaLog('auth session load timeout', {
+          'timeoutMs': _maximumBootstrapWait.inMilliseconds,
+        });
+      } else {
+        turnaLog('auth session load skipped', error);
+      }
     }
 
     final elapsed = DateTime.now().difference(startedAt);
@@ -476,14 +487,40 @@ class _TurnaAppState extends State<TurnaApp> with WidgetsBindingObserver {
         _session = session;
         _bootstrapping = false;
       });
-      turnaLog('app init', {'hasSession': _session != null});
+      turnaLog('app init', {
+        'hasSession': _session != null,
+        'elapsedMs': DateTime.now().difference(startedAt).inMilliseconds,
+        'timedOut': timedOut,
+      });
     }
 
     if (session == null) {
       unawaited(TurnaAppBadge.setCount(0));
     }
 
+    if (timedOut) {
+      unawaited(
+        sessionFuture.then((lateSession) {
+          if (!mounted || lateSession == null) return;
+          if (_session?.userId == lateSession.userId &&
+              _session?.token == lateSession.token) {
+            return;
+          }
+          setState(() => _session = lateSession);
+          turnaLog('auth session restored after timeout', {
+            'hasSession': true,
+          });
+        }).catchError((Object error) {
+          turnaLog('late auth session load skipped', error);
+        }),
+      );
+    }
+
     unawaited(_initializeServices());
+  }
+
+  Future<AuthSession?> _loadStoredSession() async {
+    return AuthSession.load();
   }
 
   Future<void> _initializeServices() async {
@@ -577,7 +614,7 @@ class _TurnaLaunchPage extends StatelessWidget {
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(20),
                   child: Image.asset(
-                    'ios/Runner/Assets.xcassets/AppIcon.appiconset/180x180.jpg',
+                    'ios/Runner/Assets.xcassets/AppIcon.appiconset/180x180.png',
                     fit: BoxFit.cover,
                   ),
                 ),
