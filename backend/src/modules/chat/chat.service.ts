@@ -522,7 +522,7 @@ export class ChatService {
 
         return {
           chatId: chat.id,
-          title: peer?.displayName ?? "New Chat",
+          title: peer?.phone ?? peer?.displayName ?? "New Chat",
           lastMessage: visibleLast ? summarizeMessage(visibleLast) : "Sohbet baslat",
           lastMessageAt: visibleLast ? visibleLast.createdAt.toISOString() : null,
           unreadCount,
