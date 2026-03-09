@@ -1,0 +1,830 @@
+import { AttachmentKind, ChatType, MessageStatus } from "@prisma/client";
+import { logError } from "../../lib/logger.js";
+import { prisma } from "../../lib/prisma.js";
+import { createObjectReadUrl, deleteObject, getObjectHead } from "../../lib/storage.js";
+import { areUsersBlocked, getBlockedUserIdsByUser, setUserBlocked } from "../../lib/user-relationship.js";
+const prismaUser = prisma.user;
+const prismaReportCase = prisma.reportCase;
+const TURNA_DELETED_EVERYONE_MARKER = "[[turna-deleted-everyone]]";
+const DELETE_FOR_EVERYONE_WINDOW_MS = 10 * 60 * 1000;
+const EDIT_MESSAGE_WINDOW_MS = 10 * 60 * 1000;
+const CHAT_FOLDER_LIMIT = 3;
+function toAttachmentKind(kind) {
+    switch (kind) {
+        case AttachmentKind.IMAGE:
+            return "image";
+        case AttachmentKind.VIDEO:
+            return "video";
+        default:
+            return "file";
+    }
+}
+function fromAttachmentKind(kind) {
+    switch (kind) {
+        case "image":
+            return AttachmentKind.IMAGE;
+        case "video":
+            return AttachmentKind.VIDEO;
+        default:
+            return AttachmentKind.FILE;
+    }
+}
+function summarizeMessage(row) {
+    const text = row.text?.trim();
+    if (text === TURNA_DELETED_EVERYONE_MARKER)
+        return "Silindi.";
+    if (text)
+        return text;
+    const attachments = row.attachments ?? [];
+    if (attachments.length === 0)
+        return "Sohbet baslat";
+    if (attachments.length > 1)
+        return `${attachments.length} ek gonderildi`;
+    switch (attachments[0].kind) {
+        case AttachmentKind.IMAGE:
+            return "Fotograf";
+        case AttachmentKind.VIDEO:
+            return "Video";
+        default:
+            return "Dosya";
+    }
+}
+async function toChatAttachment(row) {
+    let url = null;
+    try {
+        url = await createObjectReadUrl(row.objectKey);
+    }
+    catch (error) {
+        logError("attachment read url create failed", error);
+    }
+    return {
+        id: row.id,
+        objectKey: row.objectKey,
+        kind: toAttachmentKind(row.kind),
+        fileName: row.fileName,
+        contentType: row.contentType,
+        sizeBytes: row.sizeBytes,
+        width: row.width,
+        height: row.height,
+        durationSeconds: row.durationSeconds,
+        url
+    };
+}
+function latestDate(a, b) {
+    if (a && b) {
+        return a.getTime() >= b.getTime() ? a : b;
+    }
+    return a ?? b ?? null;
+}
+function toEditHistoryEntries(value) {
+    if (!Array.isArray(value))
+        return [];
+    return value
+        .map((item) => {
+        if (!item || typeof item !== "object")
+            return null;
+        const map = item;
+        const text = typeof map.text === "string" ? map.text : null;
+        const editedAt = typeof map.editedAt === "string" ? map.editedAt : null;
+        if (!text || !editedAt)
+            return null;
+        return { text, editedAt };
+    })
+        .filter((item) => item != null);
+}
+async function toChatMessage(row) {
+    const attachments = await Promise.all(row.attachments.map((attachment) => toChatAttachment(attachment)));
+    return {
+        id: row.id,
+        chatId: row.chatId,
+        senderId: row.senderId,
+        text: row.text ?? "",
+        createdAt: row.createdAt.toISOString(),
+        status: row.status,
+        editedAt: row.editedAt ? row.editedAt.toISOString() : null,
+        isEdited: row.editedAt != null,
+        editHistory: toEditHistoryEntries(row.editHistory),
+        attachments
+    };
+}
+export class ChatService {
+    async getMembershipState(chatId, userId) {
+        return prisma.chatMember.findUnique({
+            where: { chatId_userId: { chatId, userId } },
+            select: {
+                hiddenAt: true,
+                clearedAt: true,
+                archivedAt: true,
+                muted: true,
+                folderId: true
+            }
+        });
+    }
+    extractDirectParticipants(chatId) {
+        if (!chatId.startsWith("direct_"))
+            return null;
+        const key = chatId.replace("direct_", "").trim();
+        const participants = key.split("_").filter(Boolean);
+        if (participants.length !== 2)
+            return null;
+        const sorted = [...participants].sort();
+        const normalized = `direct_${sorted[0]}_${sorted[1]}`;
+        if (normalized !== chatId)
+            return null;
+        return [sorted[0], sorted[1]];
+    }
+    getDirectPeerId(chatId, userId) {
+        const participants = this.extractDirectParticipants(chatId);
+        if (!participants || !participants.includes(userId))
+            return null;
+        return participants.find((participantId) => participantId !== userId) ?? null;
+    }
+    getDirectParticipants(chatId) {
+        const participants = this.extractDirectParticipants(chatId);
+        return participants ? [...participants] : [];
+    }
+    async getChatParticipantIds(chatId) {
+        const members = await prisma.chatMember.findMany({
+            where: { chatId },
+            select: { userId: true }
+        });
+        return members.map((member) => member.userId);
+    }
+    async resolvePeerId(chatId, userId) {
+        const directPeer = this.getDirectPeerId(chatId, userId);
+        if (directPeer)
+            return directPeer;
+        const participants = await this.getChatParticipantIds(chatId);
+        const peer = participants.find((participantId) => participantId !== userId);
+        return peer ?? null;
+    }
+    async ensureCanInteract(chatId, userId) {
+        const peerId = this.getDirectPeerId(chatId, userId);
+        if (!peerId)
+            return;
+        if (await areUsersBlocked(userId, peerId)) {
+            throw new Error("chat_blocked");
+        }
+    }
+    async ensureChatAccess(chatId, userId) {
+        const member = await this.getMembershipState(chatId, userId);
+        if (member) {
+            if (member.hiddenAt) {
+                await prisma.chatMember.update({
+                    where: { chatId_userId: { chatId, userId } },
+                    data: { hiddenAt: null }
+                });
+            }
+            return true;
+        }
+        const participants = this.extractDirectParticipants(chatId);
+        if (!participants || !participants.includes(userId))
+            return false;
+        const users = await prisma.user.findMany({
+            where: { id: { in: participants } },
+            select: { id: true }
+        });
+        if (users.length !== 2)
+            return false;
+        await prisma.chat.upsert({
+            where: { id: chatId },
+            create: {
+                id: chatId,
+                type: ChatType.DIRECT,
+                members: {
+                    create: participants.map((participantId) => ({ userId: participantId }))
+                }
+            },
+            update: {
+                members: {
+                    connectOrCreate: participants.map((participantId) => ({
+                        where: { chatId_userId: { chatId, userId: participantId } },
+                        create: { userId: participantId }
+                    }))
+                }
+            }
+        });
+        return true;
+    }
+    async sendMessage(payload) {
+        const hasAccess = await this.ensureChatAccess(payload.chatId, payload.senderId);
+        if (!hasAccess) {
+            throw new Error("forbidden_chat_access");
+        }
+        await this.ensureCanInteract(payload.chatId, payload.senderId);
+        const preparedAttachments = await this.prepareAttachments(payload.chatId, payload.senderId, payload.attachments ?? []);
+        const message = await prisma.message.create({
+            data: {
+                chatId: payload.chatId,
+                senderId: payload.senderId,
+                text: payload.text?.trim() ? payload.text.trim() : null,
+                status: MessageStatus.sent,
+                attachments: preparedAttachments.length
+                    ? {
+                        create: preparedAttachments.map((attachment) => ({
+                            objectKey: attachment.objectKey,
+                            kind: attachment.kind,
+                            fileName: attachment.fileName,
+                            contentType: attachment.contentType,
+                            sizeBytes: attachment.sizeBytes,
+                            width: attachment.width,
+                            height: attachment.height,
+                            durationSeconds: attachment.durationSeconds
+                        }))
+                    }
+                    : undefined
+            },
+            include: {
+                attachments: {
+                    orderBy: { createdAt: "asc" }
+                }
+            }
+        });
+        return toChatMessage(message);
+    }
+    async deleteMessageForEveryone(messageId, requesterId) {
+        const existing = await prisma.message.findUnique({
+            where: { id: messageId },
+            include: {
+                attachments: {
+                    orderBy: { createdAt: "asc" }
+                }
+            }
+        });
+        if (!existing) {
+            throw new Error("message_not_found");
+        }
+        const hasAccess = await this.ensureChatAccess(existing.chatId, requesterId);
+        if (!hasAccess) {
+            throw new Error("forbidden_chat_access");
+        }
+        if (existing.senderId !== requesterId) {
+            throw new Error("message_delete_not_allowed");
+        }
+        if ((existing.text ?? "").trim() === TURNA_DELETED_EVERYONE_MARKER) {
+            return toChatMessage(existing);
+        }
+        if (Date.now() - existing.createdAt.getTime() > DELETE_FOR_EVERYONE_WINDOW_MS) {
+            throw new Error("message_delete_window_expired");
+        }
+        const updated = await prisma.$transaction(async (tx) => {
+            await tx.messageAttachment.deleteMany({
+                where: { messageId: existing.id }
+            });
+            return tx.message.update({
+                where: { id: existing.id },
+                data: {
+                    text: TURNA_DELETED_EVERYONE_MARKER,
+                    isViewOnce: false
+                },
+                include: {
+                    attachments: {
+                        orderBy: { createdAt: "asc" }
+                    }
+                }
+            });
+        });
+        await Promise.all(existing.attachments.map((attachment) => deleteObject(attachment.objectKey).catch((error) => {
+            logError("message attachment delete failed", error);
+        })));
+        return toChatMessage(updated);
+    }
+    async editMessage(messageId, requesterId, nextText) {
+        const existing = await prisma.message.findUnique({
+            where: { id: messageId },
+            include: {
+                attachments: {
+                    orderBy: { createdAt: "asc" }
+                }
+            }
+        });
+        if (!existing) {
+            throw new Error("message_not_found");
+        }
+        const hasAccess = await this.ensureChatAccess(existing.chatId, requesterId);
+        if (!hasAccess) {
+            throw new Error("forbidden_chat_access");
+        }
+        if (existing.senderId !== requesterId) {
+            throw new Error("message_edit_not_allowed");
+        }
+        if ((existing.text ?? "").trim() === TURNA_DELETED_EVERYONE_MARKER) {
+            throw new Error("message_edit_not_allowed");
+        }
+        if (!(existing.text ?? "").trim()) {
+            throw new Error("message_edit_not_allowed");
+        }
+        if (Date.now() - existing.createdAt.getTime() > EDIT_MESSAGE_WINDOW_MS) {
+            throw new Error("message_edit_window_expired");
+        }
+        const trimmedText = nextText.trim();
+        if (!trimmedText) {
+            throw new Error("message_edit_text_required");
+        }
+        if (trimmedText === (existing.text ?? "").trim()) {
+            return toChatMessage(existing);
+        }
+        const history = toEditHistoryEntries(existing.editHistory);
+        history.push({
+            text: existing.text ?? "",
+            editedAt: new Date().toISOString()
+        });
+        const updated = await prisma.message.update({
+            where: { id: messageId },
+            data: {
+                text: trimmedText,
+                editedAt: new Date(),
+                editCount: (existing.editCount ?? 0) + 1,
+                editHistory: history
+            },
+            include: {
+                attachments: {
+                    orderBy: { createdAt: "asc" }
+                }
+            }
+        });
+        return toChatMessage(updated);
+    }
+    async markMessagesDelivered(chatId, userId) {
+        const membership = await this.getMembershipState(chatId, userId);
+        const cutoff = latestDate(membership?.hiddenAt, membership?.clearedAt);
+        const targetRows = await prisma.message.findMany({
+            where: {
+                chatId,
+                senderId: { not: userId },
+                status: MessageStatus.sent,
+                ...(cutoff ? { createdAt: { gt: cutoff } } : {})
+            },
+            select: { id: true }
+        });
+        const messageIds = targetRows.map((row) => row.id);
+        if (messageIds.length === 0)
+            return [];
+        await prisma.message.updateMany({
+            where: { id: { in: messageIds } },
+            data: { status: MessageStatus.delivered }
+        });
+        return messageIds;
+    }
+    async markMessagesRead(chatId, userId) {
+        const membership = await this.getMembershipState(chatId, userId);
+        const cutoff = latestDate(membership?.hiddenAt, membership?.clearedAt);
+        const targetRows = await prisma.message.findMany({
+            where: {
+                chatId,
+                senderId: { not: userId },
+                status: { in: [MessageStatus.sent, MessageStatus.delivered] },
+                ...(cutoff ? { createdAt: { gt: cutoff } } : {})
+            },
+            select: { id: true }
+        });
+        const messageIds = targetRows.map((row) => row.id);
+        if (messageIds.length === 0)
+            return [];
+        await prisma.message.updateMany({
+            where: { id: { in: messageIds } },
+            data: { status: MessageStatus.read, readAt: new Date() }
+        });
+        return messageIds;
+    }
+    async markAllChatsRead(userId) {
+        const memberships = await prisma.chatMember.findMany({
+            where: { userId },
+            select: { chatId: true }
+        });
+        const results = [];
+        for (const membership of memberships) {
+            const messageIds = await this.markMessagesRead(membership.chatId, userId);
+            if (messageIds.length > 0) {
+                results.push({ chatId: membership.chatId, messageIds });
+            }
+        }
+        return results;
+    }
+    async getMessages(chatId) {
+        const page = await this.getMessagePage(chatId, { limit: 30 });
+        return page.items;
+    }
+    async getMessagePage(chatId, options = {}) {
+        const limit = Math.min(Math.max(options.limit ?? 30, 1), 100);
+        const beforeDate = options.before && !Number.isNaN(Date.parse(options.before))
+            ? new Date(options.before)
+            : null;
+        const membership = options.userId != null
+            ? await this.getMembershipState(chatId, options.userId)
+            : null;
+        const clearedAt = membership?.clearedAt ?? null;
+        const rows = await prisma.message.findMany({
+            where: {
+                chatId,
+                createdAt: {
+                    ...(beforeDate ? { lt: beforeDate } : {}),
+                    ...(clearedAt ? { gt: clearedAt } : {})
+                }
+            },
+            include: {
+                attachments: {
+                    orderBy: { createdAt: "asc" }
+                }
+            },
+            orderBy: { createdAt: "desc" },
+            take: limit + 1
+        });
+        const hasMore = rows.length > limit;
+        const pageRows = rows.slice(0, limit).reverse();
+        return {
+            items: await Promise.all(pageRows.map((row) => toChatMessage(row))),
+            hasMore,
+            nextBefore: hasMore && pageRows.length > 0 ? pageRows[0].createdAt.toISOString() : null
+        };
+    }
+    async getChatSummaries(userId) {
+        const memberships = await prisma.chatMember.findMany({
+            where: { userId },
+            select: {
+                chatId: true,
+                joinedAt: true,
+                hiddenAt: true,
+                clearedAt: true,
+                archivedAt: true,
+                muted: true,
+                folderId: true,
+                folder: {
+                    select: {
+                        id: true,
+                        name: true
+                    }
+                },
+                chat: {
+                    include: {
+                        members: {
+                            include: { user: true }
+                        },
+                        messages: {
+                            orderBy: { createdAt: "desc" },
+                            take: 1,
+                            include: {
+                                attachments: {
+                                    orderBy: { createdAt: "asc" },
+                                    take: 3
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            orderBy: { joinedAt: "desc" }
+        });
+        const peerIds = memberships
+            .map((membership) => membership.chat.members.find((m) => m.userId !== userId)?.user.id)
+            .filter((peerId) => Boolean(peerId));
+        const blockedPeerIds = await getBlockedUserIdsByUser(userId, Array.from(new Set(peerIds)));
+        const items = await Promise.all(memberships.map(async (membership) => {
+            const chat = membership.chat;
+            const peer = chat.members.find((m) => m.userId !== userId)?.user;
+            const last = chat.messages[0];
+            const hiddenAt = membership.hiddenAt;
+            const clearedAt = membership.clearedAt;
+            if (hiddenAt && (!last || last.createdAt <= hiddenAt)) {
+                return null;
+            }
+            const unreadCutoff = latestDate(hiddenAt, clearedAt);
+            const visibleLast = last && (!clearedAt || last.createdAt > clearedAt) ? last : null;
+            const unreadCount = await prisma.message.count({
+                where: {
+                    chatId: chat.id,
+                    senderId: { not: userId },
+                    status: { not: MessageStatus.read },
+                    ...(unreadCutoff ? { createdAt: { gt: unreadCutoff } } : {})
+                }
+            });
+            return {
+                chatId: chat.id,
+                title: peer?.phone ?? peer?.displayName ?? "New Chat",
+                lastMessage: visibleLast ? summarizeMessage(visibleLast) : "Sohbet baslat",
+                lastMessageAt: visibleLast ? visibleLast.createdAt.toISOString() : null,
+                unreadCount,
+                peerId: peer?.id ?? null,
+                peerAvatarKey: peer?.avatarUrl ?? null,
+                peerUpdatedAt: peer?.updatedAt ? peer.updatedAt.toISOString() : null,
+                isMuted: membership.muted,
+                isBlockedByMe: peer ? blockedPeerIds.has(peer.id) : false,
+                isArchived: membership.archivedAt != null,
+                folderId: membership.folderId,
+                folderName: membership.folder?.name ?? null,
+                joinedAt: membership.joinedAt
+            };
+        }));
+        const visibleItems = items.filter((item) => item != null);
+        visibleItems.sort((a, b) => {
+            const aTime = a.lastMessageAt ? new Date(a.lastMessageAt).getTime() : a.joinedAt.getTime();
+            const bTime = b.lastMessageAt ? new Date(b.lastMessageAt).getTime() : b.joinedAt.getTime();
+            return bTime - aTime;
+        });
+        return visibleItems.map(({ joinedAt: _joinedAt, ...summary }) => summary);
+    }
+    async getUserDirectory(userId) {
+        const users = await prisma.user.findMany({
+            where: { id: { not: userId } },
+            select: {
+                id: true,
+                displayName: true,
+                username: true,
+                phone: true,
+                about: true,
+                avatarUrl: true,
+                updatedAt: true
+            },
+            orderBy: { createdAt: "desc" }
+        });
+        return users.map((user) => ({
+            id: user.id,
+            displayName: user.displayName,
+            username: user.username,
+            phone: user.phone,
+            about: user.about,
+            avatarKey: user.avatarUrl,
+            updatedAt: user.updatedAt.toISOString()
+        }));
+    }
+    async getUserChats(userId) {
+        const memberships = await prisma.chatMember.findMany({
+            where: { userId },
+            select: { chatId: true }
+        });
+        return memberships.map((m) => m.chatId);
+    }
+    async hideChatsForUser(userId, chatIds) {
+        const membershipRows = await prisma.chatMember.findMany({
+            where: {
+                userId,
+                chatId: { in: chatIds }
+            },
+            select: { chatId: true }
+        });
+        const ownedChatIds = membershipRows.map((row) => row.chatId);
+        if (ownedChatIds.length === 0)
+            return [];
+        await prisma.chatMember.updateMany({
+            where: {
+                userId,
+                chatId: { in: ownedChatIds }
+            },
+            data: {
+                hiddenAt: new Date()
+            }
+        });
+        return ownedChatIds;
+    }
+    async listFolders(userId) {
+        return prisma.chatFolder.findMany({
+            where: { userId },
+            select: {
+                id: true,
+                name: true,
+                sortOrder: true
+            },
+            orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }]
+        });
+    }
+    async createFolder(userId, rawName) {
+        const name = rawName.trim();
+        if (!name) {
+            throw new Error("chat_folder_name_required");
+        }
+        const existingFolders = await this.listFolders(userId);
+        if (existingFolders.length >= CHAT_FOLDER_LIMIT) {
+            throw new Error("chat_folder_limit_reached");
+        }
+        const normalizedName = name.toLowerCase();
+        if (existingFolders.some((item) => item.name.trim().toLowerCase() === normalizedName)) {
+            throw new Error("chat_folder_exists");
+        }
+        return prisma.chatFolder.create({
+            data: {
+                userId,
+                name,
+                sortOrder: existingFolders.length
+            },
+            select: {
+                id: true,
+                name: true,
+                sortOrder: true
+            }
+        });
+    }
+    async deleteFolder(userId, folderId) {
+        const folder = await prisma.chatFolder.findFirst({
+            where: {
+                id: folderId,
+                userId
+            },
+            select: { id: true }
+        });
+        if (!folder) {
+            throw new Error("chat_folder_not_found");
+        }
+        await prisma.$transaction(async (tx) => {
+            await tx.chatMember.updateMany({
+                where: {
+                    userId,
+                    folderId
+                },
+                data: {
+                    folderId: null
+                }
+            });
+            await tx.chatFolder.delete({
+                where: { id: folderId }
+            });
+        });
+    }
+    async clearChatForUser(chatId, userId) {
+        const hasAccess = await this.ensureChatAccess(chatId, userId);
+        if (!hasAccess) {
+            throw new Error("forbidden_chat_access");
+        }
+        await prisma.chatMember.update({
+            where: {
+                chatId_userId: { chatId, userId }
+            },
+            data: {
+                clearedAt: new Date(),
+                hiddenAt: null
+            }
+        });
+    }
+    async setChatArchived(chatId, userId, archived) {
+        const hasAccess = await this.ensureChatAccess(chatId, userId);
+        if (!hasAccess) {
+            throw new Error("forbidden_chat_access");
+        }
+        await prisma.chatMember.update({
+            where: {
+                chatId_userId: { chatId, userId }
+            },
+            data: {
+                archivedAt: archived ? new Date() : null
+            }
+        });
+        return archived;
+    }
+    async setChatFolder(chatId, userId, folderId) {
+        const hasAccess = await this.ensureChatAccess(chatId, userId);
+        if (!hasAccess) {
+            throw new Error("forbidden_chat_access");
+        }
+        let folderName = null;
+        if (folderId != null) {
+            const folder = await prisma.chatFolder.findFirst({
+                where: {
+                    id: folderId,
+                    userId
+                },
+                select: {
+                    id: true,
+                    name: true
+                }
+            });
+            if (!folder) {
+                throw new Error("chat_folder_not_found");
+            }
+            folderName = folder.name;
+        }
+        await prisma.chatMember.update({
+            where: {
+                chatId_userId: { chatId, userId }
+            },
+            data: {
+                folderId
+            }
+        });
+        return { folderId, folderName };
+    }
+    async setChatMuted(chatId, userId, muted) {
+        const hasAccess = await this.ensureChatAccess(chatId, userId);
+        if (!hasAccess) {
+            throw new Error("forbidden_chat_access");
+        }
+        await prisma.chatMember.update({
+            where: {
+                chatId_userId: { chatId, userId }
+            },
+            data: { muted }
+        });
+        return muted;
+    }
+    async setDirectChatBlocked(chatId, userId, blocked) {
+        const hasAccess = await this.ensureChatAccess(chatId, userId);
+        if (!hasAccess) {
+            throw new Error("forbidden_chat_access");
+        }
+        const peerId = this.getDirectPeerId(chatId, userId);
+        if (!peerId) {
+            throw new Error("invalid_block_target");
+        }
+        return setUserBlocked(userId, peerId, blocked);
+    }
+    async getPresenceAudienceUserIds(userId) {
+        const chatIds = await this.getUserChats(userId);
+        if (chatIds.length === 0)
+            return [];
+        const relatedMembers = await prisma.chatMember.findMany({
+            where: {
+                chatId: { in: chatIds },
+                userId: { not: userId }
+            },
+            select: { userId: true }
+        });
+        return Array.from(new Set(relatedMembers.map((member) => member.userId)));
+    }
+    async getUserLastSeenAt(userId) {
+        const user = await prismaUser.findUnique({
+            where: { id: userId },
+            select: { lastSeenAt: true }
+        });
+        return user?.lastSeenAt ?? null;
+    }
+    async updateUserLastSeen(userId, seenAt = new Date()) {
+        const user = await prismaUser.update({
+            where: { id: userId },
+            data: { lastSeenAt: seenAt },
+            select: { lastSeenAt: true }
+        });
+        return user.lastSeenAt ?? seenAt;
+    }
+    async getUserDisplayName(userId) {
+        const user = await prisma.user.findUnique({
+            where: { id: userId },
+            select: { displayName: true }
+        });
+        return user?.displayName ?? "Turna";
+    }
+    async getMessageById(messageId) {
+        return prisma.message.findUnique({
+            where: { id: messageId },
+            select: {
+                id: true,
+                chatId: true,
+                senderId: true,
+                text: true,
+                createdAt: true
+            }
+        });
+    }
+    async findOpenMessageReport(input) {
+        return prismaReportCase.findFirst({
+            where: {
+                reporterUserId: input.reporterUserId,
+                targetType: "MESSAGE",
+                messageId: input.messageId,
+                status: {
+                    in: ["OPEN", "UNDER_REVIEW"]
+                }
+            },
+            select: { id: true }
+        });
+    }
+    async createMessageReport(input) {
+        return prismaReportCase.create({
+            data: {
+                reporterUserId: input.reporterUserId,
+                targetType: "MESSAGE",
+                messageId: input.messageId,
+                chatId: input.chatId,
+                reportedUserId: input.reportedUserId,
+                reasonCode: input.reasonCode,
+                details: input.details
+            },
+            select: {
+                id: true,
+                status: true
+            }
+        });
+    }
+    async prepareAttachments(chatId, senderId, attachments) {
+        if (attachments.length === 0)
+            return [];
+        return Promise.all(attachments.map(async (attachment) => {
+            if (!attachment.objectKey.startsWith(`chat-media/${chatId}/${senderId}/`)) {
+                throw new Error("invalid_attachment_key");
+            }
+            const head = await getObjectHead(attachment.objectKey);
+            return {
+                objectKey: attachment.objectKey,
+                kind: fromAttachmentKind(attachment.kind),
+                fileName: attachment.fileName?.trim() || null,
+                contentType: head.contentType ?? attachment.contentType,
+                sizeBytes: head.contentLength != null
+                    ? Number(head.contentLength)
+                    : Math.max(0, Math.trunc(attachment.sizeBytes ?? 0)),
+                width: attachment.width != null ? Math.max(0, Math.trunc(attachment.width)) : null,
+                height: attachment.height != null ? Math.max(0, Math.trunc(attachment.height)) : null,
+                durationSeconds: attachment.durationSeconds != null
+                    ? Math.max(0, Math.trunc(attachment.durationSeconds))
+                    : null
+            };
+        }));
+    }
+}
+export const chatService = new ChatService();
