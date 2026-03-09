@@ -54,6 +54,12 @@
 @import flutter_callkit_incoming;
 #endif
 
+#if __has_include(<flutter_contacts/FlutterContactsPlugin.h>)
+#import <flutter_contacts/FlutterContactsPlugin.h>
+#else
+@import flutter_contacts;
+#endif
+
 #if __has_include(<flutter_webrtc/FlutterWebRTCPlugin.h>)
 #import <flutter_webrtc/FlutterWebRTCPlugin.h>
 #else
@@ -101,6 +107,7 @@
   [FLTFirebaseCorePlugin registerWithRegistrar:[registry registrarForPlugin:@"FLTFirebaseCorePlugin"]];
   [FLTFirebaseMessagingPlugin registerWithRegistrar:[registry registrarForPlugin:@"FLTFirebaseMessagingPlugin"]];
   [FlutterCallkitIncomingPlugin registerWithRegistrar:[registry registrarForPlugin:@"FlutterCallkitIncomingPlugin"]];
+  [FlutterContactsPlugin registerWithRegistrar:[registry registrarForPlugin:@"FlutterContactsPlugin"]];
   [FlutterWebRTCPlugin registerWithRegistrar:[registry registrarForPlugin:@"FlutterWebRTCPlugin"]];
   [FLTImagePickerPlugin registerWithRegistrar:[registry registrarForPlugin:@"FLTImagePickerPlugin"]];
   [LiveKitPlugin registerWithRegistrar:[registry registrarForPlugin:@"LiveKitPlugin"]];
