@@ -1417,10 +1417,13 @@ class _ChatPreviewListTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tileColor = isSelected
+        ? TurnaColors.primary.withValues(alpha: 0.08)
+        : chat.unreadCount > 0
+        ? TurnaColors.chatUnreadBg
+        : Colors.transparent;
     return Material(
-      color: isSelected
-          ? TurnaColors.primary.withValues(alpha: 0.08)
-          : Colors.transparent,
+      color: tileColor,
       child: InkWell(
         onTap: onTap,
         onLongPress: onLongPress,
@@ -3363,6 +3366,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                   : TurnaChatTokens.bubbleRadiusTail,
             ),
           ),
+          boxShadow: const [TurnaColors.shadowBubble],
         ),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -3523,11 +3527,13 @@ class _ChatRoomPageState extends State<ChatRoomPage>
             borderRadius: bubbleRadius,
             border: bubbleBorder,
             boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: mine ? 0.04 : 0.08),
-                blurRadius: mine ? 4 : 10,
-                offset: const Offset(0, 1),
-              ),
+              mine
+                  ? TurnaColors.shadowBubble
+                  : const BoxShadow(
+                      color: Color(0x14000000),
+                      blurRadius: 10,
+                      offset: Offset(0, 1),
+                    ),
               if (isHighlighted)
                 BoxShadow(
                   color: TurnaColors.accent.withValues(alpha: 0.18),
@@ -4564,9 +4570,7 @@ class _MessageMetaFooter extends StatelessWidget {
           Icon(
             Icons.star_rounded,
             size: 13,
-            color: mine
-                ? Colors.white.withValues(alpha: 0.86)
-                : TurnaColors.warning,
+            color: mine ? TurnaColors.chatOutgoingMeta : TurnaColors.warning,
           ),
           const SizedBox(width: 4),
         ],
@@ -4574,9 +4578,7 @@ class _MessageMetaFooter extends StatelessWidget {
           edited ? 'duzenlendi $timeLabel' : timeLabel,
           style: TextStyle(
             fontSize: 11,
-            color: mine
-                ? Colors.white.withValues(alpha: 0.8)
-                : TurnaColors.textMuted,
+            color: mine ? TurnaColors.chatOutgoingMeta : TurnaColors.textMuted,
           ),
         ),
         if (mine) ...[
@@ -4597,9 +4599,7 @@ class _StatusTick extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     IconData icon = Icons.done;
-    Color color = mine
-        ? Colors.white.withValues(alpha: 0.82)
-        : TurnaColors.textMuted;
+    Color color = mine ? TurnaColors.chatOutgoingMeta : TurnaColors.textMuted;
 
     if (status == ChatMessageStatus.sending) {
       icon = Icons.schedule;
@@ -4612,7 +4612,7 @@ class _StatusTick extends StatelessWidget {
       icon = Icons.done_all;
     } else if (status == ChatMessageStatus.read) {
       icon = Icons.done_all;
-      color = mine ? TurnaColors.accent : TurnaColors.info;
+      color = mine ? TurnaColors.chatOutgoingRead : TurnaColors.info;
     }
 
     return Icon(icon, size: 16, color: color);
@@ -5260,11 +5260,13 @@ class _VoiceMessageBubbleState extends State<_VoiceMessageBubble> {
         : _duration.inMilliseconds;
     final progress = (_position.inMilliseconds / totalMillis).clamp(0.0, 1.0);
     final backgroundColor = widget.mine
-        ? Colors.white.withValues(alpha: 0.16)
-        : TurnaColors.primary50;
-    final foregroundColor = widget.mine ? Colors.white : TurnaColors.primary;
+        ? Colors.white.withValues(alpha: 0.26)
+        : TurnaColors.chatUnreadBg;
+    final foregroundColor = widget.mine
+        ? TurnaColors.chatOutgoingText
+        : TurnaColors.primary;
     final subColor = widget.mine
-        ? Colors.white.withValues(alpha: 0.76)
+        ? TurnaColors.chatOutgoingText.withValues(alpha: 0.74)
         : TurnaColors.textMuted;
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
@@ -5285,7 +5287,7 @@ class _VoiceMessageBubbleState extends State<_VoiceMessageBubble> {
                 height: 34,
                 decoration: BoxDecoration(
                   color: widget.mine
-                      ? Colors.white.withValues(alpha: 0.2)
+                      ? Colors.white.withValues(alpha: 0.34)
                       : TurnaColors.primary,
                   shape: BoxShape.circle,
                 ),

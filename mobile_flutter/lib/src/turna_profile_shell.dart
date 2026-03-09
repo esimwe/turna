@@ -600,14 +600,22 @@ class _ProfileAvatar extends StatelessWidget {
   Widget build(BuildContext context) {
     final trimmedUrl = avatarUrl?.trim() ?? '';
     if (trimmedUrl.isNotEmpty) {
-      return CircleAvatar(
-        radius: radius,
-        backgroundColor: TurnaColors.primary100,
-        backgroundImage: NetworkImage(
-          trimmedUrl,
-          headers: authToken == null || authToken!.trim().isEmpty
-              ? null
-              : {'Authorization': 'Bearer ${authToken!.trim()}'},
+      return Container(
+        width: radius * 2,
+        height: radius * 2,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: TurnaColors.avatarGradient,
+          boxShadow: const [TurnaColors.shadowSoft],
+          image: DecorationImage(
+            image: NetworkImage(
+              trimmedUrl,
+              headers: authToken == null || authToken!.trim().isEmpty
+                  ? null
+                  : {'Authorization': 'Bearer ${authToken!.trim()}'},
+            ),
+            fit: BoxFit.cover,
+          ),
         ),
       );
     }
@@ -616,13 +624,19 @@ class _ProfileAvatar extends StatelessWidget {
     final initial = safeLabel.isEmpty
         ? '?'
         : safeLabel.characters.first.toUpperCase();
-    return CircleAvatar(
-      radius: radius,
-      backgroundColor: TurnaColors.primary100,
+    return Container(
+      width: radius * 2,
+      height: radius * 2,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: TurnaColors.avatarGradient,
+        boxShadow: const [TurnaColors.shadowSoft],
+      ),
+      alignment: Alignment.center,
       child: Text(
         initial,
         style: TextStyle(
-          color: TurnaColors.primary,
+          color: TurnaColors.textInverse,
           fontWeight: FontWeight.w700,
           fontSize: radius * 0.65,
         ),
