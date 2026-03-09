@@ -2,6 +2,7 @@ import type { Request } from "express";
 import { Router } from "express";
 import { z } from "zod";
 import { logError } from "../../lib/logger.js";
+import { otpService } from "../auth/otp.service.js";
 import { prisma } from "../../lib/prisma.js";
 import {
   assertObjectExists,
@@ -15,6 +16,7 @@ import { requireAuth } from "../../middleware/auth.js";
 import { buildAvatarUrl } from "./avatar-url.js";
 
 export const profileRouter = Router();
+const prismaUser = (prisma as unknown as { user: any }).user;
 const prismaReportCase = (prisma as unknown as { reportCase: any }).reportCase;
 
 const nullableTrimmedString = (maxLength: number) =>
@@ -62,6 +64,17 @@ const avatarUploadCompleteSchema = z.object({
 const submitUserReportSchema = z.object({
   reasonCode: z.string().trim().min(2).max(50),
   details: nullableTrimmedString(1000)
+});
+
+const requestPhoneChangeOtpSchema = z.object({
+  countryIso: z.string().trim().min(2).max(2),
+  dialCode: z.string().trim().min(1).max(10),
+  nationalNumber: z.string().trim().min(4).max(20)
+});
+
+const confirmPhoneChangeSchema = z.object({
+  phone: z.string().trim().min(8).max(20),
+  code: z.string().trim().min(4).max(8)
 });
 
 function toProfileDto(
@@ -222,6 +235,57 @@ profileRouter.post("/users/:userId/report", requireAuth, async (req, res) => {
   res.status(201).json({ data: { id: report.id, status: report.status } });
 });
 
+profileRouter.post("/request-phone-change-otp", requireAuth, async (req, res) => {
+  const parsed = requestPhoneChangeOtpSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
+    return;
+  }
+
+  try {
+    const result = await otpService.requestPhoneChangeOtp({
+      userId: req.authUserId!,
+      ...parsed.data,
+      ...otpService.buildRequestContext(req)
+    });
+
+    res.json({
+      data: {
+        sent: true,
+        phone: result.phone,
+        expiresInSeconds: result.expiresInSeconds,
+        retryAfterSeconds: result.retryAfterSeconds
+      }
+    });
+  } catch (error) {
+    const mapped = otpService.extractRequestOtpError(error);
+    res.status(mapped.status).json({
+      error: mapped.error,
+      ...(mapped.retryAfterSeconds ? { retryAfterSeconds: mapped.retryAfterSeconds } : {})
+    });
+  }
+});
+
+profileRouter.post("/confirm-phone-change", requireAuth, async (req, res) => {
+  const parsed = confirmPhoneChangeSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
+    return;
+  }
+
+  try {
+    const user = await otpService.confirmPhoneChange({
+      userId: req.authUserId!,
+      ...parsed.data
+    });
+
+    res.json({ data: toProfileDto(req, user) });
+  } catch (error) {
+    const mapped = otpService.extractVerifyOtpError(error);
+    res.status(mapped.status).json({ error: mapped.error });
+  }
+});
+
 profileRouter.put("/me", requireAuth, async (req, res) => {
   const parsed = updateProfileSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -231,22 +295,24 @@ profileRouter.put("/me", requireAuth, async (req, res) => {
 
   const userId = req.authUserId!;
 
-  if (parsed.data.phone) {
-    const phoneOwner = await prisma.user.findFirst({
-      where: {
-        phone: parsed.data.phone,
-        id: { not: userId }
-      },
-      select: { id: true }
-    });
-    if (phoneOwner) {
-      res.status(409).json({ error: "phone_already_in_use" });
-      return;
-    }
+  const currentUser = await prismaUser.findUnique({
+    where: { id: userId },
+    select: { id: true, phone: true }
+  });
+  if (!currentUser) {
+    res.status(404).json({ error: "user_not_found" });
+    return;
+  }
+
+  const normalizedCurrentPhone = currentUser.phone?.trim() || null;
+  const normalizedIncomingPhone = parsed.data.phone?.trim() || null;
+  if (normalizedIncomingPhone !== normalizedCurrentPhone) {
+    res.status(409).json({ error: "phone_change_requires_verification" });
+    return;
   }
 
   if (parsed.data.email) {
-    const emailOwner = await prisma.user.findFirst({
+    const emailOwner = await prismaUser.findFirst({
       where: {
         email: parsed.data.email,
         id: { not: userId }
@@ -259,7 +325,7 @@ profileRouter.put("/me", requireAuth, async (req, res) => {
     }
   }
 
-  const user = await prisma.user.update({
+  const user = await prismaUser.update({
     where: { id: userId },
     data: {
       displayName: parsed.data.displayName,

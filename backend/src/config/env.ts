@@ -44,6 +44,8 @@ const resolvedEnv = {
   NETGSM_PASSWORD: process.env.NETGSM_PASSWORD,
   NETGSM_HEADER: process.env.NETGSM_HEADER,
   OTP_SECRET: process.env.OTP_SECRET,
+  FIXED_OTP_CODE:
+    process.env.FIXED_OTP_CODE ?? process.env.OTP_FIXED_CODE ?? process.env.fixed_otp_code,
   OTP_TTL_SECONDS: process.env.OTP_TTL_SECONDS,
   OTP_RESEND_COOLDOWN_SECONDS: process.env.OTP_RESEND_COOLDOWN_SECONDS,
   OTP_MAX_ATTEMPTS: process.env.OTP_MAX_ATTEMPTS,
@@ -99,6 +101,10 @@ const envSchema = z.object({
   NETGSM_PASSWORD: z.string().min(1).optional(),
   NETGSM_HEADER: z.string().min(1).optional(),
   OTP_SECRET: z.string().min(12).default("turna-otp-dev-secret-change-me"),
+  FIXED_OTP_CODE: z
+    .string()
+    .regex(/^\d{4,8}$/)
+    .optional(),
   OTP_TTL_SECONDS: z.coerce.number().int().min(30).max(900).default(180),
   OTP_RESEND_COOLDOWN_SECONDS: z.coerce.number().int().min(15).max(300).default(60),
   OTP_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(5),

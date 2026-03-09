@@ -2,6 +2,7 @@ import bcrypt from "bcryptjs";
 import { Router } from "express";
 import { z } from "zod";
 import { signAccessToken } from "../../lib/jwt.js";
+import { otpService } from "./otp.service.js";
 import { prisma } from "../../lib/prisma.js";
 import { createAuthSessionForRequest, revokeAuthSession } from "../../lib/auth-sessions.js";
 import { assertUserCanAccessApp } from "../../lib/user-access.js";
@@ -18,6 +19,63 @@ const registerSchema = z.object({
 const loginSchema = z.object({
   username: z.string().min(3).max(32),
   password: z.string().min(4).max(128)
+});
+
+const requestOtpSchema = z.object({
+  countryIso: z.string().trim().min(2).max(2),
+  dialCode: z.string().trim().min(1).max(10),
+  nationalNumber: z.string().trim().min(4).max(20)
+});
+
+const verifyOtpSchema = z.object({
+  phone: z.string().trim().min(8).max(20),
+  code: z.string().trim().min(4).max(8)
+});
+
+authRouter.post("/request-otp", async (req, res) => {
+  const parsed = requestOtpSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
+    return;
+  }
+
+  try {
+    const result = await otpService.requestLoginOtp({
+      ...parsed.data,
+      ...otpService.buildRequestContext(req)
+    });
+
+    res.json({
+      data: {
+        sent: true,
+        phone: result.phone,
+        expiresInSeconds: result.expiresInSeconds,
+        retryAfterSeconds: result.retryAfterSeconds
+      }
+    });
+  } catch (error) {
+    const mapped = otpService.extractRequestOtpError(error);
+    res.status(mapped.status).json({
+      error: mapped.error,
+      ...(mapped.retryAfterSeconds ? { retryAfterSeconds: mapped.retryAfterSeconds } : {})
+    });
+  }
+});
+
+authRouter.post("/verify-otp", async (req, res) => {
+  const parsed = verifyOtpSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
+    return;
+  }
+
+  try {
+    const result = await otpService.verifyLoginOtp(parsed.data, req);
+    res.json(result);
+  } catch (error) {
+    const mapped = otpService.extractVerifyOtpError(error);
+    res.status(mapped.status).json({ error: mapped.error });
+  }
 });
 
 authRouter.post("/register", async (req, res) => {
