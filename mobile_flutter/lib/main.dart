@@ -405,17 +405,12 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await TurnaFirebase.ensureInitialized();
-  await TurnaNativeCallManager.initialize();
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
-  final session = await AuthSession.load();
-  runApp(TurnaApp(initialSession: session));
+  runApp(const TurnaApp());
 }
 
 class TurnaApp extends StatefulWidget {
-  const TurnaApp({super.key, required this.initialSession});
-
-  final AuthSession? initialSession;
+  const TurnaApp({super.key});
 
   @override
   State<TurnaApp> createState() => _TurnaAppState();
@@ -423,13 +418,13 @@ class TurnaApp extends StatefulWidget {
 
 class _TurnaAppState extends State<TurnaApp> with WidgetsBindingObserver {
   AuthSession? _session;
+  bool _bootstrapping = true;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _session = widget.initialSession;
-    turnaLog('app init', {'hasSession': _session != null});
+    unawaited(_bootstrap());
   }
 
   @override
@@ -442,6 +437,39 @@ class _TurnaAppState extends State<TurnaApp> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     kTurnaLifecycleState.value = state;
     turnaLog('app lifecycle', state.name);
+  }
+
+  Future<void> _bootstrap() async {
+    AuthSession? session;
+    try {
+      session = await AuthSession.load();
+    } catch (error) {
+      turnaLog('auth session load skipped', error);
+    }
+
+    if (mounted) {
+      setState(() {
+        _session = session;
+        _bootstrapping = false;
+      });
+      turnaLog('app init', {'hasSession': _session != null});
+    }
+
+    unawaited(_initializeServices());
+  }
+
+  Future<void> _initializeServices() async {
+    try {
+      await TurnaFirebase.ensureInitialized();
+    } catch (error) {
+      turnaLog('firebase boot init skipped', error);
+    }
+
+    try {
+      await TurnaNativeCallManager.initialize();
+    } catch (error) {
+      turnaLog('native call init skipped', error);
+    }
   }
 
   @override
@@ -469,7 +497,9 @@ class _TurnaAppState extends State<TurnaApp> with WidgetsBindingObserver {
       navigatorKey: kTurnaNavigatorKey,
       navigatorObservers: [kTurnaRouteObserver],
       theme: theme,
-      home: _session == null
+      home: _bootstrapping
+          ? const _TurnaLaunchPage()
+          : _session == null
           ? AuthPage(
               onAuthenticated: (session) => setState(() => _session = session),
             )
@@ -483,6 +513,23 @@ class _TurnaAppState extends State<TurnaApp> with WidgetsBindingObserver {
                 setState(() => _session = null);
               },
             ),
+    );
+  }
+}
+
+class _TurnaLaunchPage extends StatelessWidget {
+  const _TurnaLaunchPage();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(
+      body: Center(
+        child: SizedBox(
+          width: 28,
+          height: 28,
+          child: CircularProgressIndicator(strokeWidth: 2.6),
+        ),
+      ),
     );
   }
 }
