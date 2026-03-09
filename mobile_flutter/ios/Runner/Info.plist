@@ -38,7 +38,7 @@
 	<key>NSCameraUsageDescription</key>
 	<string>Fotograf ve video cekebilmek icin kamera erisimi gerekiyor.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Video cekerken ses kaydi icin mikrofon erisimi gerekiyor.</string>
+	<string>Sesli mesaj, arama ve video icin mikrofon erisimi gerekiyor.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
