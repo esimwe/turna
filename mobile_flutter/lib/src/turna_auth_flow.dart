@@ -1226,6 +1226,7 @@ class TurnaProfileOnboardingPage extends StatefulWidget {
 class _TurnaProfileOnboardingPageState
     extends State<TurnaProfileOnboardingPage> {
   final TextEditingController _displayNameController = TextEditingController();
+  final TextEditingController _usernameController = TextEditingController();
   final TextEditingController _aboutController = TextEditingController();
   final ImagePicker _imagePicker = ImagePicker();
 
@@ -1240,20 +1241,30 @@ class _TurnaProfileOnboardingPageState
     if (!_looksGeneratedDisplayName(widget.session.displayName)) {
       _displayNameController.text = widget.session.displayName;
     }
+    _usernameController.text =
+        widget.session.username ??
+        _buildUsernameSuggestion(_displayNameController.text);
     _displayNameController.addListener(_refresh);
+    _displayNameController.addListener(_syncUsernameSuggestion);
+    _usernameController.addListener(_refresh);
     _aboutController.addListener(_refresh);
   }
 
   @override
   void dispose() {
     _displayNameController.removeListener(_refresh);
+    _displayNameController.removeListener(_syncUsernameSuggestion);
+    _usernameController.removeListener(_refresh);
     _aboutController.removeListener(_refresh);
     _displayNameController.dispose();
+    _usernameController.dispose();
     _aboutController.dispose();
     super.dispose();
   }
 
-  bool get _canContinue => _displayNameController.text.trim().length >= 3;
+  bool get _canContinue =>
+      _displayNameController.text.trim().length >= 3 &&
+      _usernameController.text.trim().length >= 3;
 
   void _refresh() {
     if (mounted) setState(() {});
@@ -1261,6 +1272,46 @@ class _TurnaProfileOnboardingPageState
 
   bool _looksGeneratedDisplayName(String value) {
     return RegExp(r'^user_\d+$').hasMatch(value.trim().toLowerCase());
+  }
+
+  String _buildUsernameSuggestion(String raw) {
+    final fallbackDigits = (widget.session.phone ?? '')
+        .replaceAll(RegExp(r'\D+'), '')
+        .characters
+        .takeLast(4)
+        .toString();
+    final normalized = raw
+        .trim()
+        .toLowerCase()
+        .replaceAll('ç', 'c')
+        .replaceAll('ğ', 'g')
+        .replaceAll('ı', 'i')
+        .replaceAll('ö', 'o')
+        .replaceAll('ş', 's')
+        .replaceAll('ü', 'u')
+        .replaceAll(RegExp(r'[^a-z0-9._]+'), '_')
+        .replaceAll(RegExp(r'_+'), '_')
+        .replaceAll(RegExp(r'^[._]+|[._]+$'), '');
+    var candidate = normalized;
+    if (candidate.isEmpty) {
+      candidate = 'turna${fallbackDigits.isEmpty ? '001' : fallbackDigits}';
+    }
+    if (!RegExp(r'^[a-z]').hasMatch(candidate)) {
+      candidate = 'u_$candidate';
+    }
+    if (candidate.length < 3) {
+      candidate = '${candidate}turna'.substring(0, 3);
+    }
+    return candidate.length > 24 ? candidate.substring(0, 24) : candidate;
+  }
+
+  void _syncUsernameSuggestion() {
+    if (_usernameController.text.trim().isNotEmpty) return;
+    final suggestion = _buildUsernameSuggestion(_displayNameController.text);
+    _usernameController.value = TextEditingValue(
+      text: suggestion,
+      selection: TextSelection.collapsed(offset: suggestion.length),
+    );
   }
 
   String? _guessImageContentType(String fileName) {
@@ -1339,11 +1390,13 @@ class _TurnaProfileOnboardingPageState
       final updatedProfile = await ProfileApi.completeOnboarding(
         widget.session,
         displayName: _displayNameController.text.trim(),
+        username: _usernameController.text.trim(),
         about: _aboutController.text,
       );
 
       final updatedSession = widget.session.copyWith(
         displayName: updatedProfile.displayName,
+        username: updatedProfile.username,
         phone: updatedProfile.phone,
         avatarUrl: updatedProfile.avatarUrl,
         clearAvatarUrl: updatedProfile.avatarUrl == null,
@@ -1440,6 +1493,32 @@ class _TurnaProfileOnboardingPageState
               decoration: const InputDecoration(
                 labelText: 'Ad',
                 hintText: 'En az 3 karakter',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: _usernameController,
+              textInputAction: TextInputAction.next,
+              inputFormatters: [
+                FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9._@]')),
+                TextInputFormatter.withFunction((oldValue, newValue) {
+                  final normalized = newValue.text
+                      .toLowerCase()
+                      .replaceAll('@', '')
+                      .replaceAll(RegExp(r'[^a-z0-9._]+'), '');
+                  return TextEditingValue(
+                    text: normalized,
+                    selection: TextSelection.collapsed(
+                      offset: normalized.length,
+                    ),
+                  );
+                }),
+              ],
+              decoration: const InputDecoration(
+                labelText: 'Kullanıcı adı',
+                hintText: 'ornek_kullanici',
+                prefixText: '@',
                 border: OutlineInputBorder(),
               ),
             ),

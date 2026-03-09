@@ -105,10 +105,14 @@ class _SettingsPageState extends State<SettingsPage> {
           future: _profileFuture,
           builder: (context, snapshot) {
             final profile = snapshot.data;
+            final username =
+                profile?.username?.trim() ?? widget.session.username;
             final about = profile?.about?.trim();
-            final subtitle = (about != null && about.isNotEmpty)
-                ? about
-                : '@${widget.session.userId}';
+            final subtitle = (username != null && username.isNotEmpty)
+                ? '@$username'
+                : ((about != null && about.isNotEmpty)
+                      ? about
+                      : '@${widget.session.userId}');
 
             return ListView(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
@@ -703,6 +707,7 @@ class ProfilePage extends StatefulWidget {
 
 class _ProfilePageState extends State<ProfilePage> {
   final _displayNameController = TextEditingController();
+  final _usernameController = TextEditingController();
   final _aboutController = TextEditingController();
   final _phoneController = TextEditingController();
   final _emailController = TextEditingController();
@@ -725,6 +730,7 @@ class _ProfilePageState extends State<ProfilePage> {
   void dispose() {
     _displayNameController.removeListener(_refreshPreview);
     _displayNameController.dispose();
+    _usernameController.dispose();
     _aboutController.dispose();
     _phoneController.dispose();
     _emailController.dispose();
@@ -746,6 +752,7 @@ class _ProfilePageState extends State<ProfilePage> {
       final profile = await ProfileApi.fetchMe(widget.session);
       final updatedSession = widget.session.copyWith(
         displayName: profile.displayName,
+        username: profile.username,
         phone: profile.phone,
         avatarUrl: profile.avatarUrl,
         clearAvatarUrl: profile.avatarUrl == null,
@@ -769,6 +776,7 @@ class _ProfilePageState extends State<ProfilePage> {
 
   void _applyProfile(TurnaUserProfile profile) {
     _displayNameController.text = profile.displayName;
+    _usernameController.text = profile.username ?? '';
     _aboutController.text = profile.about ?? '';
     _phoneController.text = profile.phone ?? '';
     _emailController.text = profile.email ?? '';
@@ -785,6 +793,7 @@ class _ProfilePageState extends State<ProfilePage> {
 
     final updatedSession = widget.session.copyWith(
       displayName: updatedProfile.displayName,
+      username: updatedProfile.username,
       phone: updatedProfile.phone,
       avatarUrl: updatedProfile.avatarUrl,
       clearAvatarUrl: updatedProfile.avatarUrl == null,
@@ -896,6 +905,11 @@ class _ProfilePageState extends State<ProfilePage> {
       setState(() => _error = 'Ad en az 2 karakter olmalı.');
       return;
     }
+    final username = _usernameController.text.trim();
+    if (username.length < 3) {
+      setState(() => _error = 'Kullanici adi en az 3 karakter olmali.');
+      return;
+    }
 
     setState(() {
       _saving = true;
@@ -906,6 +920,7 @@ class _ProfilePageState extends State<ProfilePage> {
       final updatedProfile = await ProfileApi.updateMe(
         widget.session,
         displayName: displayName,
+        username: username,
         about: _aboutController.text,
         phone: _phoneController.text,
         email: _emailController.text,
@@ -1019,6 +1034,29 @@ class _ProfilePageState extends State<ProfilePage> {
             textInputAction: TextInputAction.next,
             decoration: const InputDecoration(
               labelText: 'Ad',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _usernameController,
+            textInputAction: TextInputAction.next,
+            inputFormatters: [
+              FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9._@]')),
+              TextInputFormatter.withFunction((oldValue, newValue) {
+                final normalized = newValue.text
+                    .toLowerCase()
+                    .replaceAll('@', '')
+                    .replaceAll(RegExp(r'[^a-z0-9._]+'), '');
+                return TextEditingValue(
+                  text: normalized,
+                  selection: TextSelection.collapsed(offset: normalized.length),
+                );
+              }),
+            ],
+            decoration: const InputDecoration(
+              labelText: 'Kullanıcı adı',
+              prefixText: '@',
               border: OutlineInputBorder(),
             ),
           ),
@@ -1292,13 +1330,13 @@ class _UserProfilePageState extends State<UserProfilePage> {
     }
 
     final about = profile.about?.trim();
-    final phone = profile.phone?.trim();
+    final username = profile.username?.trim();
     final subtitle = about == null || about.isEmpty
         ? 'Merhaba! Ben Turna kullaniyorum.'
         : about;
-    final displayedPhone = phone == null || phone.isEmpty
-        ? widget.userId
-        : phone;
+    final displayedUsername = username == null || username.isEmpty
+        ? null
+        : '@$username';
 
     return Scaffold(
       backgroundColor: TurnaColors.backgroundSoft,
@@ -1353,18 +1391,20 @@ class _UserProfilePageState extends State<UserProfilePage> {
               style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
             ),
           ),
-          const SizedBox(height: 6),
-          Center(
-            child: Text(
-              displayedPhone,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                fontSize: 15,
-                color: Color(0xFF68706C),
-                fontWeight: FontWeight.w500,
+          if (displayedUsername != null) ...[
+            const SizedBox(height: 6),
+            Center(
+              child: Text(
+                displayedUsername,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 15,
+                  color: Color(0xFF68706C),
+                  fontWeight: FontWeight.w500,
+                ),
               ),
             ),
-          ),
+          ],
           const SizedBox(height: 4),
           Center(
             child: Text(

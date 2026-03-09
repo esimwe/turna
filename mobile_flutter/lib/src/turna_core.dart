@@ -11,6 +11,9 @@ class ChatPreview {
     this.unreadCount = 0,
     this.isMuted = false,
     this.isBlockedByMe = false,
+    this.isArchived = false,
+    this.folderId,
+    this.folderName,
   });
 
   final String chatId;
@@ -22,6 +25,32 @@ class ChatPreview {
   final int unreadCount;
   final bool isMuted;
   final bool isBlockedByMe;
+  final bool isArchived;
+  final String? folderId;
+  final String? folderName;
+}
+
+class ChatFolder {
+  ChatFolder({required this.id, required this.name, required this.sortOrder});
+
+  final String id;
+  final String name;
+  final int sortOrder;
+
+  factory ChatFolder.fromMap(Map<String, dynamic> map) {
+    return ChatFolder(
+      id: (map['id'] ?? '').toString(),
+      name: (map['name'] ?? '').toString(),
+      sortOrder: (map['sortOrder'] as num?)?.toInt() ?? 0,
+    );
+  }
+}
+
+class ChatInboxData {
+  ChatInboxData({required this.chats, required this.folders});
+
+  final List<ChatPreview> chats;
+  final List<ChatFolder> folders;
 }
 
 class ChatUser {
@@ -36,6 +65,7 @@ class TurnaUserProfile {
   TurnaUserProfile({
     required this.id,
     required this.displayName,
+    this.username,
     this.phone,
     this.email,
     this.about,
@@ -46,6 +76,7 @@ class TurnaUserProfile {
 
   final String id;
   final String displayName;
+  final String? username;
   final String? phone;
   final String? email;
   final String? about;
@@ -57,6 +88,7 @@ class TurnaUserProfile {
     return TurnaUserProfile(
       id: (map['id'] ?? '').toString(),
       displayName: (map['displayName'] ?? '').toString(),
+      username: _nullableString(map['username']),
       phone: _nullableString(map['phone']),
       email: _nullableString(map['email']),
       about: _nullableString(map['about']),
@@ -145,6 +177,9 @@ class ChatMessage {
     required this.text,
     required this.status,
     required this.createdAt,
+    this.editedAt,
+    this.isEdited = false,
+    this.editHistory = const [],
     this.attachments = const [],
     this.errorText,
   });
@@ -154,6 +189,9 @@ class ChatMessage {
   final String text;
   final ChatMessageStatus status;
   final String createdAt;
+  final String? editedAt;
+  final bool isEdited;
+  final List<ChatMessageEditHistoryEntry> editHistory;
   final List<ChatAttachment> attachments;
   final String? errorText;
 
@@ -163,6 +201,9 @@ class ChatMessage {
     String? text,
     ChatMessageStatus? status,
     String? createdAt,
+    String? editedAt,
+    bool? isEdited,
+    List<ChatMessageEditHistoryEntry>? editHistory,
     List<ChatAttachment>? attachments,
     String? errorText,
     bool clearErrorText = false,
@@ -173,6 +214,9 @@ class ChatMessage {
       text: text ?? this.text,
       status: status ?? this.status,
       createdAt: createdAt ?? this.createdAt,
+      editedAt: editedAt ?? this.editedAt,
+      isEdited: isEdited ?? this.isEdited,
+      editHistory: editHistory ?? this.editHistory,
       attachments: attachments ?? this.attachments,
       errorText: clearErrorText ? null : (errorText ?? this.errorText),
     );
@@ -185,6 +229,16 @@ class ChatMessage {
       text: (map['text'] ?? '').toString(),
       status: ChatMessageStatusX.fromWire((map['status'] ?? '').toString()),
       createdAt: (map['createdAt'] ?? '').toString(),
+      editedAt: TurnaUserProfile._nullableString(map['editedAt']),
+      isEdited: map['isEdited'] == true,
+      editHistory: (map['editHistory'] as List<dynamic>? ?? const [])
+          .whereType<Map>()
+          .map(
+            (item) => ChatMessageEditHistoryEntry.fromMap(
+              Map<String, dynamic>.from(item),
+            ),
+          )
+          .toList(),
       attachments: (map['attachments'] as List<dynamic>? ?? const [])
           .whereType<Map>()
           .map(
@@ -201,6 +255,9 @@ class ChatMessage {
       'text': text,
       'status': status.name,
       'createdAt': createdAt,
+      'editedAt': editedAt,
+      'isEdited': isEdited,
+      'editHistory': editHistory.map((entry) => entry.toMap()).toList(),
       'attachments': attachments
           .map((attachment) => attachment.toMap())
           .toList(),
@@ -215,6 +272,16 @@ class ChatMessage {
       text: (map['text'] ?? '').toString(),
       status: ChatMessageStatusX.fromLocal((map['status'] ?? '').toString()),
       createdAt: (map['createdAt'] ?? '').toString(),
+      editedAt: TurnaUserProfile._nullableString(map['editedAt']),
+      isEdited: map['isEdited'] == true,
+      editHistory: (map['editHistory'] as List<dynamic>? ?? const [])
+          .whereType<Map>()
+          .map(
+            (item) => ChatMessageEditHistoryEntry.fromMap(
+              Map<String, dynamic>.from(item),
+            ),
+          )
+          .toList(),
       attachments: (map['attachments'] as List<dynamic>? ?? const [])
           .whereType<Map>()
           .map(
@@ -224,6 +291,22 @@ class ChatMessage {
       errorText: TurnaUserProfile._nullableString(map['errorText']),
     );
   }
+}
+
+class ChatMessageEditHistoryEntry {
+  ChatMessageEditHistoryEntry({required this.text, required this.editedAt});
+
+  final String text;
+  final String editedAt;
+
+  factory ChatMessageEditHistoryEntry.fromMap(Map<String, dynamic> map) {
+    return ChatMessageEditHistoryEntry(
+      text: (map['text'] ?? '').toString(),
+      editedAt: (map['editedAt'] ?? '').toString(),
+    );
+  }
+
+  Map<String, dynamic> toMap() => {'text': text, 'editedAt': editedAt};
 }
 
 enum ChatMessageStatus { sending, queued, failed, sent, delivered, read }
@@ -1097,6 +1180,7 @@ class AuthSession {
     required this.token,
     required this.userId,
     required this.displayName,
+    this.username,
     this.phone,
     this.avatarUrl,
     this.needsOnboarding = false,
@@ -1105,6 +1189,7 @@ class AuthSession {
   final String token;
   final String userId;
   final String displayName;
+  final String? username;
   final String? phone;
   final String? avatarUrl;
   final bool needsOnboarding;
@@ -1112,6 +1197,7 @@ class AuthSession {
   static const _tokenKey = 'turna_auth_token';
   static const _userIdKey = 'turna_auth_user_id';
   static const _displayNameKey = 'turna_auth_display_name';
+  static const _usernameKey = 'turna_auth_username';
   static const _phoneKey = 'turna_auth_phone';
   static const _avatarUrlKey = 'turna_auth_avatar_url';
   static const _needsOnboardingKey = 'turna_auth_needs_onboarding';
@@ -1121,6 +1207,7 @@ class AuthSession {
     final token = prefs.getString(_tokenKey);
     final userId = prefs.getString(_userIdKey);
     final displayName = prefs.getString(_displayNameKey);
+    final username = prefs.getString(_usernameKey);
     final phone = prefs.getString(_phoneKey);
     final avatarUrl = prefs.getString(_avatarUrlKey);
     final needsOnboarding = prefs.getBool(_needsOnboardingKey) ?? false;
@@ -1132,6 +1219,7 @@ class AuthSession {
       token: token,
       userId: userId,
       displayName: displayName,
+      username: username,
       phone: phone,
       avatarUrl: avatarUrl,
       needsOnboarding: needsOnboarding,
@@ -1142,6 +1230,7 @@ class AuthSession {
     String? token,
     String? userId,
     String? displayName,
+    String? username,
     String? phone,
     String? avatarUrl,
     bool? needsOnboarding,
@@ -1152,6 +1241,7 @@ class AuthSession {
       token: token ?? this.token,
       userId: userId ?? this.userId,
       displayName: displayName ?? this.displayName,
+      username: username ?? this.username,
       phone: clearPhone ? null : (phone ?? this.phone),
       avatarUrl: clearAvatarUrl ? null : (avatarUrl ?? this.avatarUrl),
       needsOnboarding: needsOnboarding ?? this.needsOnboarding,
@@ -1163,6 +1253,11 @@ class AuthSession {
     await prefs.setString(_tokenKey, token);
     await prefs.setString(_userIdKey, userId);
     await prefs.setString(_displayNameKey, displayName);
+    if (username == null || username!.trim().isEmpty) {
+      await prefs.remove(_usernameKey);
+    } else {
+      await prefs.setString(_usernameKey, username!);
+    }
     if (phone == null || phone!.trim().isEmpty) {
       await prefs.remove(_phoneKey);
     } else {
@@ -1181,6 +1276,7 @@ class AuthSession {
     await prefs.remove(_tokenKey);
     await prefs.remove(_userIdKey);
     await prefs.remove(_displayNameKey);
+    await prefs.remove(_usernameKey);
     await prefs.remove(_phoneKey);
     await prefs.remove(_avatarUrlKey);
     await prefs.remove(_needsOnboardingKey);
@@ -1271,6 +1367,7 @@ class AuthApi {
       token: token,
       userId: userId,
       displayName: displayName,
+      username: TurnaUserProfile._nullableString(user['username']),
       phone: TurnaUserProfile._nullableString(user['phone']),
       avatarUrl: TurnaUserProfile._nullableString(user['avatarUrl']),
       needsOnboarding: needsOnboarding,
@@ -2091,6 +2188,7 @@ class ProfileApi {
   static Future<TurnaUserProfile> updateMe(
     AuthSession session, {
     required String displayName,
+    required String username,
     required String about,
     required String phone,
     required String email,
@@ -2103,6 +2201,7 @@ class ProfileApi {
       },
       body: jsonEncode({
         'displayName': displayName,
+        'username': username.trim(),
         'about': about.trim(),
         'phone': phone.trim(),
         'email': email.trim(),
@@ -2120,6 +2219,7 @@ class ProfileApi {
   static Future<TurnaUserProfile> completeOnboarding(
     AuthSession session, {
     required String displayName,
+    required String username,
     required String about,
   }) async {
     final res = await http.put(
@@ -2128,7 +2228,11 @@ class ProfileApi {
         'Authorization': 'Bearer ${session.token}',
         'Content-Type': 'application/json',
       },
-      body: jsonEncode({'displayName': displayName, 'about': about.trim()}),
+      body: jsonEncode({
+        'displayName': displayName,
+        'username': username.trim(),
+        'about': about.trim(),
+      }),
     );
     if (res.statusCode >= 400) {
       throw TurnaApiException(_extractApiError(res.body, res.statusCode));
@@ -2207,6 +2311,8 @@ class ProfileApi {
           return 'Numara değişikliği için doğrulama gerekiyor.';
         case 'email_already_in_use':
           return 'Bu email başka bir hesapta kullanılıyor.';
+        case 'username_already_in_use':
+          return 'Bu kullanici adi baska bir hesapta kullaniliyor.';
         case 'validation_error':
           return 'Girilen bilgiler geçersiz.';
         case 'user_not_found':
@@ -2245,6 +2351,20 @@ class ProfileApi {
           return 'Bu mesaj sadece gonderen tarafindan herkesten silinebilir.';
         case 'message_delete_window_expired':
           return 'Mesaj artik herkesten silinemez. 10 dakika siniri doldu.';
+        case 'message_edit_not_allowed':
+          return 'Bu mesaj artik duzenlenemez.';
+        case 'message_edit_window_expired':
+          return 'Mesaj duzenleme suresi doldu. 10 dakika siniri doldu.';
+        case 'message_edit_text_required':
+          return 'Duzenlenecek mesaj bos olamaz.';
+        case 'chat_folder_limit_reached':
+          return 'En fazla 3 kategori olusturabilirsin.';
+        case 'chat_folder_exists':
+          return 'Bu kategori adi zaten kullaniliyor.';
+        case 'chat_folder_not_found':
+          return 'Kategori bulunamadi.';
+        case 'lookup_query_required':
+          return 'Telefon numarasi veya kullanici adi gir.';
         case 'uploaded_file_not_found':
           return 'Yüklenen dosya bulunamadı.';
         case 'avatar_not_found':
@@ -2279,7 +2399,7 @@ class ProfileApi {
 }
 
 class ChatApi {
-  static Future<List<ChatPreview>> fetchChats(
+  static Future<ChatInboxData> fetchChats(
     AuthSession session, {
     int refreshTick = 0,
   }) async {
@@ -2295,7 +2415,8 @@ class ChatApi {
 
       final chatsMap = jsonDecode(chatsRes.body) as Map<String, dynamic>;
       final chatsData = (chatsMap['data'] as List<dynamic>? ?? []);
-      return chatsData.map((item) {
+      final foldersData = (chatsMap['folders'] as List<dynamic>? ?? []);
+      final chats = chatsData.map((item) {
         final map = item as Map<String, dynamic>;
         final rawTitle = map['title']?.toString() ?? 'Chat';
         return ChatPreview(
@@ -2310,8 +2431,16 @@ class ChatApi {
           unreadCount: (map['unreadCount'] as num?)?.toInt() ?? 0,
           isMuted: map['isMuted'] == true,
           isBlockedByMe: map['isBlockedByMe'] == true,
+          isArchived: map['isArchived'] == true,
+          folderId: _nullableString(map['folderId']),
+          folderName: _nullableString(map['folderName']),
         );
       }).toList();
+      final folders = foldersData
+          .whereType<Map>()
+          .map((item) => ChatFolder.fromMap(Map<String, dynamic>.from(item)))
+          .toList();
+      return ChatInboxData(chats: chats, folders: folders);
     } on TurnaApiException {
       rethrow;
     } catch (_) {
@@ -2487,15 +2616,15 @@ class ChatApi {
     }
   }
 
-  static Future<TurnaUserProfile?> lookupUserByPhone(
+  static Future<TurnaUserProfile?> lookupUser(
     AuthSession session,
-    String phone,
+    String query,
   ) async {
     try {
       final headers = {'Authorization': 'Bearer ${session.token}'};
       final uri = Uri.parse(
         '$kBackendBaseUrl/api/chats/directory/lookup',
-      ).replace(queryParameters: {'phone': phone.trim()});
+      ).replace(queryParameters: {'q': query.trim()});
       final res = await http.get(uri, headers: headers);
       if (res.statusCode == 404) {
         return null;
@@ -2509,6 +2638,95 @@ class ChatApi {
       rethrow;
     } catch (_) {
       throw TurnaApiException('Kullanici aranamadi.');
+    }
+  }
+
+  static Future<ChatFolder> createFolder(
+    AuthSession session, {
+    required String name,
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse('$kBackendBaseUrl/api/chats/folders'),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'name': name.trim()}),
+      );
+      _throwIfApiError(res);
+
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = map['data'] as Map<String, dynamic>? ?? const {};
+      return ChatFolder.fromMap(data);
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Kategori olusturulamadi.');
+    }
+  }
+
+  static Future<void> deleteFolder(AuthSession session, String folderId) async {
+    try {
+      final res = await http.delete(
+        Uri.parse('$kBackendBaseUrl/api/chats/folders/$folderId'),
+        headers: {'Authorization': 'Bearer ${session.token}'},
+      );
+      _throwIfApiError(res);
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Kategori silinemedi.');
+    }
+  }
+
+  static Future<bool> setChatArchived(
+    AuthSession session, {
+    required String chatId,
+    required bool archived,
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse('$kBackendBaseUrl/api/chats/$chatId/archive'),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'archived': archived}),
+      );
+      _throwIfApiError(res);
+
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = map['data'] as Map<String, dynamic>? ?? const {};
+      return data['archived'] == true;
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException(
+        archived ? 'Sohbet arsivlenemedi.' : 'Sohbet arsivden cikarilamadi.',
+      );
+    }
+  }
+
+  static Future<void> setChatFolder(
+    AuthSession session, {
+    required String chatId,
+    required String? folderId,
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse('$kBackendBaseUrl/api/chats/$chatId/folder'),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'folderId': folderId}),
+      );
+      _throwIfApiError(res);
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Sohbet kategorisi guncellenemedi.');
     }
   }
 
@@ -2658,6 +2876,32 @@ class ChatApi {
       rethrow;
     } catch (_) {
       throw TurnaApiException('Mesaj herkesten silinemedi.');
+    }
+  }
+
+  static Future<ChatMessage> editMessage(
+    AuthSession session, {
+    required String messageId,
+    required String text,
+  }) async {
+    try {
+      final res = await http.put(
+        Uri.parse('$kBackendBaseUrl/api/chats/messages/$messageId'),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'text': text.trim()}),
+      );
+      _throwIfApiError(res);
+
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = map['data'] as Map<String, dynamic>? ?? const {};
+      return ChatMessage.fromMap(data);
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Mesaj duzenlenemedi.');
     }
   }
 

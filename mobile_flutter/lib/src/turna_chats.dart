@@ -201,11 +201,15 @@ class ChatsPage extends StatefulWidget {
 enum _ChatsMenuAction { select, markAllRead }
 
 class _ChatsPageState extends State<ChatsPage> {
+  static const String _allChatsFilterId = '__all__';
+  static const String _archivedChatsFilterId = '__archived__';
+
   int _refreshTick = 0;
   bool _selectionMode = false;
   bool _bulkActionBusy = false;
   final TextEditingController _searchController = TextEditingController();
   final Set<String> _selectedChatIds = <String>{};
+  String _selectedFilterId = _allChatsFilterId;
 
   @override
   void initState() {
@@ -273,6 +277,11 @@ class _ChatsPageState extends State<ChatsPage> {
         _selectedChatIds.add(chatId);
       }
     });
+  }
+
+  void _selectFilter(String filterId) {
+    if (_selectedFilterId == filterId) return;
+    setState(() => _selectedFilterId = filterId);
   }
 
   Future<void> _handleChatsMenuAction(_ChatsMenuAction action) async {
@@ -427,6 +436,217 @@ class _ChatsPageState extends State<ChatsPage> {
             muted
                 ? '"${chat.name}" sessize alindi.'
                 : '"${chat.name}" icin bildirimler yeniden acildi.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _bulkActionBusy = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
+  Future<void> _toggleArchiveChat(ChatPreview chat) async {
+    if (_bulkActionBusy) return;
+    setState(() => _bulkActionBusy = true);
+    try {
+      final archived = await ChatApi.setChatArchived(
+        widget.session,
+        chatId: chat.chatId,
+        archived: !chat.isArchived,
+      );
+      if (!mounted) return;
+      setState(() {
+        _bulkActionBusy = false;
+        if (!archived && _selectedFilterId == _archivedChatsFilterId) {
+          _selectedFilterId = _allChatsFilterId;
+        }
+        _refreshTick++;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            archived
+                ? '"${chat.name}" arsive tasindi.'
+                : '"${chat.name}" arsivden cikarildi.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _bulkActionBusy = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
+  Future<String?> _promptFolderName() async {
+    final controller = TextEditingController();
+    final name = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Kategori olustur'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLength: 24,
+          decoration: const InputDecoration(
+            hintText: 'Kategori adi',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Vazgec'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(controller.text.trim()),
+            child: const Text('Olustur'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    final trimmed = name?.trim();
+    if (trimmed == null || trimmed.isEmpty) return null;
+    return trimmed;
+  }
+
+  Future<void> _deleteFolder(ChatFolder folder) async {
+    if (_bulkActionBusy) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Kategori sil'),
+        content: Text(
+          '"${folder.name}" kategorisi silinsin mi? Kategoriye atanmis sohbetler Tumu icinde kalmaya devam edecek.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Vazgec'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Sil'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    setState(() => _bulkActionBusy = true);
+    try {
+      await ChatApi.deleteFolder(widget.session, folder.id);
+      if (!mounted) return;
+      setState(() {
+        _bulkActionBusy = false;
+        if (_selectedFilterId == folder.id) {
+          _selectedFilterId = _allChatsFilterId;
+        }
+        _refreshTick++;
+      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('"${folder.name}" silindi.')));
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _bulkActionBusy = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
+  Future<void> _assignChatFolder(
+    ChatPreview chat,
+    List<ChatFolder> folders,
+  ) async {
+    if (_bulkActionBusy) return;
+
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (chat.folderId != null)
+                ListTile(
+                  leading: const Icon(Icons.folder_off_outlined),
+                  title: const Text('Kategoriden cikar'),
+                  onTap: () => Navigator.pop(sheetContext, '__clear__'),
+                ),
+              for (final folder in folders)
+                ListTile(
+                  leading: Icon(
+                    chat.folderId == folder.id
+                        ? Icons.check_circle_rounded
+                        : Icons.folder_open_outlined,
+                  ),
+                  title: Text(folder.name),
+                  onTap: () => Navigator.pop(sheetContext, folder.id),
+                ),
+              if (folders.length < 3)
+                ListTile(
+                  leading: const Icon(Icons.create_new_folder_outlined),
+                  title: const Text('Yeni kategori olustur'),
+                  onTap: () => Navigator.pop(sheetContext, '__create__'),
+                ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+
+    if (!mounted || action == null) return;
+
+    String? nextFolderId;
+    if (action == '__create__') {
+      final name = await _promptFolderName();
+      if (!mounted || name == null) return;
+      setState(() => _bulkActionBusy = true);
+      try {
+        final folder = await ChatApi.createFolder(widget.session, name: name);
+        nextFolderId = folder.id;
+      } catch (error) {
+        if (!mounted) return;
+        setState(() => _bulkActionBusy = false);
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.toString())));
+        return;
+      }
+    } else if (action == '__clear__') {
+      nextFolderId = null;
+    } else {
+      nextFolderId = action;
+    }
+
+    setState(() => _bulkActionBusy = true);
+    try {
+      await ChatApi.setChatFolder(
+        widget.session,
+        chatId: chat.chatId,
+        folderId: nextFolderId,
+      );
+      if (!mounted) return;
+      setState(() {
+        _bulkActionBusy = false;
+        _refreshTick++;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            nextFolderId == null
+                ? '"${chat.name}" kategoriden cikarildi.'
+                : '"${chat.name}" kategoriye atandi.',
           ),
         ),
       );
@@ -594,7 +814,10 @@ class _ChatsPageState extends State<ChatsPage> {
     }
   }
 
-  Future<void> _showChatActions(ChatPreview chat) async {
+  Future<void> _showChatActions(
+    ChatPreview chat,
+    List<ChatFolder> folders,
+  ) async {
     if (_bulkActionBusy) return;
 
     await showModalBottomSheet<void>(
@@ -638,6 +861,24 @@ class _ChatsPageState extends State<ChatsPage> {
                     _toggleBlockChat(chat);
                   },
                 ),
+              _ChatListActionTile(
+                icon: chat.isArchived
+                    ? Icons.unarchive_outlined
+                    : Icons.archive_outlined,
+                title: chat.isArchived ? 'Arsivden cikar' : 'Arsive at',
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  _toggleArchiveChat(chat);
+                },
+              ),
+              _ChatListActionTile(
+                icon: Icons.folder_open_outlined,
+                title: 'Kategori ata',
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  _assignChatFolder(chat, folders);
+                },
+              ),
               _ChatListActionTile(
                 icon: Icons.layers_clear_outlined,
                 title: 'Sohbeti temizle',
@@ -736,7 +977,7 @@ class _ChatsPageState extends State<ChatsPage> {
                 ),
               ],
       ),
-      body: FutureBuilder<List<ChatPreview>>(
+      body: FutureBuilder<ChatInboxData>(
         future: ChatApi.fetchChats(widget.session, refreshTick: _refreshTick),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
@@ -758,7 +999,21 @@ class _ChatsPageState extends State<ChatsPage> {
             );
           }
 
-          final chats = snapshot.data ?? [];
+          final inbox =
+              snapshot.data ??
+              ChatInboxData(chats: const [], folders: const []);
+          final chats = inbox.chats;
+          final folders = inbox.folders;
+          final hasSelectedFolder =
+              _selectedFilterId == _allChatsFilterId ||
+              _selectedFilterId == _archivedChatsFilterId ||
+              folders.any((folder) => folder.id == _selectedFilterId);
+          if (!hasSelectedFolder) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!mounted) return;
+              setState(() => _selectedFilterId = _allChatsFilterId);
+            });
+          }
           final unreadTotal = chats.fold<int>(
             0,
             (sum, chat) => sum + chat.unreadCount,
@@ -767,18 +1022,42 @@ class _ChatsPageState extends State<ChatsPage> {
             if (!mounted) return;
             widget.onUnreadChanged?.call(unreadTotal);
           });
+
+          final archivedChats = chats.where((chat) => chat.isArchived).toList();
+          final activeChats = chats.where((chat) => !chat.isArchived).toList();
+          if (archivedChats.isEmpty &&
+              _selectedFilterId == _archivedChatsFilterId) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!mounted) return;
+              setState(() => _selectedFilterId = _allChatsFilterId);
+            });
+          }
+          final scopedChats = switch (_selectedFilterId) {
+            _archivedChatsFilterId => archivedChats,
+            _allChatsFilterId => activeChats,
+            _ =>
+              activeChats
+                  .where((chat) => chat.folderId == _selectedFilterId)
+                  .toList(),
+          };
           final query = _searchController.text.trim().toLowerCase();
-          final filteredChats = chats.where((chat) {
+          final filteredChats = scopedChats.where((chat) {
             if (query.isEmpty) return true;
             return chat.name.toLowerCase().contains(query) ||
                 chat.message.toLowerCase().contains(query);
           }).toList();
+          final archivedTopVisible = archivedChats.isNotEmpty;
+          final filtersVisible = folders.isNotEmpty;
+          final headerSlots =
+              1 + (archivedTopVisible ? 1 : 0) + (filtersVisible ? 1 : 0);
 
           return RefreshIndicator(
             onRefresh: () async => setState(() => _refreshTick++),
             child: ListView.builder(
               physics: const AlwaysScrollableScrollPhysics(),
-              itemCount: filteredChats.isEmpty ? 2 : filteredChats.length + 1,
+              itemCount: filteredChats.isEmpty
+                  ? headerSlots + 1
+                  : filteredChats.length + headerSlots,
               itemBuilder: (context, index) {
                 if (index == 0) {
                   return Padding(
@@ -805,8 +1084,57 @@ class _ChatsPageState extends State<ChatsPage> {
                   );
                 }
 
+                var cursor = 1;
+                if (archivedTopVisible && index == cursor) {
+                  return Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 2, 16, 6),
+                    child: _ArchivedChatsBanner(
+                      archivedCount: archivedChats.length,
+                      selected: _selectedFilterId == _archivedChatsFilterId,
+                      onTap: () => _selectFilter(
+                        _selectedFilterId == _archivedChatsFilterId
+                            ? _allChatsFilterId
+                            : _archivedChatsFilterId,
+                      ),
+                    ),
+                  );
+                }
+                if (archivedTopVisible) {
+                  cursor += 1;
+                }
+
+                if (filtersVisible && index == cursor) {
+                  return SizedBox(
+                    height: 46,
+                    child: ListView(
+                      scrollDirection: Axis.horizontal,
+                      padding: const EdgeInsets.fromLTRB(16, 2, 16, 8),
+                      children: [
+                        _ChatFilterChip(
+                          label: 'Tümü',
+                          selected: _selectedFilterId == _allChatsFilterId,
+                          onTap: () => _selectFilter(_allChatsFilterId),
+                        ),
+                        for (final folder in folders)
+                          Padding(
+                            padding: const EdgeInsets.only(left: 8),
+                            child: _ChatFilterChip(
+                              label: folder.name,
+                              selected: _selectedFilterId == folder.id,
+                              onTap: () => _selectFilter(folder.id),
+                              onLongPress: () => _deleteFolder(folder),
+                            ),
+                          ),
+                      ],
+                    ),
+                  );
+                }
+                if (filtersVisible) {
+                  cursor += 1;
+                }
+
                 if (filteredChats.isEmpty) {
-                  if (chats.isEmpty) {
+                  if (activeChats.isEmpty && archivedChats.isEmpty) {
                     return const _CenteredListState(
                       icon: Icons.chat_bubble_outline,
                       title: 'Henuz sohbet yok',
@@ -816,14 +1144,20 @@ class _ChatsPageState extends State<ChatsPage> {
                   }
                   return _CenteredListState(
                     icon: Icons.search_off,
-                    title: 'Sonuc bulunamadi',
+                    title: _selectedFilterId == _archivedChatsFilterId
+                        ? 'Arsiv bos'
+                        : 'Sonuc bulunamadi',
                     message:
-                        '"${_searchController.text.trim()}" icin eslesen sohbet yok.',
+                        _selectedFilterId == _archivedChatsFilterId &&
+                            query.isEmpty
+                        ? 'Arsivde sohbet yok.'
+                        : '"${_searchController.text.trim()}" icin eslesen sohbet yok.',
                   );
                 }
 
-                final chat = filteredChats[index - 1];
-                final isLastItem = index == filteredChats.length;
+                final chat = filteredChats[index - headerSlots];
+                final isLastItem =
+                    index == filteredChats.length + headerSlots - 1;
                 final isSelected = _selectedChatIds.contains(chat.chatId);
                 return Material(
                   color: isSelected
@@ -832,7 +1166,7 @@ class _ChatsPageState extends State<ChatsPage> {
                   child: InkWell(
                     onLongPress: () {
                       if (_selectionMode) return;
-                      _showChatActions(chat);
+                      _showChatActions(chat, folders);
                     },
                     onTap: () {
                       if (_selectionMode) {
@@ -1060,6 +1394,106 @@ class _ChatsNewChatActionButton extends StatelessWidget {
   }
 }
 
+class _ArchivedChatsBanner extends StatelessWidget {
+  const _ArchivedChatsBanner({
+    required this.archivedCount,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final int archivedCount;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: selected ? TurnaColors.primary50 : Colors.white,
+      borderRadius: BorderRadius.circular(18),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(18),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          child: Row(
+            children: [
+              Icon(
+                Icons.archive_outlined,
+                color: selected ? TurnaColors.primary : TurnaColors.textMuted,
+              ),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  'Arşiv Sohbetleri',
+                  style: TextStyle(
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w600,
+                    color: TurnaColors.text,
+                  ),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: selected
+                      ? TurnaColors.primary
+                      : TurnaColors.backgroundMuted,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  '$archivedCount',
+                  style: TextStyle(
+                    color: selected ? Colors.white : TurnaColors.textSoft,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ChatFilterChip extends StatelessWidget {
+  const _ChatFilterChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    this.onLongPress,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  final VoidCallback? onLongPress;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onLongPress: onLongPress,
+      child: ChoiceChip(
+        label: Text(label),
+        selected: selected,
+        onSelected: (_) => onTap(),
+        selectedColor: TurnaColors.primary.withValues(alpha: 0.16),
+        labelStyle: TextStyle(
+          color: selected ? TurnaColors.primaryDeep : TurnaColors.textSoft,
+          fontWeight: FontWeight.w600,
+        ),
+        side: BorderSide(
+          color: selected ? TurnaColors.primary : TurnaColors.border,
+        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+        backgroundColor: Colors.white,
+        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+    );
+  }
+}
+
 class _ChatPreviewMeta extends StatelessWidget {
   const _ChatPreviewMeta({required this.chat});
 
@@ -1179,6 +1613,18 @@ class _ChatPreviewSubtitle extends StatelessWidget {
   }
 }
 
+class _ComposerEditDraft {
+  const _ComposerEditDraft({
+    required this.messageId,
+    required this.reply,
+    required this.originalText,
+  });
+
+  final String messageId;
+  final TurnaReplyPayload? reply;
+  final String originalText;
+}
+
 class ChatRoomPage extends StatefulWidget {
   const ChatRoomPage({
     super.key,
@@ -1274,6 +1720,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   bool _hasComposerText = false;
   bool _loadingPeerCalls = false;
   TurnaReplyPayload? _replyDraft;
+  _ComposerEditDraft? _editingDraft;
   _PinnedMessageDraft? _pinnedMessage;
   List<TurnaCallHistoryItem> _peerCalls = const [];
   Set<String> _starredMessageIds = <String>{};
@@ -1728,6 +2175,41 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     );
   }
 
+  bool _canEditMessage(ChatMessage msg, {ParsedTurnaMessageText? parsed}) {
+    final resolved = parsed ?? parseTurnaMessageText(msg.text);
+    if (msg.senderId != widget.session.userId) return false;
+    if (_isMessageDeletedPlaceholder(msg, parsed: resolved)) return false;
+    if (resolved.text.trim().isEmpty) return false;
+    final createdAt = parseTurnaLocalDateTime(msg.createdAt);
+    if (createdAt == null) return false;
+    return DateTime.now().difference(createdAt).inMinutes < 10;
+  }
+
+  void _startEditingMessage(ChatMessage msg, ParsedTurnaMessageText parsed) {
+    final visibleText = parsed.text.trim();
+    setState(() {
+      _replyDraft = null;
+      _editingDraft = _ComposerEditDraft(
+        messageId: msg.id,
+        reply: parsed.reply,
+        originalText: visibleText,
+      );
+      _controller.value = TextEditingValue(
+        text: visibleText,
+        selection: TextSelection.collapsed(offset: visibleText.length),
+      );
+    });
+    _composerFocusNode.requestFocus();
+  }
+
+  void _cancelEditingMessage() {
+    if (_editingDraft == null) return;
+    setState(() {
+      _editingDraft = null;
+      _controller.clear();
+    });
+  }
+
   Future<List<int>> _downloadAttachmentBytes(ChatAttachment attachment) async {
     final url = attachment.url?.trim() ?? '';
     if (url.isEmpty) {
@@ -1853,6 +2335,10 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       _deletedMessageIds = next;
       _starredMessageIds = nextStarred;
       _softDeletedMessageIds = nextSoftDeleted;
+      if (_editingDraft?.messageId == msg.id) {
+        _editingDraft = null;
+        _controller.clear();
+      }
       if (wasPinned) {
         _pinnedMessage = null;
       }
@@ -1876,6 +2362,10 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     setState(() {
       _softDeletedMessageIds = nextSoftDeleted;
       _starredMessageIds = nextStarred;
+      if (_editingDraft?.messageId == msg.id) {
+        _editingDraft = null;
+        _controller.clear();
+      }
     });
     await _persistSoftDeletedMessages();
     await _persistStarredMessages();
@@ -1897,7 +2387,13 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       final nextSoftDeleted = Set<String>.from(_softDeletedMessageIds)
         ..remove(msg.id);
       if (mounted) {
-        setState(() => _softDeletedMessageIds = nextSoftDeleted);
+        setState(() {
+          _softDeletedMessageIds = nextSoftDeleted;
+          if (_editingDraft?.messageId == msg.id) {
+            _editingDraft = null;
+            _controller.clear();
+          }
+        });
       }
       await _persistSoftDeletedMessages();
       await _setPinnedPreviewIfNeeded(msg.id, 'Silindi.');
@@ -2096,6 +2592,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     final replyPayload = _replyPayloadForMessage(msg);
     final isStarred = _starredMessageIds.contains(msg.id);
     final textOnly = parsed.text.trim();
+    final canEdit = _canEditMessage(msg, parsed: parsed);
     await showModalBottomSheet<void>(
       context: context,
       builder: (sheetContext) {
@@ -2115,7 +2612,10 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                       label: 'Cevapla',
                       onTap: () {
                         Navigator.pop(sheetContext);
-                        setState(() => _replyDraft = replyPayload);
+                        setState(() {
+                          _editingDraft = null;
+                          _replyDraft = replyPayload;
+                        });
                         _composerFocusNode.requestFocus();
                       },
                     ),
@@ -2127,6 +2627,15 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                         _forwardMessage(msg);
                       },
                     ),
+                    if (canEdit)
+                      _MessageQuickAction(
+                        icon: Icons.edit_outlined,
+                        label: 'Duzenle',
+                        onTap: () {
+                          Navigator.pop(sheetContext);
+                          _startEditingMessage(msg, parsed);
+                        },
+                      ),
                     _MessageQuickAction(
                       icon: Icons.copy_all_outlined,
                       label: 'Kopyala',
@@ -2330,6 +2839,42 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     if (_attachmentBusy) return;
     final text = _controller.text.trim();
     if (text.isEmpty) return;
+    final editingDraft = _editingDraft;
+    if (editingDraft != null) {
+      final outboundText = editingDraft.reply == null
+          ? text
+          : buildTurnaReplyEncodedText(reply: editingDraft.reply!, text: text);
+      try {
+        final updated = await ChatApi.editMessage(
+          widget.session,
+          messageId: editingDraft.messageId,
+          text: outboundText,
+        );
+        _client.mergeServerMessage(updated);
+        await _setPinnedPreviewIfNeeded(
+          updated.id,
+          _previewSnippetForMessage(updated),
+        );
+        if (!mounted) return;
+        setState(() => _editingDraft = null);
+        _controller.clear();
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Mesaj duzenlendi.')));
+        return;
+      } on TurnaUnauthorizedException {
+        if (!mounted) return;
+        widget.onSessionExpired();
+        return;
+      } catch (error) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.toString())));
+        return;
+      }
+    }
+
     final outboundText = _replyDraft == null
         ? text
         : buildTurnaReplyEncodedText(reply: _replyDraft!, text: text);
@@ -2519,6 +3064,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       timeLabel: _formatMessageTime(msg.createdAt),
       mine: mine,
       status: msg.status,
+      edited: msg.isEdited,
       starred: _starredMessageIds.contains(msg.id),
     );
     final bubbleColor = mine
@@ -2667,6 +3213,14 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (_editingDraft != null)
+              Padding(
+                padding: const EdgeInsets.only(left: 48, right: 54, bottom: 8),
+                child: _ComposerEditBanner(
+                  draft: _editingDraft!,
+                  onClose: _cancelEditingMessage,
+                ),
+              ),
             if (_replyDraft != null)
               Padding(
                 padding: const EdgeInsets.only(left: 48, right: 54, bottom: 8),
@@ -2722,17 +3276,19 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                             minLines: 1,
                             maxLines: 5,
                             textCapitalization: TextCapitalization.sentences,
-                            decoration: const InputDecoration(
-                              hintText: 'Mesaj',
+                            decoration: InputDecoration(
+                              hintText: _editingDraft == null
+                                  ? 'Mesaj'
+                                  : 'Duzenlenmis mesaji yaz',
                               border: InputBorder.none,
-                              contentPadding: EdgeInsets.symmetric(
+                              contentPadding: const EdgeInsets.symmetric(
                                 horizontal: 8,
                                 vertical: 14,
                               ),
                             ),
                           ),
                         ),
-                        if (!_hasComposerText)
+                        if (!_hasComposerText && _editingDraft == null)
                           IconButton(
                             onPressed: _attachmentBusy
                                 ? null
@@ -3372,12 +3928,14 @@ class _MessageMetaFooter extends StatelessWidget {
     required this.timeLabel,
     required this.mine,
     required this.status,
+    this.edited = false,
     this.starred = false,
   });
 
   final String timeLabel;
   final bool mine;
   final ChatMessageStatus status;
+  final bool edited;
   final bool starred;
 
   @override
@@ -3396,7 +3954,7 @@ class _MessageMetaFooter extends StatelessWidget {
           const SizedBox(width: 4),
         ],
         Text(
-          timeLabel,
+          edited ? 'duzenlendi $timeLabel' : timeLabel,
           style: TextStyle(
             fontSize: 11,
             color: mine
@@ -3864,6 +4422,71 @@ class _ComposerReplyBanner extends StatelessWidget {
   }
 }
 
+class _ComposerEditBanner extends StatelessWidget {
+  const _ComposerEditBanner({required this.draft, required this.onClose});
+
+  final _ComposerEditDraft draft;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEFF6FF),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: TurnaColors.border),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 3,
+            height: 36,
+            decoration: BoxDecoration(
+              color: TurnaColors.primary,
+              borderRadius: BorderRadius.circular(999),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Mesaj duzenleniyor',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: TurnaColors.primary,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  draft.originalText,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: TurnaColors.textMuted,
+                    fontSize: 12.5,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            onPressed: onClose,
+            visualDensity: VisualDensity.compact,
+            icon: const Icon(Icons.close_rounded, size: 18),
+            color: TurnaColors.textMuted,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _PinnedMessageBar extends StatelessWidget {
   const _PinnedMessageBar({required this.pinned, required this.onClear});
 
@@ -4031,7 +4654,7 @@ class ForwardMessagePickerPage extends StatefulWidget {
 
 class _ForwardMessagePickerPageState extends State<ForwardMessagePickerPage> {
   final TextEditingController _searchController = TextEditingController();
-  late Future<List<ChatPreview>> _chatsFuture;
+  late Future<ChatInboxData> _chatsFuture;
 
   @override
   void initState() {
@@ -4057,7 +4680,7 @@ class _ForwardMessagePickerPageState extends State<ForwardMessagePickerPage> {
     final query = _searchController.text.trim().toLowerCase();
     return Scaffold(
       appBar: AppBar(title: const Text('Ilet')),
-      body: FutureBuilder<List<ChatPreview>>(
+      body: FutureBuilder<ChatInboxData>(
         future: _chatsFuture,
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
@@ -4071,7 +4694,8 @@ class _ForwardMessagePickerPageState extends State<ForwardMessagePickerPage> {
             );
           }
 
-          final chats = (snapshot.data ?? const <ChatPreview>[])
+          final chats = (snapshot.data?.chats ?? const <ChatPreview>[])
+              .where((chat) => !chat.isArchived)
               .where((chat) => chat.chatId != widget.currentChatId)
               .where((chat) {
                 if (query.isEmpty) return true;
@@ -6648,7 +7272,7 @@ class NewChatPage extends StatefulWidget {
 }
 
 class _NewChatPageState extends State<NewChatPage> {
-  final TextEditingController _phoneController = TextEditingController();
+  final TextEditingController _lookupController = TextEditingController();
   TurnaUserProfile? _foundUser;
   bool _loading = false;
   String? _error;
@@ -6656,20 +7280,20 @@ class _NewChatPageState extends State<NewChatPage> {
   @override
   void initState() {
     super.initState();
-    _phoneController.addListener(() => setState(() {}));
+    _lookupController.addListener(() => setState(() {}));
   }
 
   @override
   void dispose() {
-    _phoneController.dispose();
+    _lookupController.dispose();
     super.dispose();
   }
 
-  Future<void> _searchByPhone() async {
-    final phone = _phoneController.text.trim();
-    if (phone.isEmpty) {
+  Future<void> _searchUser() async {
+    final query = _lookupController.text.trim();
+    if (query.isEmpty) {
       setState(() {
-        _error = 'Telefon numarasini ulke kodu ile birlikte gir.';
+        _error = 'Telefon numarasi veya kullanici adi gir.';
         _foundUser = null;
       });
       return;
@@ -6682,13 +7306,13 @@ class _NewChatPageState extends State<NewChatPage> {
     });
 
     try {
-      final user = await ChatApi.lookupUserByPhone(widget.session, phone);
+      final user = await ChatApi.lookupUser(widget.session, query);
       if (!mounted) return;
       setState(() {
         _foundUser = user;
         _loading = false;
         _error = user == null
-            ? 'Bu numarayla kayitli bir Turna hesabi bulunamadi.'
+            ? 'Bu sorguyla kayitli bir Turna hesabi bulunamadi.'
             : null;
       });
     } catch (error) {
@@ -6724,10 +7348,10 @@ class _NewChatPageState extends State<NewChatPage> {
 
   @override
   Widget build(BuildContext context) {
-    final phoneInput = _phoneController.text.trim();
+    final lookupInput = _lookupController.text.trim();
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Telefon ile sohbet')),
+      appBar: AppBar(title: const Text('Telefon veya kullanıcı adı')),
       body: Column(
         children: [
           Padding(
@@ -6736,7 +7360,7 @@ class _NewChatPageState extends State<NewChatPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  'Tum kullanicilar listelenmez. Sohbet baslatmak icin telefon numarasini tam olarak gir.',
+                  'Tum kullanicilar listelenmez. Sohbet baslatmak icin telefon numarasi veya kullanici adini tam olarak gir.',
                   style: TextStyle(
                     fontSize: 13,
                     height: 1.4,
@@ -6745,16 +7369,16 @@ class _NewChatPageState extends State<NewChatPage> {
                 ),
                 const SizedBox(height: 12),
                 TextField(
-                  controller: _phoneController,
-                  keyboardType: TextInputType.phone,
+                  controller: _lookupController,
+                  keyboardType: TextInputType.text,
                   decoration: InputDecoration(
-                    hintText: '+905413432140',
-                    prefixIcon: const Icon(Icons.phone_outlined),
-                    suffixIcon: phoneInput.isEmpty
+                    hintText: '+905413432140 veya @kullaniciadi',
+                    prefixIcon: const Icon(Icons.person_search_outlined),
+                    suffixIcon: lookupInput.isEmpty
                         ? null
                         : IconButton(
                             onPressed: () {
-                              _phoneController.clear();
+                              _lookupController.clear();
                               setState(() {
                                 _foundUser = null;
                                 _error = null;
@@ -6769,13 +7393,13 @@ class _NewChatPageState extends State<NewChatPage> {
                       borderSide: BorderSide.none,
                     ),
                   ),
-                  onSubmitted: (_) => _searchByPhone(),
+                  onSubmitted: (_) => _searchUser(),
                 ),
                 const SizedBox(height: 12),
                 SizedBox(
                   width: double.infinity,
                   child: FilledButton(
-                    onPressed: _loading ? null : _searchByPhone,
+                    onPressed: _loading ? null : _searchUser,
                     child: Text(_loading ? 'Araniyor...' : 'Kisiyi bul'),
                   ),
                 ),
@@ -6793,17 +7417,17 @@ class _NewChatPageState extends State<NewChatPage> {
                     title: 'Kullanici bulunamadi',
                     message: _error!,
                     primaryLabel: 'Tekrar ara',
-                    onPrimary: _searchByPhone,
+                    onPrimary: _searchUser,
                   )
                 : _foundUser == null
                 ? _CenteredState(
                     icon: Icons.phone_forwarded_outlined,
-                    title: 'Telefon numarasi ile ara',
+                    title: 'Telefon veya kullanıcı adı ile ara',
                     message:
-                        'Kayitli bir kullaniciyi bulmak icin ulke kodu ile birlikte numarasini yaz.',
+                        'Kayitli bir kullaniciyi bulmak icin ulke kodu ile birlikte numarasini veya @kullanici adini yaz.',
                     primaryLabel: 'Ornek doldur',
                     onPrimary: () {
-                      _phoneController.text = '+905413432140';
+                      _lookupController.text = '@turna';
                     },
                   )
                 : ListView(
@@ -6832,13 +7456,18 @@ class _NewChatPageState extends State<NewChatPage> {
                                 fontWeight: FontWeight.w700,
                               ),
                             ),
-                            const SizedBox(height: 4),
-                            Text(
-                              _foundUser!.phone ?? '',
-                              style: const TextStyle(
-                                color: TurnaColors.textMuted,
+                            if ((_foundUser!.username ?? '')
+                                .trim()
+                                .isNotEmpty) ...[
+                              const SizedBox(height: 4),
+                              Text(
+                                '@${_foundUser!.username!.trim()}',
+                                style: const TextStyle(
+                                  color: TurnaColors.textMuted,
+                                  fontWeight: FontWeight.w500,
+                                ),
                               ),
-                            ),
+                            ],
                             if ((_foundUser!.about ?? '')
                                 .trim()
                                 .isNotEmpty) ...[
