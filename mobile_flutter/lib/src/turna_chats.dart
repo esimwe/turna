@@ -1710,15 +1710,27 @@ class _ChatTimelineEntry {
 
 class _ChatRoomPageState extends State<ChatRoomPage>
     with WidgetsBindingObserver, RouteAware {
+  static const Duration _voiceRecordTick = Duration(milliseconds: 140);
+  static const Duration _voiceMinDuration = Duration(milliseconds: 600);
+  static const double _voiceCancelThreshold = 112;
+  static const double _voiceLockThreshold = 84;
+
   late final TurnaSocketClient _client;
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   final ImagePicker _mediaPicker = ImagePicker();
   final FocusNode _composerFocusNode = FocusNode();
+  final rec.AudioRecorder _voiceRecorder = rec.AudioRecorder();
+  final Stopwatch _voiceStopwatch = Stopwatch();
   bool _showScrollToBottom = false;
   bool _attachmentBusy = false;
   bool _hasComposerText = false;
   bool _loadingPeerCalls = false;
+  bool _voiceRecording = false;
+  bool _voiceRecordingLocked = false;
+  bool _voiceRecordingPaused = false;
+  bool _voiceRecorderBusy = false;
+  bool _voiceSlideCancelArmed = false;
   TurnaReplyPayload? _replyDraft;
   _ComposerEditDraft? _editingDraft;
   _PinnedMessageDraft? _pinnedMessage;
@@ -1731,6 +1743,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   Timer? _messageHighlightTimer;
   String? _highlightedMessageId;
   PageRoute<dynamic>? _route;
+  Timer? _voiceRecordTimer;
+  String? _voiceRecordingPath;
+  double _voiceSlideProgress = 0;
 
   String? get _peerUserId =>
       ChatApi.extractPeerUserId(widget.chat.chatId, widget.session.userId);
@@ -2009,9 +2024,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     }
   }
 
-  void _showVoiceMessagePlaceholder() {
+  void _showVoiceMessageHint() {
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Sesli mesaj yakinda eklenecek.')),
+      const SnackBar(content: Text('Ses kaydi icin mikrofona basili tut.')),
     );
   }
 
@@ -2019,6 +2034,274 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text('$label yakinda eklenecek.')));
+  }
+
+  String _formatVoiceDuration(Duration duration) {
+    final minutes = duration.inMinutes.toString().padLeft(2, '0');
+    final seconds = (duration.inSeconds % 60).toString().padLeft(2, '0');
+    return '$minutes:$seconds';
+  }
+
+  Duration get _voiceDuration => _voiceStopwatch.elapsed;
+
+  void _tickVoiceRecording() {
+    if (!mounted || !_voiceRecording || _voiceRecordingPaused) return;
+    setState(() {});
+  }
+
+  void _resetVoiceRecordingState() {
+    _voiceRecordTimer?.cancel();
+    _voiceRecordTimer = null;
+    _voiceStopwatch
+      ..stop()
+      ..reset();
+    _voiceRecording = false;
+    _voiceRecordingLocked = false;
+    _voiceRecordingPaused = false;
+    _voiceSlideCancelArmed = false;
+    _voiceSlideProgress = 0;
+    _voiceRecordingPath = null;
+  }
+
+  Future<void> _startVoiceRecording() async {
+    if (_attachmentBusy ||
+        _voiceRecorderBusy ||
+        _voiceRecording ||
+        _hasComposerText ||
+        _editingDraft != null) {
+      return;
+    }
+
+    FocusScope.of(context).unfocus();
+    setState(() => _voiceRecorderBusy = true);
+
+    try {
+      final hasPermission = await _voiceRecorder.hasPermission();
+      if (!hasPermission) {
+        throw TurnaApiException(
+          'Sesli mesaj icin mikrofon izni vermen gerekiyor.',
+        );
+      }
+
+      final tempDir = await getTemporaryDirectory();
+      final fileName =
+          'turna-voice-${DateTime.now().millisecondsSinceEpoch}.m4a';
+      final path = '${tempDir.path}/$fileName';
+
+      await _voiceRecorder.start(
+        const rec.RecordConfig(
+          encoder: rec.AudioEncoder.aacLc,
+          bitRate: 128000,
+          sampleRate: 44100,
+        ),
+        path: path,
+      );
+
+      _voiceRecordTimer?.cancel();
+      _voiceStopwatch
+        ..reset()
+        ..start();
+      _voiceRecordTimer = Timer.periodic(
+        _voiceRecordTick,
+        (_) => _tickVoiceRecording(),
+      );
+
+      if (!mounted) return;
+      setState(() {
+        _voiceRecording = true;
+        _voiceRecordingLocked = false;
+        _voiceRecordingPaused = false;
+        _voiceSlideCancelArmed = false;
+        _voiceSlideProgress = 0;
+        _voiceRecordingPath = path;
+        _voiceRecorderBusy = false;
+      });
+    } on TurnaApiException catch (error) {
+      if (!mounted) return;
+      setState(() => _voiceRecorderBusy = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.message)));
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _voiceRecorderBusy = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Ses kaydi baslatilamadi.')));
+      turnaLog('voice record start failed', error);
+    }
+  }
+
+  void _handleVoiceRecordingMove(LongPressMoveUpdateDetails details) {
+    if (!_voiceRecording || _voiceRecordingLocked) return;
+    final slideProgress =
+        ((-details.offsetFromOrigin.dx) / _voiceCancelThreshold).clamp(
+          0.0,
+          1.0,
+        );
+    final lockProgress = ((-details.offsetFromOrigin.dy) / _voiceLockThreshold)
+        .clamp(0.0, 1.0);
+    if (lockProgress >= 1) {
+      setState(() {
+        _voiceRecordingLocked = true;
+        _voiceSlideCancelArmed = false;
+        _voiceSlideProgress = 0;
+      });
+      return;
+    }
+    setState(() {
+      _voiceSlideProgress = slideProgress;
+      _voiceSlideCancelArmed = slideProgress >= 1;
+    });
+  }
+
+  Future<void> _handleVoiceRecordingRelease() async {
+    if (!_voiceRecording) return;
+    if (_voiceRecordingLocked) return;
+    if (_voiceSlideCancelArmed) {
+      await _cancelVoiceRecording();
+      return;
+    }
+    await _finishVoiceRecording(send: true);
+  }
+
+  Future<void> _toggleLockedVoicePause() async {
+    if (!_voiceRecording || !_voiceRecordingLocked || _voiceRecorderBusy) {
+      return;
+    }
+    setState(() => _voiceRecorderBusy = true);
+    try {
+      if (_voiceRecordingPaused) {
+        await _voiceRecorder.resume();
+        _voiceStopwatch.start();
+      } else {
+        await _voiceRecorder.pause();
+        _voiceStopwatch.stop();
+      }
+      if (!mounted) return;
+      setState(() {
+        _voiceRecordingPaused = !_voiceRecordingPaused;
+        _voiceRecorderBusy = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _voiceRecorderBusy = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Ses kaydi guncellenemedi.')),
+      );
+      turnaLog('voice record pause toggle failed', error);
+    }
+  }
+
+  Future<void> _cancelVoiceRecording({bool showFeedback = false}) async {
+    final path = _voiceRecordingPath;
+    _voiceRecordTimer?.cancel();
+    _voiceStopwatch.stop();
+    try {
+      await _voiceRecorder.cancel();
+    } catch (error) {
+      turnaLog('voice record cancel failed', error);
+    }
+    if (path != null) {
+      final file = File(path);
+      if (await file.exists()) {
+        try {
+          await file.delete();
+        } catch (_) {}
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      _voiceRecorderBusy = false;
+      _resetVoiceRecordingState();
+    });
+    if (showFeedback) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Sesli mesaj silindi.')));
+    }
+  }
+
+  Future<void> _finishVoiceRecording({required bool send}) async {
+    if (_voiceRecorderBusy) return;
+    if (mounted) {
+      setState(() => _voiceRecorderBusy = true);
+    } else {
+      _voiceRecorderBusy = true;
+    }
+    final capturedDuration = _voiceDuration;
+    final fallbackPath = _voiceRecordingPath;
+    _voiceRecordTimer?.cancel();
+    _voiceStopwatch.stop();
+
+    String? resolvedPath;
+    try {
+      resolvedPath = send ? await _voiceRecorder.stop() : null;
+    } catch (error) {
+      turnaLog('voice record stop failed', error);
+    }
+
+    if (mounted) {
+      setState(() {
+        _voiceRecorderBusy = false;
+        _resetVoiceRecordingState();
+      });
+    } else {
+      _resetVoiceRecordingState();
+    }
+
+    final path = resolvedPath ?? fallbackPath;
+    if (!send || path == null || path.trim().isEmpty) return;
+
+    if (capturedDuration < _voiceMinDuration) {
+      final file = File(path);
+      if (await file.exists()) {
+        try {
+          await file.delete();
+        } catch (_) {}
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Sesli mesaj cok kisa.')));
+      }
+      return;
+    }
+
+    final file = File(path);
+    if (!await file.exists()) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Ses kaydi bulunamadi.')));
+      }
+      return;
+    }
+
+    final bytes = await file.readAsBytes();
+    if (bytes.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Ses kaydi bos geldi.')));
+      }
+      return;
+    }
+
+    await _sendPickedAttachment(
+      kind: ChatAttachmentKind.file,
+      fileName: 'sesli-mesaj-${DateTime.now().millisecondsSinceEpoch}.m4a',
+      contentType: 'audio/mp4',
+      readBytes: () async => bytes,
+      sizeBytes: bytes.length,
+      durationSeconds: math.max(1, capturedDuration.inSeconds),
+    );
+
+    try {
+      if (await file.exists()) {
+        await file.delete();
+      }
+    } catch (_) {}
   }
 
   Future<void> _loadPinnedMessage() async {
@@ -3167,6 +3450,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
               if (visibleAttachments.isNotEmpty) ...[
                 _ChatAttachmentList(
                   attachments: visibleAttachments,
+                  mine: mine,
                   onTap: _openAttachment,
                   formatFileSize: _formatFileSize,
                 ),
@@ -3206,6 +3490,38 @@ class _ChatRoomPageState extends State<ChatRoomPage>
 
   Widget _buildComposer() {
     final focused = _composerFocusNode.hasFocus;
+    if (_voiceRecording) {
+      return SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 160),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(28),
+              border: Border.all(
+                color: _voiceSlideCancelArmed
+                    ? TurnaColors.error.withValues(alpha: 0.32)
+                    : TurnaColors.border,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.05),
+                  blurRadius: 10,
+                  offset: const Offset(0, 1),
+                ),
+              ],
+            ),
+            child: _voiceRecordingLocked
+                ? _buildLockedVoiceRecorderComposer()
+                : _buildHoldVoiceRecorderComposer(),
+          ),
+        ),
+      );
+    }
+
     return SafeArea(
       top: false,
       child: Padding(
@@ -3320,27 +3636,46 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                             color: TurnaColors.surface,
                           ),
                         )
-                      : Container(
+                      : SizedBox(
                           key: const ValueKey('mic'),
                           width: 46,
                           height: 46,
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            shape: BoxShape.circle,
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.05),
-                                blurRadius: 8,
-                                offset: const Offset(0, 1),
-                              ),
-                            ],
-                          ),
-                          child: IconButton(
-                            onPressed: _attachmentBusy
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: _attachmentBusy
                                 ? null
-                                : _showVoiceMessagePlaceholder,
-                            icon: const Icon(Icons.mic_none_rounded),
-                            color: TurnaColors.textSoft,
+                                : _showVoiceMessageHint,
+                            onLongPressStart: _attachmentBusy
+                                ? null
+                                : (_) => unawaited(_startVoiceRecording()),
+                            onLongPressMoveUpdate: _attachmentBusy
+                                ? null
+                                : _handleVoiceRecordingMove,
+                            onLongPressEnd: _attachmentBusy
+                                ? null
+                                : (_) =>
+                                      unawaited(_handleVoiceRecordingRelease()),
+                            child: Container(
+                              width: 46,
+                              height: 46,
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                shape: BoxShape.circle,
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withValues(alpha: 0.05),
+                                    blurRadius: 8,
+                                    offset: const Offset(0, 1),
+                                  ),
+                                ],
+                              ),
+                              child: Icon(
+                                Icons.mic_none_rounded,
+                                color: _voiceRecorderBusy
+                                    ? TurnaColors.textMuted
+                                    : TurnaColors.textSoft,
+                              ),
+                            ),
                           ),
                         ),
                 ),
@@ -3352,12 +3687,173 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     );
   }
 
+  Widget _buildHoldVoiceRecorderComposer() {
+    final danger = _voiceSlideCancelArmed;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          children: [
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: danger
+                    ? TurnaColors.error.withValues(alpha: 0.14)
+                    : TurnaColors.primary50,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                Icons.mic_rounded,
+                color: danger ? TurnaColors.error : TurnaColors.primary,
+                size: 19,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Text(
+              _formatVoiceDuration(_voiceDuration),
+              style: const TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+                color: TurnaColors.text,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Opacity(
+                opacity: 1 - (_voiceSlideProgress * 0.45),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      Icons.chevron_left_rounded,
+                      size: 20,
+                      color: danger ? TurnaColors.error : TurnaColors.textMuted,
+                    ),
+                    Text(
+                      danger ? 'Birakinca silinecek' : 'iptal icin kaydir',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: danger
+                            ? TurnaColors.error
+                            : TurnaColors.textMuted,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Container(
+              width: 40,
+              height: 40,
+              decoration: const BoxDecoration(
+                color: TurnaColors.primary,
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.mic_rounded,
+                color: Colors.white,
+                size: 18,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            const SizedBox(width: 46),
+            Expanded(
+              child: _VoiceWaveformStrip(
+                color: danger ? TurnaColors.error : TurnaColors.primary,
+                activeBars: math.min(
+                  _VoiceWaveformStrip.barCount,
+                  ((_voiceDuration.inMilliseconds / 180).floor() %
+                          _VoiceWaveformStrip.barCount) +
+                      4,
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Text(
+              'yukari kaydirip kilitle',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: TurnaColors.textMuted.withValues(alpha: 0.9),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildLockedVoiceRecorderComposer() {
+    final paused = _voiceRecordingPaused;
+    return Row(
+      children: [
+        _VoiceComposerAction(
+          icon: Icons.delete_outline_rounded,
+          backgroundColor: TurnaColors.error.withValues(alpha: 0.12),
+          foregroundColor: TurnaColors.error,
+          onTap: _voiceRecorderBusy
+              ? null
+              : () => unawaited(_cancelVoiceRecording(showFeedback: true)),
+        ),
+        const SizedBox(width: 12),
+        Text(
+          _formatVoiceDuration(_voiceDuration),
+          style: const TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.w700,
+            color: TurnaColors.text,
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: _VoiceWaveformStrip(
+            color: paused ? TurnaColors.textMuted : TurnaColors.primary,
+            activeBars: paused
+                ? 4
+                : math.min(
+                    _VoiceWaveformStrip.barCount,
+                    ((_voiceDuration.inMilliseconds / 180).floor() %
+                            _VoiceWaveformStrip.barCount) +
+                        4,
+                  ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        _VoiceComposerAction(
+          icon: paused ? Icons.play_arrow_rounded : Icons.pause_rounded,
+          backgroundColor: TurnaColors.primary50,
+          foregroundColor: TurnaColors.primary,
+          onTap: _voiceRecorderBusy
+              ? null
+              : () => unawaited(_toggleLockedVoicePause()),
+        ),
+        const SizedBox(width: 10),
+        _VoiceComposerAction(
+          icon: Icons.send_rounded,
+          backgroundColor: const Color(0xFF111827),
+          foregroundColor: Colors.white,
+          onTap: _voiceRecorderBusy
+              ? null
+              : () => unawaited(_finishVoiceRecording(send: true)),
+        ),
+      ],
+    );
+  }
+
   Future<void> _sendPickedAttachment({
     required ChatAttachmentKind kind,
     required String fileName,
     required String contentType,
     required Future<List<int>> Function() readBytes,
     int? sizeBytes,
+    int? durationSeconds,
   }) async {
     setState(() => _attachmentBusy = true);
 
@@ -3398,6 +3894,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
             fileName: fileName,
             contentType: contentType,
             sizeBytes: sizeBytes ?? bytes.length,
+            durationSeconds: durationSeconds,
           ),
         ],
       );
@@ -3693,6 +4190,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     _composerFocusNode.dispose();
     _scrollController.removeListener(_handleScroll);
     _scrollController.dispose();
+    _voiceRecordTimer?.cancel();
+    unawaited(_voiceRecorder.cancel());
+    unawaited(_voiceRecorder.dispose());
     _messageHighlightTimer?.cancel();
     super.dispose();
   }
@@ -3708,6 +4208,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     if (state == AppLifecycleState.hidden ||
         state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached) {
+      if (_voiceRecording) {
+        unawaited(_cancelVoiceRecording());
+      }
       _client.disconnectForBackground();
     }
   }
@@ -4547,36 +5050,118 @@ class _PinnedMessageBar extends StatelessWidget {
   }
 }
 
-class _VoiceMessageBubbleSkeleton extends StatelessWidget {
-  const _VoiceMessageBubbleSkeleton({
+class _VoiceMessageBubble extends StatefulWidget {
+  const _VoiceMessageBubble({
     required this.attachment,
-    required this.onTap,
+    required this.mine,
+    required this.onFallbackTap,
   });
 
   final ChatAttachment attachment;
-  final VoidCallback onTap;
+  final bool mine;
+  final VoidCallback onFallbackTap;
+
+  @override
+  State<_VoiceMessageBubble> createState() => _VoiceMessageBubbleState();
+}
+
+class _VoiceMessageBubbleState extends State<_VoiceMessageBubble> {
+  final ap.AudioPlayer _player = ap.AudioPlayer();
+  Duration _position = Duration.zero;
+  Duration _duration = Duration.zero;
+  bool _playing = false;
+  String? _preparedUrl;
+
+  @override
+  void initState() {
+    super.initState();
+    final configuredDuration = widget.attachment.durationSeconds;
+    if (configuredDuration != null && configuredDuration > 0) {
+      _duration = Duration(seconds: configuredDuration);
+    }
+    _player.onPlayerStateChanged.listen((state) {
+      if (!mounted) return;
+      setState(() => _playing = state == ap.PlayerState.playing);
+    });
+    _player.onPositionChanged.listen((position) {
+      if (!mounted) return;
+      setState(() => _position = position);
+    });
+    _player.onDurationChanged.listen((duration) {
+      if (!mounted || duration == Duration.zero) return;
+      setState(() => _duration = duration);
+    });
+    _player.onPlayerComplete.listen((_) {
+      if (!mounted) return;
+      setState(() {
+        _playing = false;
+        _position = Duration.zero;
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _player.dispose();
+    super.dispose();
+  }
 
   String _formatDuration() {
-    final duration = attachment.durationSeconds;
-    if (duration == null || duration <= 0) return '--:--';
-    final minutes = (duration ~/ 60).toString().padLeft(2, '0');
-    final seconds = (duration % 60).toString().padLeft(2, '0');
+    final effective = _duration == Duration.zero
+        ? Duration(seconds: widget.attachment.durationSeconds ?? 0)
+        : _duration;
+    if (effective <= Duration.zero) return '--:--';
+    final minutes = effective.inMinutes.toString().padLeft(2, '0');
+    final seconds = (effective.inSeconds % 60).toString().padLeft(2, '0');
     return '$minutes:$seconds';
+  }
+
+  Future<void> _togglePlayback() async {
+    final url = widget.attachment.url?.trim() ?? '';
+    if (url.isEmpty) {
+      widget.onFallbackTap();
+      return;
+    }
+    try {
+      if (_playing) {
+        await _player.pause();
+        return;
+      }
+      if (_preparedUrl == url) {
+        await _player.resume();
+        return;
+      }
+      _preparedUrl = url;
+      await _player.play(ap.UrlSource(url));
+    } catch (error) {
+      turnaLog('voice playback failed', error);
+      widget.onFallbackTap();
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    const bars = [10, 16, 12, 20, 13, 17, 9, 19, 11, 15, 18, 12];
+    final totalMillis = _duration.inMilliseconds <= 0
+        ? math.max(1, (widget.attachment.durationSeconds ?? 0) * 1000)
+        : _duration.inMilliseconds;
+    final progress = (_position.inMilliseconds / totalMillis).clamp(0.0, 1.0);
+    final backgroundColor = widget.mine
+        ? Colors.white.withValues(alpha: 0.16)
+        : TurnaColors.primary50;
+    final foregroundColor = widget.mine ? Colors.white : TurnaColors.primary;
+    final subColor = widget.mine
+        ? Colors.white.withValues(alpha: 0.76)
+        : TurnaColors.textMuted;
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: InkWell(
-        onTap: onTap,
+        onTap: _togglePlayback,
         borderRadius: BorderRadius.circular(18),
         child: Container(
           width: 236,
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
           decoration: BoxDecoration(
-            color: TurnaColors.primary50,
+            color: backgroundColor,
             borderRadius: BorderRadius.circular(18),
           ),
           child: Row(
@@ -4584,13 +5169,15 @@ class _VoiceMessageBubbleSkeleton extends StatelessWidget {
               Container(
                 width: 34,
                 height: 34,
-                decoration: const BoxDecoration(
-                  color: TurnaColors.primary,
+                decoration: BoxDecoration(
+                  color: widget.mine
+                      ? Colors.white.withValues(alpha: 0.2)
+                      : TurnaColors.primary,
                   shape: BoxShape.circle,
                 ),
-                child: const Icon(
-                  Icons.play_arrow_rounded,
-                  color: Colors.white,
+                child: Icon(
+                  _playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                  color: foregroundColor,
                   size: 20,
                 ),
               ),
@@ -4599,38 +5186,136 @@ class _VoiceMessageBubbleSkeleton extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: bars
-                          .map(
-                            (height) => Container(
-                              width: 3,
-                              height: height.toDouble(),
-                              margin: const EdgeInsets.only(right: 3),
-                              decoration: BoxDecoration(
-                                color: TurnaColors.primary.withValues(
-                                  alpha: 0.78,
-                                ),
-                                borderRadius: BorderRadius.circular(999),
-                              ),
-                            ),
-                          )
-                          .toList(),
+                    _VoiceWaveformStrip(
+                      color: foregroundColor,
+                      fadedColor: foregroundColor.withValues(alpha: 0.3),
+                      activeBars: math.max(
+                        1,
+                        (_VoiceWaveformStrip.barCount * progress).round(),
+                      ),
                     ),
                     const SizedBox(height: 8),
-                    Text(
-                      _formatDuration(),
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: TurnaColors.textMuted,
-                        fontWeight: FontWeight.w600,
-                      ),
+                    Row(
+                      children: [
+                        Text(
+                          _formatDuration(),
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: subColor,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(999),
+                            child: LinearProgressIndicator(
+                              minHeight: 3,
+                              value: progress,
+                              backgroundColor: foregroundColor.withValues(
+                                alpha: 0.16,
+                              ),
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                foregroundColor,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _VoiceWaveformStrip extends StatelessWidget {
+  const _VoiceWaveformStrip({
+    required this.color,
+    required this.activeBars,
+    this.fadedColor,
+  });
+
+  static const List<double> _bars = <double>[
+    7,
+    11,
+    9,
+    15,
+    10,
+    17,
+    8,
+    13,
+    18,
+    11,
+    15,
+    9,
+    16,
+    12,
+    8,
+    14,
+    19,
+    10,
+    13,
+    9,
+  ];
+
+  static int get barCount => _bars.length;
+
+  final Color color;
+  final Color? fadedColor;
+  final int activeBars;
+
+  @override
+  Widget build(BuildContext context) {
+    final inactiveColor = fadedColor ?? color.withValues(alpha: 0.22);
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: List<Widget>.generate(_bars.length, (index) {
+        final highlighted = index < activeBars;
+        return Container(
+          width: 3,
+          height: _bars[index],
+          margin: EdgeInsets.only(right: index == _bars.length - 1 ? 0 : 3),
+          decoration: BoxDecoration(
+            color: highlighted ? color : inactiveColor,
+            borderRadius: BorderRadius.circular(999),
+          ),
+        );
+      }),
+    );
+  }
+}
+
+class _VoiceComposerAction extends StatelessWidget {
+  const _VoiceComposerAction({
+    required this.icon,
+    required this.backgroundColor,
+    required this.foregroundColor,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final Color backgroundColor;
+  final Color foregroundColor;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: backgroundColor,
+      shape: const CircleBorder(),
+      child: InkWell(
+        onTap: onTap,
+        customBorder: const CircleBorder(),
+        child: SizedBox(
+          width: 42,
+          height: 42,
+          child: Icon(icon, color: foregroundColor, size: 22),
         ),
       ),
     );
@@ -4769,11 +5454,13 @@ class _ForwardMessagePickerPageState extends State<ForwardMessagePickerPage> {
 class _ChatAttachmentList extends StatelessWidget {
   const _ChatAttachmentList({
     required this.attachments,
+    required this.mine,
     required this.onTap,
     required this.formatFileSize,
   });
 
   final List<ChatAttachment> attachments;
+  final bool mine;
   final Future<void> Function(ChatAttachment attachment) onTap;
   final String Function(int bytes) formatFileSize;
 
@@ -4782,9 +5469,10 @@ class _ChatAttachmentList extends StatelessWidget {
     return Column(
       children: attachments.map((attachment) {
         if (_isAudioAttachment(attachment)) {
-          return _VoiceMessageBubbleSkeleton(
+          return _VoiceMessageBubble(
             attachment: attachment,
-            onTap: () => onTap(attachment),
+            mine: mine,
+            onFallbackTap: () => onTap(attachment),
           );
         }
         if (attachment.kind == ChatAttachmentKind.image) {
