@@ -6,8 +6,18 @@ plugins {
     id("com.google.gms.google-services")
 }
 
+configurations.configureEach {
+    resolutionStrategy.dependencySubstitution {
+        substitute(module("com.github.davidliu:audioswitch"))
+            .using(module("com.twilio:audioswitch:1.2.4"))
+            .because(
+                "flutter_webrtc still points at the old JitPack coordinate; use the official Maven Central artifact instead.",
+            )
+    }
+}
+
 android {
-    namespace = "com.turna.app"
+    namespace = "com.turna.chat"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -22,7 +32,7 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.turna.app"
+        applicationId = "com.turna.chat"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
@@ -42,4 +52,8 @@ android {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    implementation("me.leolin:ShortcutBadger:1.1.22@aar")
 }
