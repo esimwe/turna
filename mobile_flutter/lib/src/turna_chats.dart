@@ -202,7 +202,6 @@ enum _ChatsMenuAction { select, markAllRead }
 
 class _ChatsPageState extends State<ChatsPage> {
   static const String _allChatsFilterId = '__all__';
-  static const String _archivedChatsFilterId = '__archived__';
 
   int _refreshTick = 0;
   bool _selectionMode = false;
@@ -250,6 +249,21 @@ class _ChatsPageState extends State<ChatsPage> {
     if (created == true && mounted) {
       setState(() => _refreshTick++);
     }
+  }
+
+  Future<void> _openArchivedChatsPage() async {
+    await Navigator.push<void>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ArchivedChatsPage(
+          session: widget.session,
+          callCoordinator: widget.callCoordinator,
+          onSessionExpired: widget.onSessionExpired,
+        ),
+      ),
+    );
+    if (!mounted) return;
+    setState(() => _refreshTick++);
   }
 
   void _enterSelectionMode([String? initialChatId]) {
@@ -462,9 +476,6 @@ class _ChatsPageState extends State<ChatsPage> {
       if (!mounted) return;
       setState(() {
         _bulkActionBusy = false;
-        if (!archived && _selectedFilterId == _archivedChatsFilterId) {
-          _selectedFilterId = _allChatsFilterId;
-        }
         _refreshTick++;
       });
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1000,7 +1011,6 @@ class _ChatsPageState extends State<ChatsPage> {
           final folders = inbox.folders;
           final hasSelectedFolder =
               _selectedFilterId == _allChatsFilterId ||
-              _selectedFilterId == _archivedChatsFilterId ||
               folders.any((folder) => folder.id == _selectedFilterId);
           if (!hasSelectedFolder) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1019,15 +1029,7 @@ class _ChatsPageState extends State<ChatsPage> {
 
           final archivedChats = chats.where((chat) => chat.isArchived).toList();
           final activeChats = chats.where((chat) => !chat.isArchived).toList();
-          if (archivedChats.isEmpty &&
-              _selectedFilterId == _archivedChatsFilterId) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (!mounted) return;
-              setState(() => _selectedFilterId = _allChatsFilterId);
-            });
-          }
           final scopedChats = switch (_selectedFilterId) {
-            _archivedChatsFilterId => archivedChats,
             _allChatsFilterId => activeChats,
             _ =>
               activeChats
@@ -1084,12 +1086,7 @@ class _ChatsPageState extends State<ChatsPage> {
                     padding: const EdgeInsets.fromLTRB(16, 2, 16, 6),
                     child: _ArchivedChatsBanner(
                       archivedCount: archivedChats.length,
-                      selected: _selectedFilterId == _archivedChatsFilterId,
-                      onTap: () => _selectFilter(
-                        _selectedFilterId == _archivedChatsFilterId
-                            ? _allChatsFilterId
-                            : _archivedChatsFilterId,
-                      ),
+                      onTap: _openArchivedChatsPage,
                     ),
                   );
                 }
@@ -1138,14 +1135,9 @@ class _ChatsPageState extends State<ChatsPage> {
                   }
                   return _CenteredListState(
                     icon: Icons.search_off,
-                    title: _selectedFilterId == _archivedChatsFilterId
-                        ? 'Arsiv bos'
-                        : 'Sonuc bulunamadi',
+                    title: 'Sonuc bulunamadi',
                     message:
-                        _selectedFilterId == _archivedChatsFilterId &&
-                            query.isEmpty
-                        ? 'Arsivde sohbet yok.'
-                        : '"${_searchController.text.trim()}" icin eslesen sohbet yok.',
+                        '"${_searchController.text.trim()}" icin eslesen sohbet yok.',
                   );
                 }
 
@@ -1153,118 +1145,30 @@ class _ChatsPageState extends State<ChatsPage> {
                 final isLastItem =
                     index == filteredChats.length + headerSlots - 1;
                 final isSelected = _selectedChatIds.contains(chat.chatId);
-                return Material(
-                  color: isSelected
-                      ? TurnaColors.primary.withValues(alpha: 0.08)
-                      : Colors.transparent,
-                  child: InkWell(
-                    onLongPress: () {
-                      if (_selectionMode) return;
-                      _showChatActions(chat, folders);
-                    },
-                    onTap: () {
-                      if (_selectionMode) {
-                        _toggleChatSelection(chat.chatId);
-                        return;
-                      }
-                      Navigator.push(
-                        context,
-                        buildChatRoomRoute(
-                          chat: chat,
-                          session: widget.session,
-                          callCoordinator: widget.callCoordinator,
-                          onSessionExpired: widget.onSessionExpired,
-                        ),
-                      );
-                    },
-                    child: Column(
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Padding(
-                                padding: const EdgeInsets.only(top: 2),
-                                child: Stack(
-                                  clipBehavior: Clip.none,
-                                  children: [
-                                    _ProfileAvatar(
-                                      label: chat.name,
-                                      avatarUrl: chat.avatarUrl,
-                                      authToken: widget.session.token,
-                                      radius: 23,
-                                    ),
-                                    if (isSelected)
-                                      Positioned(
-                                        right: -2,
-                                        bottom: -2,
-                                        child: Container(
-                                          width: 18,
-                                          height: 18,
-                                          decoration: BoxDecoration(
-                                            color: TurnaColors.primary,
-                                            shape: BoxShape.circle,
-                                            border: Border.all(
-                                              color: Colors.white,
-                                              width: 1.6,
-                                            ),
-                                          ),
-                                          child: const Icon(
-                                            Icons.check,
-                                            size: 11,
-                                            color: Colors.white,
-                                          ),
-                                        ),
-                                      ),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Expanded(
-                                          child: Text(
-                                            chat.name,
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: const TextStyle(
-                                              fontSize: 16,
-                                              fontWeight: FontWeight.w700,
-                                              color: TurnaColors.text,
-                                              height: 1.1,
-                                            ),
-                                          ),
-                                        ),
-                                        const SizedBox(width: 10),
-                                        _ChatPreviewMeta(chat: chat),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 4),
-                                    _ChatPreviewSubtitle(text: chat.message),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        if (!isLastItem)
-                          const Divider(
-                            height: 1,
-                            thickness: 0.8,
-                            indent: 74,
-                            endIndent: 16,
-                            color: TurnaColors.divider,
-                          ),
-                      ],
-                    ),
-                  ),
+                return _ChatPreviewListTile(
+                  chat: chat,
+                  authToken: widget.session.token,
+                  isSelected: isSelected,
+                  showDivider: !isLastItem,
+                  onTap: () {
+                    if (_selectionMode) {
+                      _toggleChatSelection(chat.chatId);
+                      return;
+                    }
+                    Navigator.push(
+                      context,
+                      buildChatRoomRoute(
+                        chat: chat,
+                        session: widget.session,
+                        callCoordinator: widget.callCoordinator,
+                        onSessionExpired: widget.onSessionExpired,
+                      ),
+                    );
+                  },
+                  onLongPress: () {
+                    if (_selectionMode) return;
+                    _showChatActions(chat, folders);
+                  },
                 );
               },
             ),
@@ -1388,21 +1292,242 @@ class _ChatsNewChatActionButton extends StatelessWidget {
   }
 }
 
+class ArchivedChatsPage extends StatefulWidget {
+  const ArchivedChatsPage({
+    super.key,
+    required this.session,
+    required this.callCoordinator,
+    required this.onSessionExpired,
+  });
+
+  final AuthSession session;
+  final TurnaCallCoordinator callCoordinator;
+  final VoidCallback onSessionExpired;
+
+  @override
+  State<ArchivedChatsPage> createState() => _ArchivedChatsPageState();
+}
+
+class _ArchivedChatsPageState extends State<ArchivedChatsPage> {
+  int _refreshTick = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'Arşiv Sohbetleri',
+          style: TextStyle(
+            color: TurnaColors.text,
+            fontSize: 18.5,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+      body: FutureBuilder<ChatInboxData>(
+        future: ChatApi.fetchChats(widget.session, refreshTick: _refreshTick),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          if (snapshot.hasError) {
+            final error = snapshot.error;
+            if (error is TurnaUnauthorizedException) {
+              return buildTurnaSessionExpiredRedirect(widget.onSessionExpired);
+            }
+            return _CenteredState(
+              icon: Icons.archive_outlined,
+              title: 'Arşiv yüklenemedi',
+              message: error.toString(),
+              primaryLabel: 'Tekrar dene',
+              onPrimary: () => setState(() => _refreshTick++),
+            );
+          }
+
+          final inbox =
+              snapshot.data ??
+              ChatInboxData(chats: const [], folders: const []);
+          final archivedChats = inbox.chats
+              .where((chat) => chat.isArchived)
+              .toList();
+
+          return RefreshIndicator(
+            onRefresh: () async => setState(() => _refreshTick++),
+            child: archivedChats.isEmpty
+                ? ListView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    children: const [
+                      SizedBox(height: 120),
+                      _CenteredListState(
+                        icon: Icons.archive_outlined,
+                        title: 'Arşiv boş',
+                        message:
+                            'Arşive attığın sohbetler burada listelenecek.',
+                      ),
+                    ],
+                  )
+                : ListView.builder(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    itemCount: archivedChats.length,
+                    itemBuilder: (context, index) {
+                      final chat = archivedChats[index];
+                      final isLastItem = index == archivedChats.length - 1;
+                      return _ChatPreviewListTile(
+                        chat: chat,
+                        authToken: widget.session.token,
+                        showDivider: !isLastItem,
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            buildChatRoomRoute(
+                              chat: chat,
+                              session: widget.session,
+                              callCoordinator: widget.callCoordinator,
+                              onSessionExpired: widget.onSessionExpired,
+                            ),
+                          );
+                        },
+                      );
+                    },
+                  ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _ChatPreviewListTile extends StatelessWidget {
+  const _ChatPreviewListTile({
+    required this.chat,
+    required this.authToken,
+    required this.onTap,
+    this.onLongPress,
+    this.isSelected = false,
+    this.showDivider = true,
+  });
+
+  final ChatPreview chat;
+  final String authToken;
+  final VoidCallback onTap;
+  final VoidCallback? onLongPress;
+  final bool isSelected;
+  final bool showDivider;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: isSelected
+          ? TurnaColors.primary.withValues(alpha: 0.08)
+          : Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        onLongPress: onLongPress,
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        _ProfileAvatar(
+                          label: chat.name,
+                          avatarUrl: chat.avatarUrl,
+                          authToken: authToken,
+                          radius: 23,
+                        ),
+                        if (isSelected)
+                          Positioned(
+                            right: -2,
+                            bottom: -2,
+                            child: Container(
+                              width: 18,
+                              height: 18,
+                              decoration: BoxDecoration(
+                                color: TurnaColors.primary,
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: Colors.white,
+                                  width: 1.6,
+                                ),
+                              ),
+                              child: const Icon(
+                                Icons.check,
+                                size: 11,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: Text(
+                                chat.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                  color: TurnaColors.text,
+                                  height: 1.1,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            _ChatPreviewMeta(chat: chat),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        _ChatPreviewSubtitle(text: chat.message),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (showDivider)
+              const Divider(
+                height: 1,
+                thickness: 0.8,
+                indent: 74,
+                endIndent: 16,
+                color: TurnaColors.divider,
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _ArchivedChatsBanner extends StatelessWidget {
   const _ArchivedChatsBanner({
     required this.archivedCount,
-    required this.selected,
     required this.onTap,
   });
 
   final int archivedCount;
-  final bool selected;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: selected ? TurnaColors.primary50 : Colors.white,
+      color: Colors.white,
       borderRadius: BorderRadius.circular(18),
       child: InkWell(
         onTap: onTap,
@@ -1411,10 +1536,7 @@ class _ArchivedChatsBanner extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           child: Row(
             children: [
-              Icon(
-                Icons.archive_outlined,
-                color: selected ? TurnaColors.primary : TurnaColors.textMuted,
-              ),
+              const Icon(Icons.archive_outlined, color: TurnaColors.textMuted),
               const SizedBox(width: 10),
               const Expanded(
                 child: Text(
@@ -1429,15 +1551,13 @@ class _ArchivedChatsBanner extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
-                  color: selected
-                      ? TurnaColors.primary
-                      : TurnaColors.backgroundMuted,
+                  color: TurnaColors.backgroundMuted,
                   borderRadius: BorderRadius.circular(999),
                 ),
                 child: Text(
                   '$archivedCount',
                   style: TextStyle(
-                    color: selected ? Colors.white : TurnaColors.textSoft,
+                    color: TurnaColors.textSoft,
                     fontSize: 11.5,
                     fontWeight: FontWeight.w700,
                   ),
