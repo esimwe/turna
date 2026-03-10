@@ -1,4 +1,8 @@
-import { AttachmentKind, ChatType, MessageStatus } from "@prisma/client";
+import prismaPkg from "@prisma/client";
+import type {
+  AttachmentKind as AttachmentKindValue,
+  MessageStatus as MessageStatusValue
+} from "@prisma/client";
 import { logError } from "../../lib/logger.js";
 import { prisma } from "../../lib/prisma.js";
 import { createObjectReadUrl, deleteObject, getObjectHead } from "../../lib/storage.js";
@@ -18,6 +22,8 @@ import type {
   SendMessagePayload
 } from "./chat.types.js";
 
+const { AttachmentKind, ChatType, MessageStatus } = prismaPkg;
+
 const prismaUser = (prisma as unknown as { user: any }).user;
 const prismaReportCase = (prisma as unknown as { reportCase: any }).reportCase;
 const TURNA_DELETED_EVERYONE_MARKER = "[[turna-deleted-everyone]]";
@@ -31,13 +37,13 @@ type MessageRow = {
   senderId: string;
   text: string | null;
   createdAt: Date;
-  status: MessageStatus;
+  status: MessageStatusValue;
   editedAt: Date | null;
   editHistory: unknown;
   attachments: Array<{
     id: string;
     objectKey: string;
-    kind: AttachmentKind;
+    kind: AttachmentKindValue;
     fileName: string | null;
     contentType: string;
     sizeBytes: number;
@@ -47,7 +53,7 @@ type MessageRow = {
   }>;
 };
 
-function toAttachmentKind(kind: AttachmentKind): ChatAttachment["kind"] {
+function toAttachmentKind(kind: AttachmentKindValue): ChatAttachment["kind"] {
   switch (kind) {
     case AttachmentKind.IMAGE:
       return "image";
@@ -58,7 +64,7 @@ function toAttachmentKind(kind: AttachmentKind): ChatAttachment["kind"] {
   }
 }
 
-function fromAttachmentKind(kind: SendMessageAttachmentInput["kind"]): AttachmentKind {
+function fromAttachmentKind(kind: SendMessageAttachmentInput["kind"]): AttachmentKindValue {
   switch (kind) {
     case "image":
       return AttachmentKind.IMAGE;
@@ -71,7 +77,7 @@ function fromAttachmentKind(kind: SendMessageAttachmentInput["kind"]): Attachmen
 
 function summarizeMessage(row: {
   text: string | null;
-  attachments?: Array<{ kind: AttachmentKind }>;
+  attachments?: Array<{ kind: AttachmentKindValue }>;
 }): string {
   const text = row.text?.trim();
   if (text === TURNA_DELETED_EVERYONE_MARKER) return "Silindi.";

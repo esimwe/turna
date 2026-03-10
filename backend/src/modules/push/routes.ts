@@ -1,10 +1,11 @@
-import { PushPlatform } from "@prisma/client";
+import prismaPkg from "@prisma/client";
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../../lib/prisma.js";
 import { requireAuth } from "../../middleware/auth.js";
 
 export const pushRouter = Router();
+const { PushPlatform } = prismaPkg;
 const prismaDeviceToken = (prisma as unknown as { deviceToken: any }).deviceToken;
 
 const registerDeviceSchema = z.object({

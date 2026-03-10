@@ -1,4 +1,5 @@
-import { MessageStatus, PushPlatform } from "@prisma/client";
+import prismaPkg from "@prisma/client";
+import type { PushPlatform as PushPlatformValue } from "@prisma/client";
 import { cert, getApps, initializeApp } from "firebase-admin/app";
 import { getMessaging } from "firebase-admin/messaging";
 import { createSign } from "node:crypto";
@@ -10,11 +11,13 @@ import { areUsersBlocked } from "./user-relationship.js";
 import type { ChatMessage } from "../modules/chat/chat.types.js";
 import type { AppCallType } from "../modules/calls/call.types.js";
 
+const { MessageStatus, PushPlatform } = prismaPkg;
+
 interface PushDevice {
   id: string;
   userId: string;
   token: string;
-  platform: PushPlatform;
+  platform: PushPlatformValue;
   tokenKind: "STANDARD" | "VOIP";
 }
 
