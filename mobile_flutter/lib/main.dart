@@ -35,6 +35,7 @@ part 'src/turna_auth_flow.dart';
 part 'src/turna_profile_shell.dart';
 part 'src/turna_core.dart';
 part 'src/turna_location.dart';
+part 'src/turna_contact.dart';
 
 String _normalizeTurnaBaseUrl(String value) {
   final trimmed = value.trim();
@@ -211,6 +212,9 @@ final RegExp _kTurnaReplyMarkerPattern = RegExp(
 final RegExp _kTurnaLocationMarkerPattern = RegExp(
   r'^\[\[turna-location:([A-Za-z0-9_-]+)\]\]\n?',
 );
+final RegExp _kTurnaContactMarkerPattern = RegExp(
+  r'^\[\[turna-contact:([A-Za-z0-9_-]+)\]\]\n?',
+);
 const String _kTurnaDeletedEveryoneMarker = '[[turna-deleted-everyone]]';
 
 class TurnaReplyPayload {
@@ -244,12 +248,14 @@ class ParsedTurnaMessageText {
     required this.text,
     this.reply,
     this.location,
+    this.contact,
     this.deletedForEveryone = false,
   });
 
   final String text;
   final TurnaReplyPayload? reply;
   final TurnaLocationPayload? location;
+  final TurnaSharedContactPayload? contact;
   final bool deletedForEveryone;
 }
 
@@ -327,6 +333,27 @@ ParsedTurnaMessageText parseTurnaMessageText(String raw) {
     }
   }
 
+  final contactMatch = _kTurnaContactMarkerPattern.firstMatch(working);
+  if (contactMatch != null) {
+    try {
+      final encoded = contactMatch.group(1)!;
+      final decoded = utf8.decode(
+        base64Url.decode(base64Url.normalize(encoded)),
+      );
+      final payload = TurnaSharedContactPayload.fromMap(
+        jsonDecode(decoded) as Map<String, dynamic>,
+      );
+      final cleaned = working.substring(contactMatch.end).trimLeft();
+      return ParsedTurnaMessageText(
+        text: cleaned,
+        reply: reply,
+        contact: payload,
+      );
+    } catch (_) {
+      return ParsedTurnaMessageText(text: raw);
+    }
+  }
+
   return ParsedTurnaMessageText(text: working, reply: reply);
 }
 
@@ -349,11 +376,23 @@ String buildTurnaLocationEncodedText({
   return '[[turna-location:$encoded]]';
 }
 
+String buildTurnaContactEncodedText({
+  required TurnaSharedContactPayload contact,
+}) {
+  final encoded = base64UrlEncode(
+    utf8.encode(jsonEncode(contact.toMap())),
+  ).replaceAll('=', '');
+  return '[[turna-contact:$encoded]]';
+}
+
 String sanitizeTurnaChatPreviewText(String raw) {
   final parsed = parseTurnaMessageText(raw);
   if (parsed.deletedForEveryone) return parsed.text;
   if (parsed.location != null) {
     return parsed.location!.previewLabel;
+  }
+  if (parsed.contact != null) {
+    return parsed.contact!.previewLabel;
   }
   final cleaned = parsed.text.trim();
   if (cleaned.isNotEmpty) return cleaned;

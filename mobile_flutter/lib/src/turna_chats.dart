@@ -2182,12 +2182,6 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     );
   }
 
-  void _showAttachmentPlaceholder(String label) {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text('$label yakinda eklenecek.')));
-  }
-
   Future<void> _pickLocation() async {
     if (_attachmentBusy) return;
     final selection = await Navigator.of(context).push<TurnaLocationSelection>(
@@ -2241,6 +2235,55 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Konum gonderilemedi: $error')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _attachmentBusy = false);
+      }
+    }
+  }
+
+  Future<void> _pickSharedContact() async {
+    if (_attachmentBusy) return;
+    final payload = await Navigator.of(context).push<TurnaSharedContactPayload>(
+      MaterialPageRoute<TurnaSharedContactPayload>(
+        builder: (_) => const ContactSharePickerPage(),
+        fullscreenDialog: true,
+      ),
+    );
+    if (!mounted || payload == null) return;
+    await _sendSharedContact(payload);
+  }
+
+  Future<void> _sendSharedContact(TurnaSharedContactPayload payload) async {
+    if (_attachmentBusy) return;
+    final replyDraft = _replyDraft;
+    final outboundText = buildTurnaContactEncodedText(contact: payload);
+    final encodedText = replyDraft == null
+        ? outboundText
+        : buildTurnaReplyEncodedText(reply: replyDraft, text: outboundText);
+    setState(() => _attachmentBusy = true);
+
+    try {
+      final message = await ChatApi.sendMessage(
+        widget.session,
+        chatId: widget.chat.chatId,
+        text: encodedText,
+      );
+      if (!mounted) return;
+      _client.mergeServerMessage(message);
+      setState(() => _replyDraft = null);
+      _jumpToBottom();
+      await TurnaAnalytics.logEvent('contact_sent', {
+        'chat_id': widget.chat.chatId,
+      });
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Kisi gonderilemedi: $error')),
       );
     } finally {
       if (mounted) {
@@ -2714,6 +2757,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     }
     if (parsed.location != null) {
       return parsed.location!.previewLabel;
+    }
+    if (parsed.contact != null) {
+      return parsed.contact!.previewLabel;
     }
     final text = parsed.text.trim();
     if (text.isNotEmpty) {
@@ -3613,11 +3659,13 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     );
     final displayText = isDeletedPlaceholder ? 'Silindi.' : parsed.text.trim();
     final locationPayload = isDeletedPlaceholder ? null : parsed.location;
+    final contactPayload = isDeletedPlaceholder ? null : parsed.contact;
     final visibleAttachments = isDeletedPlaceholder
         ? const <ChatAttachment>[]
         : msg.attachments;
     final hasText = displayText.isNotEmpty;
     final hasLocation = locationPayload != null;
+    final hasContact = contactPayload != null;
     final hasSingleVisualAttachment =
         visibleAttachments.length == 1 &&
         !_isAudioAttachment(visibleAttachments.first) &&
@@ -3748,7 +3796,10 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                   mine: mine,
                   onTap: () => _scrollToReplyTarget(parsed.reply!.messageId),
                 ),
-                if (hasText || hasLocation || visibleAttachments.isNotEmpty)
+                if (hasText ||
+                    hasLocation ||
+                    hasContact ||
+                    visibleAttachments.isNotEmpty)
                   const SizedBox(height: 8),
               ],
               if (visibleAttachments.isNotEmpty) ...[
@@ -3759,7 +3810,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                   formatFileSize: _formatFileSize,
                   overlayFooter: useEmbeddedMediaBubble ? embeddedFooter : null,
                 ),
-                if (hasText || hasLocation) const SizedBox(height: 8),
+                if (hasText || hasLocation || hasContact) const SizedBox(height: 8),
               ],
               if (locationPayload != null) ...[
                 _TurnaLocationMessageCard(
@@ -3770,6 +3821,14 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                       mine && locationPayload.isLiveActive
                       ? () => _stopLiveLocation(msg, locationPayload)
                       : null,
+                ),
+                if (hasText || hasContact) const SizedBox(height: 8),
+              ],
+              if (contactPayload != null) ...[
+                _TurnaSharedContactMessageCard(
+                  payload: contactPayload,
+                  mine: mine,
+                  onTap: () => openTurnaSharedContactCard(context, contactPayload),
                 ),
                 if (hasText) const SizedBox(height: 8),
               ],
@@ -3797,7 +3856,10 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                   ],
                 )
               else if (!useEmbeddedMediaBubble &&
-                  (hasLocation || visibleAttachments.isNotEmpty || hasError))
+                  (hasLocation ||
+                      hasContact ||
+                      visibleAttachments.isNotEmpty ||
+                      hasError))
                 Align(alignment: Alignment.bottomRight, child: footer),
             ],
           ),
@@ -4465,7 +4527,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                       backgroundColor: TurnaColors.accentStrong,
                       onTap: () {
                         Navigator.pop(sheetContext);
-                        _showAttachmentPlaceholder('Kisi');
+                        _pickSharedContact();
                       },
                     ),
                   ],
