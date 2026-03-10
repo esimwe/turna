@@ -88,9 +88,32 @@ function fromAttachmentKind(kind: SendMessageAttachmentInput["kind"]): Attachmen
   }
 }
 
+function isAudioAttachmentMeta(attachment: {
+  kind: AttachmentKindValue;
+  contentType?: string | null;
+  fileName?: string | null;
+}): boolean {
+  const contentType = attachment.contentType?.toLowerCase() ?? "";
+  if (contentType.startsWith("audio/")) return true;
+
+  const fileName = attachment.fileName?.toLowerCase() ?? "";
+  return (
+    fileName.endsWith(".m4a") ||
+    fileName.endsWith(".aac") ||
+    fileName.endsWith(".mp3") ||
+    fileName.endsWith(".wav") ||
+    fileName.endsWith(".ogg") ||
+    fileName.endsWith(".opus")
+  );
+}
+
 function summarizeMessage(row: {
   text: string | null;
-  attachments?: Array<{ kind: AttachmentKindValue }>;
+  attachments?: Array<{
+    kind: AttachmentKindValue;
+    contentType?: string | null;
+    fileName?: string | null;
+  }>;
 }): string {
   const text = summarizeTurnaMessageText(row.text);
   if (text) return text;
@@ -105,7 +128,7 @@ function summarizeMessage(row: {
     case AttachmentKind.VIDEO:
       return "Video";
     default:
-      return "Dosya";
+      return isAudioAttachmentMeta(attachments[0]) ? "Sesli mesaj" : "Dosya";
   }
 }
 

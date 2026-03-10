@@ -47,6 +47,24 @@ let apnsVoipKeyErrorLogged = false;
 const prismaDeviceToken = (prisma as unknown as { deviceToken: any }).deviceToken;
 const prismaChatMember = (prisma as unknown as { chatMember: any }).chatMember;
 
+function isAudioAttachmentMeta(attachment: {
+  kind: "image" | "video" | "file";
+  contentType: string;
+  fileName: string | null;
+}): boolean {
+  if (attachment.contentType.toLowerCase().startsWith("audio/")) return true;
+
+  const fileName = attachment.fileName?.toLowerCase() ?? "";
+  return (
+    fileName.endsWith(".m4a") ||
+    fileName.endsWith(".aac") ||
+    fileName.endsWith(".mp3") ||
+    fileName.endsWith(".wav") ||
+    fileName.endsWith(".ogg") ||
+    fileName.endsWith(".opus")
+  );
+}
+
 function hasFirebaseCredentials(): boolean {
   return Boolean(
     env.FIREBASE_SERVICE_ACCOUNT_JSON ||
@@ -150,7 +168,9 @@ function buildPushBody(message: ChatMessage): string {
     case "video":
       return "Video gonderdi";
     default:
-      return "Dosya gonderdi";
+      return isAudioAttachmentMeta(message.attachments[0])
+        ? "Sesli mesaj gonderdi"
+        : "Dosya gonderdi";
   }
 }
 
