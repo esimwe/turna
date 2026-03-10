@@ -482,17 +482,39 @@ function renderMediaTab() {
     return;
   }
 
+  const outgoingCount = state.selectedMedia.filter((media) => media.isOutgoing).length;
+  const incomingCount = state.selectedMedia.length - outgoingCount;
+
   mediaTab.innerHTML = `
+    <div class="badge-row media-summary-row">
+      <span class="soft-badge">Toplam ${formatNumber(state.selectedMedia.length)}</span>
+      <span class="soft-badge">Gonderilen ${formatNumber(outgoingCount)}</span>
+      <span class="soft-badge">Gelen ${formatNumber(incomingCount)}</span>
+    </div>
     <div class="media-grid">
       ${state.selectedMedia
         .map((media) => {
           const preview = renderMediaPreview(media);
+          const directionLabel = media.isOutgoing ? "Gonderilen" : "Gelen";
+          const directionClass = media.isOutgoing ? "media-direction-outgoing" : "media-direction-incoming";
+          const senderLine = media.isOutgoing
+            ? "Bu kullanici tarafindan yuklendi"
+            : `${escapeHtml(
+                media.sender?.displayName ||
+                  media.sender?.username ||
+                  formatPhone(media.sender?.phone || "") ||
+                  "Baska kullanici"
+              )} tarafindan gonderildi`;
           return `
-            <article class="media-tile">
+            <article class="media-tile ${media.isOutgoing ? "media-tile-outgoing" : "media-tile-incoming"}">
               ${preview}
               <div class="media-meta">
-                <span class="media-kind">${escapeHtml(media.kind || "file")}</span>
+                <div class="badge-row">
+                  <span class="pill ${directionClass}">${directionLabel}</span>
+                  <span class="media-kind">${escapeHtml(media.kind || "file")}</span>
+                </div>
                 <strong>${escapeHtml(media.fileName || media.objectKey || "Medya")}</strong>
+                <span class="user-subtitle">${senderLine}</span>
                 <span class="user-subtitle">${escapeHtml(formatDateTime(media.messageCreatedAt))}</span>
                 ${
                   media.url
@@ -526,11 +548,18 @@ function renderAttachmentChip(attachment) {
 
 function renderMediaPreview(media) {
   const url = media.url ? escapeAttribute(media.url) : "";
-  if (media.kind === "image" && media.url) {
+  const contentType = String(media.contentType || "").toLowerCase();
+  const isImage = media.kind === "image" || contentType.startsWith("image/");
+  const isVideo = media.kind === "video" || contentType.startsWith("video/");
+
+  if (isImage && media.url) {
     return `<img src="${url}" alt="" loading="lazy" />`;
   }
-  if (media.kind === "video" && media.url) {
+  if (isVideo && media.url) {
     return `<video src="${url}" controls preload="metadata"></video>`;
+  }
+  if (contentType.startsWith("audio/")) {
+    return `<div class="empty-note">SES</div>`;
   }
   return `<div class="empty-note">${escapeHtml((media.kind || "file").toUpperCase())}</div>`;
 }

@@ -921,7 +921,13 @@ adminRouter.get("/users/:userId/media", requireAdminAuth, async (req, res) => {
   const attachments = await prismaMessageAttachment.findMany({
     where: {
       message: {
-        senderId: parsedParams.data.userId
+        chat: {
+          members: {
+            some: {
+              userId: parsedParams.data.userId
+            }
+          }
+        }
       }
     },
     orderBy: { createdAt: "desc" },
@@ -931,8 +937,19 @@ adminRouter.get("/users/:userId/media", requireAdminAuth, async (req, res) => {
         select: {
           id: true,
           chatId: true,
+          senderId: true,
           text: true,
-          createdAt: true
+          createdAt: true,
+          sender: {
+            select: {
+              id: true,
+              displayName: true,
+              username: true,
+              phone: true,
+              avatarUrl: true,
+              updatedAt: true
+            }
+          }
         }
       }
     }
@@ -943,6 +960,20 @@ adminRouter.get("/users/:userId/media", requireAdminAuth, async (req, res) => {
       ...(await resolveAttachmentAdminPayload(attachment)),
       messageId: attachment.message.id,
       chatId: attachment.message.chatId,
+      senderId: attachment.message.senderId,
+      isOutgoing: attachment.message.senderId === parsedParams.data.userId,
+      sender: attachment.message.sender
+        ? {
+            id: attachment.message.sender.id,
+            displayName: attachment.message.sender.displayName,
+            username: attachment.message.sender.username,
+            phone: attachment.message.sender.phone,
+            avatarUrl:
+              attachment.message.sender.avatarUrl && attachment.message.sender.updatedAt
+                ? buildAvatarUrl(req, attachment.message.sender.id, attachment.message.sender.updatedAt)
+                : null
+          }
+        : null,
       messageText: attachment.message.text,
       messageCreatedAt: attachment.message.createdAt.toISOString()
     }))

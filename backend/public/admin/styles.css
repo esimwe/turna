@@ -526,6 +526,10 @@ input {
   gap: 14px;
 }
 
+.media-summary-row {
+  margin-bottom: 14px;
+}
+
 .media-tile {
   border: 1px solid var(--line);
   border-radius: 18px;
@@ -534,10 +538,25 @@ input {
   display: grid;
 }
 
+.media-tile-incoming img,
+.media-tile-incoming video {
+  filter: brightness(0.72);
+}
+
 .media-meta {
   padding: 12px;
   display: grid;
   gap: 6px;
+}
+
+.media-direction-outgoing {
+  background: #eaf7ef;
+  color: var(--success);
+}
+
+.media-direction-incoming {
+  background: #eef5fb;
+  color: var(--text-soft);
 }
 
 .media-kind {
