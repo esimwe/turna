@@ -4990,6 +4990,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
               ),
             ],
             initialIndex: 0,
+            autoOpenInitialVideoFullscreen: _isVideoAttachment(attachment),
           ),
         ),
       );
@@ -5045,6 +5046,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
           session: widget.session,
           items: itemsToOpen,
           initialIndex: initialIndex < 0 ? 0 : initialIndex,
+          autoOpenInitialVideoFullscreen: _isVideoAttachment(attachment),
           formatTimestamp: _formatViewerDateTime,
           isStarred: (message) => _starredMessageIds.contains(message.id),
           onReply: (message) async {
@@ -6912,6 +6914,7 @@ class ChatAttachmentViewerPage extends StatefulWidget {
     required this.session,
     required this.items,
     this.initialIndex = 0,
+    this.autoOpenInitialVideoFullscreen = false,
     this.formatTimestamp,
     this.isStarred,
     this.onReply,
@@ -6923,6 +6926,7 @@ class ChatAttachmentViewerPage extends StatefulWidget {
   final AuthSession session;
   final List<ChatGalleryMediaItem> items;
   final int initialIndex;
+  final bool autoOpenInitialVideoFullscreen;
   final String Function(String iso)? formatTimestamp;
   final bool Function(ChatMessage message)? isStarred;
   final Future<void> Function(ChatMessage message)? onReply;
@@ -6938,6 +6942,7 @@ class _ChatAttachmentViewerPageState extends State<ChatAttachmentViewerPage> {
   late List<ChatGalleryMediaItem> _items;
   late int _currentIndex;
   late final PageController _pageController;
+  bool _didHandleInitialVideoFullscreen = false;
 
   ChatGalleryMediaItem get _currentItem => _items[_currentIndex];
 
@@ -6947,6 +6952,9 @@ class _ChatAttachmentViewerPageState extends State<ChatAttachmentViewerPage> {
     _items = List<ChatGalleryMediaItem>.from(widget.items);
     _currentIndex = widget.initialIndex.clamp(0, _items.length - 1);
     _pageController = PageController(initialPage: _currentIndex);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _maybeOpenInitialVideoFullscreen();
+    });
   }
 
   @override
@@ -7127,6 +7135,66 @@ class _ChatAttachmentViewerPageState extends State<ChatAttachmentViewerPage> {
     });
   }
 
+  Future<void> _maybeOpenInitialVideoFullscreen() async {
+    if (_didHandleInitialVideoFullscreen ||
+        !widget.autoOpenInitialVideoFullscreen ||
+        !_isVideoAttachment(_currentItem.attachment) ||
+        !mounted) {
+      return;
+    }
+    _didHandleInitialVideoFullscreen = true;
+    await _openCurrentVideoFullscreen();
+  }
+
+  Future<void> _openCurrentVideoFullscreen() async {
+    final item = _currentItem;
+    if (!_isVideoAttachment(item.attachment)) return;
+    try {
+      final cachedFile = await TurnaLocalMediaCache.getOrDownloadFile(
+        cacheKey: item.cacheKey,
+        url: item.url,
+        authToken: widget.session.token,
+      );
+      if (cachedFile == null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Video yüklenemedi.')));
+        return;
+      }
+      final preparedFile = await TurnaLocalMediaCache.prepareMediaFile(
+        cacheKey: item.cacheKey,
+        sourceFile: cachedFile,
+        mimeType: item.attachment.contentType,
+        fileName: item.attachment.fileName,
+      );
+      if (!mounted) return;
+      await Navigator.push<void>(
+        context,
+        PageRouteBuilder<void>(
+          pageBuilder: (context, animation, secondaryAnimation) =>
+              _TurnaFullscreenVideoPage(file: preparedFile),
+          opaque: false,
+          transitionDuration: const Duration(milliseconds: 180),
+          reverseTransitionDuration: const Duration(milliseconds: 160),
+          transitionsBuilder:
+              (context, animation, secondaryAnimation, child) => FadeTransition(
+                opacity: CurvedAnimation(
+                  parent: animation,
+                  curve: Curves.easeOut,
+                ),
+                child: child,
+              ),
+        ),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Video yüklenemedi.')));
+    }
+  }
+
   Widget _buildTitle() {
     final subtitle = _subtitleFor(_currentItem);
     if (subtitle == null || subtitle.isEmpty) {
@@ -7265,6 +7333,9 @@ class _ChatAttachmentViewerPageState extends State<ChatAttachmentViewerPage> {
               itemBuilder: (context, index) => _TurnaAttachmentPageAsset(
                 item: _items[index],
                 authToken: widget.session.token,
+                onOpenFullscreen: _isVideoAttachment(_items[index].attachment)
+                    ? _openCurrentVideoFullscreen
+                    : null,
               ),
             ),
           ),
@@ -7326,15 +7397,21 @@ class _TurnaAttachmentPageAsset extends StatelessWidget {
   const _TurnaAttachmentPageAsset({
     required this.item,
     required this.authToken,
+    this.onOpenFullscreen,
   });
 
   final ChatGalleryMediaItem item;
   final String authToken;
+  final Future<void> Function()? onOpenFullscreen;
 
   @override
   Widget build(BuildContext context) {
     if (_isVideoAttachment(item.attachment)) {
-      return _TurnaAttachmentVideoSurface(item: item, authToken: authToken);
+      return _TurnaAttachmentVideoSurface(
+        item: item,
+        authToken: authToken,
+        onOpenFullscreen: onOpenFullscreen,
+      );
     }
 
     return FutureBuilder<File?>(
@@ -7384,10 +7461,12 @@ class _TurnaAttachmentVideoSurface extends StatefulWidget {
   const _TurnaAttachmentVideoSurface({
     required this.item,
     required this.authToken,
+    this.onOpenFullscreen,
   });
 
   final ChatGalleryMediaItem item;
   final String authToken;
+  final Future<void> Function()? onOpenFullscreen;
 
   @override
   State<_TurnaAttachmentVideoSurface> createState() =>
@@ -7504,7 +7583,9 @@ class _TurnaAttachmentVideoSurfaceState
         }
 
         return GestureDetector(
-          onTap: _togglePlayback,
+          onTap: widget.onOpenFullscreen == null
+              ? _togglePlayback
+              : () => widget.onOpenFullscreen!(),
           child: Stack(
             alignment: Alignment.center,
             children: [
@@ -7544,10 +7625,216 @@ class _TurnaAttachmentVideoSurfaceState
                   ),
                 ),
               ),
+              if (widget.onOpenFullscreen != null)
+                Positioned(
+                  right: 16,
+                  top: 16,
+                  child: Material(
+                    color: Colors.black.withValues(alpha: 0.34),
+                    shape: const CircleBorder(),
+                    child: InkWell(
+                      customBorder: const CircleBorder(),
+                      onTap: () => widget.onOpenFullscreen!(),
+                      child: const Padding(
+                        padding: EdgeInsets.all(10),
+                        child: Icon(
+                          Icons.open_in_full_rounded,
+                          color: Colors.white,
+                          size: 20,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
             ],
           ),
         );
       },
+    );
+  }
+}
+
+class _TurnaFullscreenVideoPage extends StatefulWidget {
+  const _TurnaFullscreenVideoPage({required this.file});
+
+  final File file;
+
+  @override
+  State<_TurnaFullscreenVideoPage> createState() =>
+      _TurnaFullscreenVideoPageState();
+}
+
+class _TurnaFullscreenVideoPageState extends State<_TurnaFullscreenVideoPage> {
+  vp.VideoPlayerController? _controller;
+  Future<void>? _initFuture;
+  String? _error;
+  double _dragOffsetY = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _prepare();
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  Future<void> _prepare() async {
+    try {
+      final controller = vp.VideoPlayerController.file(widget.file);
+      final initFuture = controller.initialize();
+      await controller.setLooping(true);
+      if (!mounted) {
+        await controller.dispose();
+        return;
+      }
+      setState(() {
+        _controller = controller;
+        _initFuture = initFuture;
+      });
+      await initFuture;
+      await controller.play();
+      if (!mounted) return;
+      setState(() {});
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _error = 'Video yüklenemedi.');
+    }
+  }
+
+  void _togglePlayback() {
+    final controller = _controller;
+    if (controller == null || !controller.value.isInitialized) return;
+    if (controller.value.isPlaying) {
+      controller.pause();
+    } else {
+      controller.play();
+    }
+    setState(() {});
+  }
+
+  void _dismiss() {
+    Navigator.of(context).pop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = _controller;
+    final initFuture = _initFuture;
+    final progress = (_dragOffsetY.abs() / 220).clamp(0.0, 1.0);
+    return Scaffold(
+      backgroundColor: Colors.black.withValues(alpha: 1 - (progress * 0.35)),
+      body: GestureDetector(
+        onVerticalDragUpdate: (details) {
+          setState(() {
+            _dragOffsetY = (_dragOffsetY + details.delta.dy).clamp(-260.0, 260.0);
+          });
+        },
+        onVerticalDragEnd: (details) {
+          final velocity = details.primaryVelocity ?? 0;
+          if (_dragOffsetY.abs() > 140 || velocity.abs() > 900) {
+            _dismiss();
+            return;
+          }
+          setState(() => _dragOffsetY = 0);
+        },
+        child: SafeArea(
+          child: Stack(
+            children: [
+              Transform.translate(
+                offset: Offset(0, _dragOffsetY),
+                child: Center(
+                  child: _error != null
+                      ? Text(
+                          _error!,
+                          style: const TextStyle(color: Colors.white),
+                        )
+                      : (controller == null || initFuture == null)
+                      ? const CircularProgressIndicator(color: Colors.white)
+                      : FutureBuilder<void>(
+                          future: initFuture,
+                          builder: (context, snapshot) {
+                            if (snapshot.connectionState != ConnectionState.done ||
+                                !controller.value.isInitialized) {
+                              return const CircularProgressIndicator(
+                                color: Colors.white,
+                              );
+                            }
+                            return GestureDetector(
+                              onTap: _togglePlayback,
+                              child: Stack(
+                                alignment: Alignment.center,
+                                children: [
+                                  Center(
+                                    child: AspectRatio(
+                                      aspectRatio: controller.value.aspectRatio <= 0
+                                          ? 16 / 9
+                                          : controller.value.aspectRatio,
+                                      child: vp.VideoPlayer(controller),
+                                    ),
+                                  ),
+                                  if (!controller.value.isPlaying)
+                                    Container(
+                                      width: 84,
+                                      height: 84,
+                                      decoration: BoxDecoration(
+                                        color: Colors.black.withValues(alpha: 0.38),
+                                        shape: BoxShape.circle,
+                                      ),
+                                      child: const Icon(
+                                        Icons.play_arrow_rounded,
+                                        color: Colors.white,
+                                        size: 46,
+                                      ),
+                                    ),
+                                  Positioned(
+                                    left: 18,
+                                    right: 18,
+                                    bottom: 22,
+                                    child: vp.VideoProgressIndicator(
+                                      controller,
+                                      allowScrubbing: true,
+                                      colors: const vp.VideoProgressColors(
+                                        playedColor: Colors.white,
+                                        bufferedColor: Colors.white38,
+                                        backgroundColor: Colors.white24,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                ),
+              ),
+              Positioned(
+                top: 8,
+                right: 12,
+                child: Material(
+                  color: Colors.black.withValues(alpha: 0.34),
+                  shape: const CircleBorder(),
+                  child: InkWell(
+                    customBorder: const CircleBorder(),
+                    onTap: _dismiss,
+                    child: const Padding(
+                      padding: EdgeInsets.all(10),
+                      child: Icon(
+                        Icons.close_rounded,
+                        color: Colors.white,
+                        size: 22,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

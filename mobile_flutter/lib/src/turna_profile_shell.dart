@@ -2472,6 +2472,7 @@ class _ConversationMediaPageState extends State<ConversationMediaPage> {
           session: widget.session,
           items: itemsToOpen,
           initialIndex: initialIndex < 0 ? 0 : initialIndex,
+          autoOpenInitialVideoFullscreen: _isVideoAttachment(item.attachment),
           formatTimestamp: _formatViewerTimestamp,
         ),
       ),
