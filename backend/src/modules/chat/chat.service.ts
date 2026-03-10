@@ -1,8 +1,3 @@
-import prismaPkg from "@prisma/client";
-import type {
-  AttachmentKind as AttachmentKindValue,
-  MessageStatus as MessageStatusValue
-} from "@prisma/client";
 import { logError } from "../../lib/logger.js";
 import { prisma } from "../../lib/prisma.js";
 import { createObjectReadUrl, deleteObject, getObjectHead } from "../../lib/storage.js";
@@ -21,8 +16,22 @@ import type {
   SendMessageAttachmentInput,
   SendMessagePayload
 } from "./chat.types.js";
-
-const { AttachmentKind, ChatType, MessageStatus } = prismaPkg;
+const AttachmentKind = {
+  IMAGE: "IMAGE",
+  VIDEO: "VIDEO",
+  FILE: "FILE"
+} as const;
+const ChatType = {
+  DIRECT: "DIRECT",
+  GROUP: "GROUP"
+} as const;
+const MessageStatus = {
+  sent: "sent",
+  delivered: "delivered",
+  read: "read"
+} as const;
+type AttachmentKindValue = typeof AttachmentKind[keyof typeof AttachmentKind];
+type MessageStatusValue = typeof MessageStatus[keyof typeof MessageStatus];
 
 const prismaUser = (prisma as unknown as { user: any }).user;
 const prismaReportCase = (prisma as unknown as { reportCase: any }).reportCase;
