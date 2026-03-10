@@ -1,6 +1,7 @@
 import type { Request } from "express";
 import { Router } from "express";
 import { z } from "zod";
+import { getRequestCountryIso } from "../../lib/auth-sessions.js";
 import { logError } from "../../lib/logger.js";
 import { otpService } from "../auth/otp.service.js";
 import { prisma } from "../../lib/prisma.js";
@@ -238,6 +239,7 @@ profileRouter.post("/contacts/sync", requireAuth, async (req, res) => {
   }
 
   const ownerId = req.authUserId!;
+  const defaultCountryIso = getRequestCountryIso(req);
   const labelsByKey = new Map<string, string>();
 
   for (const contact of parsed.data.contacts) {
@@ -245,7 +247,7 @@ profileRouter.post("/contacts/sync", requireAuth, async (req, res) => {
     if (!displayName) continue;
 
     for (const rawPhone of contact.phones) {
-      const key = buildCanonicalPhoneLookupKey(rawPhone);
+      const key = buildCanonicalPhoneLookupKey(rawPhone, { defaultCountryIso });
       if (key && !labelsByKey.has(key)) {
         labelsByKey.set(key, displayName);
       }
@@ -260,6 +262,9 @@ profileRouter.post("/contacts/sync", requireAuth, async (req, res) => {
 
   await prisma.$transaction(async (tx: any) => {
     const txClient = tx as unknown as { userContact: any };
+    await tx.$executeRaw`
+      SELECT pg_advisory_xact_lock(hashtext('turna_contact_sync'), hashtext(${ownerId}))
+    `;
     await txClient.userContact.deleteMany({ where: { ownerId } });
     if (createData.length > 0) {
       await txClient.userContact.createMany({ data: createData });
