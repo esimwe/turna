@@ -679,6 +679,7 @@ class TurnaApp extends StatefulWidget {
 class _TurnaAppState extends State<TurnaApp> with WidgetsBindingObserver {
   AuthSession? _session;
   bool _bootstrapping = true;
+  bool _requestedContactsOnLaunch = false;
   static const Duration _minimumSplashDuration = Duration(milliseconds: 750);
   static const Duration _maximumBootstrapWait = Duration(seconds: 6);
 
@@ -731,6 +732,7 @@ class _TurnaAppState extends State<TurnaApp> with WidgetsBindingObserver {
         _session = session;
         _bootstrapping = false;
       });
+      _requestContactsOnLaunch();
       turnaLog('app init', {
         'hasSession': _session != null,
         'elapsedMs': DateTime.now().difference(startedAt).inMilliseconds,
@@ -781,6 +783,16 @@ class _TurnaAppState extends State<TurnaApp> with WidgetsBindingObserver {
     } catch (error) {
       turnaLog('native call init skipped', error);
     }
+  }
+
+  void _requestContactsOnLaunch() {
+    if (_requestedContactsOnLaunch) {
+      return;
+    }
+    _requestedContactsOnLaunch = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(TurnaContactsDirectory.ensureLoaded());
+    });
   }
 
   @override
