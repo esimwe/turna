@@ -2767,7 +2767,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     }
     if (msg.attachments.isEmpty) return 'Mesaj';
     final first = msg.attachments.first;
-    if (_isAudioAttachment(first)) return 'Sesli mesaj';
+    if (_isAudioAttachment(first)) return 'Ses kaydi';
     if (first.kind == ChatAttachmentKind.image) return 'Fotograf';
     if (first.kind == ChatAttachmentKind.video) return 'Video';
     return 'Dosya';
@@ -3141,7 +3141,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     if (parsed.contact != null) return 'Kisi';
     if (msg.attachments.isNotEmpty) {
       final first = msg.attachments.first;
-      if (_isAudioAttachment(first)) return 'Sesli mesaj';
+      if (_isAudioAttachment(first)) return 'Ses kaydi';
       if (first.kind == ChatAttachmentKind.image) return 'Fotograf';
       if (first.kind == ChatAttachmentKind.video) return 'Video';
       return 'Belge';
@@ -5723,6 +5723,10 @@ class _VoiceMessageBubbleState extends State<_VoiceMessageBubble> {
   String? _preparedPath;
   Uint8List? _preparedBytes;
 
+  int get _effectiveDurationMillis => _duration.inMilliseconds <= 0
+      ? math.max(1, (widget.attachment.durationSeconds ?? 0) * 1000)
+      : _duration.inMilliseconds;
+
   @override
   void initState() {
     super.initState();
@@ -5765,6 +5769,29 @@ class _VoiceMessageBubbleState extends State<_VoiceMessageBubble> {
     final minutes = effective.inMinutes.toString().padLeft(2, '0');
     final seconds = (effective.inSeconds % 60).toString().padLeft(2, '0');
     return '$minutes:$seconds';
+  }
+
+  bool _isPreparedForUrl(String url) {
+    return _preparedUrl == url &&
+        (_preparedBytes != null || _preparedPath != null);
+  }
+
+  Future<void> _seekToRelativePosition(double localDx, double width) async {
+    final url = widget.attachment.url?.trim() ?? '';
+    if (url.isEmpty || width <= 0 || !_isPreparedForUrl(url)) return;
+
+    final progress = (localDx / width).clamp(0.0, 1.0);
+    final target = Duration(
+      milliseconds: (_effectiveDurationMillis * progress).round(),
+    );
+
+    try {
+      await _player.seek(target);
+      if (!mounted) return;
+      setState(() => _position = target);
+    } catch (error) {
+      turnaLog('voice seek failed', error);
+    }
   }
 
   Future<void> _togglePlayback() async {
@@ -5834,10 +5861,8 @@ class _VoiceMessageBubbleState extends State<_VoiceMessageBubble> {
   @override
   Widget build(BuildContext context) {
     final showOverlay = widget.overlayFooter != null;
-    final totalMillis = _duration.inMilliseconds <= 0
-        ? math.max(1, (widget.attachment.durationSeconds ?? 0) * 1000)
-        : _duration.inMilliseconds;
-    final progress = (_position.inMilliseconds / totalMillis).clamp(0.0, 1.0);
+    final progress =
+        (_position.inMilliseconds / _effectiveDurationMillis).clamp(0.0, 1.0);
     final backgroundColor = showOverlay
         ? (widget.mine ? TurnaColors.chatOutgoing : Colors.white)
         : (widget.mine
@@ -5857,10 +5882,8 @@ class _VoiceMessageBubbleState extends State<_VoiceMessageBubble> {
         : TurnaColors.textMuted;
     return Padding(
       padding: EdgeInsets.only(bottom: showOverlay ? 0 : 8),
-      child: InkWell(
-        onTap: _togglePlayback,
+      child: GestureDetector(
         onLongPress: widget.onLongPress,
-        borderRadius: BorderRadius.circular(18),
         child: Container(
           width: 236,
           padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
@@ -5880,62 +5903,91 @@ class _VoiceMessageBubbleState extends State<_VoiceMessageBubble> {
             children: [
               Row(
                 children: [
-                  Container(
-                    width: 34,
-                    height: 34,
-                    decoration: BoxDecoration(
-                      color: playButtonColor,
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(
-                      _playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                      color: playIconColor,
-                      size: 20,
+                  Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: _togglePlayback,
+                      customBorder: const CircleBorder(),
+                      child: Container(
+                        width: 34,
+                        height: 34,
+                        decoration: BoxDecoration(
+                          color: playButtonColor,
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(
+                          _playing
+                              ? Icons.pause_rounded
+                              : Icons.play_arrow_rounded,
+                          color: playIconColor,
+                          size: 20,
+                        ),
+                      ),
                     ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        _VoiceWaveformStrip(
-                          color: accentColor,
-                          fadedColor: accentColor.withValues(alpha: 0.3),
-                          activeBars: math.max(
-                            1,
-                            (_VoiceWaveformStrip.barCount * progress).round(),
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Row(
-                          children: [
-                            Text(
-                              _formatDuration(),
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: subColor,
-                                fontWeight: FontWeight.w600,
-                              ),
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        return GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTapDown: (details) => unawaited(
+                            _seekToRelativePosition(
+                              details.localPosition.dx,
+                              constraints.maxWidth,
                             ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: ClipRRect(
-                                borderRadius: BorderRadius.circular(999),
-                                child: LinearProgressIndicator(
-                                  minHeight: 3,
-                                  value: progress,
-                                  backgroundColor: accentColor.withValues(
-                                    alpha: 0.16,
-                                  ),
-                                  valueColor: AlwaysStoppedAnimation<Color>(
-                                    accentColor,
-                                  ),
+                          ),
+                          onHorizontalDragUpdate: (details) => unawaited(
+                            _seekToRelativePosition(
+                              details.localPosition.dx,
+                              constraints.maxWidth,
+                            ),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _VoiceWaveformStrip(
+                                color: accentColor,
+                                fadedColor: accentColor.withValues(alpha: 0.3),
+                                activeBars: math.max(
+                                  1,
+                                  (_VoiceWaveformStrip.barCount * progress)
+                                      .round(),
                                 ),
                               ),
-                            ),
-                          ],
-                        ),
-                      ],
+                              const SizedBox(height: 8),
+                              Row(
+                                children: [
+                                  Text(
+                                    _formatDuration(),
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: subColor,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: ClipRRect(
+                                      borderRadius: BorderRadius.circular(999),
+                                      child: LinearProgressIndicator(
+                                        minHeight: 3,
+                                        value: progress,
+                                        backgroundColor: accentColor
+                                            .withValues(alpha: 0.16),
+                                        valueColor:
+                                            AlwaysStoppedAnimation<Color>(
+                                              accentColor,
+                                            ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        );
+                      },
                     ),
                   ),
                 ],
