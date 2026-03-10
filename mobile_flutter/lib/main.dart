@@ -1303,6 +1303,33 @@ bool _isAudioAttachment(ChatAttachment attachment) {
       fileName.endsWith('.opus');
 }
 
+bool _isImageAttachment(ChatAttachment attachment) {
+  if (attachment.kind == ChatAttachmentKind.image) return true;
+  final contentType = attachment.contentType.toLowerCase();
+  if (contentType.startsWith('image/')) return true;
+  final fileName = (attachment.fileName ?? '').toLowerCase();
+  return fileName.endsWith('.jpg') ||
+      fileName.endsWith('.jpeg') ||
+      fileName.endsWith('.png') ||
+      fileName.endsWith('.webp') ||
+      fileName.endsWith('.gif') ||
+      fileName.endsWith('.heic') ||
+      fileName.endsWith('.heif');
+}
+
+bool _isVideoAttachment(ChatAttachment attachment) {
+  if (attachment.kind == ChatAttachmentKind.video) return true;
+  final contentType = attachment.contentType.toLowerCase();
+  if (contentType.startsWith('video/')) return true;
+  final fileName = (attachment.fileName ?? '').toLowerCase();
+  return fileName.endsWith('.mp4') ||
+      fileName.endsWith('.mov') ||
+      fileName.endsWith('.m4v') ||
+      fileName.endsWith('.webm') ||
+      fileName.endsWith('.mkv') ||
+      fileName.endsWith('.avi');
+}
+
 String formatBytesLabel(int bytes) {
   if (bytes <= 0) return '0 B';
   const units = ['B', 'KB', 'MB', 'GB'];

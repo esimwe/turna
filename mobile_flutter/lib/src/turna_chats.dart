@@ -2848,8 +2848,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     if (msg.attachments.isEmpty) return 'Mesaj';
     final first = msg.attachments.first;
     if (_isAudioAttachment(first)) return 'Ses kaydı';
-    if (first.kind == ChatAttachmentKind.image) return 'Fotoğraf';
-    if (first.kind == ChatAttachmentKind.video) return 'Video';
+    if (_isImageAttachment(first)) return 'Fotoğraf';
+    if (_isVideoAttachment(first)) return 'Video';
     return 'Dosya';
   }
 
@@ -2945,8 +2945,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       final parsed = parseTurnaMessageText(message.text);
       if (_isMessageDeletedPlaceholder(message, parsed: parsed)) continue;
       for (final attachment in message.attachments) {
-        if (attachment.kind != ChatAttachmentKind.image &&
-            attachment.kind != ChatAttachmentKind.video) {
+        if (!_isImageAttachment(attachment) && !_isVideoAttachment(attachment)) {
           continue;
         }
         final url = attachment.url?.trim() ?? '';
@@ -3276,8 +3275,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     if (msg.attachments.isNotEmpty) {
       final first = msg.attachments.first;
       if (_isAudioAttachment(first)) return 'Ses kaydı';
-      if (first.kind == ChatAttachmentKind.image) return 'Fotoğraf';
-      if (first.kind == ChatAttachmentKind.video) return 'Video';
+      if (_isImageAttachment(first)) return 'Fotoğraf';
+      if (_isVideoAttachment(first)) return 'Video';
       return 'Belge';
     }
     return 'Mesaj';
@@ -3444,14 +3443,12 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     final textOnly = parsed.text.trim();
     final canEdit = _canEditMessage(msg, parsed: parsed);
     final visualAttachment = attachment != null &&
-            (attachment.kind == ChatAttachmentKind.image ||
-                attachment.kind == ChatAttachmentKind.video)
+            (_isImageAttachment(attachment) || _isVideoAttachment(attachment))
         ? attachment
         : msg.attachments.cast<ChatAttachment?>().firstWhere(
               (item) =>
                   item != null &&
-                  (item.kind == ChatAttachmentKind.image ||
-                      item.kind == ChatAttachmentKind.video),
+                  (_isImageAttachment(item) || _isVideoAttachment(item)),
               orElse: () => null,
             );
     await showModalBottomSheet<void>(
@@ -4108,8 +4105,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                   attachments: visibleAttachments,
                   mine: mine,
                   onTap: (attachment) {
-                    if (attachment.kind == ChatAttachmentKind.image ||
-                        attachment.kind == ChatAttachmentKind.video) {
+                    if (_isImageAttachment(attachment) ||
+                        _isVideoAttachment(attachment)) {
                       return _openMediaAttachment(msg, attachment);
                     }
                     return _openAttachment(attachment);
@@ -4978,7 +4975,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       return;
     }
 
-    if (attachment.kind == ChatAttachmentKind.image) {
+    if (_isImageAttachment(attachment) || _isVideoAttachment(attachment)) {
       await Navigator.push(
         context,
         MaterialPageRoute(
@@ -6643,7 +6640,7 @@ class _ChatAttachmentList extends StatelessWidget {
           );
         }
 
-        if (attachment.kind == ChatAttachmentKind.image) {
+        if (_isImageAttachment(attachment)) {
           final imageUrl = attachment.url?.trim() ?? '';
           return Padding(
             padding: EdgeInsets.only(bottom: showOverlay ? 0 : 8),
@@ -6717,7 +6714,7 @@ class _ChatAttachmentList extends StatelessWidget {
           );
         }
 
-        final isVideo = attachment.kind == ChatAttachmentKind.video;
+        final isVideo = _isVideoAttachment(attachment);
         if (isVideo) {
           return Padding(
             padding: EdgeInsets.only(bottom: showOverlay ? 0 : 8),
@@ -7161,7 +7158,7 @@ class _ChatAttachmentViewerPageState extends State<ChatAttachmentViewerPage> {
                 ),
               ),
               clipBehavior: Clip.antiAlias,
-              child: item.attachment.kind == ChatAttachmentKind.video
+              child: _isVideoAttachment(item.attachment)
                   ? Container(
                       color: const Color(0xFF1E2932),
                       alignment: Alignment.center,
@@ -7297,7 +7294,7 @@ class _TurnaAttachmentPageAsset extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (item.attachment.kind == ChatAttachmentKind.video) {
+    if (_isVideoAttachment(item.attachment)) {
       return _TurnaAttachmentVideoSurface(item: item, authToken: authToken);
     }
 

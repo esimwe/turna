@@ -2275,8 +2275,7 @@ class _ConversationMediaPageState extends State<ConversationMediaPage> {
         final createdAt = _messageTimestamp(message);
 
         for (final attachment in message.attachments) {
-          if (attachment.kind == ChatAttachmentKind.image ||
-              attachment.kind == ChatAttachmentKind.video) {
+          if (_isImageAttachment(attachment) || _isVideoAttachment(attachment)) {
             mediaItems.add(
               _ConversationMediaItem(
                 message: message,
@@ -2286,8 +2285,7 @@ class _ConversationMediaPageState extends State<ConversationMediaPage> {
             );
             continue;
           }
-          if (attachment.kind == ChatAttachmentKind.file &&
-              !_isAudioAttachment(attachment)) {
+          if (!_isAudioAttachment(attachment)) {
             documentItems.add(
               _ConversationDocumentItem(
                 message: message,
@@ -2581,9 +2579,7 @@ class _ConversationMediaPageState extends State<ConversationMediaPage> {
       );
     }
 
-    final hasVideo = _mediaItems.any(
-      (item) => item.attachment.kind == ChatAttachmentKind.video,
-    );
+    final hasVideo = _mediaItems.any((item) => _isVideoAttachment(item.attachment));
     final footerLabel =
         hasVideo ? '${_mediaItems.length} Medya' : '${_mediaItems.length} Fotoğraf';
 
@@ -2808,7 +2804,7 @@ class _ConversationMediaTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final attachment = item.attachment;
     final imageUrl = attachment.url?.trim() ?? '';
-    final isVideo = attachment.kind == ChatAttachmentKind.video;
+    final isVideo = _isVideoAttachment(attachment);
 
     return DecoratedBox(
       decoration: const BoxDecoration(color: Color(0xFFE6E9EE)),
