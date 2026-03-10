@@ -41,9 +41,16 @@
 		<string>Sesli mesaj, arama ve video icin mikrofon erisimi gerekiyor.</string>
 		<key>NSContactsUsageDescription</key>
 		<string>Rehberinizde kayitli kisileri isimleriyle gosterebilmek icin kisiler erisimi gerekiyor.</string>
+		<key>NSLocationWhenInUseUsageDescription</key>
+		<string>Konum gonderebilmek icin konum erisimi gerekiyor.</string>
+		<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+		<string>Canli konumu arka planda paylasabilmek icin surekli konum erisimi gerekiyor.</string>
+		<key>NSLocationAlwaysUsageDescription</key>
+		<string>Canli konumu arka planda paylasabilmek icin surekli konum erisimi gerekiyor.</string>
 		<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
+		<string>location</string>
 		<string>voip</string>
 		<string>remote-notification</string>
 	</array>
