@@ -1,5 +1,6 @@
 const TURNA_REPLY_MARKER_PATTERN = /^\[\[turna-reply:([A-Za-z0-9_-]+)\]\]\n?/;
 const TURNA_LOCATION_MARKER_PATTERN = /^\[\[turna-location:([A-Za-z0-9_-]+)\]\]\n?/;
+const TURNA_CONTACT_MARKER_PATTERN = /^\[\[turna-contact:([A-Za-z0-9_-]+)\]\]\n?/;
 export const TURNA_DELETED_EVERYONE_MARKER = "[[turna-deleted-everyone]]";
 
 export interface TurnaLocationPayload {
@@ -19,7 +20,13 @@ export interface TurnaLocationPayload {
 export interface ParsedTurnaMessageText {
   text: string;
   location: TurnaLocationPayload | null;
+  contact: TurnaContactPayload | null;
   deletedForEveryone: boolean;
+}
+
+export interface TurnaContactPayload {
+  displayName?: string | null;
+  phones?: string[];
 }
 
 function nullableString(value: unknown): string | null {
@@ -69,6 +76,19 @@ function parseLocationPayload(value: unknown): TurnaLocationPayload | null {
   };
 }
 
+function parseContactPayload(value: unknown): TurnaContactPayload | null {
+  if (!value || typeof value !== "object") return null;
+  const map = value as Record<string, unknown>;
+  return {
+    displayName: nullableString(map.displayName),
+    phones: Array.isArray(map.phones)
+      ? map.phones
+          .map((item) => (typeof item === "string" ? item.trim() : ""))
+          .filter((item) => item.length > 0)
+      : []
+  };
+}
+
 function parseDate(value: string | null | undefined): Date | null {
   if (!value) return null;
   const parsed = new Date(value);
@@ -90,14 +110,19 @@ function summarizeLocation(payload: TurnaLocationPayload): string {
   return payload.title ?? "Konum";
 }
 
+function summarizeContact(payload: TurnaContactPayload): string {
+  return payload.displayName ?? "Kisi";
+}
+
 export function parseTurnaMessageText(rawText: string | null | undefined): ParsedTurnaMessageText {
   const raw = (rawText ?? "").toString();
   if (raw.trim() === TURNA_DELETED_EVERYONE_MARKER) {
-    return {
-      text: "Silindi.",
-      location: null,
-      deletedForEveryone: true
-    };
+      return {
+        text: "Silindi.",
+        location: null,
+        contact: null,
+        deletedForEveryone: true
+      };
   }
 
   let working = raw;
@@ -110,6 +135,7 @@ export function parseTurnaMessageText(rawText: string | null | undefined): Parse
       return {
         text: raw,
         location: null,
+        contact: null,
         deletedForEveryone: false
       };
     }
@@ -124,18 +150,50 @@ export function parseTurnaMessageText(rawText: string | null | undefined): Parse
         return {
           text: raw,
           location: null,
+          contact: null,
           deletedForEveryone: false
         };
       }
       return {
         text: working.slice(locationMatch[0].length).trimStart(),
         location: payload,
+        contact: null,
         deletedForEveryone: false
       };
     } catch {
       return {
         text: raw,
         location: null,
+        contact: null,
+        deletedForEveryone: false
+      };
+    }
+  }
+
+  const contactMatch = TURNA_CONTACT_MARKER_PATTERN.exec(working);
+  if (contactMatch) {
+    try {
+      const decoded = JSON.parse(decodeBase64Url(contactMatch[1]!)) as Record<string, unknown>;
+      const payload = parseContactPayload(decoded);
+      if (!payload) {
+        return {
+          text: raw,
+          location: null,
+          contact: null,
+          deletedForEveryone: false
+        };
+      }
+      return {
+        text: working.slice(contactMatch[0].length).trimStart(),
+        location: null,
+        contact: payload,
+        deletedForEveryone: false
+      };
+    } catch {
+      return {
+        text: raw,
+        location: null,
+        contact: null,
         deletedForEveryone: false
       };
     }
@@ -144,6 +202,7 @@ export function parseTurnaMessageText(rawText: string | null | undefined): Parse
   return {
     text: working,
     location: null,
+    contact: null,
     deletedForEveryone: false
   };
 }
@@ -152,6 +211,7 @@ export function summarizeTurnaMessageText(rawText: string | null | undefined): s
   const parsed = parseTurnaMessageText(rawText);
   if (parsed.deletedForEveryone) return parsed.text;
   if (parsed.location) return summarizeLocation(parsed.location);
+  if (parsed.contact) return summarizeContact(parsed.contact);
   return parsed.text.trim();
 }
 
