@@ -3125,6 +3125,113 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     ).showSnackBar(SnackBar(content: Text('Sikayet kaydedildi: $reason')));
   }
 
+  String _messageStatusLabel(ChatMessageStatus status) {
+    return switch (status) {
+      ChatMessageStatus.sending => 'Gonderiliyor',
+      ChatMessageStatus.queued => 'Kuyrukta',
+      ChatMessageStatus.failed => 'Hatali',
+      ChatMessageStatus.sent => 'Gonderildi',
+      ChatMessageStatus.delivered => 'Teslim edildi',
+      ChatMessageStatus.read => 'Okundu',
+    };
+  }
+
+  String _messageTypeLabel(ChatMessage msg, ParsedTurnaMessageText parsed) {
+    if (parsed.location != null) return parsed.location!.live ? 'Canli konum' : 'Konum';
+    if (parsed.contact != null) return 'Kisi';
+    if (msg.attachments.isNotEmpty) {
+      final first = msg.attachments.first;
+      if (_isAudioAttachment(first)) return 'Sesli mesaj';
+      if (first.kind == ChatAttachmentKind.image) return 'Fotograf';
+      if (first.kind == ChatAttachmentKind.video) return 'Video';
+      return 'Belge';
+    }
+    return 'Mesaj';
+  }
+
+  Future<void> _showMessageInfo(ChatMessage msg) async {
+    final parsed = parseTurnaMessageText(msg.text);
+    final totalBytes = msg.attachments.fold<int>(
+      0,
+      (total, item) => total + math.max(0, item.sizeBytes),
+    );
+    final detailRows = <MapEntry<String, String>>[
+      MapEntry('Tur', _messageTypeLabel(msg, parsed)),
+      MapEntry(
+        'Tarih',
+        '${_formatDayLabel(msg.createdAt)} ${_formatMessageTime(msg.createdAt)}',
+      ),
+      MapEntry('Durum', _messageStatusLabel(msg.status)),
+      if (msg.attachments.isNotEmpty)
+        MapEntry('Ek sayisi', '${msg.attachments.length}'),
+      if (totalBytes > 0) MapEntry('Boyut', _formatFileSize(totalBytes)),
+      if (msg.attachments.length == 1 &&
+          _isAudioAttachment(msg.attachments.first) &&
+          (msg.attachments.first.durationSeconds ?? 0) > 0)
+        MapEntry(
+          'Sure',
+          _formatVoiceDuration(
+            Duration(seconds: msg.attachments.first.durationSeconds!),
+          ),
+        ),
+      if (msg.isEdited && (msg.editedAt?.trim().isNotEmpty ?? false))
+        MapEntry(
+          'Duzenlendi',
+          '${_formatDayLabel(msg.editedAt!)} ${_formatMessageTime(msg.editedAt!)}',
+        ),
+    ];
+
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 18),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Mesaj bilgisi',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 12),
+                for (final row in detailRows)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SizedBox(
+                          width: 88,
+                          child: Text(
+                            row.key,
+                            style: const TextStyle(
+                              color: TurnaColors.textMuted,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        Expanded(
+                          child: Text(
+                            row.value,
+                            style: const TextStyle(
+                              color: TurnaColors.text,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   Future<void> _showMoreMessageActions(ChatMessage msg) async {
     final parsed = parseTurnaMessageText(msg.text);
     if (_isMessageDeletedPlaceholder(msg, parsed: parsed)) {
@@ -3263,6 +3370,14 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                       onTap: () {
                         Navigator.pop(sheetContext);
                         _toggleStarMessage(msg);
+                      },
+                    ),
+                    _MessageQuickAction(
+                      icon: Icons.info_outline_rounded,
+                      label: 'Bilgi',
+                      onTap: () {
+                        Navigator.pop(sheetContext);
+                        _showMessageInfo(msg);
                       },
                     ),
                     _MessageQuickAction(
@@ -3808,6 +3923,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                   mine: mine,
                   onTap: _openAttachment,
                   formatFileSize: _formatFileSize,
+                  authToken: widget.session.token,
+                  onLongPress: () => _handleMessageLongPress(msg),
                   overlayFooter: useEmbeddedMediaBubble ? embeddedFooter : null,
                 ),
                 if (hasText || hasLocation || hasContact) const SizedBox(height: 8),
@@ -4393,8 +4510,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     _jumpToBottom();
   }
 
-  Future<void> _pickGalleryMedia() async {
-    final files = await _mediaPicker.pickMultipleMedia(
+  Future<void> _pickGalleryPhotos() async {
+    final files = await _mediaPicker.pickMultiImage(
       limit: kComposerMediaLimit,
       imageQuality: kInlineImagePickerQuality,
       maxWidth: kInlineImagePickerMaxDimension,
@@ -4404,6 +4521,12 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     await _openMediaComposerFromFiles(files);
   }
 
+  Future<void> _pickGalleryVideo() async {
+    final file = await _mediaPicker.pickVideo(source: ImageSource.gallery);
+    if (file == null) return;
+    await _openMediaComposerFromFiles([file]);
+  }
+
   Future<void> _pickCameraImage() async {
     final file = await _mediaPicker.pickImage(
       source: ImageSource.camera,
@@ -4411,12 +4534,6 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       maxWidth: kInlineImagePickerMaxDimension,
       maxHeight: kInlineImagePickerMaxDimension,
     );
-    if (file == null) return;
-    await _openMediaComposerFromFiles([file]);
-  }
-
-  Future<void> _pickCameraVideo() async {
-    final file = await _mediaPicker.pickVideo(source: ImageSource.camera);
     if (file == null) return;
     await _openMediaComposerFromFiles([file]);
   }
@@ -4445,6 +4562,75 @@ class _ChatRoomPageState extends State<ChatRoomPage>
           guessContentTypeForFileName(fileName) ?? 'application/octet-stream',
       readBytes: () => File(filePath).readAsBytes(),
       sizeBytes: file.size,
+    );
+  }
+
+  Future<void> _showPaymentPlaceholderModal() async {
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return Dialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(28),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(24, 24, 24, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 68,
+                  height: 68,
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        Color(0xFF27D06F),
+                        Color(0xFF00B8FF),
+                        Color(0xFFFFC23A),
+                      ],
+                    ),
+                    borderRadius: BorderRadius.circular(22),
+                  ),
+                  alignment: Alignment.center,
+                  child: const Icon(
+                    Icons.payments_rounded,
+                    color: Colors.white,
+                    size: 34,
+                  ),
+                ),
+                const SizedBox(height: 18),
+                const Text(
+                  'Odeme Yap',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Hazirlaniyor...',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 15,
+                    color: TurnaColors.textMuted,
+                  ),
+                ),
+                const SizedBox(height: 18),
+                const SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(strokeWidth: 2.4),
+                ),
+                const SizedBox(height: 18),
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext),
+                  child: const Text('Tamam'),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -4481,6 +4667,24 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                   runSpacing: 18,
                   children: [
                     _AttachmentQuickAction(
+                      icon: Icons.photo_library_outlined,
+                      label: 'Fotograflar',
+                      backgroundColor: TurnaColors.accent,
+                      onTap: () {
+                        Navigator.pop(sheetContext);
+                        _pickGalleryPhotos();
+                      },
+                    ),
+                    _AttachmentQuickAction(
+                      icon: Icons.video_library_outlined,
+                      label: 'Videolar',
+                      backgroundColor: TurnaColors.primaryStrong,
+                      onTap: () {
+                        Navigator.pop(sheetContext);
+                        _pickGalleryVideo();
+                      },
+                    ),
+                    _AttachmentQuickAction(
                       icon: Icons.photo_camera_outlined,
                       label: 'Kamera',
                       backgroundColor: TurnaColors.primary,
@@ -4490,21 +4694,21 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                       },
                     ),
                     _AttachmentQuickAction(
-                      icon: Icons.photo_library_outlined,
-                      label: 'Galeri',
-                      backgroundColor: TurnaColors.accent,
+                      icon: Icons.payments_rounded,
+                      label: 'Odeme Yap',
+                      backgroundColor: const Color(0xFF1FCB76),
+                      gradient: const LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [
+                          Color(0xFF2BD56F),
+                          Color(0xFF00B7FF),
+                          Color(0xFFFFC93D),
+                        ],
+                      ),
                       onTap: () {
                         Navigator.pop(sheetContext);
-                        _pickGalleryMedia();
-                      },
-                    ),
-                    _AttachmentQuickAction(
-                      icon: Icons.videocam_outlined,
-                      label: 'Video',
-                      backgroundColor: TurnaColors.primaryStrong,
-                      onTap: () {
-                        Navigator.pop(sheetContext);
-                        _pickCameraVideo();
+                        _showPaymentPlaceholderModal();
                       },
                     ),
                     _AttachmentQuickAction(
@@ -4517,21 +4721,21 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                       },
                     ),
                     _AttachmentQuickAction(
-                      icon: Icons.location_on_outlined,
-                      label: 'Konum',
-                      backgroundColor: TurnaColors.primary400,
-                      onTap: () {
-                        Navigator.pop(sheetContext);
-                        _pickLocation();
-                      },
-                    ),
-                    _AttachmentQuickAction(
                       icon: Icons.perm_contact_calendar_outlined,
                       label: 'Kisi',
                       backgroundColor: TurnaColors.accentStrong,
                       onTap: () {
                         Navigator.pop(sheetContext);
                         _pickSharedContact();
+                      },
+                    ),
+                    _AttachmentQuickAction(
+                      icon: Icons.location_on_outlined,
+                      label: 'Konum',
+                      backgroundColor: TurnaColors.primary400,
+                      onTap: () {
+                        Navigator.pop(sheetContext);
+                        _pickLocation();
                       },
                     ),
                   ],
@@ -5098,12 +5302,14 @@ class _AttachmentQuickAction extends StatelessWidget {
     required this.label,
     required this.backgroundColor,
     required this.onTap,
+    this.gradient,
   });
 
   final IconData icon;
   final String label;
   final Color backgroundColor;
   final VoidCallback onTap;
+  final Gradient? gradient;
 
   @override
   Widget build(BuildContext context) {
@@ -5119,6 +5325,7 @@ class _AttachmentQuickAction extends StatelessWidget {
               height: 56,
               decoration: BoxDecoration(
                 color: backgroundColor,
+                gradient: gradient,
                 borderRadius: BorderRadius.circular(18),
               ),
               child: Icon(icon, color: Colors.white, size: 25),
@@ -5467,12 +5674,14 @@ class _VoiceMessageBubble extends StatefulWidget {
   const _VoiceMessageBubble({
     required this.attachment,
     required this.mine,
-    required this.onFallbackTap,
+    required this.authToken,
+    this.onLongPress,
   });
 
   final ChatAttachment attachment;
   final bool mine;
-  final VoidCallback onFallbackTap;
+  final String authToken;
+  final VoidCallback? onLongPress;
 
   @override
   State<_VoiceMessageBubble> createState() => _VoiceMessageBubbleState();
@@ -5484,6 +5693,7 @@ class _VoiceMessageBubbleState extends State<_VoiceMessageBubble> {
   Duration _duration = Duration.zero;
   bool _playing = false;
   String? _preparedUrl;
+  String? _preparedPath;
 
   @override
   void initState() {
@@ -5532,7 +5742,10 @@ class _VoiceMessageBubbleState extends State<_VoiceMessageBubble> {
   Future<void> _togglePlayback() async {
     final url = widget.attachment.url?.trim() ?? '';
     if (url.isEmpty) {
-      widget.onFallbackTap();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Sesli mesaj baglantisi hazir degil.')),
+      );
       return;
     }
     try {
@@ -5540,7 +5753,15 @@ class _VoiceMessageBubbleState extends State<_VoiceMessageBubble> {
         await _player.pause();
         return;
       }
-      if (_preparedUrl == url) {
+      if (_preparedUrl == url && _preparedPath != null) {
+        final shouldReplayFromStart =
+            _position == Duration.zero ||
+            (_duration > Duration.zero &&
+                _position >= _duration - const Duration(milliseconds: 320));
+        if (shouldReplayFromStart) {
+          await _player.play(ap.DeviceFileSource(_preparedPath!));
+          return;
+        }
         await _player.resume();
         return;
       }
@@ -5548,15 +5769,23 @@ class _VoiceMessageBubbleState extends State<_VoiceMessageBubble> {
       final cachedFile = await TurnaLocalMediaCache.getOrDownloadFile(
         cacheKey: 'attachment:${widget.attachment.objectKey}',
         url: url,
+        authToken: widget.authToken,
       );
       if (cachedFile == null) {
-        widget.onFallbackTap();
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Sesli mesaj indirilemedi.')),
+        );
         return;
       }
+      _preparedPath = cachedFile.path;
       await _player.play(ap.DeviceFileSource(cachedFile.path));
     } catch (error) {
       turnaLog('voice playback failed', error);
-      widget.onFallbackTap();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Sesli mesaj oynatilamadi.')),
+      );
     }
   }
 
@@ -5579,6 +5808,7 @@ class _VoiceMessageBubbleState extends State<_VoiceMessageBubble> {
       padding: const EdgeInsets.only(bottom: 8),
       child: InkWell(
         onTap: _togglePlayback,
+        onLongPress: widget.onLongPress,
         borderRadius: BorderRadius.circular(18),
         child: Container(
           width: 236,
@@ -5880,6 +6110,8 @@ class _ChatAttachmentList extends StatelessWidget {
     required this.mine,
     required this.onTap,
     required this.formatFileSize,
+    required this.authToken,
+    this.onLongPress,
     this.overlayFooter,
   });
 
@@ -5887,6 +6119,8 @@ class _ChatAttachmentList extends StatelessWidget {
   final bool mine;
   final Future<void> Function(ChatAttachment attachment) onTap;
   final String Function(int bytes) formatFileSize;
+  final String authToken;
+  final VoidCallback? onLongPress;
   final Widget? overlayFooter;
 
   @override
@@ -5898,7 +6132,8 @@ class _ChatAttachmentList extends StatelessWidget {
           return _VoiceMessageBubble(
             attachment: attachment,
             mine: mine,
-            onFallbackTap: () => onTap(attachment),
+            authToken: authToken,
+            onLongPress: onLongPress,
           );
         }
 
@@ -5909,6 +6144,7 @@ class _ChatAttachmentList extends StatelessWidget {
             child: InkWell(
               borderRadius: BorderRadius.circular(22),
               onTap: () => onTap(attachment),
+              onLongPress: onLongPress,
               child: SizedBox(
                 width: 220,
                 height: 220,
@@ -5981,6 +6217,7 @@ class _ChatAttachmentList extends StatelessWidget {
             padding: EdgeInsets.only(bottom: showOverlay ? 0 : 8),
             child: InkWell(
               onTap: () => onTap(attachment),
+              onLongPress: onLongPress,
               borderRadius: BorderRadius.circular(22),
               child: SizedBox(
                 width: 220,
@@ -6072,6 +6309,7 @@ class _ChatAttachmentList extends StatelessWidget {
           padding: const EdgeInsets.only(bottom: 8),
           child: InkWell(
             onTap: () => onTap(attachment),
+            onLongPress: onLongPress,
             borderRadius: BorderRadius.circular(14),
             child: Container(
               width: 220,
