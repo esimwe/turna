@@ -2,6 +2,7 @@ import AVFAudio
 import CallKit
 import FirebaseCore
 import Flutter
+import Photos
 import PushKit
 import UIKit
 import UserNotifications
@@ -13,6 +14,7 @@ import Darwin
   private let pendingActionDefaultsKey = "flutter.turna_pending_native_call_action"
   private var displayChannel: FlutterMethodChannel?
   private var deviceChannel: FlutterMethodChannel?
+  private var mediaChannel: FlutterMethodChannel?
   private var didConfigureDisplayChannel = false
 
   override func application(
@@ -192,7 +194,123 @@ import Darwin
       }
     }
     self.deviceChannel = deviceChannel
+
+    let mediaChannel = FlutterMethodChannel(
+      name: "turna/media",
+      binaryMessenger: controller.binaryMessenger
+    )
+    mediaChannel.setMethodCallHandler { [weak self] call, result in
+      switch call.method {
+      case "shareFile":
+        guard
+          let args = call.arguments as? [String: Any],
+          let path = args["path"] as? String
+        else {
+          result(
+            FlutterError(code: "invalid_args", message: "Dosya yolu gerekli.", details: nil)
+          )
+          return
+        }
+        self?.shareFile(path: path, result: result)
+      case "saveToGallery":
+        guard
+          let args = call.arguments as? [String: Any],
+          let path = args["path"] as? String
+        else {
+          result(
+            FlutterError(code: "invalid_args", message: "Dosya yolu gerekli.", details: nil)
+          )
+          return
+        }
+        let mimeType = args["mimeType"] as? String
+        self?.saveToGallery(path: path, mimeType: mimeType, result: result)
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+    self.mediaChannel = mediaChannel
     didConfigureDisplayChannel = true
+  }
+
+  private func shareFile(path: String, result: @escaping FlutterResult) {
+    let fileUrl = URL(fileURLWithPath: path)
+    guard FileManager.default.fileExists(atPath: fileUrl.path) else {
+      result(FlutterError(code: "missing_file", message: "Dosya bulunamadı.", details: nil))
+      return
+    }
+
+    DispatchQueue.main.async { [weak self] in
+      guard let controller = self?.topMostViewController() else {
+        result(
+          FlutterError(code: "missing_view", message: "Paylaşım ekranı açılamadı.", details: nil)
+        )
+        return
+      }
+      let activity = UIActivityViewController(activityItems: [fileUrl], applicationActivities: nil)
+      activity.completionWithItemsHandler = { _, _, _, _ in
+        result(nil)
+      }
+      if let popover = activity.popoverPresentationController {
+        popover.sourceView = controller.view
+        popover.sourceRect = CGRect(
+          x: controller.view.bounds.midX,
+          y: controller.view.bounds.maxY - 40,
+          width: 1,
+          height: 1
+        )
+      }
+      controller.present(activity, animated: true)
+    }
+  }
+
+  private func saveToGallery(path: String, mimeType: String?, result: @escaping FlutterResult) {
+    let fileUrl = URL(fileURLWithPath: path)
+    guard FileManager.default.fileExists(atPath: fileUrl.path) else {
+      result(FlutterError(code: "missing_file", message: "Dosya bulunamadı.", details: nil))
+      return
+    }
+
+    let performSave = {
+      PHPhotoLibrary.shared().performChanges({
+        if (mimeType ?? "").lowercased().starts(with: "video/") {
+          PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: fileUrl)
+        } else {
+          PHAssetChangeRequest.creationRequestForAssetFromImage(atFileURL: fileUrl)
+        }
+      }) { success, error in
+        if let error {
+          result(
+            FlutterError(code: "save_failed", message: error.localizedDescription, details: nil)
+          )
+          return
+        }
+        result(success ? nil : FlutterError(code: "save_failed", message: "Kaydetme tamamlanamadı.", details: nil))
+      }
+    }
+
+    if #available(iOS 14, *) {
+      PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+        switch status {
+        case .authorized, .limited:
+          performSave()
+        default:
+          result(
+            FlutterError(code: "permission_denied", message: "Fotoğraf izni verilmedi.", details: nil)
+          )
+        }
+      }
+    } else {
+      PHPhotoLibrary.requestAuthorization { status in
+        switch status {
+        case .authorized:
+          performSave()
+        default:
+          result(
+            FlutterError(code: "permission_denied", message: "Fotoğraf izni verilmedi.", details: nil)
+          )
+        }
+      }
+    }
   }
 
   private func buildDeviceContextPayload() -> [String: Any] {
@@ -228,5 +346,24 @@ import Darwin
       return UIDevice.current.model
     }
     return identifier
+  }
+
+  private func topMostViewController(
+    from controller: UIViewController? = UIApplication.shared.connectedScenes
+      .compactMap { $0 as? UIWindowScene }
+      .flatMap(\.windows)
+      .first(where: \.isKeyWindow)?
+      .rootViewController
+  ) -> UIViewController? {
+    if let navigation = controller as? UINavigationController {
+      return topMostViewController(from: navigation.visibleViewController)
+    }
+    if let tab = controller as? UITabBarController {
+      return topMostViewController(from: tab.selectedViewController)
+    }
+    if let presented = controller?.presentedViewController {
+      return topMostViewController(from: presented)
+    }
+    return controller
   }
 }
