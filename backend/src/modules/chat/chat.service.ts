@@ -128,7 +128,7 @@ function summarizeMessage(row: {
     case AttachmentKind.VIDEO:
       return "Video";
     default:
-      return isAudioAttachmentMeta(attachments[0]) ? "Sesli mesaj" : "Dosya";
+      return isAudioAttachmentMeta(attachments[0]) ? "Ses kaydi" : "Dosya";
   }
 }
 

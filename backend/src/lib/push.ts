@@ -169,7 +169,7 @@ function buildPushBody(message: ChatMessage): string {
       return "Video gonderdi";
     default:
       return isAudioAttachmentMeta(message.attachments[0])
-        ? "Sesli mesaj gonderdi"
+        ? "Ses kaydi gonderdi"
         : "Dosya gonderdi";
   }
 }
