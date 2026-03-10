@@ -10,6 +10,8 @@ import flutter_callkit_incoming
 @main
 @objc class AppDelegate: FlutterAppDelegate, PKPushRegistryDelegate, CallkitIncomingAppDelegate {
   private let pendingActionDefaultsKey = "flutter.turna_pending_native_call_action"
+  private var displayChannel: FlutterMethodChannel?
+  private var didConfigureDisplayChannel = false
 
   override func application(
     _ application: UIApplication,
@@ -28,7 +30,14 @@ import flutter_callkit_incoming
       UNUserNotificationCenter.current().delegate = self
     }
 
-    return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+    let didFinish = super.application(application, didFinishLaunchingWithOptions: launchOptions)
+    configureDisplayChannelWhenReady()
+    return didFinish
+  }
+
+  override func applicationDidBecomeActive(_ application: UIApplication) {
+    super.applicationDidBecomeActive(application)
+    configureDisplayChannelWhenReady()
   }
 
   func pushRegistry(_ registry: PKPushRegistry, didUpdate credentials: PKPushCredentials, for type: PKPushType) {
@@ -126,5 +135,47 @@ import flutter_callkit_incoming
     }
     UserDefaults.standard.set(raw, forKey: pendingActionDefaultsKey)
     UserDefaults.standard.synchronize()
+  }
+
+  private func configureDisplayChannelWhenReady(retryCount: Int = 0) {
+    guard !didConfigureDisplayChannel else {
+      return
+    }
+    guard let controller = window?.rootViewController as? FlutterViewController else {
+      if retryCount < 12 {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+          self?.configureDisplayChannelWhenReady(retryCount: retryCount + 1)
+        }
+      }
+      return
+    }
+
+    let channel = FlutterMethodChannel(
+      name: "turna/display",
+      binaryMessenger: controller.binaryMessenger
+    )
+    channel.setMethodCallHandler { call, result in
+      switch call.method {
+      case "setKeepScreenOn":
+        let args = call.arguments as? [String: Any]
+        let enabled = args?["enabled"] as? Bool ?? false
+        DispatchQueue.main.async {
+          UIApplication.shared.isIdleTimerDisabled = enabled
+          result(nil)
+        }
+      case "setAppBadgeCount":
+        let args = call.arguments as? [String: Any]
+        let count = args?["count"] as? Int ?? 0
+        DispatchQueue.main.async {
+          UIApplication.shared.applicationIconBadgeNumber = max(0, count)
+          result(nil)
+        }
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+
+    displayChannel = channel
+    didConfigureDisplayChannel = true
   }
 }
