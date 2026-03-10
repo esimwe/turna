@@ -3830,7 +3830,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                 _TurnaSharedContactMessageCard(
                   payload: contactPayload,
                   mine: mine,
-                  onTap: () => openTurnaSharedContactCard(context, contactPayload),
+                  session: widget.session,
+                  callCoordinator: widget.callCoordinator,
+                  onSessionExpired: widget.onSessionExpired,
                 ),
                 if (hasText) const SizedBox(height: 8),
               ],
