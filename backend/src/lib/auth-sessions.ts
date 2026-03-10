@@ -31,6 +31,43 @@ export function getRequestPlatform(req: Request): string | null {
   return firstHeaderValue(req.headers["x-turna-platform"]);
 }
 
+export function getRequestDeviceModel(req: Request): string | null {
+  return firstHeaderValue(req.headers["x-turna-device-model"]);
+}
+
+export function getRequestOsVersion(req: Request): string | null {
+  return firstHeaderValue(req.headers["x-turna-os-version"]);
+}
+
+export function getRequestAppVersion(req: Request): string | null {
+  return firstHeaderValue(req.headers["x-turna-app-version"]);
+}
+
+export function getRequestLocaleTag(req: Request): string | null {
+  return firstHeaderValue(req.headers["x-turna-locale"]);
+}
+
+export function getRequestRegionCode(req: Request): string | null {
+  return firstHeaderValue(req.headers["x-turna-region"]);
+}
+
+export function getRequestConnectionType(req: Request): string | null {
+  return firstHeaderValue(req.headers["x-turna-connection-type"]);
+}
+
+export function getRequestCountryIso(req: Request): string | null {
+  const countryIso = firstHeaderValue(req.headers["x-turna-country-iso"]);
+  return countryIso?.toUpperCase() ?? null;
+}
+
+export function getRequestIpCountryIso(req: Request): string | null {
+  const headerValue =
+    firstHeaderValue(req.headers["cf-ipcountry"]) ??
+    firstHeaderValue(req.headers["x-vercel-ip-country"]) ??
+    firstHeaderValue(req.headers["x-country-code"]);
+  return headerValue?.toUpperCase() ?? null;
+}
+
 async function revokeSessionIds(sessionIds: string[], reason: string): Promise<number> {
   if (sessionIds.length === 0) return 0;
 
@@ -83,6 +120,14 @@ export async function createAuthSessionForRequest(
       userId,
       deviceId: getRequestDeviceId(req),
       platform: getRequestPlatform(req),
+      deviceModel: getRequestDeviceModel(req),
+      osVersion: getRequestOsVersion(req),
+      appVersion: getRequestAppVersion(req),
+      localeTag: getRequestLocaleTag(req),
+      regionCode: getRequestRegionCode(req),
+      connectionType: getRequestConnectionType(req),
+      countryIso: getRequestCountryIso(req),
+      ipCountryIso: getRequestIpCountryIso(req),
       ipAddress: getRequestIp(req),
       userAgent: getRequestUserAgent(req)
     }
@@ -119,5 +164,48 @@ export async function findActiveAuthSession(sessionId: string) {
       id: true,
       userId: true
     }
+  });
+}
+
+export async function touchActiveAuthSessionForRequest(
+  sessionId: string,
+  req: Request
+): Promise<void> {
+  const data: Record<string, unknown> = {
+    lastSeenAt: new Date()
+  };
+
+  const deviceId = getRequestDeviceId(req);
+  const platform = getRequestPlatform(req);
+  const deviceModel = getRequestDeviceModel(req);
+  const osVersion = getRequestOsVersion(req);
+  const appVersion = getRequestAppVersion(req);
+  const localeTag = getRequestLocaleTag(req);
+  const regionCode = getRequestRegionCode(req);
+  const connectionType = getRequestConnectionType(req);
+  const countryIso = getRequestCountryIso(req);
+  const ipCountryIso = getRequestIpCountryIso(req);
+  const ipAddress = getRequestIp(req);
+  const userAgent = getRequestUserAgent(req);
+
+  if (deviceId) data.deviceId = deviceId;
+  if (platform) data.platform = platform;
+  if (deviceModel) data.deviceModel = deviceModel;
+  if (osVersion) data.osVersion = osVersion;
+  if (appVersion) data.appVersion = appVersion;
+  if (localeTag) data.localeTag = localeTag;
+  if (regionCode) data.regionCode = regionCode;
+  if (connectionType) data.connectionType = connectionType;
+  if (countryIso) data.countryIso = countryIso;
+  if (ipCountryIso) data.ipCountryIso = ipCountryIso;
+  if (ipAddress) data.ipAddress = ipAddress;
+  if (userAgent) data.userAgent = userAgent;
+
+  await prismaAuthSession.updateMany({
+    where: {
+      id: sessionId,
+      revokedAt: null
+    },
+    data
   });
 }

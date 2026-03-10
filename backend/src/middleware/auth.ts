@@ -6,7 +6,10 @@ import {
   requireUserAccessState,
   type UserAccessState
 } from "../lib/user-access.js";
-import { findActiveAuthSession } from "../lib/auth-sessions.js";
+import {
+  findActiveAuthSession,
+  touchActiveAuthSessionForRequest
+} from "../lib/auth-sessions.js";
 import { verifyAccessToken } from "../lib/jwt.js";
 import { logInfo } from "../lib/logger.js";
 
@@ -65,6 +68,7 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
         res.status(401).json({ error: "session_revoked" });
         return;
       }
+      await touchActiveAuthSessionForRequest(claims.sessionId, req);
     }
 
     req.authUserId = claims.sub;

@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Turna Admin</title>
+    <link rel="stylesheet" href="/admin/styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">T</div>
+          <div>
+            <div class="brand-title">Turna Admin</div>
+            <div class="brand-subtitle">Operasyon merkezi</div>
+          </div>
+        </div>
+
+        <div id="admin-meta" class="admin-meta hidden"></div>
+        <button id="logout-button" class="ghost-button hidden" type="button">
+          Cikis yap
+        </button>
+      </aside>
+
+      <main class="content">
+        <section id="login-view" class="panel login-panel">
+          <div class="panel-heading">
+            <div>
+              <h1>Admin girisi</h1>
+              <p>Kullanici, oturum, sohbet ve medya verilerini yonetin.</p>
+            </div>
+          </div>
+          <form id="login-form" class="stack-form">
+            <label class="field">
+              <span>Kullanici adi</span>
+              <input id="login-username" type="text" autocomplete="username" required />
+            </label>
+            <label class="field">
+              <span>Sifre</span>
+              <input id="login-password" type="password" autocomplete="current-password" required />
+            </label>
+            <button id="login-submit" class="primary-button" type="submit">
+              Giris yap
+            </button>
+            <p id="login-error" class="error-text hidden"></p>
+          </form>
+        </section>
+
+        <section id="app-view" class="hidden">
+          <section class="summary-grid">
+            <article class="metric-card">
+              <span class="metric-label">Toplam kullanici</span>
+              <strong id="metric-total-users">-</strong>
+            </article>
+            <article class="metric-card">
+              <span class="metric-label">Aktif oturum</span>
+              <strong id="metric-active-sessions">-</strong>
+            </article>
+            <article class="metric-card">
+              <span class="metric-label">24s mesaj</span>
+              <strong id="metric-messages">-</strong>
+            </article>
+            <article class="metric-card">
+              <span class="metric-label">Acik sikayet</span>
+              <strong id="metric-open-reports">-</strong>
+            </article>
+          </section>
+
+          <section class="workspace">
+            <section class="panel users-panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>Kullanicilar</h2>
+                  <p>Arama yap, sec ve detaylarini incele.</p>
+                </div>
+                <form id="user-search-form" class="search-form">
+                  <input
+                    id="user-search-input"
+                    type="search"
+                    placeholder="Ad, @username, telefon, email"
+                  />
+                  <button class="ghost-button" type="submit">Ara</button>
+                </form>
+              </div>
+              <div id="users-state" class="state-text">Yukleniyor...</div>
+              <div id="users-list" class="users-list"></div>
+            </section>
+
+            <section class="panel detail-panel">
+              <div id="detail-empty" class="state-empty">
+                Listeden bir kullanici sec.
+              </div>
+
+              <div id="detail-view" class="hidden">
+                <header class="detail-header">
+                  <div class="detail-identity">
+                    <div id="detail-avatar" class="avatar-shell"></div>
+                    <div>
+                      <h2 id="detail-name">-</h2>
+                      <div id="detail-subtitle" class="muted-text">-</div>
+                    </div>
+                  </div>
+                  <div class="badge-row">
+                    <span id="detail-status" class="status-badge">-</span>
+                    <span id="detail-last-seen" class="soft-badge">-</span>
+                  </div>
+                </header>
+
+                <nav class="tab-row">
+                  <button class="tab-button active" data-tab="overview" type="button">Genel</button>
+                  <button class="tab-button" data-tab="sessions" type="button">Oturumlar</button>
+                  <button class="tab-button" data-tab="chats" type="button">Sohbetler</button>
+                  <button class="tab-button" data-tab="media" type="button">Medya</button>
+                </nav>
+
+                <section id="tab-overview" class="tab-panel"></section>
+                <section id="tab-sessions" class="tab-panel hidden"></section>
+                <section id="tab-chats" class="tab-panel hidden"></section>
+                <section id="tab-media" class="tab-panel hidden"></section>
+              </div>
+            </section>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <script type="module" src="/admin/app.js"></script>
+  </body>
+</html>

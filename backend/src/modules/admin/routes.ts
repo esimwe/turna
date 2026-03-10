@@ -14,8 +14,10 @@ import { env } from "../../config/env.js";
 import { revokeAllAuthSessionsForUser } from "../../lib/auth-sessions.js";
 import { signAdminAccessToken } from "../../lib/jwt.js";
 import { prisma } from "../../lib/prisma.js";
+import { createObjectReadUrl } from "../../lib/storage.js";
 import { writeAdminAuditLog } from "../../lib/admin-audit.js";
 import { requireAdminAuth, requireAdminRole } from "../../middleware/admin-auth.js";
+import { buildAvatarUrl } from "../profile/avatar-url.js";
 
 export const adminRouter = Router();
 const prismaUser = (prisma as unknown as { user: any }).user;
@@ -25,6 +27,9 @@ const prismaFeatureFlag = (prisma as unknown as { featureFlag: any }).featureFla
 const prismaCountryPolicy = (prisma as unknown as { countryPolicy: any }).countryPolicy;
 const prismaReportCase = (prisma as unknown as { reportCase: any }).reportCase;
 const prismaAdminAuditLog = (prisma as unknown as { adminAuditLog: any }).adminAuditLog;
+const prismaChatMember = (prisma as unknown as { chatMember: any }).chatMember;
+const prismaMessage = (prisma as unknown as { message: any }).message;
+const prismaMessageAttachment = (prisma as unknown as { messageAttachment: any }).messageAttachment;
 
 const adminLoginSchema = z.object({
   username: z.string().trim().min(3).max(64),
@@ -142,6 +147,70 @@ const updateCountryPolicySchema = z
 const listAuditLogsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(100)
 });
+
+const listSessionsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).default(50)
+});
+
+const listChatsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).default(100)
+});
+
+const listMessagesQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).default(100)
+});
+
+const chatIdParamSchema = z.object({
+  chatId: z.string().trim().min(1).max(255)
+});
+
+function summarizeMessage(row: {
+  text?: string | null;
+  attachments?: Array<{ kind?: string | null }>;
+}): string {
+  const text = row.text?.trim();
+  if (text) return text;
+  const firstKind = row.attachments?.[0]?.kind?.toUpperCase?.();
+  if (!firstKind) return "Sohbet baslat";
+  if ((row.attachments?.length ?? 0) > 1) return `${row.attachments?.length ?? 0} ek gonderildi`;
+  if (firstKind === "IMAGE") return "Fotograf";
+  if (firstKind === "VIDEO") return "Video";
+  return "Dosya";
+}
+
+async function resolveAttachmentAdminPayload(attachment: {
+  id: string;
+  objectKey: string;
+  kind: string;
+  fileName: string | null;
+  contentType: string;
+  sizeBytes: number;
+  width: number | null;
+  height: number | null;
+  durationSeconds: number | null;
+  createdAt?: Date;
+}) {
+  let url: string | null = null;
+  try {
+    url = await createObjectReadUrl(attachment.objectKey);
+  } catch (_) {
+    url = null;
+  }
+
+  return {
+    id: attachment.id,
+    objectKey: attachment.objectKey,
+    kind: attachment.kind.toLowerCase(),
+    fileName: attachment.fileName,
+    contentType: attachment.contentType,
+    sizeBytes: attachment.sizeBytes,
+    width: attachment.width,
+    height: attachment.height,
+    durationSeconds: attachment.durationSeconds,
+    createdAt: attachment.createdAt?.toISOString?.() ?? null,
+    url
+  };
+}
 
 async function ensureBootstrapAdmin(): Promise<void> {
   if (!env.ADMIN_BOOTSTRAP_USERNAME || !env.ADMIN_BOOTSTRAP_PASSWORD) {
@@ -488,17 +557,27 @@ adminRouter.get("/users", requireAdminAuth, async (req, res) => {
       displayName: true,
       phone: true,
       email: true,
+      avatarUrl: true,
       accountStatus: true,
       accountStatusReason: true,
       otpBlocked: true,
       sendRestricted: true,
       callRestricted: true,
       createdAt: true,
-      lastSeenAt: true
+      lastSeenAt: true,
+      updatedAt: true
     }
   });
 
-  res.json({ data: users });
+  res.json({
+    data: users.map((user: any) => ({
+      ...user,
+      avatarUrl:
+        user.avatarUrl && user.updatedAt
+          ? buildAvatarUrl(req, user.id, user.updatedAt)
+          : null
+    }))
+  });
 });
 
 adminRouter.get("/users/:userId", requireAdminAuth, async (req, res) => {
@@ -552,12 +631,324 @@ adminRouter.get("/users/:userId", requireAdminAuth, async (req, res) => {
     }
   });
 
+  const latestSession = await prismaAuthSession.findFirst({
+    where: {
+      userId: user.id
+    },
+    orderBy: {
+      createdAt: "desc"
+    },
+    select: {
+      id: true,
+      platform: true,
+      deviceModel: true,
+      osVersion: true,
+      appVersion: true,
+      localeTag: true,
+      regionCode: true,
+      connectionType: true,
+      countryIso: true,
+      ipCountryIso: true,
+      ipAddress: true,
+      userAgent: true,
+      createdAt: true,
+      lastSeenAt: true,
+      revokedAt: true,
+      revokeReason: true
+    }
+  });
+
   res.json({
     data: {
       ...user,
-      activeSessionCount
+      avatarUrl:
+        user.avatarUrl && user.updatedAt
+          ? buildAvatarUrl(req, user.id, user.updatedAt)
+          : null,
+      activeSessionCount,
+      latestSession
     }
   });
+});
+
+adminRouter.get("/users/:userId/sessions", requireAdminAuth, async (req, res) => {
+  const parsedParams = userIdParamSchema.safeParse(req.params);
+  const parsedQuery = listSessionsQuerySchema.safeParse(req.query);
+  if (!parsedParams.success) {
+    res.status(400).json({
+      error: "validation_error",
+      details: parsedParams.error.flatten()
+    });
+    return;
+  }
+  if (!parsedQuery.success) {
+    res.status(400).json({
+      error: "validation_error",
+      details: parsedQuery.error.flatten()
+    });
+    return;
+  }
+
+  const sessions = await prismaAuthSession.findMany({
+    where: { userId: parsedParams.data.userId },
+    orderBy: [{ revokedAt: "asc" }, { createdAt: "desc" }],
+    take: parsedQuery.data.limit,
+    select: {
+      id: true,
+      deviceId: true,
+      platform: true,
+      deviceModel: true,
+      osVersion: true,
+      appVersion: true,
+      localeTag: true,
+      regionCode: true,
+      connectionType: true,
+      countryIso: true,
+      ipCountryIso: true,
+      ipAddress: true,
+      userAgent: true,
+      createdAt: true,
+      lastSeenAt: true,
+      revokedAt: true,
+      revokeReason: true
+    }
+  });
+
+  res.json({ data: sessions });
+});
+
+adminRouter.get("/users/:userId/chats", requireAdminAuth, async (req, res) => {
+  const parsedParams = userIdParamSchema.safeParse(req.params);
+  const parsedQuery = listChatsQuerySchema.safeParse(req.query);
+  if (!parsedParams.success) {
+    res.status(400).json({
+      error: "validation_error",
+      details: parsedParams.error.flatten()
+    });
+    return;
+  }
+  if (!parsedQuery.success) {
+    res.status(400).json({
+      error: "validation_error",
+      details: parsedQuery.error.flatten()
+    });
+    return;
+  }
+
+  const memberships = await prismaChatMember.findMany({
+    where: { userId: parsedParams.data.userId },
+    orderBy: { joinedAt: "desc" },
+    take: parsedQuery.data.limit,
+    include: {
+      folder: {
+        select: {
+          id: true,
+          name: true
+        }
+      },
+      chat: {
+        select: {
+          id: true,
+          type: true,
+          createdAt: true,
+          members: {
+            select: {
+              userId: true,
+              user: {
+                select: {
+                  id: true,
+                  displayName: true,
+                  username: true,
+                  phone: true,
+                  avatarUrl: true,
+                  updatedAt: true
+                }
+              }
+            }
+          },
+          messages: {
+            take: 1,
+            orderBy: { createdAt: "desc" },
+            select: {
+              id: true,
+              text: true,
+              createdAt: true,
+              senderId: true,
+              attachments: {
+                select: {
+                  kind: true
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  });
+
+  res.json({
+    data: memberships.map((membership: any) => {
+      const peers = (membership.chat?.members ?? [])
+        .filter((member: any) => member.userId !== parsedParams.data.userId)
+        .map((member: any) => ({
+          id: member.user.id,
+          displayName: member.user.displayName,
+          username: member.user.username,
+          phone: member.user.phone,
+          avatarUrl:
+            member.user.avatarUrl && member.user.updatedAt
+              ? buildAvatarUrl(req, member.user.id, member.user.updatedAt)
+              : null
+        }));
+      const lastMessage = membership.chat?.messages?.[0] ?? null;
+
+      return {
+        chatId: membership.chatId,
+        type: membership.chat?.type?.toLowerCase?.() ?? "direct",
+        createdAt: membership.chat?.createdAt?.toISOString?.() ?? null,
+        joinedAt: membership.joinedAt?.toISOString?.() ?? null,
+        hiddenAt: membership.hiddenAt?.toISOString?.() ?? null,
+        clearedAt: membership.clearedAt?.toISOString?.() ?? null,
+        archivedAt: membership.archivedAt?.toISOString?.() ?? null,
+        muted: membership.muted === true,
+        folderId: membership.folderId ?? null,
+        folderName: membership.folder?.name ?? null,
+        peers,
+        lastMessage: lastMessage
+          ? {
+              id: lastMessage.id,
+              senderId: lastMessage.senderId,
+              text: summarizeMessage(lastMessage),
+              createdAt: lastMessage.createdAt.toISOString()
+            }
+          : null
+      };
+    })
+  });
+});
+
+adminRouter.get("/chats/:chatId/messages", requireAdminAuth, async (req, res) => {
+  const parsedParams = chatIdParamSchema.safeParse(req.params);
+  const parsedQuery = listMessagesQuerySchema.safeParse(req.query);
+  if (!parsedParams.success) {
+    res.status(400).json({
+      error: "validation_error",
+      details: parsedParams.error.flatten()
+    });
+    return;
+  }
+  if (!parsedQuery.success) {
+    res.status(400).json({
+      error: "validation_error",
+      details: parsedQuery.error.flatten()
+    });
+    return;
+  }
+
+  const messages = await prismaMessage.findMany({
+    where: { chatId: parsedParams.data.chatId },
+    orderBy: { createdAt: "desc" },
+    take: parsedQuery.data.limit,
+    include: {
+      sender: {
+        select: {
+          id: true,
+          displayName: true,
+          username: true,
+          phone: true,
+          avatarUrl: true,
+          updatedAt: true
+        }
+      },
+      attachments: {
+        orderBy: { createdAt: "asc" }
+      }
+    }
+  });
+
+  const items = await Promise.all(
+    messages
+      .reverse()
+      .map(async (message: any) => ({
+        id: message.id,
+        chatId: message.chatId,
+        sender: {
+          id: message.sender.id,
+          displayName: message.sender.displayName,
+          username: message.sender.username,
+          phone: message.sender.phone,
+          avatarUrl:
+            message.sender.avatarUrl && message.sender.updatedAt
+              ? buildAvatarUrl(req, message.sender.id, message.sender.updatedAt)
+              : null
+        },
+        text: message.text,
+        status: message.status,
+        createdAt: message.createdAt.toISOString(),
+        readAt: message.readAt?.toISOString?.() ?? null,
+        editedAt: message.editedAt?.toISOString?.() ?? null,
+        editCount: message.editCount ?? 0,
+        isEdited: message.editedAt != null,
+        attachments: await Promise.all(
+          (message.attachments ?? []).map((attachment: any) =>
+            resolveAttachmentAdminPayload(attachment)
+          )
+        )
+      }))
+  );
+
+  res.json({ data: items });
+});
+
+adminRouter.get("/users/:userId/media", requireAdminAuth, async (req, res) => {
+  const parsedParams = userIdParamSchema.safeParse(req.params);
+  const parsedQuery = listMessagesQuerySchema.safeParse(req.query);
+  if (!parsedParams.success) {
+    res.status(400).json({
+      error: "validation_error",
+      details: parsedParams.error.flatten()
+    });
+    return;
+  }
+  if (!parsedQuery.success) {
+    res.status(400).json({
+      error: "validation_error",
+      details: parsedQuery.error.flatten()
+    });
+    return;
+  }
+
+  const attachments = await prismaMessageAttachment.findMany({
+    where: {
+      message: {
+        senderId: parsedParams.data.userId
+      }
+    },
+    orderBy: { createdAt: "desc" },
+    take: parsedQuery.data.limit,
+    include: {
+      message: {
+        select: {
+          id: true,
+          chatId: true,
+          text: true,
+          createdAt: true
+        }
+      }
+    }
+  });
+
+  const items = await Promise.all(
+    attachments.map(async (attachment: any) => ({
+      ...(await resolveAttachmentAdminPayload(attachment)),
+      messageId: attachment.message.id,
+      chatId: attachment.message.chatId,
+      messageText: attachment.message.text,
+      messageCreatedAt: attachment.message.createdAt.toISOString()
+    }))
+  );
+
+  res.json({ data: items });
 });
 
 adminRouter.put("/users/:userId/moderation", requireAdminAuth, async (req, res) => {

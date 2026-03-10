@@ -314,6 +314,14 @@ model AuthSession {
   userId       String
   deviceId     String?
   platform     String?
+  deviceModel  String?
+  osVersion    String?
+  appVersion   String?
+  localeTag    String?
+  regionCode   String?
+  connectionType String?
+  countryIso   String?
+  ipCountryIso String?
   ipAddress    String?
   userAgent    String?
   createdAt    DateTime @default(now())
