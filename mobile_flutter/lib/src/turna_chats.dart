@@ -3816,6 +3816,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                 _TurnaLocationMessageCard(
                   payload: locationPayload,
                   mine: mine,
+                  messageId: msg.id,
+                  liveClient: _client,
                   overlayFooter: useEmbeddedMediaBubble ? embeddedFooter : null,
                   onStopShare:
                       mine && locationPayload.isLiveActive

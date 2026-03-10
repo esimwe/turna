@@ -310,17 +310,120 @@ TileLayer buildTurnaStadiaTileLayer() {
   );
 }
 
-Future<void> openTurnaLocationInMaps(TurnaLocationPayload payload) async {
-  final label = Uri.encodeComponent(payload.displayTitle);
-  final uri = Platform.isIOS
-      ? Uri.parse(
-          'http://maps.apple.com/?ll=${payload.latitude},${payload.longitude}&q=$label',
-        )
-      : Uri.parse(
-          'https://www.google.com/maps/search/?api=1&query=${payload.latitude},${payload.longitude}',
-        );
+enum TurnaExternalMapApp { system, apple, google, browser }
 
-  await launchUrl(uri, mode: LaunchMode.externalApplication);
+Uri _turnaAppleMapsUri(TurnaLocationPayload payload) {
+  final label = Uri.encodeComponent(payload.displayTitle);
+  return Uri.parse(
+    'http://maps.apple.com/?ll=${payload.latitude},${payload.longitude}&q=$label',
+  );
+}
+
+Uri _turnaGoogleMapsAppUri(TurnaLocationPayload payload) {
+  final label = Uri.encodeComponent(payload.displayTitle);
+  if (Platform.isIOS) {
+    return Uri.parse(
+      'comgooglemaps://?center=${payload.latitude},${payload.longitude}&q=${payload.latitude},${payload.longitude}($label)',
+    );
+  }
+  return Uri.parse(
+    'geo:${payload.latitude},${payload.longitude}?q=${payload.latitude},${payload.longitude}($label)',
+  );
+}
+
+Uri _turnaGoogleMapsWebUri(TurnaLocationPayload payload) {
+  return Uri.parse(
+    'https://www.google.com/maps/search/?api=1&query=${payload.latitude},${payload.longitude}',
+  );
+}
+
+Future<bool> _launchTurnaMapUri(Uri uri) async {
+  if (!await canLaunchUrl(uri)) return false;
+  return launchUrl(uri, mode: LaunchMode.externalApplication);
+}
+
+Future<void> openTurnaLocationInMaps(
+  TurnaLocationPayload payload, {
+  TurnaExternalMapApp preferredApp = TurnaExternalMapApp.system,
+}) async {
+  if (preferredApp == TurnaExternalMapApp.apple) {
+    await _launchTurnaMapUri(_turnaAppleMapsUri(payload));
+    return;
+  }
+  if (preferredApp == TurnaExternalMapApp.google) {
+    final openedApp = await _launchTurnaMapUri(_turnaGoogleMapsAppUri(payload));
+    if (!openedApp) {
+      await _launchTurnaMapUri(_turnaGoogleMapsWebUri(payload));
+    }
+    return;
+  }
+  if (preferredApp == TurnaExternalMapApp.browser) {
+    await _launchTurnaMapUri(_turnaGoogleMapsWebUri(payload));
+    return;
+  }
+
+  if (Platform.isIOS) {
+    final openedApple = await _launchTurnaMapUri(_turnaAppleMapsUri(payload));
+    if (openedApple) return;
+  }
+  final openedGoogle = await _launchTurnaMapUri(_turnaGoogleMapsAppUri(payload));
+  if (openedGoogle) return;
+  await _launchTurnaMapUri(_turnaGoogleMapsWebUri(payload));
+}
+
+Future<void> showTurnaLocationMapChooser(
+  BuildContext context,
+  TurnaLocationPayload payload,
+) async {
+  final hasGoogleApp = await canLaunchUrl(_turnaGoogleMapsAppUri(payload));
+  if (!context.mounted) return;
+
+  await showModalBottomSheet<void>(
+    context: context,
+    builder: (sheetContext) {
+      return SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (Platform.isIOS)
+              ListTile(
+                leading: const Icon(Icons.map_outlined),
+                title: const Text('Apple Haritalar'),
+                onTap: () async {
+                  Navigator.pop(sheetContext);
+                  await openTurnaLocationInMaps(
+                    payload,
+                    preferredApp: TurnaExternalMapApp.apple,
+                  );
+                },
+              ),
+            ListTile(
+              leading: const Icon(Icons.navigation_outlined),
+              title: Text(hasGoogleApp ? 'Google Maps' : 'Google Maps (web)'),
+              onTap: () async {
+                Navigator.pop(sheetContext);
+                await openTurnaLocationInMaps(
+                  payload,
+                  preferredApp: TurnaExternalMapApp.google,
+                );
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.public_outlined),
+              title: const Text('Tarayicida ac'),
+              onTap: () async {
+                Navigator.pop(sheetContext);
+                await openTurnaLocationInMaps(
+                  payload,
+                  preferredApp: TurnaExternalMapApp.browser,
+                );
+              },
+            ),
+          ],
+        ),
+      );
+    },
+  );
 }
 
 class _TurnaMapMarker extends StatelessWidget {
@@ -367,6 +470,9 @@ class _TurnaLocationMapPreview extends StatelessWidget {
       height: height,
       child: IgnorePointer(
         child: FlutterMap(
+          key: ValueKey(
+            'location-preview:${payload.latitude.toStringAsFixed(5)}:${payload.longitude.toStringAsFixed(5)}:${payload.updatedAt ?? ''}:${payload.endedAt ?? ''}',
+          ),
           options: MapOptions(
             initialCenter: ll.LatLng(payload.latitude, payload.longitude),
             initialZoom: 15.5,
@@ -388,6 +494,187 @@ class _TurnaLocationMapPreview extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class TurnaLocationViewerPage extends StatefulWidget {
+  const TurnaLocationViewerPage({
+    super.key,
+    required this.initialPayload,
+    this.messageId,
+    this.liveClient,
+  });
+
+  final TurnaLocationPayload initialPayload;
+  final String? messageId;
+  final TurnaSocketClient? liveClient;
+
+  @override
+  State<TurnaLocationViewerPage> createState() => _TurnaLocationViewerPageState();
+}
+
+class _TurnaLocationViewerPageState extends State<TurnaLocationViewerPage> {
+  late TurnaLocationPayload _payload = widget.initialPayload;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.liveClient?.addListener(_handleLiveMessageUpdated);
+    _handleLiveMessageUpdated();
+  }
+
+  @override
+  void dispose() {
+    widget.liveClient?.removeListener(_handleLiveMessageUpdated);
+    super.dispose();
+  }
+
+  void _handleLiveMessageUpdated() {
+    final messageId = widget.messageId;
+    final client = widget.liveClient;
+    if (messageId == null || client == null) return;
+    ChatMessage? target;
+    for (final message in client.messages) {
+      if (message.id == messageId) {
+        target = message;
+        break;
+      }
+    }
+    if (target == null) return;
+    final next = parseTurnaMessageText(target.text).location;
+    if (next == null) return;
+    if (_payload.latitude == next.latitude &&
+        _payload.longitude == next.longitude &&
+        _payload.updatedAt == next.updatedAt &&
+        _payload.endedAt == next.endedAt) {
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _payload = next);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final payload = _payload;
+    final textColor = Colors.white;
+
+    return Scaffold(
+      backgroundColor: const Color(0xFF101416),
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        foregroundColor: Colors.white,
+        title: Text(payload.displayTitle),
+        actions: [
+          IconButton(
+            onPressed: () => showTurnaLocationMapChooser(context, payload),
+            icon: const Icon(Icons.open_in_new_rounded),
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          Expanded(
+            child: FlutterMap(
+              key: ValueKey(
+                'location-viewer:${payload.latitude.toStringAsFixed(5)}:${payload.longitude.toStringAsFixed(5)}:${payload.updatedAt ?? ''}:${payload.endedAt ?? ''}',
+              ),
+              options: MapOptions(
+                initialCenter: ll.LatLng(payload.latitude, payload.longitude),
+                initialZoom: 16,
+              ),
+              children: [
+                buildTurnaStadiaTileLayer(),
+                MarkerLayer(
+                  markers: [
+                    Marker(
+                      point: ll.LatLng(payload.latitude, payload.longitude),
+                      width: 40,
+                      height: 40,
+                      child: _TurnaMapMarker(live: payload.live),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          SafeArea(
+            top: false,
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
+              decoration: const BoxDecoration(
+                color: Color(0xFF11181D),
+                borderRadius: BorderRadius.vertical(top: Radius.circular(26)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (payload.live)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: payload.isLiveActive
+                            ? TurnaColors.success.withValues(alpha: 0.16)
+                            : Colors.white.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        payload.isLiveActive
+                            ? 'Canli takip acik'
+                            : 'Canli konum sona erdi',
+                        style: TextStyle(
+                          color: payload.isLiveActive
+                              ? TurnaColors.success
+                              : Colors.white70,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  if (payload.live) const SizedBox(height: 12),
+                  Text(
+                    payload.displayTitle,
+                    style: TextStyle(
+                      color: textColor,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    payload.displaySubtitle,
+                    style: TextStyle(
+                      color: textColor.withValues(alpha: 0.78),
+                      fontSize: 14,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    formatTurnaLocationCoordinates(
+                      payload.latitude,
+                      payload.longitude,
+                    ),
+                    style: TextStyle(
+                      color: textColor.withValues(alpha: 0.62),
+                      fontSize: 13,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  FilledButton.icon(
+                    onPressed: () => showTurnaLocationMapChooser(context, payload),
+                    icon: const Icon(Icons.navigation_rounded),
+                    label: const Text('Haritalarda ac'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1198,12 +1485,16 @@ class _TurnaLocationMessageCard extends StatelessWidget {
   const _TurnaLocationMessageCard({
     required this.payload,
     required this.mine,
+    this.messageId,
+    this.liveClient,
     this.overlayFooter,
     this.onStopShare,
   });
 
   final TurnaLocationPayload payload;
   final bool mine;
+  final String? messageId;
+  final TurnaSocketClient? liveClient;
   final Widget? overlayFooter;
   final Future<void> Function()? onStopShare;
 
@@ -1217,7 +1508,17 @@ class _TurnaLocationMessageCard extends StatelessWidget {
 
     return InkWell(
       borderRadius: BorderRadius.circular(22),
-      onTap: () => openTurnaLocationInMaps(payload),
+      onTap: () {
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => TurnaLocationViewerPage(
+              initialPayload: payload,
+              messageId: messageId,
+              liveClient: liveClient,
+            ),
+          ),
+        );
+      },
       child: Container(
         width: 250,
         decoration: BoxDecoration(
