@@ -3618,10 +3618,19 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         : msg.attachments;
     final hasText = displayText.isNotEmpty;
     final hasLocation = locationPayload != null;
+    final hasSingleVisualAttachment =
+        visibleAttachments.length == 1 &&
+        !_isAudioAttachment(visibleAttachments.first) &&
+        visibleAttachments.first.kind != ChatAttachmentKind.file;
     final hasError =
         !isDeletedPlaceholder &&
         msg.errorText != null &&
         msg.errorText!.trim().isNotEmpty;
+    final useEmbeddedMediaBubble =
+        !hasText &&
+        !hasError &&
+        parsed.reply == null &&
+        (locationPayload != null || hasSingleVisualAttachment);
     final isHighlighted = _highlightedMessageId == msg.id;
     final footer = _MessageMetaFooter(
       timeLabel: _formatMessageTime(msg.createdAt),
@@ -3629,6 +3638,14 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       status: msg.status,
       edited: msg.isEdited,
       starred: _starredMessageIds.contains(msg.id),
+    );
+    final embeddedFooter = _MessageMetaFooter(
+      timeLabel: _formatMessageTime(msg.createdAt),
+      mine: mine,
+      status: msg.status,
+      edited: msg.isEdited,
+      starred: _starredMessageIds.contains(msg.id),
+      overlay: true,
     );
     final bubbleColor = mine
         ? TurnaColors.chatOutgoing
@@ -3678,24 +3695,29 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                 TurnaChatTokens.messageMaxWidthFactor,
           ),
           margin: _bubbleMarginFor(displayEntries, index, mine),
-          padding: EdgeInsets.fromLTRB(
-            12,
-            9,
-            12,
-            msg.attachments.isEmpty && !hasError ? 8 : 10,
-          ),
+          padding: useEmbeddedMediaBubble
+              ? EdgeInsets.zero
+              : EdgeInsets.fromLTRB(
+                  12,
+                  9,
+                  12,
+                  msg.attachments.isEmpty && !hasError ? 8 : 10,
+                ),
           decoration: BoxDecoration(
-            color: resolvedBubbleColor,
+            color: useEmbeddedMediaBubble
+                ? Colors.transparent
+                : resolvedBubbleColor,
             borderRadius: bubbleRadius,
-            border: bubbleBorder,
+            border: useEmbeddedMediaBubble ? null : bubbleBorder,
             boxShadow: [
-              mine
-                  ? TurnaColors.shadowBubble
-                  : const BoxShadow(
-                      color: Color(0x14000000),
-                      blurRadius: 10,
-                      offset: Offset(0, 1),
-                    ),
+              if (!useEmbeddedMediaBubble)
+                mine
+                    ? TurnaColors.shadowBubble
+                    : const BoxShadow(
+                        color: Color(0x14000000),
+                        blurRadius: 10,
+                        offset: Offset(0, 1),
+                      ),
               if (isHighlighted)
                 BoxShadow(
                   color: TurnaColors.accent.withValues(alpha: 0.18),
@@ -3735,6 +3757,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                   mine: mine,
                   onTap: _openAttachment,
                   formatFileSize: _formatFileSize,
+                  overlayFooter: useEmbeddedMediaBubble ? embeddedFooter : null,
                 ),
                 if (hasText || hasLocation) const SizedBox(height: 8),
               ],
@@ -3742,6 +3765,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                 _TurnaLocationMessageCard(
                   payload: locationPayload,
                   mine: mine,
+                  overlayFooter: useEmbeddedMediaBubble ? embeddedFooter : null,
                   onStopShare:
                       mine && locationPayload.isLiveActive
                       ? () => _stopLiveLocation(msg, locationPayload)
@@ -3772,7 +3796,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                     footer,
                   ],
                 )
-              else if (hasLocation || visibleAttachments.isNotEmpty || hasError)
+              else if (!useEmbeddedMediaBubble &&
+                  (hasLocation || visibleAttachments.isNotEmpty || hasError))
                 Align(alignment: Alignment.bottomRight, child: footer),
             ],
           ),
@@ -4738,6 +4763,7 @@ class _MessageMetaFooter extends StatelessWidget {
     required this.status,
     this.edited = false,
     this.starred = false,
+    this.overlay = false,
   });
 
   final String timeLabel;
@@ -4745,17 +4771,23 @@ class _MessageMetaFooter extends StatelessWidget {
   final ChatMessageStatus status;
   final bool edited;
   final bool starred;
+  final bool overlay;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
+    final textColor = overlay
+        ? Colors.white.withValues(alpha: 0.94)
+        : (mine ? TurnaColors.chatOutgoingMeta : TurnaColors.textMuted);
+    final content = Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         if (starred) ...[
           Icon(
             Icons.star_rounded,
             size: 13,
-            color: mine ? TurnaColors.chatOutgoingMeta : TurnaColors.warning,
+            color: overlay
+                ? Colors.white.withValues(alpha: 0.96)
+                : (mine ? TurnaColors.chatOutgoingMeta : TurnaColors.warning),
           ),
           const SizedBox(width: 4),
         ],
@@ -4763,28 +4795,44 @@ class _MessageMetaFooter extends StatelessWidget {
           edited ? 'duzenlendi $timeLabel' : timeLabel,
           style: TextStyle(
             fontSize: 11,
-            color: mine ? TurnaColors.chatOutgoingMeta : TurnaColors.textMuted,
+            color: textColor,
           ),
         ),
         if (mine) ...[
           const SizedBox(width: 6),
-          _StatusTick(status: status, mine: mine),
+          _StatusTick(status: status, mine: mine, overlay: overlay),
         ],
       ],
+    );
+    if (!overlay) return content;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.34),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: content,
     );
   }
 }
 
 class _StatusTick extends StatelessWidget {
-  const _StatusTick({required this.status, this.mine = false});
+  const _StatusTick({
+    required this.status,
+    this.mine = false,
+    this.overlay = false,
+  });
 
   final ChatMessageStatus status;
   final bool mine;
+  final bool overlay;
 
   @override
   Widget build(BuildContext context) {
     IconData icon = Icons.done;
-    Color color = mine ? TurnaColors.chatOutgoingMeta : TurnaColors.textMuted;
+    Color color = overlay
+        ? Colors.white.withValues(alpha: 0.94)
+        : (mine ? TurnaColors.chatOutgoingMeta : TurnaColors.textMuted);
 
     if (status == ChatMessageStatus.sending) {
       icon = Icons.schedule;
@@ -5766,17 +5814,20 @@ class _ChatAttachmentList extends StatelessWidget {
     required this.mine,
     required this.onTap,
     required this.formatFileSize,
+    this.overlayFooter,
   });
 
   final List<ChatAttachment> attachments;
   final bool mine;
   final Future<void> Function(ChatAttachment attachment) onTap;
   final String Function(int bytes) formatFileSize;
+  final Widget? overlayFooter;
 
   @override
   Widget build(BuildContext context) {
+    final showOverlay = overlayFooter != null && attachments.length == 1;
     return Column(
-      children: attachments.map((attachment) {
+      children: attachments.map<Widget>((attachment) {
         if (_isAudioAttachment(attachment)) {
           return _VoiceMessageBubble(
             attachment: attachment,
@@ -5784,34 +5835,74 @@ class _ChatAttachmentList extends StatelessWidget {
             onFallbackTap: () => onTap(attachment),
           );
         }
+
         if (attachment.kind == ChatAttachmentKind.image) {
           final imageUrl = attachment.url?.trim() ?? '';
           return Padding(
-            padding: const EdgeInsets.only(bottom: 8),
+            padding: EdgeInsets.only(bottom: showOverlay ? 0 : 8),
             child: InkWell(
-              borderRadius: BorderRadius.circular(14),
+              borderRadius: BorderRadius.circular(22),
               onTap: () => onTap(attachment),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(14),
-                child: Container(
-                  width: 220,
-                  height: 220,
-                  color: TurnaColors.backgroundMuted,
-                  child: imageUrl.isEmpty
-                      ? const Center(
-                          child: Icon(Icons.image_not_supported_outlined),
-                        )
-                      : _TurnaCachedImage(
-                          cacheKey: 'attachment:${attachment.objectKey}',
-                          imageUrl: imageUrl,
-                          fit: BoxFit.cover,
-                          loading: const Center(
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
-                          error: const Center(
-                            child: Icon(Icons.broken_image_outlined),
+              child: SizedBox(
+                width: 220,
+                height: 220,
+                child: Stack(
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(22),
+                      child: Container(
+                        width: 220,
+                        height: 220,
+                        color: TurnaColors.backgroundMuted,
+                        child: imageUrl.isEmpty
+                            ? const Center(
+                                child: Icon(Icons.image_not_supported_outlined),
+                              )
+                            : _TurnaCachedImage(
+                                cacheKey: 'attachment:${attachment.objectKey}',
+                                imageUrl: imageUrl,
+                                fit: BoxFit.cover,
+                                loading: const Center(
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                ),
+                                error: const Center(
+                                  child: Icon(Icons.broken_image_outlined),
+                                ),
+                              ),
+                      ),
+                    ),
+                    if (showOverlay)
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        child: IgnorePointer(
+                          child: Container(
+                            height: 70,
+                            decoration: BoxDecoration(
+                              borderRadius: const BorderRadius.vertical(
+                                bottom: Radius.circular(22),
+                              ),
+                              gradient: LinearGradient(
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                                colors: [
+                                  Colors.transparent,
+                                  Colors.black.withValues(alpha: 0.22),
+                                  Colors.black.withValues(alpha: 0.34),
+                                ],
+                              ),
+                            ),
                           ),
                         ),
+                      ),
+                    if (showOverlay)
+                      Positioned(
+                        right: 8,
+                        bottom: 8,
+                        child: overlayFooter!,
+                      ),
+                  ],
                 ),
               ),
             ),
@@ -5819,6 +5910,98 @@ class _ChatAttachmentList extends StatelessWidget {
         }
 
         final isVideo = attachment.kind == ChatAttachmentKind.video;
+        if (isVideo) {
+          return Padding(
+            padding: EdgeInsets.only(bottom: showOverlay ? 0 : 8),
+            child: InkWell(
+              onTap: () => onTap(attachment),
+              borderRadius: BorderRadius.circular(22),
+              child: SizedBox(
+                width: 220,
+                height: 220,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(22),
+                  child: Stack(
+                    children: [
+                      Container(
+                        width: 220,
+                        height: 220,
+                        decoration: const BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: [
+                              Color(0xFF31424A),
+                              Color(0xFF1E2A30),
+                              Color(0xFF11181D),
+                            ],
+                          ),
+                        ),
+                      ),
+                      Positioned.fill(
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.14),
+                          ),
+                        ),
+                      ),
+                      Center(
+                        child: Container(
+                          width: 62,
+                          height: 62,
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.34),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.play_arrow_rounded,
+                            color: Colors.white,
+                            size: 34,
+                          ),
+                        ),
+                      ),
+                      Positioned(
+                        left: 14,
+                        right: showOverlay ? 82 : 14,
+                        bottom: 12,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              attachment.fileName ?? 'Video',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              'Video • ${formatFileSize(attachment.sizeBytes)}',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.white.withValues(alpha: 0.82),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (showOverlay)
+                        Positioned(
+                          right: 8,
+                          bottom: 8,
+                          child: overlayFooter!,
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          );
+        }
+
         return Padding(
           padding: const EdgeInsets.only(bottom: 8),
           child: InkWell(
@@ -5840,10 +6023,8 @@ class _ChatAttachmentList extends StatelessWidget {
                       color: TurnaColors.surface,
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    child: Icon(
-                      isVideo
-                          ? Icons.play_circle_outline
-                          : Icons.insert_drive_file_outlined,
+                    child: const Icon(
+                      Icons.insert_drive_file_outlined,
                       color: TurnaColors.primary,
                     ),
                   ),
@@ -5853,14 +6034,14 @@ class _ChatAttachmentList extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          attachment.fileName ?? (isVideo ? 'Video' : 'Dosya'),
+                          attachment.fileName ?? 'Dosya',
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(fontWeight: FontWeight.w600),
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          '${isVideo ? 'Video' : 'Dosya'} • ${formatFileSize(attachment.sizeBytes)}',
+                          'Dosya • ${formatFileSize(attachment.sizeBytes)}',
                           style: const TextStyle(
                             fontSize: 12,
                             color: TurnaColors.textMuted,

@@ -1198,115 +1198,140 @@ class _TurnaLocationMessageCard extends StatelessWidget {
   const _TurnaLocationMessageCard({
     required this.payload,
     required this.mine,
+    this.overlayFooter,
     this.onStopShare,
   });
 
   final TurnaLocationPayload payload;
   final bool mine;
+  final Widget? overlayFooter;
   final Future<void> Function()? onStopShare;
 
   @override
   Widget build(BuildContext context) {
-    final cardColor = mine ? Colors.white.withValues(alpha: 0.18) : Colors.white;
+    final cardColor = mine ? TurnaColors.chatOutgoing : Colors.white;
     final textColor = mine
         ? TurnaColors.chatOutgoingText
         : TurnaColors.chatIncomingText;
+    final showOverlayFooter = overlayFooter != null;
 
     return InkWell(
-      borderRadius: BorderRadius.circular(16),
+      borderRadius: BorderRadius.circular(22),
       onTap: () => openTurnaLocationInMaps(payload),
       child: Container(
-        width: 240,
+        width: 250,
         decoration: BoxDecoration(
           color: cardColor,
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(22),
           border: Border.all(
             color: payload.live
-                ? TurnaColors.success.withValues(alpha: 0.28)
-                : TurnaColors.border,
+                ? TurnaColors.success.withValues(alpha: mine ? 0.24 : 0.28)
+                : (mine
+                      ? TurnaColors.chatOutgoing.withValues(alpha: 0.92)
+                      : TurnaColors.border),
           ),
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        child: Stack(
           children: [
-            ClipRRect(
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-              child: _TurnaLocationMapPreview(payload: payload, height: 150),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                ClipRRect(
+                  borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(22),
+                  ),
+                  child: _TurnaLocationMapPreview(payload: payload, height: 150),
+                ),
+                Padding(
+                  padding: EdgeInsets.fromLTRB(
+                    12,
+                    10,
+                    12,
+                    showOverlayFooter ? 46 : 12,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(
-                        payload.live
-                            ? Icons.location_history_rounded
-                            : Icons.location_on_rounded,
-                        color: payload.live
-                            ? TurnaColors.success
-                            : TurnaColors.primary,
-                        size: 18,
+                      Row(
+                        children: [
+                          Icon(
+                            payload.live
+                                ? Icons.location_history_rounded
+                                : Icons.location_on_rounded,
+                            color: payload.live
+                                ? TurnaColors.success
+                                : TurnaColors.primary,
+                            size: 18,
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              payload.displayTitle,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: textColor,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          payload.displayTitle,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: textColor,
-                            fontWeight: FontWeight.w700,
+                      const SizedBox(height: 4),
+                      Text(
+                        payload.displaySubtitle,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: textColor.withValues(alpha: 0.78),
+                          fontSize: 12.5,
+                          height: 1.3,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        formatTurnaLocationCoordinates(
+                          payload.latitude,
+                          payload.longitude,
+                        ),
+                        style: TextStyle(
+                          color: textColor.withValues(alpha: 0.62),
+                          fontSize: 11.5,
+                        ),
+                      ),
+                      if (payload.live &&
+                          payload.isLiveActive &&
+                          mine &&
+                          onStopShare != null) ...[
+                        const SizedBox(height: 8),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton.icon(
+                            onPressed: onStopShare,
+                            icon: const Icon(
+                              Icons.stop_circle_outlined,
+                              size: 18,
+                            ),
+                            label: const Text('Canli konumu durdur'),
+                            style: TextButton.styleFrom(
+                              foregroundColor: TurnaColors.error,
+                              padding: EdgeInsets.zero,
+                              visualDensity: VisualDensity.compact,
+                            ),
                           ),
                         ),
-                      ),
+                      ],
                     ],
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    payload.displaySubtitle,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: textColor.withValues(alpha: 0.78),
-                      fontSize: 12.5,
-                      height: 1.3,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    formatTurnaLocationCoordinates(
-                      payload.latitude,
-                      payload.longitude,
-                    ),
-                    style: TextStyle(
-                      color: textColor.withValues(alpha: 0.62),
-                      fontSize: 11.5,
-                    ),
-                  ),
-                  if (payload.live &&
-                      payload.isLiveActive &&
-                      mine &&
-                      onStopShare != null) ...[
-                    const SizedBox(height: 8),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: TextButton.icon(
-                        onPressed: onStopShare,
-                        icon: const Icon(Icons.stop_circle_outlined, size: 18),
-                        label: const Text('Canli konumu durdur'),
-                        style: TextButton.styleFrom(
-                          foregroundColor: TurnaColors.error,
-                          padding: EdgeInsets.zero,
-                          visualDensity: VisualDensity.compact,
-                        ),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
+                ),
+              ],
             ),
+            if (showOverlayFooter)
+              Positioned(
+                right: 8,
+                bottom: 8,
+                child: overlayFooter!,
+              ),
           ],
         ),
       ),
