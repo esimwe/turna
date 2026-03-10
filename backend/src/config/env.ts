@@ -25,6 +25,10 @@ const resolvedEnv = {
   NODE_ENV: process.env.NODE_ENV,
   PORT: process.env.PORT,
   CORS_ORIGIN: process.env.CORS_ORIGIN,
+  PUBLIC_BASE_URL:
+    process.env.PUBLIC_BASE_URL ??
+    process.env.API_BASE_URL ??
+    process.env.APP_BASE_URL,
   TRUST_PROXY: process.env.TRUST_PROXY,
   FORCE_HTTPS: process.env.FORCE_HTTPS,
   REDIS_URL: process.env.REDIS_URL ?? process.env.REDIS_PRIVATE_URL,
@@ -77,6 +81,7 @@ const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().default(4000),
   CORS_ORIGIN: z.string().default("*"),
+  PUBLIC_BASE_URL: z.string().url().optional(),
   TRUST_PROXY: z
     .string()
     .optional()

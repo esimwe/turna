@@ -6,7 +6,7 @@ import { logError, logInfo } from "../../lib/logger.js";
 import { sendCallEndedPush, sendIncomingCallPush } from "../../lib/push.js";
 import { requireAuth, requireCallingAccess } from "../../middleware/auth.js";
 import { emitUserEvent } from "../chat/chat.realtime.js";
-import { buildAvatarUrlFromOrigin } from "../profile/avatar-url.js";
+import { buildAvatarUrlFromOrigin, getRequestOrigin } from "../profile/avatar-url.js";
 import { callService } from "./call.service.js";
 import {
   cancelCallReconnectGrace,
@@ -34,12 +34,6 @@ const listCallsQuerySchema = z.object({
 function getRouteParam(req: Request, key: string): string {
   const value = req.params[key];
   return Array.isArray(value) ? value[0] ?? "" : value ?? "";
-}
-
-function getRequestOrigin(req: Request): string {
-  const forwardedProto = req.header("x-forwarded-proto");
-  const proto = forwardedProto?.split(",")[0]?.trim() || req.protocol;
-  return `${proto}://${req.get("host")}`;
 }
 
 function withAvatarUrl(origin: string, user: CallUser) {
