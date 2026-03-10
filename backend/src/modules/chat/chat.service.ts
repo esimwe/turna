@@ -217,7 +217,7 @@ export class ChatService {
       where: { chatId },
       select: { userId: true }
     });
-    return members.map((member) => member.userId);
+    return members.map((member: any) => member.userId);
   }
 
   async resolvePeerId(chatId: string, userId: string): Promise<string | null> {
@@ -356,7 +356,7 @@ export class ChatService {
       throw new Error("message_delete_window_expired");
     }
 
-    const updated = await prisma.$transaction(async (tx) => {
+    const updated = await prisma.$transaction(async (tx: any) => {
       await tx.messageAttachment.deleteMany({
         where: { messageId: existing.id }
       });
@@ -376,7 +376,7 @@ export class ChatService {
     });
 
     await Promise.all(
-      existing.attachments.map((attachment) =>
+      existing.attachments.map((attachment: any) =>
         deleteObject(attachment.objectKey).catch((error: unknown) => {
           logError("message attachment delete failed", error);
         })
@@ -470,7 +470,7 @@ export class ChatService {
       },
       select: { id: true }
     });
-    const messageIds = targetRows.map((row) => row.id);
+    const messageIds = targetRows.map((row: any) => row.id);
     if (messageIds.length === 0) return [];
 
     await prisma.message.updateMany({
@@ -493,7 +493,7 @@ export class ChatService {
       },
       select: { id: true }
     });
-    const messageIds = targetRows.map((row) => row.id);
+    const messageIds = targetRows.map((row: any) => row.id);
     if (messageIds.length === 0) return [];
 
     await prisma.message.updateMany({
@@ -568,7 +568,7 @@ export class ChatService {
     const pageRows = rows.slice(0, limit).reverse();
 
     return {
-      items: await Promise.all(pageRows.map((row) => toChatMessage(row))),
+      items: await Promise.all(pageRows.map((row: any) => toChatMessage(row))),
       hasMore,
       nextBefore: hasMore && pageRows.length > 0 ? pageRows[0].createdAt.toISOString() : null
     };
@@ -613,17 +613,17 @@ export class ChatService {
     });
 
     const peerIds = memberships
-      .map((membership) => membership.chat.members.find((m) => m.userId !== userId)?.user.id)
-      .filter((peerId): peerId is string => Boolean(peerId));
+      .map((membership: any) => membership.chat.members.find((m: any) => m.userId !== userId)?.user.id)
+      .filter((peerId: any): peerId is string => Boolean(peerId));
     const blockedPeerIds = await getBlockedUserIdsByUser(
       userId,
       Array.from(new Set(peerIds))
     );
 
     const items = await Promise.all(
-      memberships.map(async (membership) => {
+      memberships.map(async (membership: any) => {
         const chat = membership.chat;
-        const peer = chat.members.find((m) => m.userId !== userId)?.user;
+        const peer = chat.members.find((m: any) => m.userId !== userId)?.user;
         const last = chat.messages[0];
         const hiddenAt = membership.hiddenAt;
         const clearedAt = membership.clearedAt;
@@ -688,7 +688,7 @@ export class ChatService {
       },
       orderBy: { createdAt: "desc" }
     });
-    return users.map((user) => ({
+    return users.map((user: any) => ({
       id: user.id,
       displayName: user.displayName,
       username: user.username,
@@ -704,7 +704,7 @@ export class ChatService {
       where: { userId },
       select: { chatId: true }
     });
-    return memberships.map((m) => m.chatId);
+    return memberships.map((m: any) => m.chatId);
   }
 
   async hideChatsForUser(userId: string, chatIds: string[]): Promise<string[]> {
@@ -716,7 +716,7 @@ export class ChatService {
       select: { chatId: true }
     });
 
-    const ownedChatIds = membershipRows.map((row) => row.chatId);
+    const ownedChatIds = membershipRows.map((row: any) => row.chatId);
     if (ownedChatIds.length === 0) return [];
 
     await prisma.chatMember.updateMany({
@@ -787,7 +787,7 @@ export class ChatService {
       throw new Error("chat_folder_not_found");
     }
 
-    await prisma.$transaction(async (tx) => {
+    await prisma.$transaction(async (tx: any) => {
       await tx.chatMember.updateMany({
         where: {
           userId,
@@ -920,7 +920,7 @@ export class ChatService {
       select: { userId: true }
     });
 
-    return Array.from(new Set(relatedMembers.map((member) => member.userId)));
+    return Array.from(new Set(relatedMembers.map((member: any) => member.userId)));
   }
 
   async getUserLastSeenAt(userId: string): Promise<Date | null> {

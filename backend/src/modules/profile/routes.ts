@@ -259,7 +259,7 @@ profileRouter.post("/contacts/sync", requireAuth, async (req, res) => {
     displayName
   }));
 
-  await prisma.$transaction(async (tx) => {
+  await prisma.$transaction(async (tx: any) => {
     const txClient = tx as unknown as { userContact: any };
     await txClient.userContact.deleteMany({ where: { ownerId } });
     if (createData.length > 0) {

@@ -578,7 +578,7 @@ chatRouter.get("/directory/contacts", requireAuth, async (req, res) => {
   });
 
   const matchedUsers = users
-    .map((user) => {
+    .map((user: any) => {
       const contactName = findLookupDisplayName(user.phone, labelsByKey);
       if (!contactName) return null;
       return {
@@ -591,8 +591,8 @@ chatRouter.get("/directory/contacts", requireAuth, async (req, res) => {
         avatarUrl: user.avatarUrl ? buildAvatarUrl(req, user.id, user.updatedAt) : null
       };
     })
-    .filter((item): item is NonNullable<typeof item> => item != null)
-    .sort((left, right) => {
+    .filter((item: any): item is NonNullable<typeof item> => item != null)
+    .sort((left: any, right: any) => {
       const labelCompare = left.contactName.localeCompare(right.contactName, "tr");
       if (labelCompare !== 0) return labelCompare;
       return left.displayName.localeCompare(right.displayName, "tr");
