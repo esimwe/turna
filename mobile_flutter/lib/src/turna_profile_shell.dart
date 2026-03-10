@@ -106,14 +106,13 @@ class _SettingsPageState extends State<SettingsPage> {
           future: _profileFuture,
           builder: (context, snapshot) {
             final profile = snapshot.data;
-            final username =
-                profile?.username?.trim() ?? widget.session.username;
             final about = profile?.about?.trim();
-            final subtitle = (username != null && username.isNotEmpty)
-                ? '@$username'
-                : ((about != null && about.isNotEmpty)
-                      ? about
-                      : '@${widget.session.userId}');
+            final statusText =
+                (about != null && about.isNotEmpty)
+                    ? about
+                    : 'Şu anki ruh halim';
+            final displayName = profile?.displayName ?? widget.session.displayName;
+            final avatarUrl = profile?.avatarUrl ?? widget.session.avatarUrl;
 
             return ListView(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
@@ -133,87 +132,52 @@ class _SettingsPageState extends State<SettingsPage> {
                     ),
                   ],
                 ),
-                const SizedBox(height: 6),
-                const Text(
-                  'Ayarlar',
-                  style: TextStyle(
-                    fontSize: 25,
-                    fontWeight: FontWeight.w700,
-                    color: TurnaColors.text,
-                  ),
-                ),
-                const SizedBox(height: 14),
-                Material(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(18),
-                  child: InkWell(
-                    onTap: _openProfileEditor,
-                    borderRadius: BorderRadius.circular(18),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 12,
-                      ),
-                      child: Row(
-                        children: [
-                          _SessionAvatar(session: widget.session, radius: 28),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  widget.session.displayName,
-                                  style: const TextStyle(
-                                    fontSize: 17.5,
-                                    fontWeight: FontWeight.w700,
-                                    color: Color(0xFF131716),
-                                  ),
-                                ),
-                                const SizedBox(height: 6),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 9,
-                                    vertical: 6,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: TurnaColors.backgroundSoft,
-                                    borderRadius: BorderRadius.circular(14),
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      const Icon(
-                                        Icons.edit_note_rounded,
-                                        size: 14,
-                                        color: TurnaColors.textMuted,
-                                      ),
-                                      const SizedBox(width: 6),
-                                      Expanded(
-                                        child: Text(
-                                          subtitle,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(
-                                            color: TurnaColors.textMuted,
-                                            fontSize: 13.2,
-                                            fontWeight: FontWeight.w500,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          Icon(
-                            Icons.chevron_right_rounded,
-                            color: Colors.black.withValues(alpha: 0.3),
-                          ),
-                        ],
+                const SizedBox(height: 8),
+                Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 10,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(999),
+                      boxShadow: const [TurnaColors.shadowSoft],
+                    ),
+                    child: Text(
+                      statusText,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: TurnaColors.textMuted,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
                       ),
                     ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                InkWell(
+                  onTap: _openProfileEditor,
+                  borderRadius: BorderRadius.circular(32),
+                  child: Column(
+                    children: [
+                      _ProfileAvatar(
+                        label: displayName,
+                        avatarUrl: avatarUrl,
+                        authToken: widget.session.token,
+                        radius: 44,
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        displayName,
+                        style: const TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w700,
+                          color: TurnaColors.text,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
                 if (snapshot.hasError) ...[
@@ -236,56 +200,37 @@ class _SettingsPageState extends State<SettingsPage> {
                     ),
                   ),
                 ],
-                const SizedBox(height: 18),
+                const SizedBox(height: 22),
+                const Padding(
+                  padding: EdgeInsets.only(left: 2, bottom: 8),
+                  child: Text(
+                    'Ayarlar',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: TurnaColors.textMuted,
+                    ),
+                  ),
+                ),
                 _buildSectionPanel([
                   _SettingsMenuAction(
                     icon: Icons.campaign_outlined,
-                    label: 'Reklam yayinlayin',
+                    label: 'Toplu mesajlar',
                     onTap: () => _openPage(
-                      const PlaceholderPage(title: 'Reklam yayinlayin'),
+                      const PlaceholderPage(title: 'Toplu mesajlar'),
                     ),
                   ),
-                  _SettingsMenuAction(
-                    icon: Icons.storefront_outlined,
-                    label: 'Isletme araclari',
-                    onTap: () => _openPage(
-                      const PlaceholderPage(title: 'Isletme araclari'),
-                    ),
-                  ),
-                  _SettingsMenuAction(
-                    icon: Icons.verified_outlined,
-                    label: 'Meta Verified',
-                    onTap: () => _openPage(
-                      const PlaceholderPage(title: 'Meta Verified'),
-                    ),
-                  ),
-                ]),
-                const SizedBox(height: 18),
-                _buildSectionPanel([
                   _SettingsMenuAction(
                     icon: Icons.star_border_rounded,
-                    label: 'Yildizli',
+                    label: 'Yıldızlı',
                     onTap: () =>
-                        _openPage(const PlaceholderPage(title: 'Yildizli')),
-                  ),
-                  _SettingsMenuAction(
-                    icon: Icons.campaign_outlined,
-                    label: 'Toplu mesaj listeleri',
-                    onTap: () => _openPage(
-                      const PlaceholderPage(title: 'Toplu mesaj listeleri'),
-                    ),
-                  ),
-                  _SettingsMenuAction(
-                    icon: Icons.groups_outlined,
-                    label: 'Topluluklar',
-                    onTap: () =>
-                        _openPage(const PlaceholderPage(title: 'Topluluklar')),
+                        _openPage(const PlaceholderPage(title: 'Yıldızlı')),
                   ),
                   _SettingsMenuAction(
                     icon: Icons.devices_outlined,
-                    label: 'Bagli cihazlar',
+                    label: 'Bağlı cihazlar',
                     onTap: () => _openPage(
-                      const PlaceholderPage(title: 'Bagli cihazlar'),
+                      const PlaceholderPage(title: 'Bağlı cihazlar'),
                     ),
                   ),
                 ]),
@@ -315,12 +260,6 @@ class _SettingsPageState extends State<SettingsPage> {
                         _openPage(const PlaceholderPage(title: 'Bildirimler')),
                   ),
                   _SettingsMenuAction(
-                    icon: Icons.receipt_long_outlined,
-                    label: 'Siparisler',
-                    onTap: () =>
-                        _openPage(const PlaceholderPage(title: 'Siparisler')),
-                  ),
-                  _SettingsMenuAction(
                     icon: Icons.swap_vert_rounded,
                     label: 'Depolama ve veriler',
                     onTap: () => _openPage(
@@ -332,16 +271,16 @@ class _SettingsPageState extends State<SettingsPage> {
                 _buildSectionPanel([
                   _SettingsMenuAction(
                     icon: Icons.help_outline_rounded,
-                    label: 'Yardim ve geri bildirim',
+                    label: 'Yardım ve geri bildirim',
                     onTap: () => _openPage(
-                      const PlaceholderPage(title: 'Yardim ve geri bildirim'),
+                      const PlaceholderPage(title: 'Yardım ve geri bildirim'),
                     ),
                   ),
                   _SettingsMenuAction(
                     icon: Icons.person_add_alt_1_outlined,
-                    label: 'Kisileri davet edin',
+                    label: 'Arkadaşlarınızı davet edin',
                     onTap: () => _openPage(
-                      const PlaceholderPage(title: 'Kisileri davet edin'),
+                      const PlaceholderPage(title: 'Arkadaşlarınızı davet edin'),
                     ),
                   ),
                 ]),

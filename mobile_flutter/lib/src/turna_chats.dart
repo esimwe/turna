@@ -3820,6 +3820,15 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       starred: _starredMessageIds.contains(msg.id),
       overlay: true,
     );
+    final embeddedFooterPlain = _MessageMetaFooter(
+      timeLabel: _formatMessageTime(msg.createdAt),
+      mine: mine,
+      status: msg.status,
+      edited: msg.isEdited,
+      starred: _starredMessageIds.contains(msg.id),
+      overlay: true,
+      showOverlayBackground: false,
+    );
     final bubbleColor = mine
         ? TurnaColors.chatOutgoing
         : TurnaColors.chatIncoming;
@@ -3936,6 +3945,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                   authToken: widget.session.token,
                   onLongPress: () => _handleMessageLongPress(msg),
                   overlayFooter: useEmbeddedMediaBubble ? embeddedFooter : null,
+                  audioOverlayFooter: useEmbeddedMediaBubble
+                      ? embeddedFooterPlain
+                      : null,
                 ),
                 if (hasText || hasLocation || hasContact) const SizedBox(height: 8),
               ],
@@ -3960,7 +3972,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                   session: widget.session,
                   callCoordinator: widget.callCoordinator,
                   onSessionExpired: widget.onSessionExpired,
-                  overlayFooter: useEmbeddedMediaBubble ? embeddedFooter : null,
+                  overlayFooter: useEmbeddedMediaBubble
+                      ? embeddedFooterPlain
+                      : null,
                 ),
                 if (hasText) const SizedBox(height: 8),
               ],
@@ -5063,6 +5077,7 @@ class _MessageMetaFooter extends StatelessWidget {
     this.edited = false,
     this.starred = false,
     this.overlay = false,
+    this.showOverlayBackground = true,
   });
 
   final String timeLabel;
@@ -5071,11 +5086,16 @@ class _MessageMetaFooter extends StatelessWidget {
   final bool edited;
   final bool starred;
   final bool overlay;
+  final bool showOverlayBackground;
 
   @override
   Widget build(BuildContext context) {
     final textColor = overlay
-        ? Colors.white.withValues(alpha: 0.94)
+        ? (showOverlayBackground
+              ? Colors.white.withValues(alpha: 0.94)
+              : (mine
+                    ? TurnaColors.chatOutgoingText.withValues(alpha: 0.54)
+                    : TurnaColors.textMuted))
         : (mine ? TurnaColors.chatOutgoingMeta : TurnaColors.textMuted);
     final content = Row(
       mainAxisSize: MainAxisSize.min,
@@ -5084,14 +5104,14 @@ class _MessageMetaFooter extends StatelessWidget {
           Icon(
             Icons.star_rounded,
             size: 13,
-            color: overlay
+            color: overlay && showOverlayBackground
                 ? Colors.white.withValues(alpha: 0.96)
                 : (mine ? TurnaColors.chatOutgoingMeta : TurnaColors.warning),
           ),
           const SizedBox(width: 4),
         ],
         Text(
-          edited ? 'duzenlendi $timeLabel' : timeLabel,
+          edited ? 'düzenlendi $timeLabel' : timeLabel,
           style: TextStyle(
             fontSize: 11,
             color: textColor,
@@ -5099,11 +5119,16 @@ class _MessageMetaFooter extends StatelessWidget {
         ),
         if (mine) ...[
           const SizedBox(width: 6),
-          _StatusTick(status: status, mine: mine, overlay: overlay),
+          _StatusTick(
+            status: status,
+            mine: mine,
+            overlay: overlay,
+            showOverlayBackground: showOverlayBackground,
+          ),
         ],
       ],
     );
-    if (!overlay) return content;
+    if (!overlay || !showOverlayBackground) return content;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
@@ -5120,16 +5145,18 @@ class _StatusTick extends StatelessWidget {
     required this.status,
     this.mine = false,
     this.overlay = false,
+    this.showOverlayBackground = true,
   });
 
   final ChatMessageStatus status;
   final bool mine;
   final bool overlay;
+  final bool showOverlayBackground;
 
   @override
   Widget build(BuildContext context) {
     IconData icon = Icons.done;
-    Color color = overlay
+    Color color = overlay && showOverlayBackground
         ? Colors.white.withValues(alpha: 0.94)
         : (mine ? TurnaColors.chatOutgoingMeta : TurnaColors.textMuted);
 
@@ -6237,6 +6264,7 @@ class _ChatAttachmentList extends StatelessWidget {
     required this.authToken,
     this.onLongPress,
     this.overlayFooter,
+    this.audioOverlayFooter,
   });
 
   final List<ChatAttachment> attachments;
@@ -6246,6 +6274,7 @@ class _ChatAttachmentList extends StatelessWidget {
   final String authToken;
   final VoidCallback? onLongPress;
   final Widget? overlayFooter;
+  final Widget? audioOverlayFooter;
 
   @override
   Widget build(BuildContext context) {
@@ -6258,7 +6287,9 @@ class _ChatAttachmentList extends StatelessWidget {
             mine: mine,
             authToken: authToken,
             onLongPress: onLongPress,
-            overlayFooter: showOverlay ? overlayFooter : null,
+            overlayFooter: showOverlay
+                ? (audioOverlayFooter ?? overlayFooter)
+                : null,
           );
         }
 
