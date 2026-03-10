@@ -499,6 +499,31 @@ class _TurnaLocationMapPreview extends StatelessWidget {
   }
 }
 
+class _TurnaMapZoomButton extends StatelessWidget {
+  const _TurnaMapZoomButton({required this.icon, required this.onPressed});
+
+  final IconData icon;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.white.withValues(alpha: 0.96),
+      borderRadius: BorderRadius.circular(14),
+      elevation: 4,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onPressed,
+        child: SizedBox(
+          width: 44,
+          height: 44,
+          child: Icon(icon, color: const Color(0xFF17212B)),
+        ),
+      ),
+    );
+  }
+}
+
 class TurnaLocationViewerPage extends StatefulWidget {
   const TurnaLocationViewerPage({
     super.key,
@@ -517,6 +542,9 @@ class TurnaLocationViewerPage extends StatefulWidget {
 
 class _TurnaLocationViewerPageState extends State<TurnaLocationViewerPage> {
   late TurnaLocationPayload _payload = widget.initialPayload;
+  final MapController _mapController = MapController();
+  double _currentZoom = 16;
+  bool _followLivePosition = true;
 
   @override
   void initState() {
@@ -553,6 +581,38 @@ class _TurnaLocationViewerPageState extends State<TurnaLocationViewerPage> {
     }
     if (!mounted) return;
     setState(() => _payload = next);
+    if (_followLivePosition) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _mapController.move(
+          ll.LatLng(next.latitude, next.longitude),
+          _currentZoom,
+        );
+      });
+    }
+  }
+
+  void _handlePositionChanged(MapCamera camera, bool hasGesture) {
+    final zoom = camera.zoom;
+    if ((_currentZoom - zoom).abs() > 0.001) {
+      _currentZoom = zoom;
+    }
+    if (hasGesture) {
+      _followLivePosition = false;
+    }
+  }
+
+  void _adjustZoom(double delta) {
+    final nextZoom = (_currentZoom + delta).clamp(3.0, 19.0).toDouble();
+    _currentZoom = nextZoom;
+    _followLivePosition = false;
+    _mapController.move(
+      ll.LatLng(_payload.latitude, _payload.longitude),
+      nextZoom,
+    );
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   @override
@@ -576,25 +636,45 @@ class _TurnaLocationViewerPageState extends State<TurnaLocationViewerPage> {
       body: Column(
         children: [
           Expanded(
-            child: FlutterMap(
-              key: ValueKey(
-                'location-viewer:${payload.latitude.toStringAsFixed(5)}:${payload.longitude.toStringAsFixed(5)}:${payload.updatedAt ?? ''}:${payload.endedAt ?? ''}',
-              ),
-              options: MapOptions(
-                initialCenter: ll.LatLng(payload.latitude, payload.longitude),
-                initialZoom: 16,
-              ),
+            child: Stack(
               children: [
-                buildTurnaStadiaTileLayer(),
-                MarkerLayer(
-                  markers: [
-                    Marker(
-                      point: ll.LatLng(payload.latitude, payload.longitude),
-                      width: 40,
-                      height: 40,
-                      child: _TurnaMapMarker(live: payload.live),
+                FlutterMap(
+                  mapController: _mapController,
+                  options: MapOptions(
+                    initialCenter: ll.LatLng(payload.latitude, payload.longitude),
+                    initialZoom: _currentZoom,
+                    onPositionChanged: _handlePositionChanged,
+                  ),
+                  children: [
+                    buildTurnaStadiaTileLayer(),
+                    MarkerLayer(
+                      markers: [
+                        Marker(
+                          point: ll.LatLng(payload.latitude, payload.longitude),
+                          width: 40,
+                          height: 40,
+                          child: _TurnaMapMarker(live: payload.live),
+                        ),
+                      ],
                     ),
                   ],
+                ),
+                Positioned(
+                  right: 16,
+                  bottom: 18,
+                  child: Column(
+                    children: [
+                      _TurnaMapZoomButton(
+                        icon: Icons.add_rounded,
+                        onPressed: () => _adjustZoom(1),
+                      ),
+                      const SizedBox(height: 10),
+                      _TurnaMapZoomButton(
+                        icon: Icons.remove_rounded,
+                        onPressed: () => _adjustZoom(-1),
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),

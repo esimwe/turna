@@ -2119,6 +2119,84 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     return '$dd.$mm.${dt.year}';
   }
 
+  String _formatViewerDateTime(String iso) {
+    final dt = parseTurnaLocalDateTime(iso);
+    if (dt == null) return '';
+    final dd = dt.day.toString().padLeft(2, '0');
+    final mm = dt.month.toString().padLeft(2, '0');
+    final hh = dt.hour.toString().padLeft(2, '0');
+    final min = dt.minute.toString().padLeft(2, '0');
+    return '$dd.$mm.${dt.year} $hh:$min';
+  }
+
+  Future<void> _openSharedUri(
+    Uri uri, {
+    String errorMessage = 'Bağlantı açılamadı.',
+  }) async {
+    final launched = await launchUrl(
+      uri,
+      mode: LaunchMode.externalApplication,
+    );
+    if (!mounted) return;
+    if (!launched) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(errorMessage)));
+    }
+  }
+
+  String _stripLinksFromText(String text) {
+    return text.replaceAll(_kTurnaSharedUrlPattern, '').replaceAll(
+      RegExp(r'\s+'),
+      ' ',
+    ).trim();
+  }
+
+  Widget _buildLinkifiedMessageText(String text, {required bool mine}) {
+    final baseStyle = TextStyle(
+      fontSize: 16,
+      height: 1.28,
+      color: mine
+          ? TurnaColors.chatOutgoingText
+          : TurnaColors.chatIncomingText,
+    );
+    final matches = _kTurnaSharedUrlPattern.allMatches(text).toList();
+    if (matches.isEmpty) {
+      return Text(text, style: baseStyle);
+    }
+
+    final spans = <InlineSpan>[];
+    var cursor = 0;
+    for (final match in matches) {
+      if (match.start > cursor) {
+        spans.add(TextSpan(text: text.substring(cursor, match.start)));
+      }
+      final raw = match.group(0) ?? '';
+      final uri = parseTurnaSharedUrl(raw);
+      if (uri == null) {
+        spans.add(TextSpan(text: raw));
+      } else {
+        spans.add(
+          TextSpan(
+            text: raw,
+            style: baseStyle.copyWith(
+              color: mine ? TurnaColors.primary800 : TurnaColors.primary,
+              decoration: TextDecoration.underline,
+            ),
+            recognizer: TapGestureRecognizer()
+              ..onTap = () => _openSharedUri(uri),
+          ),
+        );
+      }
+      cursor = match.end;
+    }
+    if (cursor < text.length) {
+      spans.add(TextSpan(text: text.substring(cursor)));
+    }
+
+    return RichText(text: TextSpan(style: baseStyle, children: spans));
+  }
+
   String _timelineCreatedAt(_ChatTimelineEntry entry) {
     if (entry.message != null) return entry.message!.createdAt;
     final call = entry.call;
@@ -2819,10 +2897,10 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     });
   }
 
-  Future<List<int>> _downloadAttachmentBytes(ChatAttachment attachment) async {
+  Future<File> _downloadAttachmentFile(ChatAttachment attachment) async {
     final url = attachment.url?.trim() ?? '';
     if (url.isEmpty) {
-      throw TurnaApiException('İletilecek ek için link bulunamadı.');
+      throw TurnaApiException('Ek için link bulunamadı.');
     }
 
     final cachedFile = await TurnaLocalMediaCache.getOrDownloadFile(
@@ -2831,10 +2909,62 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       authToken: widget.session.token,
     );
     if (cachedFile != null) {
-      return cachedFile.readAsBytes();
+      return cachedFile;
     }
 
     throw TurnaApiException('Ek indirilemedi.');
+  }
+
+  Future<List<int>> _downloadAttachmentBytes(ChatAttachment attachment) async {
+    final file = await _downloadAttachmentFile(attachment);
+    return file.readAsBytes();
+  }
+
+  Future<void> _saveAttachmentToDevice(ChatAttachment attachment) async {
+    try {
+      final file = await _downloadAttachmentFile(attachment);
+      await TurnaMediaBridge.saveToGallery(
+        path: file.path,
+        mimeType: attachment.contentType,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Medya cihaza kaydedildi.')));
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
+  List<ChatGalleryMediaItem> _buildMediaGalleryItems() {
+    final items = <ChatGalleryMediaItem>[];
+    for (final message in _currentDisplayMessages()) {
+      final parsed = parseTurnaMessageText(message.text);
+      if (_isMessageDeletedPlaceholder(message, parsed: parsed)) continue;
+      for (final attachment in message.attachments) {
+        if (attachment.kind != ChatAttachmentKind.image &&
+            attachment.kind != ChatAttachmentKind.video) {
+          continue;
+        }
+        final url = attachment.url?.trim() ?? '';
+        if (url.isEmpty) continue;
+        items.add(
+          ChatGalleryMediaItem(
+            message: message,
+            attachment: attachment,
+            senderLabel: message.senderId == widget.session.userId
+                ? 'Sen'
+                : _chatDisplayName,
+            cacheKey: 'attachment:${attachment.objectKey}',
+            url: url,
+          ),
+        );
+      }
+    }
+    return items;
   }
 
   Future<void> _forwardMessage(ChatMessage msg) async {
@@ -3300,7 +3430,10 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     );
   }
 
-  Future<void> _handleMessageLongPress(ChatMessage msg) async {
+  Future<void> _handleMessageLongPress(
+    ChatMessage msg, {
+    ChatAttachment? attachment,
+  }) async {
     final parsed = parseTurnaMessageText(msg.text);
     if (_isMessageDeletedPlaceholder(msg, parsed: parsed)) {
       await _confirmRemoveDeletedPlaceholder(msg);
@@ -3310,6 +3443,17 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     final isStarred = _starredMessageIds.contains(msg.id);
     final textOnly = parsed.text.trim();
     final canEdit = _canEditMessage(msg, parsed: parsed);
+    final visualAttachment = attachment != null &&
+            (attachment.kind == ChatAttachmentKind.image ||
+                attachment.kind == ChatAttachmentKind.video)
+        ? attachment
+        : msg.attachments.cast<ChatAttachment?>().firstWhere(
+              (item) =>
+                  item != null &&
+                  (item.kind == ChatAttachmentKind.image ||
+                      item.kind == ChatAttachmentKind.video),
+              orElse: () => null,
+            );
     await showModalBottomSheet<void>(
       context: context,
       builder: (sheetContext) {
@@ -3384,6 +3528,15 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                         _showMessageInfo(msg);
                       },
                     ),
+                    if (visualAttachment != null)
+                      _MessageQuickAction(
+                        icon: Icons.download_rounded,
+                        label: 'Kaydet',
+                        onTap: () {
+                          Navigator.pop(sheetContext);
+                          _saveAttachmentToDevice(visualAttachment);
+                        },
+                      ),
                     _MessageQuickAction(
                       icon: Icons.delete_outline_rounded,
                       label: 'Sil',
@@ -3796,6 +3949,20 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         !isDeletedPlaceholder &&
         msg.errorText != null &&
         msg.errorText!.trim().isNotEmpty;
+    final sharedLinks = hasText ? extractTurnaUrls(displayText) : const <Uri>[];
+    final primaryLinkUri = sharedLinks.isEmpty ? null : sharedLinks.first;
+    final linkCaptionText = primaryLinkUri == null
+        ? displayText
+        : _stripLinksFromText(displayText);
+    final showLinkPreview =
+        primaryLinkUri != null &&
+        !hasLocation &&
+        !hasContact &&
+        visibleAttachments.isEmpty &&
+        !hasError;
+    final previewUri = showLinkPreview ? primaryLinkUri : null;
+    final showTextBlock =
+        hasText && (!showLinkPreview || linkCaptionText.isNotEmpty);
     final useEmbeddedMediaBubble =
         !hasText &&
         !hasError &&
@@ -3940,10 +4107,17 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                 _ChatAttachmentList(
                   attachments: visibleAttachments,
                   mine: mine,
-                  onTap: _openAttachment,
+                  onTap: (attachment) {
+                    if (attachment.kind == ChatAttachmentKind.image ||
+                        attachment.kind == ChatAttachmentKind.video) {
+                      return _openMediaAttachment(msg, attachment);
+                    }
+                    return _openAttachment(attachment);
+                  },
                   formatFileSize: _formatFileSize,
                   authToken: widget.session.token,
-                  onLongPress: () => _handleMessageLongPress(msg),
+                  onLongPress: (attachment) =>
+                      _handleMessageLongPress(msg, attachment: attachment),
                   overlayFooter: useEmbeddedMediaBubble ? embeddedFooter : null,
                   audioOverlayFooter: useEmbeddedMediaBubble
                       ? embeddedFooterPlain
@@ -3978,7 +4152,15 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                 ),
                 if (hasText) const SizedBox(height: 8),
               ],
-              if (hasText)
+              if (previewUri != null) ...[
+                _TurnaMessageLinkPreviewCard(
+                  uri: previewUri,
+                  mine: mine,
+                  onTap: () => _openSharedUri(previewUri),
+                ),
+                if (showTextBlock) const SizedBox(height: 8),
+              ],
+              if (showTextBlock)
                 Stack(
                   alignment: Alignment.bottomRight,
                   children: [
@@ -3987,20 +4169,16 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                         right: mine ? 64 : 54,
                         bottom: 4,
                       ),
-                      child: Text(
-                        displayText,
-                        style: TextStyle(
-                          fontSize: 16,
-                          height: 1.28,
-                          color: mine
-                              ? TurnaColors.chatOutgoingText
-                              : TurnaColors.chatIncomingText,
-                        ),
+                      child: _buildLinkifiedMessageText(
+                        showLinkPreview ? linkCaptionText : displayText,
+                        mine: mine,
                       ),
                     ),
                     footer,
                   ],
                 )
+              else if (showLinkPreview)
+                Align(alignment: Alignment.bottomRight, child: footer)
               else if (!useEmbeddedMediaBubble &&
                   (hasLocation ||
                       hasContact ||
@@ -4805,9 +4983,16 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         context,
         MaterialPageRoute(
           builder: (_) => ChatAttachmentViewerPage(
-            cacheKey: 'attachment:${attachment.objectKey}',
-            imageUrl: url,
-            title: attachment.fileName ?? 'Görsel',
+            session: widget.session,
+            items: [
+              ChatGalleryMediaItem(
+                attachment: attachment,
+                senderLabel: attachment.fileName ?? 'Medya',
+                cacheKey: 'attachment:${attachment.objectKey}',
+                url: url,
+              ),
+            ],
+            initialIndex: 0,
           ),
         ),
       );
@@ -4823,6 +5008,64 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         context,
       ).showSnackBar(const SnackBar(content: Text('Dosya açılamadı.')));
     }
+  }
+
+  Future<void> _openMediaAttachment(
+    ChatMessage sourceMessage,
+    ChatAttachment attachment,
+  ) async {
+    final url = attachment.url?.trim() ?? '';
+    if (url.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Dosya linki hazır değil.')));
+      return;
+    }
+    final galleryItems = _buildMediaGalleryItems();
+    final initialIndex = galleryItems.indexWhere(
+      (item) =>
+          item.message?.id == sourceMessage.id &&
+          item.attachment.objectKey == attachment.objectKey,
+    );
+    final itemsToOpen = initialIndex < 0
+        ? [
+            ChatGalleryMediaItem(
+              message: sourceMessage,
+              attachment: attachment,
+              senderLabel: sourceMessage.senderId == widget.session.userId
+                  ? 'Sen'
+                  : _chatDisplayName,
+              cacheKey: 'attachment:${attachment.objectKey}',
+              url: url,
+            ),
+          ]
+        : galleryItems;
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ChatAttachmentViewerPage(
+          session: widget.session,
+          items: itemsToOpen,
+          initialIndex: initialIndex < 0 ? 0 : initialIndex,
+          formatTimestamp: _formatViewerDateTime,
+          isStarred: (message) => _starredMessageIds.contains(message.id),
+          onReply: (message) async {
+            final replyPayload = _replyPayloadForMessage(message);
+            setState(() {
+              _editingDraft = null;
+              _replyDraft = replyPayload;
+            });
+            _composerFocusNode.requestFocus();
+          },
+          onForward: _forwardMessage,
+          onToggleStar: _toggleStarMessage,
+          onDeleteForMe: (message) async {
+            await _deleteMessageForMe(message);
+          },
+        ),
+      ),
+    );
   }
 
   @override
@@ -5532,6 +5775,113 @@ class _ReplySnippetCard extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _TurnaMessageLinkPreviewCard extends StatelessWidget {
+  const _TurnaMessageLinkPreviewCard({
+    required this.uri,
+    required this.mine,
+    required this.onTap,
+  });
+
+  final Uri uri;
+  final bool mine;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final surfaceColor = mine
+        ? Colors.white.withValues(alpha: 0.44)
+        : const Color(0xFFF6F8FB);
+    final borderColor = mine
+        ? Colors.white.withValues(alpha: 0.22)
+        : TurnaColors.border;
+
+    return FutureBuilder<TurnaLinkPreviewMetadata>(
+      future: TurnaLinkPreviewCache.resolve(uri),
+      builder: (context, snapshot) {
+        final preview = snapshot.data;
+        final host = preview?.host.isNotEmpty == true
+            ? preview!.host
+            : uri.host.replaceFirst(RegExp(r'^www\.', caseSensitive: false), '');
+        final title = (preview?.title.trim().isNotEmpty ?? false)
+            ? preview!.title.trim()
+            : (host.isEmpty ? uri.toString() : host);
+        final displayUrl = preview?.displayUrl ?? uri.toString();
+
+        return Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(16),
+            child: Container(
+              width: 250,
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+              decoration: BoxDecoration(
+                color: surfaceColor,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: borderColor),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 42,
+                    height: 42,
+                    decoration: BoxDecoration(
+                      color: mine
+                          ? Colors.white.withValues(alpha: 0.5)
+                          : TurnaColors.backgroundMuted,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    alignment: Alignment.center,
+                    child: Icon(
+                      Icons.link_rounded,
+                      color: mine ? TurnaColors.primary800 : TurnaColors.primary,
+                      size: 22,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 14,
+                            height: 1.22,
+                            fontWeight: FontWeight.w700,
+                            color: mine
+                                ? TurnaColors.chatOutgoingText
+                                : TurnaColors.chatIncomingText,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          displayUrl,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12.5,
+                            color: mine
+                                ? TurnaColors.chatOutgoingText.withValues(alpha: 0.72)
+                                : TurnaColors.textMuted,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }
@@ -6272,7 +6622,7 @@ class _ChatAttachmentList extends StatelessWidget {
   final Future<void> Function(ChatAttachment attachment) onTap;
   final String Function(int bytes) formatFileSize;
   final String authToken;
-  final VoidCallback? onLongPress;
+  final ValueChanged<ChatAttachment>? onLongPress;
   final Widget? overlayFooter;
   final Widget? audioOverlayFooter;
 
@@ -6286,7 +6636,7 @@ class _ChatAttachmentList extends StatelessWidget {
             attachment: attachment,
             mine: mine,
             authToken: authToken,
-            onLongPress: onLongPress,
+            onLongPress: onLongPress == null ? null : () => onLongPress!(attachment),
             overlayFooter: showOverlay
                 ? (audioOverlayFooter ?? overlayFooter)
                 : null,
@@ -6300,7 +6650,7 @@ class _ChatAttachmentList extends StatelessWidget {
             child: InkWell(
               borderRadius: BorderRadius.circular(22),
               onTap: () => onTap(attachment),
-              onLongPress: onLongPress,
+              onLongPress: onLongPress == null ? null : () => onLongPress!(attachment),
               child: SizedBox(
                 width: 220,
                 height: 220,
@@ -6373,7 +6723,7 @@ class _ChatAttachmentList extends StatelessWidget {
             padding: EdgeInsets.only(bottom: showOverlay ? 0 : 8),
             child: InkWell(
               onTap: () => onTap(attachment),
-              onLongPress: onLongPress,
+              onLongPress: onLongPress == null ? null : () => onLongPress!(attachment),
               borderRadius: BorderRadius.circular(22),
               child: SizedBox(
                 width: 220,
@@ -6465,7 +6815,7 @@ class _ChatAttachmentList extends StatelessWidget {
           padding: const EdgeInsets.only(bottom: 8),
           child: InkWell(
             onTap: () => onTap(attachment),
-            onLongPress: onLongPress,
+            onLongPress: onLongPress == null ? null : () => onLongPress!(attachment),
             borderRadius: BorderRadius.circular(14),
             child: Container(
               width: 220,
@@ -6520,66 +6870,642 @@ class _ChatAttachmentList extends StatelessWidget {
   }
 }
 
-class ChatAttachmentViewerPage extends StatelessWidget {
-  const ChatAttachmentViewerPage({
-    super.key,
+class ChatGalleryMediaItem {
+  const ChatGalleryMediaItem({
+    required this.attachment,
+    required this.senderLabel,
     required this.cacheKey,
-    required this.imageUrl,
-    required this.title,
+    required this.url,
+    this.message,
   });
 
+  final ChatAttachment attachment;
+  final ChatMessage? message;
+  final String senderLabel;
   final String cacheKey;
-  final String imageUrl;
-  final String title;
+  final String url;
+}
+
+class ChatAttachmentViewerPage extends StatefulWidget {
+  ChatAttachmentViewerPage({
+    super.key,
+    required this.session,
+    required this.items,
+    this.initialIndex = 0,
+    this.formatTimestamp,
+    this.isStarred,
+    this.onReply,
+    this.onForward,
+    this.onToggleStar,
+    this.onDeleteForMe,
+  }) : assert(items.isNotEmpty, 'items must not be empty.');
+
+  final AuthSession session;
+  final List<ChatGalleryMediaItem> items;
+  final int initialIndex;
+  final String Function(String iso)? formatTimestamp;
+  final bool Function(ChatMessage message)? isStarred;
+  final Future<void> Function(ChatMessage message)? onReply;
+  final Future<void> Function(ChatMessage message)? onForward;
+  final Future<void> Function(ChatMessage message)? onToggleStar;
+  final Future<void> Function(ChatMessage message)? onDeleteForMe;
+
+  @override
+  State<ChatAttachmentViewerPage> createState() => _ChatAttachmentViewerPageState();
+}
+
+class _ChatAttachmentViewerPageState extends State<ChatAttachmentViewerPage> {
+  late List<ChatGalleryMediaItem> _items;
+  late int _currentIndex;
+  late final PageController _pageController;
+
+  ChatGalleryMediaItem get _currentItem => _items[_currentIndex];
+
+  @override
+  void initState() {
+    super.initState();
+    _items = List<ChatGalleryMediaItem>.from(widget.items);
+    _currentIndex = widget.initialIndex.clamp(0, _items.length - 1);
+    _pageController = PageController(initialPage: _currentIndex);
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  String _titleFor(ChatGalleryMediaItem item) {
+    if (item.senderLabel.trim().isNotEmpty) return item.senderLabel;
+    return item.attachment.fileName ?? 'Medya';
+  }
+
+  String? _subtitleFor(ChatGalleryMediaItem item) {
+    final message = item.message;
+    if (message == null || widget.formatTimestamp == null) return null;
+    return widget.formatTimestamp!(message.createdAt);
+  }
+
+  bool _isStarred(ChatGalleryMediaItem item) {
+    final message = item.message;
+    if (message == null || widget.isStarred == null) return false;
+    return widget.isStarred!(message);
+  }
+
+  Future<File> _resolveFile(ChatGalleryMediaItem item) async {
+    final file = await TurnaLocalMediaCache.getOrDownloadFile(
+      cacheKey: item.cacheKey,
+      url: item.url,
+      authToken: widget.session.token,
+    );
+    if (file != null) return file;
+    throw TurnaApiException('Medya indirilemedi.');
+  }
+
+  Future<void> _saveCurrentMedia() async {
+    try {
+      final file = await _resolveFile(_currentItem);
+      await TurnaMediaBridge.saveToGallery(
+        path: file.path,
+        mimeType: _currentItem.attachment.contentType,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Medya cihaza kaydedildi.')));
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
+  Future<void> _shareCurrentMedia() async {
+    try {
+      final file = await _resolveFile(_currentItem);
+      await TurnaMediaBridge.shareFile(
+        path: file.path,
+        mimeType: _currentItem.attachment.contentType,
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
+  Future<void> _showShareOptions() async {
+    final message = _currentItem.message;
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.download_rounded),
+                title: const Text('Kaydet'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _saveCurrentMedia();
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.ios_share_rounded),
+                title: const Text('Paylaş'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _shareCurrentMedia();
+                },
+              ),
+              if (message != null && widget.onForward != null)
+                ListTile(
+                  leading: const Icon(Icons.forward_rounded),
+                  title: const Text('İlet'),
+                  onTap: () async {
+                    Navigator.pop(sheetContext);
+                    await widget.onForward!(message);
+                  },
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _replyToCurrent() async {
+    final message = _currentItem.message;
+    if (message == null || widget.onReply == null) return;
+    await widget.onReply!(message);
+    if (!mounted) return;
+    Navigator.pop(context);
+  }
+
+  Future<void> _forwardCurrent() async {
+    final message = _currentItem.message;
+    if (message == null || widget.onForward == null) return;
+    await widget.onForward!(message);
+  }
+
+  Future<void> _toggleStarCurrent() async {
+    final message = _currentItem.message;
+    if (message == null || widget.onToggleStar == null) return;
+    await widget.onToggleStar!(message);
+    if (!mounted) return;
+    setState(() {});
+  }
+
+  Future<void> _deleteCurrentForMe() async {
+    final message = _currentItem.message;
+    if (message == null || widget.onDeleteForMe == null) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Medyayı benden sil'),
+        content: const Text(
+          'Bu medya bu cihazdan ve sohbet görünümünden kaldırılacak. Karşı tarafta kalmaya devam edecek.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Vazgeç'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Benden sil'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    final removedItem = _currentItem;
+    await widget.onDeleteForMe!(message);
+    await TurnaLocalMediaCache.remove(removedItem.cacheKey);
+    if (!mounted) return;
+
+    if (_items.length == 1) {
+      Navigator.pop(context);
+      return;
+    }
+
+    setState(() {
+      _items.removeAt(_currentIndex);
+      if (_currentIndex >= _items.length) {
+        _currentIndex = _items.length - 1;
+      }
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_pageController.hasClients) {
+        _pageController.jumpToPage(_currentIndex);
+      }
+    });
+  }
+
+  Widget _buildTitle() {
+    final subtitle = _subtitleFor(_currentItem);
+    if (subtitle == null || subtitle.isEmpty) {
+      return Text(_titleFor(_currentItem));
+    }
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          _titleFor(_currentItem),
+          style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          subtitle,
+          style: TextStyle(
+            fontSize: 12,
+            color: Colors.white.withValues(alpha: 0.78),
+            fontWeight: FontWeight.w400,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildThumbnailStrip() {
+    if (_items.length <= 1) return const SizedBox.shrink();
+    return SizedBox(
+      height: 58,
+      child: ListView.separated(
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        scrollDirection: Axis.horizontal,
+        itemCount: _items.length,
+        separatorBuilder: (_, _) => const SizedBox(width: 6),
+        itemBuilder: (context, index) {
+          final item = _items[index];
+          final selected = index == _currentIndex;
+          return GestureDetector(
+            onTap: () => _pageController.animateToPage(
+              index,
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOut,
+            ),
+            child: Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: selected ? Colors.white : Colors.white24,
+                  width: selected ? 2 : 1,
+                ),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: item.attachment.kind == ChatAttachmentKind.video
+                  ? Container(
+                      color: const Color(0xFF1E2932),
+                      alignment: Alignment.center,
+                      child: const Icon(
+                        Icons.play_arrow_rounded,
+                        color: Colors.white,
+                      ),
+                    )
+                  : _TurnaCachedImage(
+                      cacheKey: item.cacheKey,
+                      imageUrl: item.url,
+                      authToken: widget.session.token,
+                      fit: BoxFit.cover,
+                      loading: const ColoredBox(color: Color(0xFF29333B)),
+                      error: const ColoredBox(
+                        color: Color(0xFF29333B),
+                        child: Icon(
+                          Icons.broken_image_outlined,
+                          color: Colors.white70,
+                        ),
+                      ),
+                    ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildActionButton({
+    required IconData icon,
+    required VoidCallback? onTap,
+    bool active = false,
+  }) {
+    final color = active ? const Color(0xFFFFD54F) : Colors.white;
+    return IconButton(
+      onPressed: onTap,
+      icon: Icon(icon, color: onTap == null ? Colors.white38 : color, size: 26),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
+    final current = _currentItem;
+    final canReply = current.message != null && widget.onReply != null;
+    final canForward = current.message != null && widget.onForward != null;
+    final canStar = current.message != null && widget.onToggleStar != null;
+    final canDelete = current.message != null && widget.onDeleteForMe != null;
+
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
-        title: Text(title),
+        centerTitle: true,
+        title: _buildTitle(),
       ),
-      body: FutureBuilder<File?>(
-        future: TurnaLocalMediaCache.getOrDownloadFile(
-          cacheKey: cacheKey,
-          url: imageUrl,
-        ),
-        builder: (context, snapshot) {
-          final file = snapshot.data;
-          if (file == null) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return const Center(child: CircularProgressIndicator());
-            }
-            return const Padding(
-              padding: EdgeInsets.all(24),
-              child: Text(
-                'Görsel yüklenemedi.',
-                style: TextStyle(color: Colors.white),
+      body: Column(
+        children: [
+          Expanded(
+            child: PageView.builder(
+              controller: _pageController,
+              itemCount: _items.length,
+              onPageChanged: (value) => setState(() => _currentIndex = value),
+              itemBuilder: (context, index) => _TurnaAttachmentPageAsset(
+                item: _items[index],
+                authToken: widget.session.token,
               ),
-            );
-          }
-
-          return InteractiveViewer(
-            minScale: 0.8,
-            maxScale: 4,
-            child: Center(
-              child: Image.file(
-                file,
-                fit: BoxFit.contain,
-                errorBuilder: (_, _, _) => const Padding(
-                  padding: EdgeInsets.all(24),
-                  child: Text(
-                    'Görsel yüklenemedi.',
-                    style: TextStyle(color: Colors.white),
+            ),
+          ),
+          if (canReply)
+            Align(
+              alignment: Alignment.centerRight,
+              child: Padding(
+                padding: const EdgeInsets.only(right: 16, bottom: 8),
+                child: TextButton.icon(
+                  onPressed: _replyToCurrent,
+                  style: TextButton.styleFrom(
+                    backgroundColor: Colors.white.withValues(alpha: 0.12),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 10,
+                    ),
                   ),
+                  icon: const Icon(Icons.reply_rounded, size: 18),
+                  label: const Text('Yanıtlayın'),
                 ),
               ),
             ),
-          );
-        },
+          _buildThumbnailStrip(),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                _buildActionButton(
+                  icon: Icons.ios_share_rounded,
+                  onTap: _showShareOptions,
+                ),
+                _buildActionButton(
+                  icon: Icons.forward_rounded,
+                  onTap: canForward ? _forwardCurrent : null,
+                ),
+                _buildActionButton(
+                  icon: _isStarred(current)
+                      ? Icons.star_rounded
+                      : Icons.star_border_rounded,
+                  onTap: canStar ? _toggleStarCurrent : null,
+                  active: _isStarred(current),
+                ),
+                _buildActionButton(
+                  icon: Icons.delete_outline_rounded,
+                  onTap: canDelete ? _deleteCurrentForMe : null,
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
+    );
+  }
+}
+
+class _TurnaAttachmentPageAsset extends StatelessWidget {
+  const _TurnaAttachmentPageAsset({
+    required this.item,
+    required this.authToken,
+  });
+
+  final ChatGalleryMediaItem item;
+  final String authToken;
+
+  @override
+  Widget build(BuildContext context) {
+    if (item.attachment.kind == ChatAttachmentKind.video) {
+      return _TurnaAttachmentVideoSurface(item: item, authToken: authToken);
+    }
+
+    return FutureBuilder<File?>(
+      future: TurnaLocalMediaCache.getOrDownloadFile(
+        cacheKey: item.cacheKey,
+        url: item.url,
+        authToken: authToken,
+      ),
+      builder: (context, snapshot) {
+        final file = snapshot.data;
+        if (file == null) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          return const Padding(
+            padding: EdgeInsets.all(24),
+            child: Text(
+              'Görsel yüklenemedi.',
+              style: TextStyle(color: Colors.white),
+            ),
+          );
+        }
+
+        return InteractiveViewer(
+          minScale: 0.8,
+          maxScale: 4,
+          child: Center(
+            child: Image.file(
+              file,
+              fit: BoxFit.contain,
+              errorBuilder: (_, _, _) => const Padding(
+                padding: EdgeInsets.all(24),
+                child: Text(
+                  'Görsel yüklenemedi.',
+                  style: TextStyle(color: Colors.white),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _TurnaAttachmentVideoSurface extends StatefulWidget {
+  const _TurnaAttachmentVideoSurface({
+    required this.item,
+    required this.authToken,
+  });
+
+  final ChatGalleryMediaItem item;
+  final String authToken;
+
+  @override
+  State<_TurnaAttachmentVideoSurface> createState() =>
+      _TurnaAttachmentVideoSurfaceState();
+}
+
+class _TurnaAttachmentVideoSurfaceState
+    extends State<_TurnaAttachmentVideoSurface> {
+  vp.VideoPlayerController? _controller;
+  Future<void>? _initFuture;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _prepare();
+  }
+
+  @override
+  void didUpdateWidget(covariant _TurnaAttachmentVideoSurface oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.item.cacheKey != widget.item.cacheKey ||
+        oldWidget.item.url != widget.item.url) {
+      _disposeController();
+      _prepare();
+    }
+  }
+
+  @override
+  void dispose() {
+    _disposeController();
+    super.dispose();
+  }
+
+  void _disposeController() {
+    _controller?.dispose();
+    _controller = null;
+    _initFuture = null;
+  }
+
+  Future<void> _prepare() async {
+    setState(() => _error = null);
+    try {
+      final file = await TurnaLocalMediaCache.getOrDownloadFile(
+        cacheKey: widget.item.cacheKey,
+        url: widget.item.url,
+        authToken: widget.authToken,
+      );
+      if (file == null) {
+        if (!mounted) return;
+        setState(() => _error = 'Video yüklenemedi.');
+        return;
+      }
+      final controller = vp.VideoPlayerController.file(file);
+      final initFuture = controller.initialize();
+      await controller.setLooping(true);
+      if (!mounted) {
+        await controller.dispose();
+        return;
+      }
+      setState(() {
+        _controller = controller;
+        _initFuture = initFuture;
+      });
+      await initFuture;
+      if (!mounted) return;
+      setState(() {});
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _error = 'Video yüklenemedi.');
+    }
+  }
+
+  void _togglePlayback() {
+    final controller = _controller;
+    if (controller == null || !controller.value.isInitialized) return;
+    if (controller.value.isPlaying) {
+      controller.pause();
+    } else {
+      controller.play();
+    }
+    setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_error != null) {
+      return Center(
+        child: Text(
+          _error!,
+          style: const TextStyle(color: Colors.white),
+        ),
+      );
+    }
+
+    final controller = _controller;
+    final initFuture = _initFuture;
+    if (controller == null || initFuture == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    return FutureBuilder<void>(
+      future: initFuture,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done ||
+            !controller.value.isInitialized) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        return GestureDetector(
+          onTap: _togglePlayback,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              Center(
+                child: AspectRatio(
+                  aspectRatio: controller.value.aspectRatio <= 0
+                      ? 16 / 9
+                      : controller.value.aspectRatio,
+                  child: vp.VideoPlayer(controller),
+                ),
+              ),
+              if (!controller.value.isPlaying)
+                Container(
+                  width: 68,
+                  height: 68,
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.38),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.play_arrow_rounded,
+                    color: Colors.white,
+                    size: 38,
+                  ),
+                ),
+              Positioned(
+                left: 16,
+                right: 16,
+                bottom: 16,
+                child: vp.VideoProgressIndicator(
+                  controller,
+                  allowScrubbing: true,
+                  colors: const vp.VideoProgressColors(
+                    playedColor: Colors.white,
+                    bufferedColor: Colors.white38,
+                    backgroundColor: Colors.white24,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

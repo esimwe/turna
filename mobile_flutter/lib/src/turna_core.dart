@@ -2409,6 +2409,8 @@ class ProfileApi {
           return 'Bu email başka bir hesapta kullanılıyor.';
         case 'username_already_in_use':
           return 'Bu kullanıcı adı başka bir hesapta kullanılıyor.';
+        case 'username_change_rate_limited':
+          return 'Kullanıcı adını 14 günde en fazla 2 kez değiştirebilirsin.';
         case 'invalid_username':
           return 'Kullanıcı adı uygun değil.';
         case 'validation_error':

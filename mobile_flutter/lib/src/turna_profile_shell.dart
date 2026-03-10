@@ -742,6 +742,7 @@ class ProfilePage extends StatefulWidget {
 
 class _ProfilePageState extends State<ProfilePage> {
   static final RegExp _usernamePattern = RegExp(r'^[a-z][a-z0-9._]{2,23}$');
+  static final RegExp _emailPattern = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
 
   final _displayNameController = TextEditingController();
   final _usernameController = TextEditingController();
@@ -754,25 +755,16 @@ class _ProfilePageState extends State<ProfilePage> {
   bool _loading = true;
   bool _saving = false;
   bool _avatarBusy = false;
-  bool _usernameChecking = false;
-  bool? _usernameAvailable;
   String? _error;
-  String? _usernameMessage;
-  Timer? _usernameCheckDebounce;
 
   @override
   void initState() {
     super.initState();
-    _displayNameController.addListener(_refreshPreview);
-    _usernameController.addListener(_handleUsernameChanged);
     _loadProfile();
   }
 
   @override
   void dispose() {
-    _displayNameController.removeListener(_refreshPreview);
-    _usernameController.removeListener(_handleUsernameChanged);
-    _usernameCheckDebounce?.cancel();
     _displayNameController.dispose();
     _usernameController.dispose();
     _aboutController.dispose();
@@ -781,92 +773,12 @@ class _ProfilePageState extends State<ProfilePage> {
     super.dispose();
   }
 
-  void _refreshPreview() {
-    if (!mounted) return;
-    setState(() {});
-  }
-
   String _normalizeUsername(String value) {
     return value.trim().toLowerCase().replaceAll('@', '');
   }
 
-  void _handleUsernameChanged() {
-    if (!mounted) return;
-    _scheduleUsernameCheck();
-  }
-
   void _handleUnauthorized() {
     widget.onSessionExpired();
-  }
-
-  void _scheduleUsernameCheck() {
-    final raw = _normalizeUsername(_usernameController.text);
-    _usernameCheckDebounce?.cancel();
-
-    if (raw.isEmpty) {
-      setState(() {
-        _usernameChecking = false;
-        _usernameAvailable = null;
-        _usernameMessage = null;
-      });
-      return;
-    }
-
-    if (!_usernamePattern.hasMatch(raw)) {
-      setState(() {
-        _usernameChecking = false;
-        _usernameAvailable = false;
-        _usernameMessage =
-            'En az 3 karakter; küçük harf, rakam, nokta veya alt çizgi kullan.';
-      });
-      return;
-    }
-
-    final currentUsername = _normalizeUsername(_profile?.username ?? '');
-    if (raw == currentUsername) {
-      setState(() {
-        _usernameChecking = false;
-        _usernameAvailable = true;
-        _usernameMessage = 'Kullanıcı adı uygun.';
-      });
-      return;
-    }
-
-    setState(() {
-      _usernameChecking = true;
-      _usernameAvailable = null;
-      _usernameMessage = 'Kontrol ediliyor...';
-    });
-
-    _usernameCheckDebounce = Timer(const Duration(milliseconds: 350), () async {
-      try {
-        final available = await ProfileApi.checkUsernameAvailability(
-          widget.session,
-          raw,
-        );
-        if (!mounted) return;
-        if (_normalizeUsername(_usernameController.text) != raw) return;
-        setState(() {
-          _usernameChecking = false;
-          _usernameAvailable = available;
-          _usernameMessage = available
-              ? 'Kullanıcı adı uygun.'
-              : 'Bu kullanıcı adı kullanılıyor.';
-        });
-      } catch (error) {
-        if (!mounted) return;
-        if (_normalizeUsername(_usernameController.text) != raw) return;
-        if (error is TurnaUnauthorizedException) {
-          _handleUnauthorized();
-          return;
-        }
-        setState(() {
-          _usernameChecking = false;
-          _usernameAvailable = false;
-          _usernameMessage = error.toString();
-        });
-      }
-    });
   }
 
   Future<void> _loadProfile() async {
@@ -910,7 +822,6 @@ class _ProfilePageState extends State<ProfilePage> {
     _aboutController.text = profile.about ?? '';
     _phoneController.text = profile.phone ?? '';
     _emailController.text = profile.email ?? '';
-    _scheduleUsernameCheck();
   }
 
   Future<void> _commitProfile(
@@ -1036,31 +947,135 @@ class _ProfilePageState extends State<ProfilePage> {
     }
   }
 
-  Future<void> _saveProfile() async {
-    final displayName = _displayNameController.text.trim();
-    if (displayName.length < 2) {
-      setState(() => _error = 'Ad en az 2 karakter olmalı.');
-      return;
+  Future<void> _showAvatarActions() async {
+    if (_saving || _avatarBusy) return;
+    final hasAvatar =
+        (_profile?.avatarUrl ?? widget.session.avatarUrl)?.trim().isNotEmpty ==
+        true;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('Galeriden seç'),
+              onTap: () {
+                Navigator.pop(context);
+                _pickAvatar();
+              },
+            ),
+            if (hasAvatar)
+              ListTile(
+                leading: const Icon(
+                  Icons.delete_outline_rounded,
+                  color: TurnaColors.error,
+                ),
+                title: const Text(
+                  'Fotoğrafı kaldır',
+                  style: TextStyle(color: TurnaColors.error),
+                ),
+                onTap: () {
+                  Navigator.pop(context);
+                  _removeAvatar();
+                },
+              ),
+            ListTile(
+              leading: const Icon(Icons.close_rounded),
+              title: const Text('Vazgeç'),
+              onTap: () => Navigator.pop(context),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _valueForField(_ProfileEditableField field) => switch (field) {
+    _ProfileEditableField.username => _usernameController.text,
+    _ProfileEditableField.about => _aboutController.text,
+    _ProfileEditableField.displayName => _displayNameController.text,
+    _ProfileEditableField.email => _emailController.text,
+    _ProfileEditableField.phone => _phoneController.text,
+    _ProfileEditableField.links => '',
+  };
+
+  String? _validateField(_ProfileEditableField field, String value) {
+    final trimmed = value.trim();
+    switch (field) {
+      case _ProfileEditableField.displayName:
+        if (trimmed.length < 2) return 'Ad en az 2 karakter olmalı.';
+        return null;
+      case _ProfileEditableField.username:
+        final normalized = _normalizeUsername(trimmed);
+        if (normalized.length < 3) {
+          return 'Kullanıcı adı en az 3 karakter olmalı.';
+        }
+        if (!_usernamePattern.hasMatch(normalized)) {
+          return 'Kullanıcı adı uygun değil. Küçük harf, rakam, nokta ve alt çizgi kullan.';
+        }
+        return null;
+      case _ProfileEditableField.email:
+        if (trimmed.isEmpty) return null;
+        if (!_emailPattern.hasMatch(trimmed)) {
+          return 'Geçerli bir email adresi gir.';
+        }
+        return null;
+      case _ProfileEditableField.phone:
+        if (trimmed.isEmpty) return 'Telefon numarası gerekli.';
+        if (trimmed.length < 6) return 'Telefon numarası çok kısa.';
+        return null;
+      case _ProfileEditableField.about:
+      case _ProfileEditableField.links:
+        return null;
     }
-    final username = _normalizeUsername(_usernameController.text);
-    if (username.length < 3) {
-      setState(() => _error = 'Kullanıcı adı en az 3 karakter olmalı.');
-      return;
+  }
+
+  Future<void> _saveField(_ProfileEditableField field, String rawValue) async {
+    final value = field == _ProfileEditableField.username
+        ? _normalizeUsername(rawValue)
+        : rawValue.trim();
+    final validationError = _validateField(field, value);
+    if (validationError != null) {
+      throw TurnaApiException(validationError);
     }
-    if (!_usernamePattern.hasMatch(username)) {
-      setState(() {
-        _error =
-            'Kullanıcı adı uygun değil. Küçük harf, rakam, nokta ve alt çizgi kullan.';
-      });
-      return;
+
+    final displayName = field == _ProfileEditableField.displayName
+        ? value
+        : _displayNameController.text.trim();
+    final username = field == _ProfileEditableField.username
+        ? value
+        : _normalizeUsername(_usernameController.text);
+    final about = field == _ProfileEditableField.about
+        ? value
+        : _aboutController.text.trim();
+    final phone = field == _ProfileEditableField.phone
+        ? value
+        : _phoneController.text.trim();
+    final email = field == _ProfileEditableField.email
+        ? value
+        : _emailController.text.trim();
+
+    final usernameError = _validateField(_ProfileEditableField.username, username);
+    if (usernameError != null) {
+      throw TurnaApiException(usernameError);
     }
-    if (_usernameChecking) {
-      setState(() => _error = 'Kullanıcı adı kontrolü tamamlanmadı.');
-      return;
-    }
-    if (_usernameAvailable == false) {
-      setState(() => _error = 'Bu kullanıcı adı kullanılıyor.');
-      return;
+
+    final currentUsername = _normalizeUsername(_profile?.username ?? '');
+    if (username != currentUsername) {
+      final available = await ProfileApi.checkUsernameAvailability(
+        widget.session,
+        username,
+      );
+      if (!available) {
+        throw TurnaApiException('Bu kullanıcı adı kullanılıyor.');
+      }
     }
 
     setState(() {
@@ -1073,30 +1088,182 @@ class _ProfilePageState extends State<ProfilePage> {
         widget.session,
         displayName: displayName,
         username: username,
-        about: _aboutController.text,
-        phone: _phoneController.text,
-        email: _emailController.text,
+        about: about,
+        phone: phone,
+        email: email,
       );
       if (!mounted) return;
-
       await _commitProfile(
         updatedProfile,
-        successMessage: 'Profil güncellendi.',
+        successMessage: '${field.label} güncellendi.',
       );
-      if (!mounted) return;
-      setState(() => _saving = false);
-      unawaited(_loadProfile());
     } on TurnaUnauthorizedException {
-      if (!mounted) return;
-      setState(() => _saving = false);
+      if (!mounted) rethrow;
       _handleUnauthorized();
-    } catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _saving = false;
-        _error = error.toString();
-      });
+      throw TurnaApiException('Oturum süresi doldu.');
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+      }
     }
+  }
+
+  Future<void> _openFieldEditor(_ProfileEditableField field) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => _ProfileFieldEditorPage(
+          field: field,
+          initialValue: _valueForField(field),
+          session: widget.session,
+          currentUsername: _normalizeUsername(_profile?.username ?? ''),
+          onSave: (value) => _saveField(field, value),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFieldSection(
+    _ProfileEditableField field, {
+    String? overrideValue,
+    String? overridePlaceholder,
+    VoidCallback? onTap,
+  }) {
+    final rawValue = overrideValue ?? _valueForField(field).trim();
+    final hasValue = rawValue.isNotEmpty;
+    final displayValue = hasValue
+        ? rawValue
+        : (overridePlaceholder ?? field.placeholder);
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(left: 2, bottom: 8),
+            child: Text(
+              field.sectionTitle,
+              style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+                color: Color(0xFF6E7472),
+              ),
+            ),
+          ),
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: ListTile(
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 2,
+              ),
+              title: Text(
+                displayValue,
+                style: TextStyle(
+                  fontSize: 16,
+                  color: hasValue ? const Color(0xFF202124) : TurnaColors.success,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              trailing: const Icon(
+                Icons.chevron_right_rounded,
+                color: Color(0xFF9BA09F),
+              ),
+              onTap: (_saving || _avatarBusy)
+                  ? null
+                  : (onTap ?? () => _openFieldEditor(field)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildErrorBanner() {
+    if (_error == null) return const SizedBox.shrink();
+    return Container(
+      margin: const EdgeInsets.only(bottom: 18),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF1F0),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Text(
+        _error!,
+        style: const TextStyle(color: Color(0xFFC0392B), fontSize: 13),
+      ),
+    );
+  }
+
+  Widget _buildProfileBody(TurnaUserProfile profile) {
+    final displayName = _displayNameController.text.trim().isEmpty
+        ? widget.session.displayName
+        : _displayNameController.text.trim();
+    final avatarUrl = profile.avatarUrl ?? widget.session.avatarUrl;
+    final username = _normalizeUsername(_usernameController.text);
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
+      children: [
+        Center(
+          child: GestureDetector(
+            onTap: () {
+              if (avatarUrl == null || avatarUrl.trim().isEmpty) return;
+              _openAvatarViewer(
+                context,
+                imageUrl: avatarUrl,
+                title: displayName,
+                token: widget.session.token,
+              );
+            },
+            child: _ProfileAvatar(
+              label: displayName,
+              avatarUrl: avatarUrl,
+              authToken: widget.session.token,
+              radius: 58,
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+        Center(
+          child: TextButton(
+            onPressed: (_saving || _avatarBusy) ? null : _showAvatarActions,
+            style: TextButton.styleFrom(
+              foregroundColor: TurnaColors.success,
+              textStyle: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            child: Text(_avatarBusy ? 'Yükleniyor...' : 'Düzenle'),
+          ),
+        ),
+        const SizedBox(height: 8),
+        _buildErrorBanner(),
+        _buildFieldSection(
+          _ProfileEditableField.username,
+          overrideValue: username.isEmpty ? '' : '@$username',
+        ),
+        _buildFieldSection(
+          _ProfileEditableField.about,
+          overridePlaceholder: 'Neler oluyor?',
+        ),
+        _buildFieldSection(_ProfileEditableField.displayName),
+        _buildFieldSection(_ProfileEditableField.email),
+        _buildFieldSection(_ProfileEditableField.phone),
+        _buildFieldSection(
+          _ProfileEditableField.links,
+          overridePlaceholder: 'Bağlantı ekle',
+          onTap: () => ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Bağlantılar yakında eklenecek.')),
+          ),
+        ),
+      ],
+    );
   }
 
   @override
@@ -1104,14 +1271,26 @@ class _ProfilePageState extends State<ProfilePage> {
     final profile = _profile;
     if (_loading && profile == null) {
       return Scaffold(
-        appBar: AppBar(title: const Text('Profil')),
+        backgroundColor: TurnaColors.backgroundSoft,
+        appBar: AppBar(
+          backgroundColor: TurnaColors.backgroundSoft,
+          surfaceTintColor: Colors.transparent,
+          centerTitle: true,
+          title: const Text('Profil'),
+        ),
         body: const Center(child: CircularProgressIndicator()),
       );
     }
 
     if (profile == null) {
       return Scaffold(
-        appBar: AppBar(title: const Text('Profil')),
+        backgroundColor: TurnaColors.backgroundSoft,
+        appBar: AppBar(
+          backgroundColor: TurnaColors.backgroundSoft,
+          surfaceTintColor: Colors.transparent,
+          centerTitle: true,
+          title: const Text('Profil'),
+        ),
         body: Center(
           child: Padding(
             padding: const EdgeInsets.all(24),
@@ -1132,158 +1311,423 @@ class _ProfilePageState extends State<ProfilePage> {
     }
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Profil')),
+      backgroundColor: TurnaColors.backgroundSoft,
+      appBar: AppBar(
+        backgroundColor: TurnaColors.backgroundSoft,
+        surfaceTintColor: Colors.transparent,
+        centerTitle: true,
+        title: const Text(
+          'Profil',
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
+      ),
+      body: _buildProfileBody(profile),
+    );
+  }
+}
+
+enum _ProfileEditableField { username, about, displayName, email, phone, links }
+
+extension _ProfileEditableFieldX on _ProfileEditableField {
+  String get label => switch (this) {
+    _ProfileEditableField.username => 'Kullanıcı adı',
+    _ProfileEditableField.about => 'Hakkında',
+    _ProfileEditableField.displayName => 'Ad',
+    _ProfileEditableField.email => 'Email',
+    _ProfileEditableField.phone => 'Telefon',
+    _ProfileEditableField.links => 'Bağlantılar',
+  };
+
+  String get sectionTitle => switch (this) {
+    _ProfileEditableField.username => 'Kullanıcı adı',
+    _ProfileEditableField.about => 'Hakkımda',
+    _ProfileEditableField.displayName => 'Ad',
+    _ProfileEditableField.email => 'Email',
+    _ProfileEditableField.phone => 'Telefon numarası',
+    _ProfileEditableField.links => 'Bağlantılar',
+  };
+
+  String get placeholder => switch (this) {
+    _ProfileEditableField.username => 'Kullanıcı adı ekle',
+    _ProfileEditableField.about => 'Neler oluyor?',
+    _ProfileEditableField.displayName => 'Ad ekle',
+    _ProfileEditableField.email => 'Email ekle',
+    _ProfileEditableField.phone => 'Telefon numarası ekle',
+    _ProfileEditableField.links => 'Bağlantı ekle',
+  };
+
+  String? get description => switch (this) {
+    _ProfileEditableField.username => 'Kullanıcılar bu ad ile sizi bulabilir.',
+    _ProfileEditableField.about => 'Profilinizde kısa bir durum olarak görünür.',
+    _ProfileEditableField.displayName =>
+      'Etkileşimde bulunduğunuz kullanıcıların kişilerinde kayıtlı değilseniz bu ad görünür.',
+    _ProfileEditableField.email =>
+      'Hesap bildirimleri ve güvenlik işlemleri için kullanılabilir.',
+    _ProfileEditableField.phone =>
+      'Telefon numaranız hesabınızla ilişkilidir.',
+    _ProfileEditableField.links => null,
+  };
+
+  TextInputType get keyboardType => switch (this) {
+    _ProfileEditableField.email => TextInputType.emailAddress,
+    _ProfileEditableField.phone => TextInputType.phone,
+    _ => TextInputType.text,
+  };
+
+  int get maxLines => switch (this) {
+    _ProfileEditableField.about => 4,
+    _ => 1,
+  };
+
+  TextCapitalization get textCapitalization => switch (this) {
+    _ProfileEditableField.displayName => TextCapitalization.words,
+    _ProfileEditableField.about => TextCapitalization.sentences,
+    _ => TextCapitalization.none,
+  };
+
+  String? get prefixText =>
+      this == _ProfileEditableField.username ? '@' : null;
+
+  List<TextInputFormatter> get inputFormatters => switch (this) {
+    _ProfileEditableField.username => [
+      FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9._@]')),
+      TextInputFormatter.withFunction((oldValue, newValue) {
+        final normalized = newValue.text
+            .toLowerCase()
+            .replaceAll('@', '')
+            .replaceAll(RegExp(r'[^a-z0-9._]+'), '');
+        return TextEditingValue(
+          text: normalized,
+          selection: TextSelection.collapsed(offset: normalized.length),
+        );
+      }),
+    ],
+    _ => const [],
+  };
+}
+
+class _ProfileFieldEditorPage extends StatefulWidget {
+  const _ProfileFieldEditorPage({
+    required this.field,
+    required this.initialValue,
+    required this.session,
+    required this.currentUsername,
+    required this.onSave,
+  });
+
+  final _ProfileEditableField field;
+  final String initialValue;
+  final AuthSession session;
+  final String currentUsername;
+  final Future<void> Function(String value) onSave;
+
+  @override
+  State<_ProfileFieldEditorPage> createState() => _ProfileFieldEditorPageState();
+}
+
+class _ProfileFieldEditorPageState extends State<_ProfileFieldEditorPage> {
+  static final RegExp _usernamePattern = RegExp(r'^[a-z][a-z0-9._]{2,23}$');
+  static final RegExp _emailPattern = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
+
+  late final TextEditingController _controller;
+  bool _saving = false;
+  bool _usernameChecking = false;
+  bool? _usernameAvailable;
+  String? _usernameMessage;
+  String? _error;
+  Timer? _usernameCheckDebounce;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.initialValue);
+    _controller.addListener(_handleChanged);
+    if (widget.field == _ProfileEditableField.username) {
+      _scheduleUsernameCheck();
+    }
+  }
+
+  @override
+  void dispose() {
+    _usernameCheckDebounce?.cancel();
+    _controller.removeListener(_handleChanged);
+    _controller.dispose();
+    super.dispose();
+  }
+
+  String _normalizeUsername(String value) {
+    return value.trim().toLowerCase().replaceAll('@', '');
+  }
+
+  String get _normalizedValue {
+    if (widget.field == _ProfileEditableField.username) {
+      return _normalizeUsername(_controller.text);
+    }
+    return _controller.text.trim();
+  }
+
+  bool get _hasChanges => _normalizedValue != widget.initialValue.trim();
+
+  void _handleChanged() {
+    if (!mounted) return;
+    if (widget.field == _ProfileEditableField.username) {
+      _scheduleUsernameCheck();
+      return;
+    }
+    setState(() => _error = null);
+  }
+
+  String? _validateInput(String value) {
+    switch (widget.field) {
+      case _ProfileEditableField.displayName:
+        if (value.length < 2) return 'Ad en az 2 karakter olmalı.';
+        return null;
+      case _ProfileEditableField.username:
+        if (value.length < 3) return 'Kullanıcı adı en az 3 karakter olmalı.';
+        if (!_usernamePattern.hasMatch(value)) {
+          return 'Kullanıcı adı uygun değil. Küçük harf, rakam, nokta ve alt çizgi kullan.';
+        }
+        return null;
+      case _ProfileEditableField.email:
+        if (value.isEmpty) return null;
+        if (!_emailPattern.hasMatch(value)) {
+          return 'Geçerli bir email adresi gir.';
+        }
+        return null;
+      case _ProfileEditableField.phone:
+        if (value.isEmpty) return 'Telefon numarası gerekli.';
+        if (value.length < 6) return 'Telefon numarası çok kısa.';
+        return null;
+      case _ProfileEditableField.about:
+      case _ProfileEditableField.links:
+        return null;
+    }
+  }
+
+  void _scheduleUsernameCheck() {
+    final raw = _normalizeUsername(_controller.text);
+    _usernameCheckDebounce?.cancel();
+
+    if (raw.isEmpty) {
+      setState(() {
+        _usernameChecking = false;
+        _usernameAvailable = false;
+        _usernameMessage = 'Kullanıcı adı en az 3 karakter olmalı.';
+      });
+      return;
+    }
+
+    final formatError = _validateInput(raw);
+    if (formatError != null) {
+      setState(() {
+        _usernameChecking = false;
+        _usernameAvailable = false;
+        _usernameMessage = formatError;
+      });
+      return;
+    }
+
+    if (raw == widget.currentUsername) {
+      setState(() {
+        _usernameChecking = false;
+        _usernameAvailable = true;
+        _usernameMessage = 'Mevcut kullanıcı adın.';
+      });
+      return;
+    }
+
+    setState(() {
+      _usernameChecking = true;
+      _usernameAvailable = null;
+      _usernameMessage = 'Kontrol ediliyor...';
+    });
+
+    _usernameCheckDebounce = Timer(const Duration(milliseconds: 350), () async {
+      try {
+        final available = await ProfileApi.checkUsernameAvailability(
+          widget.session,
+          raw,
+        );
+        if (!mounted) return;
+        if (_normalizeUsername(_controller.text) != raw) return;
+        setState(() {
+          _usernameChecking = false;
+          _usernameAvailable = available;
+          _usernameMessage = available
+              ? 'Kullanıcı adı uygun.'
+              : 'Bu kullanıcı adı kullanılıyor.';
+        });
+      } catch (error) {
+        if (!mounted) return;
+        if (_normalizeUsername(_controller.text) != raw) return;
+        setState(() {
+          _usernameChecking = false;
+          _usernameAvailable = false;
+          _usernameMessage = error.toString();
+        });
+      }
+    });
+  }
+
+  Future<void> _handleSave() async {
+    final value = _normalizedValue;
+    final validationError = _validateInput(value);
+    if (validationError != null) {
+      setState(() => _error = validationError);
+      return;
+    }
+
+    if (widget.field == _ProfileEditableField.username) {
+      if (_usernameChecking) {
+        setState(() => _error = 'Kullanıcı adı kontrolü tamamlanmadı.');
+        return;
+      }
+      if (_usernameAvailable == false) {
+        setState(() => _error = 'Bu kullanıcı adı kullanılıyor.');
+        return;
+      }
+    }
+
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+
+    try {
+      await widget.onSave(value);
+      if (!mounted) return;
+      Navigator.pop(context);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _error = error.toString();
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final canSave = !_saving && _hasChanges;
+
+    return Scaffold(
+      backgroundColor: TurnaColors.backgroundSoft,
+      appBar: AppBar(
+        backgroundColor: TurnaColors.backgroundSoft,
+        surfaceTintColor: Colors.transparent,
+        leadingWidth: 78,
+        leading: TextButton(
+          onPressed: _saving ? null : () => Navigator.pop(context),
+          child: const Text(
+            'İptal',
+            style: TextStyle(fontSize: 16, color: Color(0xFF202124)),
+          ),
+        ),
+        centerTitle: true,
+        title: Text(
+          widget.field.sectionTitle,
+          style: const TextStyle(fontWeight: FontWeight.w600),
+        ),
+        actions: [
+          TextButton(
+            onPressed: canSave ? _handleSave : null,
+            child: Text(
+              _saving ? 'Kaydediliyor' : 'Kaydet',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: canSave ? TurnaColors.primary : const Color(0xFFADB3B1),
+              ),
+            ),
+          ),
+        ],
+      ),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
         children: [
-          Center(
-            child: GestureDetector(
-              onTap: () {
-                final avatarUrl = profile.avatarUrl ?? widget.session.avatarUrl;
-                if (avatarUrl == null || avatarUrl.trim().isEmpty) return;
-                _openAvatarViewer(
-                  context,
-                  imageUrl: avatarUrl,
-                  title: _displayNameController.text.trim().isEmpty
-                      ? widget.session.displayName
-                      : _displayNameController.text.trim(),
-                  token: widget.session.token,
-                );
-              },
-              child: _ProfileAvatar(
-                label: _displayNameController.text.trim().isEmpty
-                    ? widget.session.displayName
-                    : _displayNameController.text.trim(),
-                avatarUrl: profile.avatarUrl ?? widget.session.avatarUrl,
-                authToken: widget.session.token,
-                radius: 58,
-              ),
-            ),
-          ),
-          const SizedBox(height: 18),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            alignment: WrapAlignment.center,
-            children: [
-              FilledButton.icon(
-                onPressed: (_saving || _avatarBusy) ? null : _pickAvatar,
-                icon: _avatarBusy
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.photo_library_outlined),
-                label: Text(_avatarBusy ? 'Yükleniyor...' : 'Galeriden seç'),
-              ),
-              if ((profile.avatarUrl ?? widget.session.avatarUrl) != null)
-                OutlinedButton.icon(
-                  onPressed: (_saving || _avatarBusy) ? null : _removeAvatar,
-                  icon: const Icon(Icons.delete_outline),
-                  label: const Text('Fotoğrafı kaldır'),
-                ),
-            ],
-          ),
-          const SizedBox(height: 16),
           TextField(
-            controller: _displayNameController,
-            textInputAction: TextInputAction.next,
-            decoration: const InputDecoration(
-              labelText: 'Ad',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _usernameController,
-            textInputAction: TextInputAction.next,
-            inputFormatters: [
-              FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9._@]')),
-              TextInputFormatter.withFunction((oldValue, newValue) {
-                final normalized = newValue.text
-                    .toLowerCase()
-                    .replaceAll('@', '')
-                    .replaceAll(RegExp(r'[^a-z0-9._]+'), '');
-                return TextEditingValue(
-                  text: normalized,
-                  selection: TextSelection.collapsed(offset: normalized.length),
-                );
-              }),
-            ],
+            controller: _controller,
+            autofocus: true,
+            keyboardType: widget.field.keyboardType,
+            textCapitalization: widget.field.textCapitalization,
+            maxLines: widget.field.maxLines,
+            inputFormatters: widget.field.inputFormatters,
             decoration: InputDecoration(
-              labelText: 'Kullanıcı adı',
-              prefixText: '@',
-              border: const OutlineInputBorder(),
-              helperText: _usernameMessage,
-              helperStyle: TextStyle(
+              hintText: widget.field.placeholder,
+              prefixText: widget.field.prefixText,
+              filled: true,
+              fillColor: Colors.white,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(14),
+                borderSide: BorderSide.none,
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(14),
+                borderSide: BorderSide.none,
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(14),
+                borderSide: const BorderSide(color: TurnaColors.primary),
+              ),
+              suffixIcon: widget.field == _ProfileEditableField.username
+                  ? (_usernameChecking
+                        ? const Padding(
+                            padding: EdgeInsets.all(12),
+                            child: SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          )
+                        : _usernameAvailable == true
+                        ? const Icon(
+                            Icons.check_circle_rounded,
+                            color: TurnaColors.success,
+                          )
+                        : _usernameAvailable == false
+                        ? const Icon(
+                            Icons.cancel_rounded,
+                            color: TurnaColors.error,
+                          )
+                        : null)
+                  : null,
+            ),
+          ),
+          if (widget.field == _ProfileEditableField.username &&
+              _usernameMessage != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              _usernameMessage!,
+              style: TextStyle(
+                fontSize: 13,
                 color: _usernameAvailable == true
                     ? TurnaColors.success
                     : _usernameAvailable == false
                     ? TurnaColors.error
                     : TurnaColors.textMuted,
               ),
-              suffixIcon: _usernameChecking
-                  ? const Padding(
-                      padding: EdgeInsets.all(12),
-                      child: SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      ),
-                    )
-                  : _usernameAvailable == true
-                  ? const Icon(
-                      Icons.check_circle_rounded,
-                      color: TurnaColors.success,
-                    )
-                  : _usernameAvailable == false
-                  ? const Icon(Icons.cancel_rounded, color: TurnaColors.error)
-                  : null,
             ),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _aboutController,
-            maxLines: 3,
-            textInputAction: TextInputAction.newline,
-            decoration: const InputDecoration(
-              labelText: 'Hakkında',
-              border: OutlineInputBorder(),
+          ] else if (widget.field.description != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              widget.field.description!,
+              style: const TextStyle(
+                fontSize: 13,
+                height: 1.35,
+                color: Color(0xFF7A817D),
+              ),
             ),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _phoneController,
-            readOnly: true,
-            keyboardType: TextInputType.phone,
-            textInputAction: TextInputAction.next,
-            decoration: const InputDecoration(
-              labelText: 'Telefon',
-              helperText: 'Numara değişikliği doğrulama ile yapılır.',
-              border: OutlineInputBorder(),
+          ],
+          if (_error != null) ...[
+            const SizedBox(height: 12),
+            Text(
+              _error!,
+              style: const TextStyle(
+                fontSize: 13,
+                color: TurnaColors.error,
+              ),
             ),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _emailController,
-            keyboardType: TextInputType.emailAddress,
-            textInputAction: TextInputAction.next,
-            decoration: const InputDecoration(
-              labelText: 'Email',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          const SizedBox(height: 16),
-          if (_error != null)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Text(_error!, style: const TextStyle(color: Colors.red)),
-            ),
-          FilledButton(
-            onPressed: (_saving || _avatarBusy) ? null : _saveProfile,
-            child: Text(_saving ? 'Kaydediliyor...' : 'Kaydet'),
-          ),
+          ],
         ],
       ),
     );
@@ -1793,11 +2237,6 @@ class ConversationMediaPage extends StatefulWidget {
 }
 
 class _ConversationMediaPageState extends State<ConversationMediaPage> {
-  static final _kMessageLinkPattern = RegExp(
-    r'((?:https?:\/\/|www\.)[^\s<]+)',
-    caseSensitive: false,
-  );
-
   _ConversationLibraryTab _selectedTab = _ConversationLibraryTab.media;
   bool _loading = true;
   String? _error;
@@ -1861,10 +2300,7 @@ class _ConversationMediaPageState extends State<ConversationMediaPage> {
 
         final normalizedText = parsed.text.trim();
         if (normalizedText.isEmpty) continue;
-        for (final match in _kMessageLinkPattern.allMatches(normalizedText)) {
-          final rawUrl = (match.group(0) ?? '').trim();
-          final uri = _parseSharedUri(rawUrl);
-          if (uri == null) continue;
+        for (final uri in extractTurnaUrls(normalizedText)) {
           final key = '${message.id}|${uri.toString()}';
           if (!seenLinks.add(key)) continue;
           linkItems.add(
@@ -1872,8 +2308,7 @@ class _ConversationMediaPageState extends State<ConversationMediaPage> {
               message: message,
               uri: uri,
               createdAt: createdAt,
-              title: _linkTitleForMessage(normalizedText, uri),
-              subtitle: _linkSubtitleForUri(uri),
+              messageText: normalizedText,
             ),
           );
         }
@@ -1930,32 +2365,35 @@ class _ConversationMediaPageState extends State<ConversationMediaPage> {
     return DateTime.now();
   }
 
-  Uri? _parseSharedUri(String raw) {
-    final trimmed = raw.trim();
-    if (trimmed.isEmpty) return null;
-    final normalized = trimmed.startsWith('http://') ||
-            trimmed.startsWith('https://')
-        ? trimmed
-        : 'https://$trimmed';
-    return Uri.tryParse(normalized);
+  String _formatViewerTimestamp(String iso) {
+    final parsed = DateTime.tryParse(iso)?.toLocal();
+    if (parsed == null) return iso;
+    final day = parsed.day.toString().padLeft(2, '0');
+    final month = parsed.month.toString().padLeft(2, '0');
+    final year = parsed.year.toString();
+    final hour = parsed.hour.toString().padLeft(2, '0');
+    final minute = parsed.minute.toString().padLeft(2, '0');
+    return '$day.$month.$year $hour:$minute';
   }
 
-  String _linkTitleForMessage(String text, Uri uri) {
-    final cleaned = text
-        .replaceAll(_kMessageLinkPattern, '')
-        .replaceAll(RegExp(r'\s+'), ' ')
-        .trim();
-    if (cleaned.isNotEmpty) return cleaned;
-    final host = uri.host.replaceFirst(RegExp(r'^www\.'), '');
-    return host.isEmpty ? uri.toString() : host;
-  }
-
-  String _linkSubtitleForUri(Uri uri) {
-    final host = uri.host.replaceFirst(RegExp(r'^www\.'), '');
-    if (host.isEmpty) return uri.toString();
-    final path = uri.path.trim();
-    if (path.isEmpty || path == '/') return host;
-    return '$host$path';
+  List<ChatGalleryMediaItem> _buildGalleryItems() {
+    final items = <ChatGalleryMediaItem>[];
+    for (final item in _mediaItems) {
+      final url = item.attachment.url?.trim() ?? '';
+      if (url.isEmpty) continue;
+      items.add(
+        ChatGalleryMediaItem(
+          message: item.message,
+          attachment: item.attachment,
+          senderLabel: item.message.senderId == widget.session.userId
+              ? 'Sen'
+              : widget.peerName,
+          cacheKey: 'library:${item.attachment.objectKey}',
+          url: url,
+        ),
+      );
+    }
+    return items;
   }
 
   List<_ConversationMonthSection<T>> _buildMonthSections<T>(
@@ -2009,28 +2447,37 @@ class _ConversationMediaPageState extends State<ConversationMediaPage> {
       _showSnackBar('Medya açılamadı.');
       return;
     }
-
-    if (item.attachment.kind == ChatAttachmentKind.image) {
-      await Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => ChatAttachmentViewerPage(
-            cacheKey: 'library:${item.attachment.objectKey}',
-            imageUrl: url,
-            title: item.attachment.fileName ?? widget.peerName,
-          ),
-        ),
-      );
-      return;
-    }
-
-    final opened = await launchUrl(
-      Uri.parse(url),
-      mode: LaunchMode.externalApplication,
+    final galleryItems = _buildGalleryItems();
+    final initialIndex = galleryItems.indexWhere(
+      (entry) =>
+          entry.message?.id == item.message.id &&
+          entry.attachment.objectKey == item.attachment.objectKey,
     );
-    if (!opened && mounted) {
-      _showSnackBar('Video açılamadı.');
-    }
+    final itemsToOpen = initialIndex < 0
+        ? [
+            ChatGalleryMediaItem(
+              message: item.message,
+              attachment: item.attachment,
+              senderLabel: item.message.senderId == widget.session.userId
+                  ? 'Sen'
+                  : widget.peerName,
+              cacheKey: 'library:${item.attachment.objectKey}',
+              url: url,
+            ),
+          ]
+        : galleryItems;
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ChatAttachmentViewerPage(
+          session: widget.session,
+          items: itemsToOpen,
+          initialIndex: initialIndex < 0 ? 0 : initialIndex,
+          formatTimestamp: _formatViewerTimestamp,
+        ),
+      ),
+    );
   }
 
   Future<void> _openExternalUri(Uri uri, String errorText) async {
@@ -2302,15 +2749,13 @@ class _ConversationLinkItem {
     required this.message,
     required this.uri,
     required this.createdAt,
-    required this.title,
-    required this.subtitle,
+    required this.messageText,
   });
 
   final ChatMessage message;
   final Uri uri;
   final DateTime createdAt;
-  final String title;
-  final String subtitle;
+  final String messageText;
 }
 
 class _ConversationDocumentItem {
@@ -2428,76 +2873,97 @@ class _ConversationLinkTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(14),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(14),
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(10, 10, 8, 10),
-          child: Row(
-            children: [
-              Container(
-                width: 58,
-                height: 58,
-                decoration: BoxDecoration(
-                  color: TurnaColors.backgroundMuted,
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                alignment: Alignment.center,
-                child: const Icon(
-                  Icons.link_rounded,
-                  color: TurnaColors.primary,
-                  size: 24,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      item.title,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 14.5,
-                        height: 1.22,
-                        color: Color(0xFF171C1B),
-                        fontWeight: FontWeight.w600,
-                      ),
+    return FutureBuilder<TurnaLinkPreviewMetadata>(
+      future: TurnaLinkPreviewCache.resolve(item.uri),
+      builder: (context, snapshot) {
+        final preview = snapshot.data;
+        final host = preview?.host.isNotEmpty == true
+            ? preview!.host
+            : item.uri.host.replaceFirst(RegExp(r'^www\.', caseSensitive: false), '');
+        final title = (preview?.title.trim().isNotEmpty ?? false)
+            ? preview!.title.trim()
+            : host;
+        final messageText = item.messageText
+            .replaceAll(_kTurnaSharedUrlPattern, '')
+            .replaceAll(RegExp(r'\s+'), ' ')
+            .trim();
+
+        return Material(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(14),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(14),
+            onTap: onTap,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(10, 10, 8, 10),
+              child: Row(
+                children: [
+                  Container(
+                    width: 58,
+                    height: 58,
+                    decoration: BoxDecoration(
+                      color: TurnaColors.backgroundMuted,
+                      borderRadius: BorderRadius.circular(10),
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      item.subtitle,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 13,
-                        color: Color(0xFF69706D),
-                      ),
+                    alignment: Alignment.center,
+                    child: const Icon(
+                      Icons.link_rounded,
+                      color: TurnaColors.primary,
+                      size: 24,
                     ),
-                    const SizedBox(height: 4),
-                    const Text(
-                      'Mesajı görüntüle',
-                      style: TextStyle(
-                        fontSize: 12.5,
-                        color: Color(0xFF7D8380),
-                      ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 14.5,
+                            height: 1.22,
+                            color: Color(0xFF171C1B),
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        if (messageText.isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            messageText,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 13,
+                              color: Color(0xFF4F5654),
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 4),
+                        Text(
+                          preview?.displayUrl ?? item.uri.toString(),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 12.5,
+                            color: Color(0xFF7D8380),
+                          ),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
+                  ),
+                  const SizedBox(width: 8),
+                  const Icon(
+                    Icons.chevron_right_rounded,
+                    color: Color(0xFF9BA09F),
+                  ),
+                ],
               ),
-              const SizedBox(width: 8),
-              const Icon(
-                Icons.chevron_right_rounded,
-                color: Color(0xFF9BA09F),
-              ),
-            ],
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 }
