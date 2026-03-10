@@ -2188,6 +2188,89 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     ).showSnackBar(SnackBar(content: Text('$label yakinda eklenecek.')));
   }
 
+  Future<void> _pickLocation() async {
+    if (_attachmentBusy) return;
+    final selection = await Navigator.of(context).push<TurnaLocationSelection>(
+      MaterialPageRoute<TurnaLocationSelection>(
+        builder: (_) => const LocationPickerPage(),
+        fullscreenDialog: true,
+      ),
+    );
+    if (!mounted || selection == null) return;
+    await _sendLocationSelection(selection);
+  }
+
+  Future<void> _sendLocationSelection(TurnaLocationSelection selection) async {
+    if (_attachmentBusy) return;
+    final replyDraft = _replyDraft;
+    final outboundText = buildTurnaLocationEncodedText(
+      location: selection.payload,
+    );
+    final encodedText = replyDraft == null
+        ? outboundText
+        : buildTurnaReplyEncodedText(reply: replyDraft, text: outboundText);
+    setState(() => _attachmentBusy = true);
+
+    try {
+      final message = await ChatApi.sendMessage(
+        widget.session,
+        chatId: widget.chat.chatId,
+        text: encodedText,
+      );
+      if (!mounted) return;
+      _client.mergeServerMessage(message);
+      if (selection.mode == TurnaLocationShareMode.live) {
+        await TurnaLiveLocationManager.instance.startShare(
+          session: widget.session,
+          chatId: widget.chat.chatId,
+          message: message,
+          payload: selection.payload,
+        );
+      }
+      setState(() => _replyDraft = null);
+      _jumpToBottom();
+      await TurnaAnalytics.logEvent('location_sent', {
+        'chat_id': widget.chat.chatId,
+        'mode': selection.mode.name,
+        'live_minutes': selection.liveDuration?.inMinutes ?? 0,
+      });
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Konum gonderilemedi: $error')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _attachmentBusy = false);
+      }
+    }
+  }
+
+  Future<void> _stopLiveLocation(
+    ChatMessage msg,
+    TurnaLocationPayload payload,
+  ) async {
+    if (_attachmentBusy) return;
+    if (!payload.isLiveActive || (payload.liveId?.trim().isEmpty ?? true)) {
+      return;
+    }
+    setState(() => _attachmentBusy = true);
+    try {
+      await TurnaLiveLocationManager.instance.stopShare(msg.id);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Canli konum durduruldu.')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _attachmentBusy = false);
+      }
+    }
+  }
+
   String _formatVoiceDuration(Duration duration) {
     final minutes = duration.inMinutes.toString().padLeft(2, '0');
     final seconds = (duration.inSeconds % 60).toString().padLeft(2, '0');
@@ -2628,6 +2711,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     final parsed = parseTurnaMessageText(msg.text);
     if (_isMessageDeletedPlaceholder(msg, parsed: parsed)) {
       return 'Silindi.';
+    }
+    if (parsed.location != null) {
+      return parsed.location!.previewLabel;
     }
     final text = parsed.text.trim();
     if (text.isNotEmpty) {
@@ -3526,10 +3612,12 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       parsed: parsed,
     );
     final displayText = isDeletedPlaceholder ? 'Silindi.' : parsed.text.trim();
+    final locationPayload = isDeletedPlaceholder ? null : parsed.location;
     final visibleAttachments = isDeletedPlaceholder
         ? const <ChatAttachment>[]
         : msg.attachments;
     final hasText = displayText.isNotEmpty;
+    final hasLocation = locationPayload != null;
     final hasError =
         !isDeletedPlaceholder &&
         msg.errorText != null &&
@@ -3638,7 +3726,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                   mine: mine,
                   onTap: () => _scrollToReplyTarget(parsed.reply!.messageId),
                 ),
-                if (hasText || msg.attachments.isNotEmpty)
+                if (hasText || hasLocation || visibleAttachments.isNotEmpty)
                   const SizedBox(height: 8),
               ],
               if (visibleAttachments.isNotEmpty) ...[
@@ -3647,6 +3735,17 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                   mine: mine,
                   onTap: _openAttachment,
                   formatFileSize: _formatFileSize,
+                ),
+                if (hasText || hasLocation) const SizedBox(height: 8),
+              ],
+              if (locationPayload != null) ...[
+                _TurnaLocationMessageCard(
+                  payload: locationPayload,
+                  mine: mine,
+                  onStopShare:
+                      mine && locationPayload.isLiveActive
+                      ? () => _stopLiveLocation(msg, locationPayload)
+                      : null,
                 ),
                 if (hasText) const SizedBox(height: 8),
               ],
@@ -3673,7 +3772,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                     footer,
                   ],
                 )
-              else if (visibleAttachments.isNotEmpty || hasError)
+              else if (hasLocation || visibleAttachments.isNotEmpty || hasError)
                 Align(alignment: Alignment.bottomRight, child: footer),
             ],
           ),
@@ -4332,7 +4431,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                       backgroundColor: TurnaColors.primary400,
                       onTap: () {
                         Navigator.pop(sheetContext);
-                        _showAttachmentPlaceholder('Konum');
+                        _pickLocation();
                       },
                     ),
                     _AttachmentQuickAction(

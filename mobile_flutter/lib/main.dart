@@ -10,15 +10,19 @@ import 'package:firebase_analytics/firebase_analytics.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_callkit_incoming/entities/entities.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:flutter_contacts/flutter_contacts.dart' hide Event;
+import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter/services.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
+import 'package:latlong2/latlong.dart' as ll;
 import 'package:livekit_client/livekit_client.dart' as lk;
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart' as rec;
@@ -30,6 +34,7 @@ part 'src/turna_chats.dart';
 part 'src/turna_auth_flow.dart';
 part 'src/turna_profile_shell.dart';
 part 'src/turna_core.dart';
+part 'src/turna_location.dart';
 
 String _normalizeTurnaBaseUrl(String value) {
   final trimmed = value.trim();
@@ -46,6 +51,27 @@ final String kBackendBaseUrl = _normalizeTurnaBaseUrl(
     defaultValue: _kDefaultBackendBaseUrl,
   ),
 );
+const String kTurnaStadiaRasterStyle = 'alidade_smooth';
+const int kTurnaLiveLocationUpdateDistanceMeters = 15;
+const int kTurnaLiveLocationUpdateIntervalSeconds = 15;
+
+class TurnaAppConfig {
+  static bool _loaded = false;
+
+  static Future<void> load() async {
+    if (_loaded) return;
+    try {
+      await dotenv.load(fileName: '.env');
+    } catch (_) {}
+    _loaded = true;
+  }
+
+  static String get stadiaMapsApiKey =>
+      (dotenv.env['STADIA_MAPS_API_KEY'] ?? '').trim();
+
+  static bool get hasStadiaMapsKey => stadiaMapsApiKey.isNotEmpty;
+}
+
 const bool kTurnaDebugLogs = true;
 const String kChatRoomRouteName = 'chat-room';
 const int kComposerMediaLimit = 30;
@@ -182,6 +208,9 @@ class TurnaChatTokens {
 final RegExp _kTurnaReplyMarkerPattern = RegExp(
   r'^\[\[turna-reply:([A-Za-z0-9_-]+)\]\]\n?',
 );
+final RegExp _kTurnaLocationMarkerPattern = RegExp(
+  r'^\[\[turna-location:([A-Za-z0-9_-]+)\]\]\n?',
+);
 const String _kTurnaDeletedEveryoneMarker = '[[turna-deleted-everyone]]';
 
 class TurnaReplyPayload {
@@ -214,11 +243,13 @@ class ParsedTurnaMessageText {
   const ParsedTurnaMessageText({
     required this.text,
     this.reply,
+    this.location,
     this.deletedForEveryone = false,
   });
 
   final String text;
   final TurnaReplyPayload? reply;
+  final TurnaLocationPayload? location;
   final bool deletedForEveryone;
 }
 
@@ -256,22 +287,47 @@ ParsedTurnaMessageText parseTurnaMessageText(String raw) {
     );
   }
 
-  final match = _kTurnaReplyMarkerPattern.firstMatch(raw);
-  if (match == null) {
-    return ParsedTurnaMessageText(text: raw);
+  var working = raw;
+  TurnaReplyPayload? reply;
+
+  final replyMatch = _kTurnaReplyMarkerPattern.firstMatch(working);
+  if (replyMatch != null) {
+    try {
+      final encoded = replyMatch.group(1)!;
+      final decoded = utf8.decode(
+        base64Url.decode(base64Url.normalize(encoded)),
+      );
+      reply = TurnaReplyPayload.fromMap(
+        jsonDecode(decoded) as Map<String, dynamic>,
+      );
+      working = working.substring(replyMatch.end);
+    } catch (_) {
+      return ParsedTurnaMessageText(text: raw);
+    }
   }
 
-  try {
-    final encoded = match.group(1)!;
-    final decoded = utf8.decode(base64Url.decode(base64Url.normalize(encoded)));
-    final payload = TurnaReplyPayload.fromMap(
-      jsonDecode(decoded) as Map<String, dynamic>,
-    );
-    final cleaned = raw.substring(match.end);
-    return ParsedTurnaMessageText(text: cleaned, reply: payload);
-  } catch (_) {
-    return ParsedTurnaMessageText(text: raw);
+  final locationMatch = _kTurnaLocationMarkerPattern.firstMatch(working);
+  if (locationMatch != null) {
+    try {
+      final encoded = locationMatch.group(1)!;
+      final decoded = utf8.decode(
+        base64Url.decode(base64Url.normalize(encoded)),
+      );
+      final payload = TurnaLocationPayload.fromMap(
+        jsonDecode(decoded) as Map<String, dynamic>,
+      );
+      final cleaned = working.substring(locationMatch.end).trimLeft();
+      return ParsedTurnaMessageText(
+        text: cleaned,
+        reply: reply,
+        location: payload,
+      );
+    } catch (_) {
+      return ParsedTurnaMessageText(text: raw);
+    }
   }
+
+  return ParsedTurnaMessageText(text: working, reply: reply);
 }
 
 String buildTurnaReplyEncodedText({
@@ -284,9 +340,21 @@ String buildTurnaReplyEncodedText({
   return '[[turna-reply:$encoded]]\n$text';
 }
 
+String buildTurnaLocationEncodedText({
+  required TurnaLocationPayload location,
+}) {
+  final encoded = base64UrlEncode(
+    utf8.encode(jsonEncode(location.toMap())),
+  ).replaceAll('=', '');
+  return '[[turna-location:$encoded]]';
+}
+
 String sanitizeTurnaChatPreviewText(String raw) {
   final parsed = parseTurnaMessageText(raw);
   if (parsed.deletedForEveryone) return parsed.text;
+  if (parsed.location != null) {
+    return parsed.location!.previewLabel;
+  }
   final cleaned = parsed.text.trim();
   if (cleaned.isNotEmpty) return cleaned;
   return parsed.reply?.previewText ?? raw;
@@ -1060,6 +1128,7 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await TurnaAppConfig.load();
   await TurnaFirebase.ensureInitialized();
   await TurnaDeviceContext.ensureLoaded();
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
@@ -1079,6 +1148,11 @@ class _TurnaAppState extends State<TurnaApp> with WidgetsBindingObserver {
   bool _requestedContactsOnLaunch = false;
   static const Duration _minimumSplashDuration = Duration(milliseconds: 750);
   static const Duration _maximumBootstrapWait = Duration(seconds: 6);
+
+  void _updateSession(AuthSession? session) {
+    setState(() => _session = session);
+    unawaited(TurnaLiveLocationManager.instance.bindSession(session));
+  }
 
   @override
   void initState() {
@@ -1129,6 +1203,7 @@ class _TurnaAppState extends State<TurnaApp> with WidgetsBindingObserver {
         _session = session;
         _bootstrapping = false;
       });
+      unawaited(TurnaLiveLocationManager.instance.bindSession(session));
       _requestContactsOnLaunch();
       turnaLog('app init', {
         'hasSession': _session != null,
@@ -1150,7 +1225,7 @@ class _TurnaAppState extends State<TurnaApp> with WidgetsBindingObserver {
                   _session?.token == lateSession.token) {
                 return;
               }
-              setState(() => _session = lateSession);
+              _updateSession(lateSession);
               turnaLog('auth session restored after timeout', {
                 'hasSession': true,
               });
@@ -1221,19 +1296,19 @@ class _TurnaAppState extends State<TurnaApp> with WidgetsBindingObserver {
           ? const _TurnaLaunchPage()
           : _session == null
           ? TurnaPhoneAuthPage(
-              onAuthenticated: (session) => setState(() => _session = session),
+              onAuthenticated: _updateSession,
             )
           : _session!.needsOnboarding
           ? TurnaProfileOnboardingPage(
               session: _session!,
               onCompleted: (session) {
-                setState(() => _session = session);
+                _updateSession(session);
               },
             )
           : MainTabs(
               session: _session!,
               onSessionUpdated: (session) {
-                setState(() => _session = session);
+                _updateSession(session);
               },
               onLogout: () async {
                 final activeSession = _session;
@@ -1244,7 +1319,7 @@ class _TurnaAppState extends State<TurnaApp> with WidgetsBindingObserver {
                 }
                 await AuthSession.clear();
                 await TurnaAppBadge.setCount(0);
-                setState(() => _session = null);
+                _updateSession(null);
               },
             ),
     );
