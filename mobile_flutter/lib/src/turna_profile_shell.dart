@@ -755,7 +755,7 @@ class AvatarViewerPage extends StatelessWidget {
               padding: EdgeInsets.all(24),
               child: Center(
                 child: Text(
-                  'Gorsel yuklenemedi.',
+                  'Görsel yüklenemedi.',
                   style: TextStyle(color: Colors.white),
                 ),
               ),
@@ -772,7 +772,7 @@ class AvatarViewerPage extends StatelessWidget {
                 errorBuilder: (_, _, _) => const Padding(
                   padding: EdgeInsets.all(24),
                   child: Text(
-                    'Gorsel yuklenemedi.',
+                    'Görsel yüklenemedi.',
                     style: TextStyle(color: Colors.white),
                   ),
                 ),
@@ -878,7 +878,7 @@ class _ProfilePageState extends State<ProfilePage> {
         _usernameChecking = false;
         _usernameAvailable = false;
         _usernameMessage =
-            'En az 3 karakter; kucuk harf, rakam, nokta veya alt cizgi kullan.';
+            'En az 3 karakter; küçük harf, rakam, nokta veya alt çizgi kullan.';
       });
       return;
     }
@@ -888,7 +888,7 @@ class _ProfilePageState extends State<ProfilePage> {
       setState(() {
         _usernameChecking = false;
         _usernameAvailable = true;
-        _usernameMessage = 'Kullanici adi uygun.';
+        _usernameMessage = 'Kullanıcı adı uygun.';
       });
       return;
     }
@@ -911,8 +911,8 @@ class _ProfilePageState extends State<ProfilePage> {
           _usernameChecking = false;
           _usernameAvailable = available;
           _usernameMessage = available
-              ? 'Kullanici adi uygun.'
-              : 'Bu kullanici adi kullaniliyor.';
+              ? 'Kullanıcı adı uygun.'
+              : 'Bu kullanıcı adı kullanılıyor.';
         });
       } catch (error) {
         if (!mounted) return;
@@ -1105,22 +1105,22 @@ class _ProfilePageState extends State<ProfilePage> {
     }
     final username = _normalizeUsername(_usernameController.text);
     if (username.length < 3) {
-      setState(() => _error = 'Kullanici adi en az 3 karakter olmali.');
+      setState(() => _error = 'Kullanıcı adı en az 3 karakter olmalı.');
       return;
     }
     if (!_usernamePattern.hasMatch(username)) {
       setState(() {
         _error =
-            'Kullanici adi uygun degil. Kucuk harf, rakam, nokta ve alt cizgi kullan.';
+            'Kullanıcı adı uygun değil. Küçük harf, rakam, nokta ve alt çizgi kullan.';
       });
       return;
     }
     if (_usernameChecking) {
-      setState(() => _error = 'Kullanici adi kontrolu tamamlanmadi.');
+      setState(() => _error = 'Kullanıcı adı kontrolü tamamlanmadı.');
       return;
     }
     if (_usernameAvailable == false) {
-      setState(() => _error = 'Bu kullanici adi kullaniliyor.');
+      setState(() => _error = 'Bu kullanıcı adı kullanılıyor.');
       return;
     }
 
@@ -1321,7 +1321,7 @@ class _ProfilePageState extends State<ProfilePage> {
             textInputAction: TextInputAction.next,
             decoration: const InputDecoration(
               labelText: 'Telefon',
-              helperText: 'Numara degisikligi dogrulama ile yapilir.',
+              helperText: 'Numara değişikliği doğrulama ile yapılır.',
               border: OutlineInputBorder(),
             ),
           ),
@@ -1533,7 +1533,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
           backgroundColor: TurnaColors.backgroundSoft,
           surfaceTintColor: Colors.transparent,
           centerTitle: true,
-          title: const Text('Kisi bilgisi'),
+          title: const Text('Kişi bilgisi'),
         ),
         body: const Center(child: CircularProgressIndicator()),
       );
@@ -1546,7 +1546,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
           backgroundColor: TurnaColors.backgroundSoft,
           surfaceTintColor: Colors.transparent,
           centerTitle: true,
-          title: const Text('Kisi bilgisi'),
+          title: const Text('Kişi bilgisi'),
         ),
         body: Center(
           child: Padding(
@@ -1554,7 +1554,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(_error ?? 'Kullanici profili yuklenemedi.'),
+                Text(_error ?? 'Kullanıcı profili yüklenemedi.'),
                 const SizedBox(height: 12),
                 FilledButton(
                   onPressed: _loadProfile,
@@ -1583,7 +1583,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
         surfaceTintColor: Colors.transparent,
         centerTitle: true,
         title: const Text(
-          'Kisi bilgisi',
+          'Kişi bilgisi',
           style: TextStyle(fontWeight: FontWeight.w600),
         ),
         actions: [

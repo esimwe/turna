@@ -371,7 +371,7 @@ class _ChatsPageState extends State<ChatsPage> {
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('Vazgec'),
+              child: const Text('Vazgeç'),
             ),
             FilledButton(
               onPressed: () => Navigator.of(context).pop(true),
@@ -490,8 +490,8 @@ class _ChatsPageState extends State<ChatsPage> {
         SnackBar(
           content: Text(
             archived
-                ? '"${chat.name}" arsive tasindi.'
-                : '"${chat.name}" arsivden cikarildi.',
+                ? '"${chat.name}" arşive taşındı.'
+                : '"${chat.name}" arşivden çıkarıldı.',
           ),
         ),
       );
@@ -507,24 +507,24 @@ class _ChatsPageState extends State<ChatsPage> {
     final name = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Kategori olustur'),
+        title: const Text('Kategori oluştur'),
         content: TextField(
           controller: controller,
           autofocus: true,
           maxLength: 24,
           decoration: const InputDecoration(
-            hintText: 'Kategori adi',
+            hintText: 'Kategori adı',
             border: OutlineInputBorder(),
           ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Vazgec'),
+            child: const Text('Vazgeç'),
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(controller.text.trim()),
-            child: const Text('Olustur'),
+            child: const Text('Oluştur'),
           ),
         ],
       ),
@@ -542,12 +542,12 @@ class _ChatsPageState extends State<ChatsPage> {
       builder: (context) => AlertDialog(
         title: const Text('Kategori sil'),
         content: Text(
-          '"${folder.name}" kategorisi silinsin mi? Kategoriye atanmis sohbetler Tumu icinde kalmaya devam edecek.',
+          '"${folder.name}" kategorisi silinsin mi? Kategoriye atanmış sohbetler Tümü içinde kalmaya devam edecek.',
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Vazgec'),
+            child: const Text('Vazgeç'),
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
@@ -596,7 +596,7 @@ class _ChatsPageState extends State<ChatsPage> {
               if (chat.folderId != null)
                 ListTile(
                   leading: const Icon(Icons.folder_off_outlined),
-                  title: const Text('Kategoriden cikar'),
+                  title: const Text('Kategoriden çıkar'),
                   onTap: () => Navigator.pop(sheetContext, '__clear__'),
                 ),
               for (final folder in folders)
@@ -612,7 +612,7 @@ class _ChatsPageState extends State<ChatsPage> {
               if (folders.length < 3)
                 ListTile(
                   leading: const Icon(Icons.create_new_folder_outlined),
-                  title: const Text('Yeni kategori olustur'),
+                  title: const Text('Yeni kategori oluştur'),
                   onTap: () => Navigator.pop(sheetContext, '__create__'),
                 ),
               const SizedBox(height: 8),
@@ -660,8 +660,8 @@ class _ChatsPageState extends State<ChatsPage> {
         SnackBar(
           content: Text(
             nextFolderId == null
-                ? '"${chat.name}" kategoriden cikarildi.'
-                : '"${chat.name}" kategoriye atandi.',
+                ? '"${chat.name}" kategoriden çıkarıldı.'
+                : '"${chat.name}" kategoriye atandı.',
           ),
         ),
       );
@@ -680,12 +680,12 @@ class _ChatsPageState extends State<ChatsPage> {
         return AlertDialog(
           title: const Text('Sohbeti temizle'),
           content: Text(
-            '"${chat.name}" sohbetinin icerigi bu cihazda temizlenecek. Karsi tarafta kalmaya devam edecek.',
+            '"${chat.name}" sohbetinin içeriği bu cihazda temizlenecek. Karşı tarafta kalmaya devam edecek.',
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('Vazgec'),
+              child: const Text('Vazgeç'),
             ),
             FilledButton(
               onPressed: () => Navigator.of(context).pop(true),
@@ -725,20 +725,20 @@ class _ChatsPageState extends State<ChatsPage> {
       context: context,
       builder: (context) {
         return AlertDialog(
-          title: Text(willBlock ? 'Kisiyi engelle' : 'Engeli kaldir'),
+          title: Text(willBlock ? 'Kişiyi engelle' : 'Engeli kaldır'),
           content: Text(
             willBlock
-                ? '"${chat.name}" artik sana mesaj gonderemez ve seni arayamaz.'
-                : '"${chat.name}" ile iletisim yeniden acilsin mi?',
+                ? '"${chat.name}" artık sana mesaj gönderemez ve seni arayamaz.'
+                : '"${chat.name}" ile iletişim yeniden açılsın mı?',
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('Vazgec'),
+              child: const Text('Vazgeç'),
             ),
             FilledButton(
               onPressed: () => Navigator.of(context).pop(true),
-              child: Text(willBlock ? 'Engelle' : 'Kaldir'),
+              child: Text(willBlock ? 'Engelle' : 'Kaldır'),
             ),
           ],
         );
@@ -763,7 +763,7 @@ class _ChatsPageState extends State<ChatsPage> {
           content: Text(
             blocked
                 ? '"${chat.name}" engellendi.'
-                : '"${chat.name}" engeli kaldirildi.',
+                : '"${chat.name}" engeli kaldırıldı.',
           ),
         ),
       );
@@ -789,7 +789,7 @@ class _ChatsPageState extends State<ChatsPage> {
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('Vazgec'),
+              child: const Text('Vazgeç'),
             ),
             FilledButton(
               onPressed: () => Navigator.of(context).pop(true),
@@ -866,8 +866,8 @@ class _ChatsPageState extends State<ChatsPage> {
                       ? Icons.person_add_alt_1_outlined
                       : Icons.block_outlined,
                   title: chat.isBlockedByMe
-                      ? 'Engeli kaldir'
-                      : 'Kisiyi engelle',
+                      ? 'Engeli kaldır'
+                      : 'Kişiyi engelle',
                   destructive: !chat.isBlockedByMe,
                   onTap: () {
                     Navigator.of(sheetContext).pop();
@@ -878,7 +878,7 @@ class _ChatsPageState extends State<ChatsPage> {
                 icon: chat.isArchived
                     ? Icons.unarchive_outlined
                     : Icons.archive_outlined,
-                title: chat.isArchived ? 'Arsivden cikar' : 'Arsive at',
+                title: chat.isArchived ? 'Arşivden çıkar' : 'Arşive at',
                 onTap: () {
                   Navigator.of(sheetContext).pop();
                   _toggleArchiveChat(chat);
@@ -1005,7 +1005,7 @@ class _ChatsPageState extends State<ChatsPage> {
             }
             return _CenteredState(
               icon: Icons.cloud_off_outlined,
-              title: 'Sohbetler yuklenemedi',
+              title: 'Sohbetler yüklenemedi',
               message: error.toString(),
               primaryLabel: 'Tekrar dene',
               onPrimary: () => setState(() => _refreshTick++),
@@ -1136,16 +1136,16 @@ class _ChatsPageState extends State<ChatsPage> {
                   if (activeChats.isEmpty && archivedChats.isEmpty) {
                     return const _CenteredListState(
                       icon: Icons.chat_bubble_outline,
-                      title: 'Henuz sohbet yok',
+                      title: 'Henüz sohbet yok',
                       message:
-                          'Ilk konusmayi baslatmak icin sag ustteki artidan kisi sec.',
+                          'İlk konuşmayı başlatmak için sağ üstteki artıdan kişi seç.',
                     );
                   }
                   return _CenteredListState(
                     icon: Icons.search_off,
-                    title: 'Sonuc bulunamadi',
+                    title: 'Sonuç bulunamadı',
                     message:
-                        '"${_searchController.text.trim()}" icin eslesen sohbet yok.',
+                        '"${_searchController.text.trim()}" için eşleşen sohbet yok.',
                   );
                 }
 
@@ -1698,7 +1698,7 @@ class _ChatPreviewSubtitle extends StatelessWidget {
   static _ChatPreviewSubtitleParts _parse(String raw) {
     final trimmed = raw.trim();
     if (trimmed.isEmpty) {
-      return const _ChatPreviewSubtitleParts(message: 'Sohbet baslat');
+      return const _ChatPreviewSubtitleParts(message: 'Sohbet başlat');
     }
 
     final dividerIndex = trimmed.indexOf(':');
@@ -2178,7 +2178,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
 
   void _showVoiceMessageHint() {
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Ses kaydi icin mikrofona basili tut.')),
+      const SnackBar(content: Text('Ses kaydı için mikrofona basılı tut.')),
     );
   }
 
@@ -2234,7 +2234,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Konum gonderilemedi: $error')),
+        SnackBar(content: Text('Konum gönderilemedi: $error')),
       );
     } finally {
       if (mounted) {
@@ -2283,7 +2283,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Kisi gonderilemedi: $error')),
+        SnackBar(content: Text('Kişi gönderilemedi: $error')),
       );
     } finally {
       if (mounted) {
@@ -2305,7 +2305,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       await TurnaLiveLocationManager.instance.stopShare(msg.id);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Canli konum durduruldu.')),
+        const SnackBar(content: Text('Canlı konum durduruldu.')),
       );
     } finally {
       if (mounted) {
@@ -2357,7 +2357,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       final hasPermission = await _voiceRecorder.hasPermission();
       if (!hasPermission) {
         throw TurnaApiException(
-          'Sesli mesaj icin mikrofon izni vermen gerekiyor.',
+          'Ses kaydı için mikrofon izni vermen gerekiyor.',
         );
       }
 
@@ -2405,7 +2405,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       setState(() => _voiceRecorderBusy = false);
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('Ses kaydi baslatilamadi.')));
+      ).showSnackBar(
+        const SnackBar(content: Text('Ses kaydı başlatılamadı.')),
+      );
       turnaLog('voice record start failed', error);
     }
   }
@@ -2505,7 +2507,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       if (!mounted) return;
       setState(() => _voiceRecorderBusy = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Ses kaydi guncellenemedi.')),
+        const SnackBar(content: Text('Ses kaydı güncellenemedi.')),
       );
       turnaLog('voice record pause toggle failed', error);
     }
@@ -2536,7 +2538,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     if (showFeedback) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('Sesli mesaj silindi.')));
+      ).showSnackBar(const SnackBar(content: Text('Ses kaydı silindi.')));
     }
   }
 
@@ -2581,7 +2583,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(const SnackBar(content: Text('Sesli mesaj cok kisa.')));
+        ).showSnackBar(const SnackBar(content: Text('Ses kaydı çok kısa.')));
       }
       return;
     }
@@ -2591,7 +2593,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(const SnackBar(content: Text('Ses kaydi bulunamadi.')));
+        ).showSnackBar(const SnackBar(content: Text('Ses kaydı bulunamadı.')));
       }
       return;
     }
@@ -2601,7 +2603,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(const SnackBar(content: Text('Ses kaydi bos geldi.')));
+        ).showSnackBar(const SnackBar(content: Text('Ses kaydı boş geldi.')));
       }
       return;
     }
@@ -2716,7 +2718,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(dialogContext, false),
-              child: const Text('Vazgec'),
+              child: const Text('Vazgeç'),
             ),
             FilledButton(
               onPressed: () => Navigator.pop(dialogContext, true),
@@ -2767,8 +2769,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     }
     if (msg.attachments.isEmpty) return 'Mesaj';
     final first = msg.attachments.first;
-    if (_isAudioAttachment(first)) return 'Ses kaydi';
-    if (first.kind == ChatAttachmentKind.image) return 'Fotograf';
+    if (_isAudioAttachment(first)) return 'Ses kaydı';
+    if (first.kind == ChatAttachmentKind.image) return 'Fotoğraf';
     if (first.kind == ChatAttachmentKind.video) return 'Video';
     return 'Dosya';
   }
@@ -2820,7 +2822,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   Future<List<int>> _downloadAttachmentBytes(ChatAttachment attachment) async {
     final url = attachment.url?.trim() ?? '';
     if (url.isEmpty) {
-      throw TurnaApiException('Iletilecek ek icin link bulunamadi.');
+      throw TurnaApiException('İletilecek ek için link bulunamadı.');
     }
 
     final cachedFile = await TurnaLocalMediaCache.getOrDownloadFile(
@@ -2870,7 +2872,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
           body: bytes,
         );
         if (uploadRes.statusCode >= 400) {
-          throw TurnaApiException('Iletilecek ek yuklenemedi.');
+          throw TurnaApiException('İletilecek ek yüklenemedi.');
         }
         drafts.add(
           OutgoingAttachmentDraft(
@@ -2925,7 +2927,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          nowStarred ? 'Mesaja yildiz eklendi.' : 'Yildiz kaldirildi.',
+          nowStarred ? 'Mesaja yıldız eklendi.' : 'Yıldız kaldırıldı.',
         ),
       ),
     );
@@ -2979,7 +2981,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('Mesaj sende Silindi. olarak gosteriliyor.'),
+        content: Text('Mesaj sende Silindi. olarak gösteriliyor.'),
       ),
     );
   }
@@ -3021,9 +3023,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
 
   Future<void> _confirmRemoveDeletedPlaceholder(ChatMessage msg) async {
     final confirmed = await _showDestructiveConfirm(
-      title: 'Mesajı kaldir',
-      message: 'Bu Silindi. mesajı cihazından tamamen kaldirilsin mi?',
-      confirmLabel: 'Kaldir',
+      title: 'Mesajı kaldır',
+      message: 'Bu Silindi. mesajı cihazından tamamen kaldırılsın mı?',
+      confirmLabel: 'Kaldır',
     );
     if (!confirmed) return;
     await _deleteMessageLocally(msg);
@@ -3047,7 +3049,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                   final confirmed = await _showDestructiveConfirm(
                     title: 'Mesajı senden sil',
                     message:
-                        'Bu mesaj sadece senin tarafinda Silindi. olarak gosterilecek.',
+                        'Bu mesaj sadece senin tarafında Silindi. olarak gösterilecek.',
                     confirmLabel: 'Benden sil',
                   );
                   if (!confirmed) return;
@@ -3063,7 +3065,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                     final confirmed = await _showDestructiveConfirm(
                       title: 'Mesajı herkesten sil',
                       message:
-                          'Bu mesaj iki taraf icin de Silindi. olarak degisecek.',
+                          'Bu mesaj iki taraf için de Silindi. olarak değişecek.',
                       confirmLabel: 'Herkesten sil',
                     );
                     if (!confirmed) return;
@@ -3082,7 +3084,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     final text = parsed.text.trim();
     if (text.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Cevrilecek metin bulunamadi.')),
+        const SnackBar(content: Text('Çevrilecek metin bulunamadı.')),
       );
       return;
     }
@@ -3095,7 +3097,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     if (!launched) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('Ceviri acilamadi.')));
+      ).showSnackBar(const SnackBar(content: Text('Çeviri açılamadı.')));
     }
   }
 
@@ -3103,7 +3105,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     final reason = await showModalBottomSheet<String>(
       context: context,
       builder: (sheetContext) {
-        const reasons = ['Spam', 'Taciz', 'Uygunsuz icerik', 'Sahte hesap'];
+        const reasons = ['Spam', 'Taciz', 'Uygunsuz içerik', 'Sahte hesap'];
         return SafeArea(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -3122,27 +3124,29 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     if (reason == null || !mounted) return;
     ScaffoldMessenger.of(
       context,
-    ).showSnackBar(SnackBar(content: Text('Sikayet kaydedildi: $reason')));
+    ).showSnackBar(SnackBar(content: Text('Şikayet kaydedildi: $reason')));
   }
 
   String _messageStatusLabel(ChatMessageStatus status) {
     return switch (status) {
-      ChatMessageStatus.sending => 'Gonderiliyor',
+      ChatMessageStatus.sending => 'Gönderiliyor',
       ChatMessageStatus.queued => 'Kuyrukta',
-      ChatMessageStatus.failed => 'Hatali',
-      ChatMessageStatus.sent => 'Gonderildi',
+      ChatMessageStatus.failed => 'Hatalı',
+      ChatMessageStatus.sent => 'Gönderildi',
       ChatMessageStatus.delivered => 'Teslim edildi',
       ChatMessageStatus.read => 'Okundu',
     };
   }
 
   String _messageTypeLabel(ChatMessage msg, ParsedTurnaMessageText parsed) {
-    if (parsed.location != null) return parsed.location!.live ? 'Canli konum' : 'Konum';
-    if (parsed.contact != null) return 'Kisi';
+    if (parsed.location != null) {
+      return parsed.location!.live ? 'Canlı konum' : 'Konum';
+    }
+    if (parsed.contact != null) return 'Kişi';
     if (msg.attachments.isNotEmpty) {
       final first = msg.attachments.first;
-      if (_isAudioAttachment(first)) return 'Ses kaydi';
-      if (first.kind == ChatAttachmentKind.image) return 'Fotograf';
+      if (_isAudioAttachment(first)) return 'Ses kaydı';
+      if (first.kind == ChatAttachmentKind.image) return 'Fotoğraf';
       if (first.kind == ChatAttachmentKind.video) return 'Video';
       return 'Belge';
     }
@@ -3156,27 +3160,27 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       (total, item) => total + math.max(0, item.sizeBytes),
     );
     final detailRows = <MapEntry<String, String>>[
-      MapEntry('Tur', _messageTypeLabel(msg, parsed)),
+      MapEntry('Tür', _messageTypeLabel(msg, parsed)),
       MapEntry(
         'Tarih',
         '${_formatDayLabel(msg.createdAt)} ${_formatMessageTime(msg.createdAt)}',
       ),
       MapEntry('Durum', _messageStatusLabel(msg.status)),
       if (msg.attachments.isNotEmpty)
-        MapEntry('Ek sayisi', '${msg.attachments.length}'),
+        MapEntry('Ek sayısı', '${msg.attachments.length}'),
       if (totalBytes > 0) MapEntry('Boyut', _formatFileSize(totalBytes)),
       if (msg.attachments.length == 1 &&
           _isAudioAttachment(msg.attachments.first) &&
           (msg.attachments.first.durationSeconds ?? 0) > 0)
         MapEntry(
-          'Sure',
+          'Süre',
           _formatVoiceDuration(
             Duration(seconds: msg.attachments.first.durationSeconds!),
           ),
         ),
       if (msg.isEdited && (msg.editedAt?.trim().isNotEmpty ?? false))
         MapEntry(
-          'Duzenlendi',
+          'Düzenlendi',
           '${_formatDayLabel(msg.editedAt!)} ${_formatMessageTime(msg.editedAt!)}',
         ),
     ];
@@ -3250,7 +3254,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                 leading: Icon(
                   isPinned ? Icons.push_pin_outlined : Icons.push_pin_rounded,
                 ),
-                title: Text(isPinned ? 'Sabitlemeyi kaldir' : 'Sabitle'),
+                title: Text(isPinned ? 'Sabitlemeyi kaldır' : 'Sabitle'),
                 onTap: () async {
                   Navigator.pop(sheetContext);
                   final next = isPinned
@@ -3275,7 +3279,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
               ),
               ListTile(
                 leading: const Icon(Icons.flag_outlined),
-                title: const Text('Sikayet Et'),
+                title: const Text('Şikayet Et'),
                 onTap: () {
                   Navigator.pop(sheetContext);
                   _reportMessage(msg);
@@ -3366,7 +3370,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                       icon: isStarred
                           ? Icons.star_rounded
                           : Icons.star_border_rounded,
-                      label: isStarred ? 'Yildizi kaldir' : 'Yildiz ekle',
+                      label: isStarred ? 'Yıldızı kaldır' : 'Yıldız ekle',
                       onTap: () {
                         Navigator.pop(sheetContext);
                         _toggleStarMessage(msg);
@@ -3501,7 +3505,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     if (targetIndex == -1) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Yanitlanan mesaj bulunamadi.')),
+        const SnackBar(content: Text('Yanıtlanan mesaj bulunamadı.')),
       );
       return;
     }
@@ -3628,9 +3632,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       case TurnaCallStatus.declined:
         return 'Reddedildi';
       case TurnaCallStatus.missed:
-        return 'Cevapsiz';
+        return 'Cevapsız';
       case TurnaCallStatus.cancelled:
-        return 'Iptal edildi';
+        return 'İptal edildi';
       case TurnaCallStatus.ringing:
         return 'Caliyor';
       case TurnaCallStatus.accepted:
@@ -4259,7 +4263,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                       color: danger ? TurnaColors.error : TurnaColors.textMuted,
                     ),
                     Text(
-                      danger ? 'Birakinca silinecek' : 'iptal icin kaydir',
+                      danger ? 'Bırakınca silinecek' : 'iptal için kaydır',
                       style: TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w600,
@@ -4305,7 +4309,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
             ),
             const SizedBox(width: 12),
             Text(
-              'yukari kaydirip kilitle',
+              'yukarı kaydırıp kilitle',
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
@@ -4401,7 +4405,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         body: bytes,
       );
       if (uploadRes.statusCode >= 400) {
-        throw TurnaApiException('Dosya yuklenemedi.');
+        throw TurnaApiException('Dosya yüklenemedi.');
       }
 
       final message = await ChatApi.sendMessage(
@@ -4473,7 +4477,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              '${file.name} 64 MB ustu oldugu icin inline medya olarak gonderilemiyor.',
+              '${file.name} 64 MB üstü olduğu için inline medya olarak gönderilemiyor.',
             ),
           ),
         );
@@ -4494,7 +4498,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     if (seeds.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Gonderilebilir medya bulunamadi.')),
+        const SnackBar(content: Text('Gönderilebilir medya bulunamadı.')),
       );
       return;
     }
@@ -4610,12 +4614,12 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                 ),
                 const SizedBox(height: 18),
                 const Text(
-                  'Odeme Yap',
+                  'Ödeme Yap',
                   style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
                 ),
                 const SizedBox(height: 8),
                 const Text(
-                  'Hazirlaniyor...',
+                  'Hazırlanıyor...',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     fontSize: 15,
@@ -4633,7 +4637,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                     borderRadius: BorderRadius.circular(999),
                   ),
                   child: const Text(
-                    'Cok yakinda Turna odemeleri burada olacak.',
+                    'Çok yakında Turna ödemeleri burada olacak.',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       fontSize: 12.5,
@@ -4675,7 +4679,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  'Paylas',
+                  'Paylaş',
                   style: TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.w700,
@@ -4693,7 +4697,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                   children: [
                     _AttachmentQuickAction(
                       icon: Icons.photo_library_outlined,
-                      label: 'Fotograflar',
+                      label: 'Fotoğraflar',
                       backgroundColor: TurnaColors.accent,
                       onTap: () {
                         Navigator.pop(sheetContext);
@@ -4720,7 +4724,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                     ),
                     _AttachmentQuickAction(
                       icon: Icons.payments_rounded,
-                      label: 'Odeme Yap',
+                      label: 'Ödeme Yap',
                       backgroundColor: const Color(0xFF1FCB76),
                       gradient: const LinearGradient(
                         begin: Alignment.topLeft,
@@ -4747,7 +4751,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                     ),
                     _AttachmentQuickAction(
                       icon: Icons.perm_contact_calendar_outlined,
-                      label: 'Kisi',
+                      label: 'Kişi',
                       backgroundColor: TurnaColors.accentStrong,
                       onTap: () {
                         Navigator.pop(sheetContext);
@@ -4778,7 +4782,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     if (url.isEmpty) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('Dosya linki hazir degil.')));
+      ).showSnackBar(const SnackBar(content: Text('Dosya linki hazır değil.')));
       return;
     }
 
@@ -4789,7 +4793,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
           builder: (_) => ChatAttachmentViewerPage(
             cacheKey: 'attachment:${attachment.objectKey}',
             imageUrl: url,
-            title: attachment.fileName ?? 'Gorsel',
+            title: attachment.fileName ?? 'Görsel',
           ),
         ),
       );
@@ -4803,7 +4807,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     if (!opened && mounted) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('Dosya acilamadi.')));
+      ).showSnackBar(const SnackBar(content: Text('Dosya açılamadı.')));
     }
   }
 
@@ -4910,7 +4914,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         ),
         actions: [
           IconButton(
-            tooltip: 'Goruntulu ara',
+            tooltip: 'Görüntülü ara',
             onPressed: _peerUserId == null
                 ? null
                 : () => _startCall(TurnaCallType.video),
@@ -4943,7 +4947,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
               color: TurnaColors.primary50,
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               child: const Text(
-                'Medya yukleniyor. Mesaj hazirlaniyor...',
+                'Medya yükleniyor. Mesaj hazırlanıyor...',
                 style: TextStyle(color: TurnaColors.primaryStrong),
               ),
             ),
@@ -4964,8 +4968,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                 else if (timelineEntries.isEmpty)
                   const _CenteredState(
                     icon: Icons.chat_bubble_outline,
-                    title: 'Henuz mesaj yok',
-                    message: 'Ilk mesaji gondererek sohbeti baslat.',
+                    title: 'Henüz mesaj yok',
+                    message: 'İlk mesajı göndererek sohbeti başlat.',
                   )
                 else
                   ListView.builder(
@@ -4986,7 +4990,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                             padding: EdgeInsets.symmetric(vertical: 12),
                             child: Center(
                               child: Text(
-                                'Eski mesajlar yukleniyor...',
+                                'Eski mesajlar yükleniyor...',
                                 style: TextStyle(color: Color(0xFF777C79)),
                               ),
                             ),
@@ -5536,7 +5540,7 @@ class _ComposerReplyBanner extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Yanitlaniyor: ${reply.senderLabel}',
+                  'Yanıtlanıyor: ${reply.senderLabel}',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
@@ -5802,7 +5806,7 @@ class _VoiceMessageBubbleState extends State<_VoiceMessageBubble> {
     if (url.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Sesli mesaj baglantisi hazir degil.')),
+        const SnackBar(content: Text('Ses kaydı bağlantısı hazır değil.')),
       );
       return;
     }
@@ -5841,7 +5845,7 @@ class _VoiceMessageBubbleState extends State<_VoiceMessageBubble> {
       if (cachedFile == null) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Sesli mesaj indirilemedi.')),
+          const SnackBar(content: Text('Ses kaydı indirilemedi.')),
         );
         return;
       }
@@ -5853,7 +5857,7 @@ class _VoiceMessageBubbleState extends State<_VoiceMessageBubble> {
       turnaLog('voice playback failed', error);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Sesli mesaj oynatilamadi.')),
+        const SnackBar(content: Text('Ses kaydı oynatılamadı.')),
       );
     }
   }
@@ -6147,7 +6151,7 @@ class _ForwardMessagePickerPageState extends State<ForwardMessagePickerPage> {
           if (snapshot.hasError) {
             return _CenteredState(
               icon: Icons.forward_to_inbox_outlined,
-              title: 'Sohbetler yuklenemedi',
+              title: 'Sohbetler yüklenemedi',
               message: snapshot.error.toString(),
             );
           }
@@ -6184,8 +6188,8 @@ class _ForwardMessagePickerPageState extends State<ForwardMessagePickerPage> {
                 child: chats.isEmpty
                     ? const _CenteredState(
                         icon: Icons.chat_bubble_outline,
-                        title: 'Sohbet bulunamadi',
-                        message: 'Iletilecek baska sohbet bulunmuyor.',
+                        title: 'Sohbet bulunamadı',
+                        message: 'İletilecek başka sohbet bulunmuyor.',
                       )
                     : ListView.builder(
                         itemCount: chats.length,
@@ -6520,7 +6524,7 @@ class ChatAttachmentViewerPage extends StatelessWidget {
             return const Padding(
               padding: EdgeInsets.all(24),
               child: Text(
-                'Gorsel yuklenemedi.',
+                'Görsel yüklenemedi.',
                 style: TextStyle(color: Colors.white),
               ),
             );
@@ -6536,7 +6540,7 @@ class ChatAttachmentViewerPage extends StatelessWidget {
                 errorBuilder: (_, _, _) => const Padding(
                   padding: EdgeInsets.all(24),
                   child: Text(
-                    'Gorsel yuklenemedi.',
+                    'Görsel yüklenemedi.',
                     style: TextStyle(color: Colors.white),
                   ),
                 ),
@@ -6900,7 +6904,7 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
   Future<void> _toggleCropMode() async {
     if (_currentItem.kind == ChatAttachmentKind.video) {
       await _showComingSoon(
-        'Kirpma su an sadece fotograflarda acik. Video kirpmaya sonra gececegiz.',
+        'Kırpma şu an sadece fotoğraflarda açık. Video kırpmaya sonra geçeceğiz.',
       );
       return;
     }
@@ -7019,7 +7023,7 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
 
   Future<void> _editOverlayText({required bool emojiMode}) async {
     if (!_currentItem.isImage) {
-      await _showComingSoon('Bu duzenleme su an sadece fotograflarda acik.');
+      await _showComingSoon('Bu düzenleme şu an sadece fotoğraflarda açık.');
       return;
     }
 
@@ -7095,7 +7099,7 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
 
   void _toggleDrawMode() {
     if (!_currentItem.isImage) {
-      _showComingSoon('Cizim modu su an sadece fotograflarda acik.');
+      _showComingSoon('Çizim modu şu an sadece fotoğraflarda açık.');
       return;
     }
     _finishTextEditing();
@@ -7123,7 +7127,7 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
 
   void _rotateCurrent() {
     if (!_currentItem.isImage) {
-      _showComingSoon('Dondurme su an sadece fotograflarda acik.');
+      _showComingSoon('Döndürme şu an sadece fotoğraflarda açık.');
       return;
     }
     _finishTextEditing();
@@ -7520,7 +7524,7 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
 
     setState(() {
       _sending = true;
-      _sendingLabel = 'Hazirlaniyor...';
+      _sendingLabel = 'Hazırlanıyor...';
     });
 
     try {
@@ -7529,7 +7533,7 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
         final item = _items[index];
         if (mounted) {
           setState(() {
-            _sendingLabel = '${index + 1}/${_items.length} yukleniyor';
+            _sendingLabel = '${index + 1}/${_items.length} yükleniyor';
           });
         }
 
@@ -7548,7 +7552,7 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
           body: prepared.bytes,
         );
         if (uploadRes.statusCode >= 400) {
-          throw TurnaApiException('Dosya yuklenemedi.');
+          throw TurnaApiException('Dosya yüklenemedi.');
         }
 
         attachments.add(
@@ -7790,7 +7794,7 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
     );
     final data = await rendered.toByteData(format: ui.ImageByteFormat.rawRgba);
     if (data == null) {
-      throw TurnaApiException('Gorsel hazirlanamadi.');
+      throw TurnaApiException('Görsel hazırlanamadı.');
     }
     final encodedImage = img.Image.fromBytes(
       width: outputWidth,
@@ -7855,14 +7859,14 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
             icon: const Icon(Icons.crop_outlined),
           ),
           IconButton(
-            tooltip: 'Yazi',
+            tooltip: 'Yazı',
             onPressed: _cropMode
                 ? null
                 : () => _editOverlayText(emojiMode: false),
             icon: const Icon(Icons.text_fields_outlined),
           ),
           IconButton(
-            tooltip: 'Ciz',
+            tooltip: 'Çiz',
             onPressed: _cropMode ? null : _toggleDrawMode,
             color: _drawMode ? TurnaColors.primary : null,
             icon: const Icon(Icons.draw_outlined),
@@ -7895,7 +7899,7 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               _ComposerToolChip(
-                                label: 'Ince',
+                                label: 'İnce',
                                 selected:
                                     !_eraserMode && _brushSizeFactor == 0.008,
                                 onTap: () => _setBrushSize(0.008),
@@ -7909,7 +7913,7 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
                               ),
                               const SizedBox(width: 8),
                               _ComposerToolChip(
-                                label: 'Kalin',
+                                label: 'Kalın',
                                 selected:
                                     !_eraserMode && _brushSizeFactor == 0.016,
                                 onTap: () => _setBrushSize(0.016),
@@ -8079,7 +8083,7 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
                     TextButton(
                       onPressed: _cancelCropEditing,
                       child: const Text(
-                        'Iptal',
+                        'İptal',
                         style: TextStyle(color: Color(0xFFB7BCB9)),
                       ),
                     ),
@@ -8106,7 +8110,7 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
                       maxLines: 4,
                       style: const TextStyle(color: Colors.white),
                       decoration: InputDecoration(
-                        hintText: 'Aciklama ekle',
+                        hintText: 'Açıklama ekle',
                         hintStyle: const TextStyle(color: Color(0xFF7C8380)),
                         filled: true,
                         fillColor: const Color(0xFF162033),
@@ -9004,7 +9008,7 @@ class _NewChatPageState extends State<NewChatPage> {
     final query = _lookupController.text.trim();
     if (query.isEmpty) {
       setState(() {
-        _lookupError = 'Telefon numarasi veya kullanici adi gir.';
+        _lookupError = 'Telefon numarası veya kullanıcı adı gir.';
         _foundUser = null;
       });
       return;
@@ -9023,7 +9027,7 @@ class _NewChatPageState extends State<NewChatPage> {
         _foundUser = user;
         _loading = false;
         _lookupError = user == null
-            ? 'Bu sorguyla kayitli bir Turna hesabi bulunamadi.'
+            ? 'Bu sorguyla kayıtlı bir Turna hesabı bulunamadı.'
             : null;
       });
     } on TurnaUnauthorizedException {
@@ -9076,7 +9080,7 @@ class _NewChatPageState extends State<NewChatPage> {
         icon: Icons.perm_contact_calendar_outlined,
         title: 'Rehber izni gerekli',
         message:
-            'Rehberinde kayitli ve Turna kullanan kisileri gormek icin rehber izni ver.',
+            'Rehberinde kayıtlı ve Turna kullanan kişileri görmek için rehber izni ver.',
         primaryLabel: 'Rehber iznini iste',
         onPrimary: () => _refreshRegisteredContacts(forceContactReload: true),
       );
@@ -9087,7 +9091,7 @@ class _NewChatPageState extends State<NewChatPage> {
         icon: Icons.sync_problem_outlined,
         title: 'Rehber senkronize edilemedi',
         message: _directoryError!,
-        primaryLabel: 'Kisileri yenile',
+        primaryLabel: 'Kişileri yenile',
         onPrimary: () => _refreshRegisteredContacts(forceContactReload: true),
       );
     }
@@ -9100,13 +9104,13 @@ class _NewChatPageState extends State<NewChatPage> {
     if (contacts.isEmpty) {
       return _CenteredState(
         icon: Icons.perm_contact_calendar_outlined,
-        title: 'Kayitli rehber kisisi bulunamadi',
+        title: 'Kayıtlı rehber kişisi bulunamadı',
         message: _lookupController.text.trim().isEmpty
-            ? 'Rehberinde kayitli ve Turna kullanan kisiler burada listelenecek.'
-            : 'Arama metnine uyan rehber kisisi bulunamadi.',
+            ? 'Rehberinde kayıtlı ve Turna kullanan kişiler burada listelenecek.'
+            : 'Arama metnine uyan rehber kişisi bulunamadı.',
         primaryLabel: _lookupController.text.trim().isEmpty
-            ? 'Kisileri yenile'
-            : 'Kisiyi bul',
+            ? 'Kişileri yenile'
+            : 'Kişiyi bul',
         onPrimary: _lookupController.text.trim().isEmpty
             ? () => _refreshRegisteredContacts(forceContactReload: true)
             : _searchUser,
@@ -9205,7 +9209,7 @@ class _NewChatPageState extends State<NewChatPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  'Rehberinde kayitli ve Turna kullanan kisiler asagida listelenir. Istersen telefon numarasi veya kullanici adi ile de arayabilirsin.',
+                  'Rehberinde kayıtlı ve Turna kullanan kişiler aşağıda listelenir. İstersen telefon numarası veya kullanıcı adı ile de arayabilirsin.',
                   style: TextStyle(
                     fontSize: 13,
                     height: 1.4,
@@ -9217,7 +9221,7 @@ class _NewChatPageState extends State<NewChatPage> {
                   controller: _lookupController,
                   keyboardType: TextInputType.text,
                   decoration: InputDecoration(
-                    hintText: '+905413432140 veya @kullaniciadi',
+                    hintText: '+905413432140 veya @kullanıcıadı',
                     prefixIcon: const Icon(Icons.person_search_outlined),
                     suffixIcon: lookupInput.isEmpty
                         ? null
@@ -9247,10 +9251,10 @@ class _NewChatPageState extends State<NewChatPage> {
                     onPressed: _loading ? null : _searchUser,
                     child: Text(
                       _loading
-                          ? 'Araniyor...'
+                          ? 'Aranıyor...'
                           : _syncingContacts
-                          ? 'Kisiler yenileniyor...'
-                          : 'Kisiyi bul',
+                          ? 'Kişiler yenileniyor...'
+                          : 'Kişiyi bul',
                     ),
                   ),
                 ),
@@ -9349,14 +9353,14 @@ class _NewChatPageState extends State<NewChatPage> {
                                             ),
                                           );
                                         },
-                                        child: const Text('Profili ac'),
+                                        child: const Text('Profili aç'),
                                       ),
                                     ),
                                     const SizedBox(width: 10),
                                     Expanded(
                                       child: FilledButton(
                                         onPressed: () => _openChat(_foundUser!),
-                                        child: const Text('Sohbet baslat'),
+                                        child: const Text('Sohbet başlat'),
                                       ),
                                     ),
                                   ],

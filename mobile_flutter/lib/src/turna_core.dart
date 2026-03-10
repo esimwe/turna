@@ -498,7 +498,7 @@ class TurnaSocketClient extends ChangeNotifier {
         return;
       }
       if (messages.isEmpty) {
-        error = 'Canli baglanti kurulamadi.';
+        error = 'Canlı bağlantı kurulamadı.';
         loadingInitial = false;
         notifyListeners();
       }
@@ -725,7 +725,7 @@ class TurnaSocketClient extends ChangeNotifier {
     } catch (_) {
       loadingInitial = false;
       if (messages.isEmpty) {
-        error = 'Mesajlar yuklenemedi.';
+        error = 'Mesajlar yüklenemedi.';
       }
       notifyListeners();
     }
@@ -763,7 +763,7 @@ class TurnaSocketClient extends ChangeNotifier {
       error = authError.toString();
       onSessionExpired?.call();
     } catch (_) {
-      error = 'Eski mesajlar yuklenemedi.';
+      error = 'Eski mesajlar yüklenemedi.';
     } finally {
       loadingMore = false;
       notifyListeners();
@@ -860,7 +860,7 @@ class TurnaSocketClient extends ChangeNotifier {
       createdAt: nowIso,
       errorText: isConnected
           ? null
-          : 'Baglanti yok. Geri gelince otomatik gonderilecek.',
+          : 'Bağlantı yok. Geri gelince otomatik gönderilecek.',
     );
     messages.add(localMessage);
     _sortMessages();
@@ -887,7 +887,7 @@ class TurnaSocketClient extends ChangeNotifier {
           : ChatMessageStatus.queued,
       errorText: isConnected
           ? null
-          : 'Baglanti yok. Geri gelince otomatik gonderilecek.',
+          : 'Bağlantı yok. Geri gelince otomatik gönderilecek.',
       clearErrorText: isConnected,
     );
     await _persistPendingMessages();
@@ -956,8 +956,8 @@ class TurnaSocketClient extends ChangeNotifier {
             ? ChatMessageStatus.failed
             : ChatMessageStatus.queued,
         errorText: isConnected
-            ? 'Mesaj gonderilemedi. Tekrar dene.'
-            : 'Baglanti yok. Geri gelince otomatik gonderilecek.',
+            ? 'Mesaj gönderilemedi. Tekrar dene.'
+            : 'Bağlantı yok. Geri gelince otomatik gönderilecek.',
       );
       await _persistPendingMessages();
       notifyListeners();
@@ -1807,9 +1807,9 @@ class TurnaNativeCallManager {
       await FlutterCallkitIncoming.requestNotificationPermission({
         'title': 'Bildirim izni',
         'rationaleMessagePermission':
-            'Gelen aramalari gosterebilmek icin bildirim izni gerekiyor.',
+            'Gelen aramaları gösterebilmek için bildirim izni gerekiyor.',
         'postNotificationMessageRequired':
-            'Gelen aramalari gosterebilmek icin bildirim izni ver.',
+            'Gelen aramaları gösterebilmek için bildirim izni ver.',
       });
     } catch (error) {
       turnaLog('android notification permission skipped', error);
@@ -2087,7 +2087,7 @@ class TurnaNativeCallManager {
       missedCallNotification: const NotificationParams(
         showNotification: true,
         isShowCallback: false,
-        subtitle: 'Cevapsiz arama',
+        subtitle: 'Cevapsız arama',
       ),
       android: const AndroidParams(
         isCustomNotification: true,
@@ -2097,7 +2097,7 @@ class TurnaNativeCallManager {
         actionColor: '#2F80ED',
         textColor: '#ffffff',
         incomingCallNotificationChannelName: 'Turna Arama',
-        missedCallNotificationChannelName: 'Turna Cevapsiz',
+        missedCallNotificationChannelName: 'Turna Cevapsız',
         isShowCallID: false,
         isShowFullLockedScreen: true,
         isImportant: true,
@@ -2408,35 +2408,35 @@ class ProfileApi {
         case 'email_already_in_use':
           return 'Bu email başka bir hesapta kullanılıyor.';
         case 'username_already_in_use':
-          return 'Bu kullanici adi baska bir hesapta kullaniliyor.';
+          return 'Bu kullanıcı adı başka bir hesapta kullanılıyor.';
         case 'invalid_username':
-          return 'Kullanici adi uygun degil.';
+          return 'Kullanıcı adı uygun değil.';
         case 'validation_error':
           return 'Girilen bilgiler geçersiz.';
         case 'user_not_found':
           return 'Kullanıcı bulunamadı.';
         case 'phone_required':
-          return 'Telefon numarasi gerekli.';
+          return 'Telefon numarası gerekli.';
         case 'invalid_phone':
-          return 'Gecerli bir telefon numarasi gir.';
+          return 'Geçerli bir telefon numarası gir.';
         case 'invalid_otp_code':
-          return 'Kod 6 haneli olmali.';
+          return 'Kod 6 haneli olmalı.';
         case 'otp_cooldown':
-          return 'Lutfen biraz bekleyip tekrar dene.';
+          return 'Lütfen biraz bekleyip tekrar dene.';
         case 'otp_rate_limited':
-          return 'Cok fazla deneme yapildi. Daha sonra tekrar dene.';
+          return 'Çok fazla deneme yapıldı. Daha sonra tekrar dene.';
         case 'otp_invalid':
-          return 'Kod hatali. Yeniden dene.';
+          return 'Kod hatalı. Yeniden dene.';
         case 'otp_expired':
           return 'Kodun suresi doldu. Yeni kod iste.';
         case 'otp_attempts_exceeded':
-          return 'Cok fazla hatali deneme yapildi. Yeni kod iste.';
+          return 'Çok fazla hatalı deneme yapıldı. Yeni kod iste.';
         case 'otp_not_found':
-          return 'Dogrulama kodu bulunamadi. Yeni kod iste.';
+          return 'Doğrulama kodu bulunamadı. Yeni kod iste.';
         case 'otp_temporarily_unavailable':
         case 'login_temporarily_unavailable':
         case 'signup_temporarily_unavailable':
-          return 'Dogrulama su an kullanilamiyor.';
+          return 'Doğrulama şu an kullanılamıyor.';
         case 'storage_not_configured':
           return 'Dosya depolama servisi hazır değil.';
         case 'invalid_avatar_key':
@@ -2444,53 +2444,53 @@ class ProfileApi {
         case 'invalid_attachment_key':
           return 'Medya yüklemesi doğrulanamadı.';
         case 'message_not_found':
-          return 'Mesaj bulunamadi.';
+          return 'Mesaj bulunamadı.';
         case 'message_delete_not_allowed':
-          return 'Bu mesaj sadece gonderen tarafindan herkesten silinebilir.';
+          return 'Bu mesaj sadece gönderen tarafından herkesten silinebilir.';
         case 'message_delete_window_expired':
-          return 'Mesaj artik herkesten silinemez. 10 dakika siniri doldu.';
+          return 'Mesaj artık herkesten silinemez. 10 dakika sınırı doldu.';
         case 'message_edit_not_allowed':
-          return 'Bu mesaj artik duzenlenemez.';
+          return 'Bu mesaj artık düzenlenemez.';
         case 'message_edit_window_expired':
-          return 'Mesaj duzenleme suresi doldu. 10 dakika siniri doldu.';
+          return 'Mesaj düzenleme süresi doldu. 10 dakika sınırı doldu.';
         case 'message_edit_text_required':
-          return 'Duzenlenecek mesaj bos olamaz.';
+          return 'Düzenlenecek mesaj boş olamaz.';
         case 'chat_folder_limit_reached':
-          return 'En fazla 3 kategori olusturabilirsin.';
+          return 'En fazla 3 kategori oluşturabilirsin.';
         case 'chat_folder_exists':
-          return 'Bu kategori adi zaten kullaniliyor.';
+          return 'Bu kategori adı zaten kullanılıyor.';
         case 'chat_folder_not_found':
-          return 'Kategori bulunamadi.';
+          return 'Kategori bulunamadı.';
         case 'lookup_query_required':
-          return 'Telefon numarasi veya kullanici adi gir.';
+          return 'Telefon numarası veya kullanıcı adı gir.';
         case 'uploaded_file_not_found':
           return 'Yüklenen dosya bulunamadı.';
         case 'avatar_not_found':
           return 'Avatar bulunamadı.';
         case 'text_or_attachment_required':
-          return 'Mesaj veya ek secmelisin.';
+          return 'Mesaj veya ek seçmelisin.';
         case 'call_provider_not_configured':
-          return 'Arama servisi henuz hazir degil.';
+          return 'Arama servisi henüz hazır değil.';
         case 'call_conflict':
-          return 'Kullanicilardan biri baska bir aramada.';
+          return 'Kullanıcılardan biri başka bir aramada.';
         case 'invalid_call_target':
-          return 'Bu kullanici aranamaz.';
+          return 'Bu kullanıcı aranamaz.';
         case 'call_not_found':
-          return 'Arama kaydi bulunamadi.';
+          return 'Arama kaydı bulunamadı.';
         case 'call_not_ringing':
           return 'Bu arama artik cevaplanamaz.';
         case 'call_not_active':
-          return 'Arama zaten sonlanmis.';
+          return 'Arama zaten sonlanmış.';
         case 'account_suspended':
-          return 'Hesap gecici olarak durduruldu.';
+          return 'Hesap geçici olarak durduruldu.';
         case 'account_banned':
-          return 'Bu hesap kullanima kapatildi.';
+          return 'Bu hesap kullanıma kapatıldı.';
         case 'otp_blocked':
-          return 'Bu hesap icin dogrulama kapatildi.';
+          return 'Bu hesap için doğrulama kapatıldı.';
         case 'unauthorized':
         case 'invalid_token':
         case 'session_revoked':
-          return 'Oturumun suresi doldu.';
+          return 'Oturumun süresi doldu.';
         default:
           return error ?? 'İşlem başarısız ($statusCode)';
       }
@@ -2668,7 +2668,7 @@ class ChatApi {
       rethrow;
     } catch (_) {
       throw TurnaApiException(
-        blocked ? 'Kisi engellenemedi.' : 'Engel kaldirilamadi.',
+        blocked ? 'Kişi engellenemedi.' : 'Engel kaldırılamadı.',
       );
     }
   }
@@ -2724,7 +2724,7 @@ class ChatApi {
     } on TurnaApiException {
       rethrow;
     } catch (_) {
-      throw TurnaApiException('Kisi listesine ulasilamadi.');
+      throw TurnaApiException('Kişi listesine ulaşılamadı.');
     }
   }
 
@@ -2775,7 +2775,7 @@ class ChatApi {
     } on TurnaApiException {
       rethrow;
     } catch (_) {
-      throw TurnaApiException('Rehber kisileri yuklenemedi.');
+      throw TurnaApiException('Rehber kişileri yüklenemedi.');
     }
   }
 
@@ -2800,7 +2800,7 @@ class ChatApi {
     } on TurnaApiException {
       rethrow;
     } catch (_) {
-      throw TurnaApiException('Kategori olusturulamadi.');
+      throw TurnaApiException('Kategori oluşturulamadı.');
     }
   }
 
@@ -2841,7 +2841,7 @@ class ChatApi {
       rethrow;
     } catch (_) {
       throw TurnaApiException(
-        archived ? 'Sohbet arsivlenemedi.' : 'Sohbet arsivden cikarilamadi.',
+        archived ? 'Sohbet arşivlenemedi.' : 'Sohbet arşivden çıkarılamadı.',
       );
     }
   }
@@ -2864,7 +2864,7 @@ class ChatApi {
     } on TurnaApiException {
       rethrow;
     } catch (_) {
-      throw TurnaApiException('Sohbet kategorisi guncellenemedi.');
+      throw TurnaApiException('Sohbet kategorisi güncellenemedi.');
     }
   }
 
@@ -2921,7 +2921,7 @@ class ChatApi {
     } on TurnaApiException {
       rethrow;
     } catch (_) {
-      throw TurnaApiException('Mesajlar yuklenemedi.');
+      throw TurnaApiException('Mesajlar yüklenemedi.');
     }
   }
 
@@ -2954,7 +2954,7 @@ class ChatApi {
     } on TurnaApiException {
       rethrow;
     } catch (_) {
-      throw TurnaApiException('Dosya yukleme hazirligi basarisiz oldu.');
+      throw TurnaApiException('Dosya yükleme hazırlığı başarısız oldu.');
     }
   }
 
@@ -2987,7 +2987,7 @@ class ChatApi {
     } on TurnaApiException {
       rethrow;
     } catch (_) {
-      throw TurnaApiException('Mesaj gonderilemedi.');
+      throw TurnaApiException('Mesaj gönderilemedi.');
     }
   }
 
@@ -3399,9 +3399,9 @@ class _CallsPageState extends State<CallsPage> {
       case TurnaCallStatus.declined:
         return 'Reddedildi';
       case TurnaCallStatus.missed:
-        return 'Cevapsiz';
+        return 'Cevapsız';
       case TurnaCallStatus.cancelled:
-        return 'Iptal edildi';
+        return 'İptal edildi';
       case TurnaCallStatus.ended:
         return 'Sonlandi';
       case TurnaCallStatus.ringing:
@@ -3428,7 +3428,7 @@ class _CallsPageState extends State<CallsPage> {
             }
             return _CenteredState(
               icon: Icons.call_missed_outgoing,
-              title: 'Aramalar yuklenemedi',
+              title: 'Aramalar yüklenemedi',
               message: error.toString(),
               primaryLabel: 'Tekrar dene',
               onPrimary: () => setState(() => _refreshTick++),
@@ -3439,8 +3439,8 @@ class _CallsPageState extends State<CallsPage> {
           if (calls.isEmpty) {
             return const _CenteredState(
               icon: Icons.call_outlined,
-              title: 'Henuz arama yok',
-              message: 'Yaptigin ve aldigin aramalar burada listelenecek.',
+              title: 'Henüz arama yok',
+              message: 'Yaptığın ve aldığın aramalar burada listelenecek.',
             );
           }
 
@@ -3638,7 +3638,7 @@ class _IncomingCallPageState extends State<IncomingCallPage> {
                     authToken: widget.session.token,
                     displayName: call.peer.displayName,
                     avatarUrl: call.peer.avatarUrl,
-                    subtitle: isVideo ? 'Goruntulu arama' : 'Sesli arama',
+                    subtitle: isVideo ? 'Görüntülü arama' : 'Sesli arama',
                   ),
                 ),
                 Align(
@@ -3746,7 +3746,7 @@ class _OutgoingCallPageState extends State<OutgoingCallPage> {
     final message = switch (terminal.kind) {
       'declined' => 'Arama reddedildi.',
       'missed' => 'Cevap yok.',
-      _ => 'Arama sonlandi.',
+      _ => 'Arama sonlandı.',
     };
     ScaffoldMessenger.of(
       context,
@@ -3788,8 +3788,8 @@ class _OutgoingCallPageState extends State<OutgoingCallPage> {
                   displayName: call.peer.displayName,
                   avatarUrl: call.peer.avatarUrl,
                   subtitle: call.type == TurnaCallType.video
-                      ? 'Goruntulu arama caliyor...'
-                      : 'Sesli arama caliyor...',
+                      ? 'Görüntülü arama çalıyor...'
+                      : 'Sesli arama çalıyor...',
                 ),
               ),
               Align(
@@ -4474,7 +4474,7 @@ class TurnaManagedCallSession extends ChangeNotifier {
     terminalMessage = switch (terminal.kind) {
       'declined' => 'Arama reddedildi.',
       'missed' => 'Cevap yok.',
-      _ => 'Arama sonlandi.',
+      _ => 'Arama sonlandı.',
     };
     _releaseWakeLock();
     _ended = true;
@@ -4902,10 +4902,10 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
             const SizedBox(height: 8),
             Text(
               adapter.connecting
-                  ? 'Baglaniyor...'
+                  ? 'Bağlanıyor...'
                   : (adapter.connected
                         ? _callSession.formatDuration()
-                        : (adapter.error ?? 'Arama hazirlaniyor')),
+                        : (adapter.error ?? 'Arama hazırlanıyor')),
               style: const TextStyle(color: Color(0xFFB7BCB9), fontSize: 16),
             ),
           ],
@@ -5170,7 +5170,7 @@ class CallApi {
     } on TurnaApiException {
       rethrow;
     } catch (_) {
-      throw TurnaApiException('Arama gecmisi yuklenemedi.');
+      throw TurnaApiException('Arama geçmişi yüklenemedi.');
     }
   }
 
@@ -5197,7 +5197,7 @@ class CallApi {
     } on TurnaApiException {
       rethrow;
     } catch (_) {
-      throw TurnaApiException('Arama baslatilamadi.');
+      throw TurnaApiException('Arama başlatılamadı.');
     }
   }
 
@@ -5267,7 +5267,7 @@ class CallApi {
     } on TurnaApiException {
       rethrow;
     } catch (_) {
-      throw TurnaApiException('Arama sonlandirilamadi.');
+      throw TurnaApiException('Arama sonlandırılamadı.');
     }
   }
 
@@ -5292,7 +5292,7 @@ class CallApi {
     } on TurnaApiException {
       rethrow;
     } catch (_) {
-      throw TurnaApiException('Arama durumu esitlenemedi.');
+      throw TurnaApiException('Arama durumu eşitlenemedi.');
     }
   }
 }

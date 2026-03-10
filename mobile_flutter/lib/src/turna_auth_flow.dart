@@ -1358,7 +1358,7 @@ class _TurnaProfileOnboardingPageState
         body: bytes,
       );
       if (uploadRes.statusCode >= 400) {
-        throw TurnaApiException('Profil resmi yuklenemedi.');
+        throw TurnaApiException('Profil resmi yüklenemedi.');
       }
 
       final updatedProfile = await ProfileApi.completeAvatarUpload(

@@ -41,7 +41,7 @@ class TurnaLocationPayload {
 
   String get previewLabel {
     if (live) {
-      return isLiveActive ? 'Canli konum' : 'Canli konum (sona erdi)';
+      return isLiveActive ? 'Canlı konum' : 'Canlı konum (sona erdi)';
     }
     final trimmedTitle = title?.trim() ?? '';
     if (trimmedTitle.isNotEmpty) return trimmedTitle;
@@ -49,7 +49,7 @@ class TurnaLocationPayload {
   }
 
   String get displayTitle {
-    if (live) return 'Canli konum';
+    if (live) return 'Canlı konum';
     final trimmedTitle = title?.trim() ?? '';
     if (trimmedTitle.isNotEmpty) return trimmedTitle;
     return 'Konum';
@@ -58,7 +58,7 @@ class TurnaLocationPayload {
   String get displaySubtitle {
     if (live) {
       if (endedAt?.trim().isNotEmpty ?? false) {
-        return 'Paylasim sona erdi';
+        return 'Paylaşım sona erdi';
       }
       final expires = DateTime.tryParse(expiresAt ?? '');
       if (expires != null) {
@@ -69,9 +69,9 @@ class TurnaLocationPayload {
       }
       final updated = DateTime.tryParse(updatedAt ?? '');
       if (updated != null) {
-        return 'Son guncelleme ${formatTurnaClockLabel(updated.toLocal())}';
+        return 'Son güncelleme ${formatTurnaClockLabel(updated.toLocal())}';
       }
-      return 'Canli paylasim';
+      return 'Canlı paylaşım';
     }
 
     final trimmedSubtitle = subtitle?.trim() ?? '';
@@ -232,7 +232,7 @@ String formatTurnaClockLabel(DateTime value) {
 
 String formatTurnaLocationAccuracy(double? accuracyMeters) {
   if (accuracyMeters == null || !accuracyMeters.isFinite) {
-    return 'Konum dogrulaniyor';
+    return 'Konum doğrulanıyor';
   }
   return '~${accuracyMeters.round()} m dogruluk';
 }
@@ -410,7 +410,7 @@ Future<void> showTurnaLocationMapChooser(
             ),
             ListTile(
               leading: const Icon(Icons.public_outlined),
-              title: const Text('Tarayicida ac'),
+              title: const Text('Tarayıcıda aç'),
               onTap: () async {
                 Navigator.pop(sheetContext);
                 await openTurnaLocationInMaps(
@@ -626,8 +626,8 @@ class _TurnaLocationViewerPageState extends State<TurnaLocationViewerPage> {
                       ),
                       child: Text(
                         payload.isLiveActive
-                            ? 'Canli takip acik'
-                            : 'Canli konum sona erdi',
+                            ? 'Canlı takip açık'
+                            : 'Canlı konum sona erdi',
                         style: TextStyle(
                           color: payload.isLiveActive
                               ? TurnaColors.success
@@ -668,7 +668,7 @@ class _TurnaLocationViewerPageState extends State<TurnaLocationViewerPage> {
                   FilledButton.icon(
                     onPressed: () => showTurnaLocationMapChooser(context, payload),
                     icon: const Icon(Icons.navigation_rounded),
-                    label: const Text('Haritalarda ac'),
+                    label: const Text('Haritalarda aç'),
                   ),
                 ],
               ),
@@ -861,7 +861,7 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
           latitude: center.latitude,
           longitude: center.longitude,
           accuracyMeters: _currentAccuracyMeters,
-          title: 'Canli konum',
+          title: 'Canlı konum',
           live: true,
           liveId: '${now.millisecondsSinceEpoch}-${center.latitude}-${center.longitude}',
           startedAt: now.toIso8601String(),
@@ -893,7 +893,7 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
         ),
       ),
       title: const Text(
-        'Mevcut konumu gonder',
+        'Mevcut konumu gönder',
         style: TextStyle(fontWeight: FontWeight.w600),
       ),
       subtitle: Text(subtitle),
@@ -913,9 +913,9 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
         leadingWidth: 84,
         leading: TextButton(
           onPressed: () => Navigator.pop(context),
-          child: const Text('Iptal'),
+          child: const Text('İptal'),
         ),
-        title: const Text('Konum gonder'),
+        title: const Text('Konum gönder'),
         centerTitle: true,
         actions: [
           IconButton(
@@ -932,7 +932,7 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
               controller: _searchController,
               textInputAction: TextInputAction.search,
               decoration: InputDecoration(
-                hintText: 'Arama yapin/adres girin',
+                hintText: 'Arama yapın/adres girin',
                 prefixIcon: const Icon(Icons.search_rounded),
                 filled: true,
                 fillColor: Colors.white,
@@ -964,7 +964,7 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
                                             padding: const EdgeInsets.all(24),
                                             child: Text(
                                               _error ??
-                                                  'Harita icin Stadia anahtari veya konum bilgisi gerekli.',
+                                                  'Harita için Stadia anahtarı veya konum bilgisi gerekli.',
                                               textAlign: TextAlign.center,
                                             ),
                                           ),
@@ -1026,11 +1026,11 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
                             foregroundColor: TurnaColors.success,
                           ),
                           icon: const Icon(Icons.location_history_rounded),
-                          label: const Text('Canli konumu paylas'),
+                          label: const Text('Canlı konumu paylaş'),
                         ),
                         const SizedBox(height: 16),
                         const Text(
-                          'Yakindaki yerler',
+                          'Yakındaki yerler',
                           style: TextStyle(
                             fontWeight: FontWeight.w700,
                             color: TurnaColors.textMuted,
@@ -1043,7 +1043,7 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
                               _buildCurrentLocationTile(),
                               if (_loadingNearby && !showingSearch)
                                 const ListTile(
-                                  title: Text('Yakindaki yerler aranıyor...'),
+                                  title: Text('Yakındaki yerler aranıyor...'),
                                   trailing: SizedBox(
                                     width: 20,
                                     height: 20,
@@ -1054,7 +1054,7 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
                                 ),
                               if (_searching)
                                 const ListTile(
-                                  title: Text('Araniyor...'),
+                                  title: Text('Aranıyor...'),
                                   trailing: SizedBox(
                                     width: 20,
                                     height: 20,
@@ -1269,7 +1269,7 @@ class TurnaLiveLocationManager extends ChangeNotifier {
       latitude: share.latitude,
       longitude: share.longitude,
       accuracyMeters: share.accuracyMeters,
-      title: 'Canli konum',
+      title: 'Canlı konum',
       live: true,
       liveId: share.liveId,
       startedAt: share.startedAt,
@@ -1345,7 +1345,7 @@ class TurnaLiveLocationManager extends ChangeNotifier {
             ),
             foregroundNotificationConfig: const ForegroundNotificationConfig(
               notificationTitle: 'Turna',
-              notificationText: 'Canli konum paylasimi suruyor.',
+              notificationText: 'Canlı konum paylaşımı sürüyor.',
               enableWakeLock: true,
             ),
           )
@@ -1420,7 +1420,7 @@ class TurnaLiveLocationManager extends ChangeNotifier {
       latitude: position.latitude,
       longitude: position.longitude,
       accuracyMeters: position.accuracy,
-      title: 'Canli konum',
+      title: 'Canlı konum',
       live: true,
       liveId: share.liveId,
       startedAt: share.startedAt,
@@ -1613,7 +1613,7 @@ class _TurnaLocationMessageCard extends StatelessWidget {
                               Icons.stop_circle_outlined,
                               size: 18,
                             ),
-                            label: const Text('Canli konumu durdur'),
+                            label: const Text('Canlı konumu durdur'),
                             style: TextButton.styleFrom(
                               foregroundColor: TurnaColors.error,
                               padding: EdgeInsets.zero,

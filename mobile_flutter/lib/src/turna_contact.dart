@@ -11,13 +11,13 @@ class TurnaSharedContactPayload {
 
   String get previewLabel {
     final trimmed = displayName.trim();
-    return trimmed.isNotEmpty ? trimmed : 'Kisi';
+    return trimmed.isNotEmpty ? trimmed : 'Kişi';
   }
 
   String get primaryPhone => phones.isNotEmpty ? phones.first : '';
 
   String get subtitle {
-    if (phones.isEmpty) return 'Paylasilan kisi';
+    if (phones.isEmpty) return 'Paylaşılan kişi';
     if (phones.length == 1) return formatTurnaSharedPhone(phones.first);
     return '${formatTurnaSharedPhone(phones.first)} ve ${phones.length - 1} numara daha';
   }
@@ -119,7 +119,7 @@ Future<void> openTurnaSharedContactMessage(
     if (user == null) {
       _showTurnaSharedContactSnackBar(
         context,
-        'Bu kisi icin Turna hesabi bulunamadi.',
+        'Bu kişi için Turna hesabı bulunamadı.',
       );
       return;
     }
@@ -161,7 +161,7 @@ Future<void> addTurnaSharedContactToAddressBook(
     if (!context.mounted) return;
     _showTurnaSharedContactSnackBar(
       context,
-      'Kisi karti acilamadi: $error',
+      'Kişi kartı açılamadı: $error',
     );
   }
 }
@@ -268,7 +268,7 @@ class _TurnaSharedContactDetailsPageState
         if (mounted) {
           _showTurnaSharedContactSnackBar(
             context,
-            'Bu numara Turna hesabina bagli degil.',
+            'Bu numara Turna hesabına bağlı değil.',
           );
         }
         return;
@@ -292,7 +292,7 @@ class _TurnaSharedContactDetailsPageState
         if (mounted) {
           _showTurnaSharedContactSnackBar(
             context,
-            'Bu numara Turna hesabina bagli degil.',
+            'Bu numara Turna hesabına bağlı değil.',
           );
         }
         return;
@@ -374,7 +374,7 @@ class _TurnaSharedContactDetailsPageState
             ),
             const SizedBox(height: 28),
             _TurnaSharedContactDetailTile(
-              title: 'Yeni kisi olustur',
+              title: 'Yeni kişi oluştur',
               onTap: _handleAddContact,
               trailing: _busyKeys.contains('add-contact')
                   ? const SizedBox(
@@ -416,7 +416,7 @@ class _TurnaSharedContactDetailsPageState
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
                       : const Icon(Icons.chat_bubble_outline_rounded),
-                  label: const Text('Bulunan Turna hesabi ile mesajlas'),
+                  label: const Text('Bulunan Turna hesabı ile mesajlaş'),
                 ),
               ),
           ],
@@ -647,9 +647,9 @@ class _ContactSharePickerPageState extends State<ContactSharePickerPage> {
         leadingWidth: 84,
         leading: TextButton(
           onPressed: () => Navigator.pop(context),
-          child: const Text('Iptal'),
+          child: const Text('İptal'),
         ),
-        title: const Text('Kisi gonder'),
+        title: const Text('Kişi gönder'),
         centerTitle: true,
       ),
       body: Column(
@@ -659,7 +659,7 @@ class _ContactSharePickerPageState extends State<ContactSharePickerPage> {
             child: TextField(
               controller: _searchController,
               decoration: InputDecoration(
-                hintText: 'Kisi ara',
+                hintText: 'Kişi ara',
                 prefixIcon: const Icon(Icons.search_rounded),
                 filled: true,
                 fillColor: Colors.white,
@@ -676,15 +676,17 @@ class _ContactSharePickerPageState extends State<ContactSharePickerPage> {
                 ? const Center(child: CircularProgressIndicator())
                 : !hasPermission
                 ? _ContactPickerEmptyState(
-                    title: 'Kisi erisimi gerekli',
-                    subtitle: 'Rehberinizden kisi paylasabilmek icin izin vermeniz gerekiyor.',
+                    title: 'Kişi erişimi gerekli',
+                    subtitle:
+                        'Rehberinizden kişi paylaşabilmek için izin vermeniz gerekiyor.',
                     primaryLabel: 'Tekrar dene',
                     onPrimary: _loadContacts,
                   )
                 : contacts.isEmpty
                 ? _ContactPickerEmptyState(
-                    title: 'Kisi bulunamadi',
-                    subtitle: 'Rehberinizde telefon numarasi olan kisi yok veya arama sonucu bos.',
+                    title: 'Kişi bulunamadı',
+                    subtitle:
+                        'Rehberinizde telefon numarası olan kişi yok veya arama sonucu boş.',
                     primaryLabel: 'Yenile',
                     onPrimary: _loadContacts,
                   )
@@ -840,7 +842,6 @@ class _TurnaSharedContactMessageCard extends StatelessWidget {
     final textColor = mine
         ? TurnaColors.chatOutgoingText
         : TurnaColors.chatIncomingText;
-    final phones = payload.phones.take(2).toList(growable: false);
     final borderColor = mine
         ? TurnaColors.chatOutgoing.withValues(alpha: 0.92)
         : TurnaColors.border;
@@ -884,9 +885,9 @@ class _TurnaSharedContactMessageCard extends StatelessWidget {
                     Padding(
                       padding: EdgeInsets.fromLTRB(
                         14,
+                        12,
                         14,
-                        14,
-                        showOverlayFooter ? 40 : 12,
+                        showOverlayFooter ? 36 : 12,
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -931,29 +932,6 @@ class _TurnaSharedContactMessageCard extends StatelessWidget {
                               ),
                             ],
                           ),
-                          const SizedBox(height: 12),
-                          for (final phone in phones) ...[
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 6),
-                              child: Text(
-                                formatTurnaSharedPhone(phone),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  color: textColor.withValues(alpha: 0.88),
-                                  fontSize: 13,
-                                ),
-                              ),
-                            ),
-                          ],
-                          if (payload.phones.length > phones.length)
-                            Text(
-                              '+${payload.phones.length - phones.length} numara daha',
-                              style: TextStyle(
-                                color: textColor.withValues(alpha: 0.72),
-                                fontSize: 12,
-                              ),
-                            ),
                         ],
                       ),
                     ),
@@ -977,7 +955,7 @@ class _TurnaSharedContactMessageCard extends StatelessWidget {
                 Expanded(
                   child: _TurnaSharedContactCardButton(
                     label: 'Mesaj',
-                    color: TurnaColors.success,
+                    color: mine ? TurnaColors.success : TurnaColors.primary,
                     onTap: () {
                       unawaited(
                         openTurnaSharedContactMessage(
@@ -994,8 +972,8 @@ class _TurnaSharedContactMessageCard extends StatelessWidget {
                 Container(width: 1, height: 54, color: borderColor),
                 Expanded(
                   child: _TurnaSharedContactCardButton(
-                    label: 'Kisi ekle',
-                    color: TurnaColors.success,
+                    label: 'Kişi ekle',
+                    color: mine ? TurnaColors.success : TurnaColors.primary,
                     onTap: () {
                       unawaited(
                         addTurnaSharedContactToAddressBook(context, payload),
