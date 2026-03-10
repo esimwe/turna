@@ -414,6 +414,27 @@ Map<String, String>? buildTurnaAuthHeaders(String? authToken) {
   return {'Authorization': 'Bearer $trimmed'};
 }
 
+String normalizeTurnaRemoteUrl(String raw) {
+  final trimmed = raw.trim();
+  if (trimmed.isEmpty) return trimmed;
+
+  final remote = Uri.tryParse(trimmed);
+  final backend = Uri.tryParse(kBackendBaseUrl);
+  if (remote == null || backend == null) return trimmed;
+
+  final sameHost = remote.host.toLowerCase() == backend.host.toLowerCase();
+  final shouldUpgradeToHttps =
+      sameHost && backend.scheme == 'https' && remote.scheme == 'http';
+  if (!shouldUpgradeToHttps) return trimmed;
+
+  return remote
+      .replace(
+        scheme: 'https',
+        port: remote.hasPort && remote.port != 80 ? remote.port : null,
+      )
+      .toString();
+}
+
 class TurnaLocalMediaCache {
   static const String _cacheDirName = 'turna-media-cache';
   static Directory? _cacheDir;
@@ -466,6 +487,7 @@ class TurnaLocalMediaCache {
     required String url,
     String? authToken,
   }) async {
+    final normalizedUrl = normalizeTurnaRemoteUrl(url);
     try {
       final file = await _fileForKey(cacheKey);
       if (await file.exists()) {
@@ -481,7 +503,7 @@ class TurnaLocalMediaCache {
 
       Future<http.Response> request(String? token) {
         return http.get(
-          Uri.parse(url),
+          Uri.parse(normalizedUrl),
           headers: buildTurnaAuthHeaders(token),
         );
       }
@@ -497,7 +519,7 @@ class TurnaLocalMediaCache {
         turnaLog('media cache download failed', {
           'cacheKey': cacheKey,
           'statusCode': response.statusCode,
-          'url': url,
+          'url': normalizedUrl,
         });
         return null;
       }
@@ -505,7 +527,7 @@ class TurnaLocalMediaCache {
       if (response.bodyBytes.isEmpty) {
         turnaLog('media cache empty response', {
           'cacheKey': cacheKey,
-          'url': url,
+          'url': normalizedUrl,
         });
         return null;
       }
@@ -516,7 +538,7 @@ class TurnaLocalMediaCache {
     } catch (error) {
       turnaLog('media cache resolve failed', {
         'cacheKey': cacheKey,
-        'url': url,
+        'url': normalizedUrl,
         'error': '$error',
       });
       return null;
