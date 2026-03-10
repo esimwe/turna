@@ -6,6 +6,7 @@ import { env } from "../config/env.js";
 import { logError, logInfo } from "./logger.js";
 import { prisma } from "./prisma.js";
 import { areUsersBlocked } from "./user-relationship.js";
+import { summarizeTurnaMessageText } from "../modules/chat/message-text.js";
 import type { ChatMessage } from "../modules/chat/chat.types.js";
 import type { AppCallType } from "../modules/calls/call.types.js";
 const MessageStatus = {
@@ -130,7 +131,7 @@ function ensureFirebaseApp() {
 }
 
 function buildPushBody(message: ChatMessage): string {
-  const trimmedText = message.text.trim();
+  const trimmedText = summarizeTurnaMessageText(message.text);
   if (trimmedText.length > 0) {
     return trimmedText.length > 120 ? `${trimmedText.slice(0, 117)}...` : trimmedText;
   }

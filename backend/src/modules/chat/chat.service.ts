@@ -16,6 +16,11 @@ import type {
   SendMessageAttachmentInput,
   SendMessagePayload
 } from "./chat.types.js";
+import {
+  TURNA_DELETED_EVERYONE_MARKER,
+  canExtendLiveLocationEditWindow,
+  summarizeTurnaMessageText
+} from "./message-text.js";
 const AttachmentKind = {
   IMAGE: "IMAGE",
   VIDEO: "VIDEO",
@@ -35,7 +40,6 @@ type MessageStatusValue = typeof MessageStatus[keyof typeof MessageStatus];
 
 const prismaUser = (prisma as unknown as { user: any }).user;
 const prismaReportCase = (prisma as unknown as { reportCase: any }).reportCase;
-const TURNA_DELETED_EVERYONE_MARKER = "[[turna-deleted-everyone]]";
 const DELETE_FOR_EVERYONE_WINDOW_MS = 10 * 60 * 1000;
 const EDIT_MESSAGE_WINDOW_MS = 10 * 60 * 1000;
 const CHAT_FOLDER_LIMIT = 3;
@@ -88,8 +92,7 @@ function summarizeMessage(row: {
   text: string | null;
   attachments?: Array<{ kind: AttachmentKindValue }>;
 }): string {
-  const text = row.text?.trim();
-  if (text === TURNA_DELETED_EVERYONE_MARKER) return "Silindi.";
+  const text = summarizeTurnaMessageText(row.text);
   if (text) return text;
 
   const attachments = row.attachments ?? [];
@@ -421,10 +424,6 @@ export class ChatService {
       throw new Error("message_edit_not_allowed");
     }
 
-    if (Date.now() - existing.createdAt.getTime() > EDIT_MESSAGE_WINDOW_MS) {
-      throw new Error("message_edit_window_expired");
-    }
-
     const trimmedText = nextText.trim();
     if (!trimmedText) {
       throw new Error("message_edit_text_required");
@@ -432,6 +431,11 @@ export class ChatService {
 
     if (trimmedText === (existing.text ?? "").trim()) {
       return toChatMessage(existing);
+    }
+
+    const withinDefaultWindow = Date.now() - existing.createdAt.getTime() <= EDIT_MESSAGE_WINDOW_MS;
+    if (!withinDefaultWindow && !canExtendLiveLocationEditWindow(existing.text ?? "", trimmedText)) {
+      throw new Error("message_edit_window_expired");
     }
 
     const history = toEditHistoryEntries(existing.editHistory);
