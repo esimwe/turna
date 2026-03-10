@@ -598,6 +598,7 @@ class TurnaLocalMediaCache {
   static Directory? _cacheDir;
   static final Map<String, File> _resolvedFiles = {};
   static final Map<String, Future<File?>> _pendingFiles = {};
+  static final Map<String, File> _preparedFiles = {};
 
   static File? peek(String cacheKey) {
     final file = _resolvedFiles[cacheKey];
@@ -648,6 +649,61 @@ class TurnaLocalMediaCache {
         await file.delete();
       } catch (_) {}
     }
+    final preparedKeys = _preparedFiles.keys
+        .where((key) => key == cacheKey || key.startsWith('$cacheKey:'))
+        .toList(growable: false);
+    for (final key in preparedKeys) {
+      final prepared = _preparedFiles.remove(key);
+      if (prepared != null && await prepared.exists()) {
+        try {
+          await prepared.delete();
+        } catch (_) {}
+      }
+    }
+  }
+
+  static Future<File> prepareMediaFile({
+    required String cacheKey,
+    required File sourceFile,
+    String? mimeType,
+    String? fileName,
+  }) async {
+    final preferredExtension = _preferredMediaExtension(
+      mimeType: mimeType,
+      fileName: fileName,
+    );
+    if (preferredExtension.isEmpty) {
+      return sourceFile;
+    }
+
+    final currentExtension = sourceFile.path.split('.').last.toLowerCase();
+    if (currentExtension == preferredExtension) {
+      return sourceFile;
+    }
+
+    final preparedKey = '$cacheKey:$preferredExtension';
+    final existing = _preparedFiles[preparedKey];
+    if (existing != null && await existing.exists()) {
+      final existingStat = await existing.stat();
+      final sourceStat = await sourceFile.stat();
+      if (existingStat.modified.isAfter(sourceStat.modified) ||
+          existingStat.modified.isAtSameMomentAs(sourceStat.modified)) {
+        return existing;
+      }
+    }
+
+    final dir = await _ensureCacheDir();
+    final target = File(
+      '${dir.path}/${_hashKey(preparedKey)}.$preferredExtension',
+    );
+    try {
+      if (await target.exists()) {
+        await target.delete();
+      }
+    } catch (_) {}
+    await sourceFile.copy(target.path);
+    _preparedFiles[preparedKey] = target;
+    return target;
   }
 
   static Future<File?> _resolveOrDownload({
@@ -738,6 +794,46 @@ class TurnaLocalMediaCache {
       hash = (hash * 0x01000193) & 0xffffffff;
     }
     return '${hash.toRadixString(16).padLeft(8, '0')}-${value.length}';
+  }
+
+  static String _preferredMediaExtension({
+    String? mimeType,
+    String? fileName,
+  }) {
+    final lowerMime = (mimeType ?? '').toLowerCase();
+    final lowerName = (fileName ?? '').toLowerCase();
+
+    String? fromName() {
+      if (!lowerName.contains('.')) return null;
+      final ext = lowerName.split('.').last.trim();
+      return ext.isEmpty ? null : ext;
+    }
+
+    final nameExt = fromName();
+    if (nameExt != null && nameExt != 'bin') {
+      return nameExt;
+    }
+
+    if (lowerMime.startsWith('video/')) {
+      if (lowerMime.contains('quicktime')) return 'mov';
+      if (lowerMime.contains('webm')) return 'webm';
+      if (lowerMime.contains('x-matroska') || lowerMime.contains('mkv')) {
+        return 'mkv';
+      }
+      return 'mp4';
+    }
+
+    if (lowerMime.startsWith('image/')) {
+      if (lowerMime.contains('png')) return 'png';
+      if (lowerMime.contains('webp')) return 'webp';
+      if (lowerMime.contains('gif')) return 'gif';
+      if (lowerMime.contains('heic') || lowerMime.contains('heif')) {
+        return 'heic';
+      }
+      return 'jpg';
+    }
+
+    return '';
   }
 }
 

@@ -2826,15 +2826,42 @@ class _ConversationMediaTile extends StatelessWidget {
               ),
             )
           else
-            Container(
-              color: const Color(0xFFCFD5DE),
-              alignment: Alignment.center,
-              child: Icon(
-                isVideo ? Icons.play_circle_fill_rounded : Icons.image_outlined,
-                size: 28,
-                color: Colors.white,
-              ),
-            ),
+            isVideo
+                ? _TurnaVideoThumbnail(
+                    cacheKey: 'library:${attachment.objectKey}',
+                    url: imageUrl,
+                    authToken: authToken,
+                    contentType: attachment.contentType,
+                    fileName: attachment.fileName,
+                    fit: BoxFit.cover,
+                    loading: Container(
+                      color: const Color(0xFFCFD5DE),
+                      alignment: Alignment.center,
+                      child: const Icon(
+                        Icons.play_circle_fill_rounded,
+                        size: 28,
+                        color: Colors.white,
+                      ),
+                    ),
+                    error: Container(
+                      color: const Color(0xFFCFD5DE),
+                      alignment: Alignment.center,
+                      child: const Icon(
+                        Icons.play_circle_fill_rounded,
+                        size: 28,
+                        color: Colors.white,
+                      ),
+                    ),
+                  )
+                : Container(
+                    color: const Color(0xFFCFD5DE),
+                    alignment: Alignment.center,
+                    child: const Icon(
+                      Icons.image_outlined,
+                      size: 28,
+                      color: Colors.white,
+                    ),
+                  ),
           if (isVideo)
             const Positioned.fill(
               child: DecoratedBox(

@@ -6729,18 +6729,41 @@ class _ChatAttachmentList extends StatelessWidget {
                   borderRadius: BorderRadius.circular(22),
                   child: Stack(
                     children: [
-                      Container(
+                      SizedBox(
                         width: 220,
                         height: 220,
-                        decoration: const BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                            colors: [
-                              Color(0xFF31424A),
-                              Color(0xFF1E2A30),
-                              Color(0xFF11181D),
-                            ],
+                        child: _TurnaVideoThumbnail(
+                          cacheKey: 'attachment:${attachment.objectKey}',
+                          url: attachment.url?.trim() ?? '',
+                          authToken: authToken,
+                          contentType: attachment.contentType,
+                          fileName: attachment.fileName,
+                          fit: BoxFit.cover,
+                          loading: const DecoratedBox(
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                                colors: [
+                                  Color(0xFF31424A),
+                                  Color(0xFF1E2A30),
+                                  Color(0xFF11181D),
+                                ],
+                              ),
+                            ),
+                          ),
+                          error: const DecoratedBox(
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                                colors: [
+                                  Color(0xFF31424A),
+                                  Color(0xFF1E2A30),
+                                  Color(0xFF11181D),
+                                ],
+                              ),
+                            ),
                           ),
                         ),
                       ),
@@ -7159,12 +7182,28 @@ class _ChatAttachmentViewerPageState extends State<ChatAttachmentViewerPage> {
               ),
               clipBehavior: Clip.antiAlias,
               child: _isVideoAttachment(item.attachment)
-                  ? Container(
-                      color: const Color(0xFF1E2932),
-                      alignment: Alignment.center,
-                      child: const Icon(
-                        Icons.play_arrow_rounded,
-                        color: Colors.white,
+                  ? _TurnaVideoThumbnail(
+                      cacheKey: item.cacheKey,
+                      url: item.url,
+                      authToken: widget.session.token,
+                      contentType: item.attachment.contentType,
+                      fileName: item.attachment.fileName,
+                      fit: BoxFit.cover,
+                      loading: Container(
+                        color: const Color(0xFF1E2932),
+                        alignment: Alignment.center,
+                        child: const Icon(
+                          Icons.play_arrow_rounded,
+                          color: Colors.white,
+                        ),
+                      ),
+                      error: Container(
+                        color: const Color(0xFF1E2932),
+                        alignment: Alignment.center,
+                        child: const Icon(
+                          Icons.play_arrow_rounded,
+                          color: Colors.white,
+                        ),
                       ),
                     )
                   : _TurnaCachedImage(
@@ -7392,16 +7431,22 @@ class _TurnaAttachmentVideoSurfaceState
   Future<void> _prepare() async {
     setState(() => _error = null);
     try {
-      final file = await TurnaLocalMediaCache.getOrDownloadFile(
+      final cachedFile = await TurnaLocalMediaCache.getOrDownloadFile(
         cacheKey: widget.item.cacheKey,
         url: widget.item.url,
         authToken: widget.authToken,
       );
-      if (file == null) {
+      if (cachedFile == null) {
         if (!mounted) return;
         setState(() => _error = 'Video yüklenemedi.');
         return;
       }
+      final file = await TurnaLocalMediaCache.prepareMediaFile(
+        cacheKey: widget.item.cacheKey,
+        sourceFile: cachedFile,
+        mimeType: widget.item.attachment.contentType,
+        fileName: widget.item.attachment.fileName,
+      );
       final controller = vp.VideoPlayerController.file(file);
       final initFuture = controller.initialize();
       await controller.setLooping(true);
@@ -7528,6 +7573,144 @@ extension MediaComposerQualityX on MediaComposerQuality {
       case MediaComposerQuality.hd:
         return 86;
     }
+  }
+}
+
+class _TurnaVideoThumbnail extends StatefulWidget {
+  const _TurnaVideoThumbnail({
+    required this.cacheKey,
+    required this.url,
+    required this.authToken,
+    required this.contentType,
+    required this.fileName,
+    required this.fit,
+    required this.loading,
+    required this.error,
+  });
+
+  final String cacheKey;
+  final String url;
+  final String authToken;
+  final String contentType;
+  final String? fileName;
+  final BoxFit fit;
+  final Widget loading;
+  final Widget error;
+
+  @override
+  State<_TurnaVideoThumbnail> createState() => _TurnaVideoThumbnailState();
+}
+
+class _TurnaVideoThumbnailState extends State<_TurnaVideoThumbnail> {
+  vp.VideoPlayerController? _controller;
+  Future<void>? _initFuture;
+  bool _failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _prepare();
+  }
+
+  @override
+  void didUpdateWidget(covariant _TurnaVideoThumbnail oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.cacheKey != widget.cacheKey || oldWidget.url != widget.url) {
+      _disposeController();
+      _prepare();
+    }
+  }
+
+  @override
+  void dispose() {
+    _disposeController();
+    super.dispose();
+  }
+
+  void _disposeController() {
+    _controller?.dispose();
+    _controller = null;
+    _initFuture = null;
+  }
+
+  Future<void> _prepare() async {
+    setState(() => _failed = false);
+    try {
+      final cachedFile = await TurnaLocalMediaCache.getOrDownloadFile(
+        cacheKey: widget.cacheKey,
+        url: widget.url,
+        authToken: widget.authToken,
+      );
+      if (cachedFile == null) {
+        if (!mounted) return;
+        setState(() => _failed = true);
+        return;
+      }
+      if (!mounted) return;
+      final file = await TurnaLocalMediaCache.prepareMediaFile(
+        cacheKey: widget.cacheKey,
+        sourceFile: cachedFile,
+        mimeType: widget.contentType,
+        fileName: widget.fileName,
+      );
+      final controller = vp.VideoPlayerController.file(file);
+      await controller.setLooping(false);
+      final initFuture = controller.initialize();
+      if (!mounted) {
+        await controller.dispose();
+        return;
+      }
+      setState(() {
+        _controller = controller;
+        _initFuture = initFuture;
+      });
+      await initFuture;
+      await controller.pause();
+      await controller.seekTo(Duration.zero);
+      if (!mounted) return;
+      setState(() {});
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _controller = null;
+        _initFuture = null;
+        _failed = true;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = _controller;
+    final initFuture = _initFuture;
+    if (_failed) {
+      return widget.error;
+    }
+    if (controller == null || initFuture == null) {
+      return widget.loading;
+    }
+
+    return FutureBuilder<void>(
+      future: initFuture,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done ||
+            !controller.value.isInitialized) {
+          return widget.loading;
+        }
+        return ClipRect(
+          child: SizedBox.expand(
+            child: FittedBox(
+              fit: widget.fit,
+              child: SizedBox(
+                width: controller.value.size.width,
+                height: controller.value.size.height,
+                child: vp.VideoPlayer(controller),
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
 }
 
