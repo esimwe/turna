@@ -387,12 +387,15 @@ class TurnaDeviceContext {
         final map = await _channel.invokeMapMethod<String, dynamic>(
           'getContextInfo',
         );
-        native = map == null ? const <String, dynamic>{} : Map<String, dynamic>.from(map);
+        native = map == null
+            ? const <String, dynamic>{}
+            : Map<String, dynamic>.from(map);
       } catch (error) {
         turnaLog('device context native skipped', error);
       }
 
-      List<ConnectivityResult> connectivityResults = const <ConnectivityResult>[];
+      List<ConnectivityResult> connectivityResults =
+          const <ConnectivityResult>[];
       try {
         connectivityResults = await Connectivity().checkConnectivity();
       } catch (error) {
@@ -400,7 +403,8 @@ class TurnaDeviceContext {
       }
 
       final locale = ui.PlatformDispatcher.instance.locale;
-      final localeTag = _readText(native['localeTag']) ?? locale.toLanguageTag();
+      final localeTag =
+          _readText(native['localeTag']) ?? locale.toLanguageTag();
       final regionCode =
           _normalizeCountryIso(_readText(native['regionCode'])) ??
           _normalizeCountryIso(_readText(native['localeCountryIso'])) ??
@@ -521,6 +525,12 @@ String formatTurnaDisplayPhone(String? raw) {
 
 class TurnaContactsDirectory {
   static final ValueNotifier<int> revision = ValueNotifier<int>(0);
+  static final List<String> _knownDialCodes =
+      _kTurnaCountries
+          .map((item) => item.dialCode.replaceAll(RegExp(r'\D+'), ''))
+          .toSet()
+          .toList()
+        ..sort((left, right) => right.length.compareTo(left.length));
 
   static Future<void>? _pendingLoad;
   static Map<String, String> _labelsByPhoneKey = <String, String>{};
@@ -562,7 +572,10 @@ class TurnaContactsDirectory {
   }
 
   static String? lookupLabel(String? phone) {
-    for (final key in _phoneLookupKeys(phone)) {
+    for (final key in _phoneLookupKeys(
+      phone,
+      defaultCountryIso: TurnaDeviceContext._countryIso,
+    )) {
       final label = _labelsByPhoneKey[key];
       if (label != null && label.trim().isNotEmpty) {
         return label;
@@ -573,12 +586,14 @@ class TurnaContactsDirectory {
 
   static Future<void> _loadContacts() async {
     try {
+      await TurnaDeviceContext.ensureLoaded();
       final granted = await FlutterContacts.requestPermission(readonly: true);
       if (!granted) {
         _permissionGranted = false;
         return;
       }
 
+      final defaultCountryIso = TurnaDeviceContext._countryIso;
       final contacts = await FlutterContacts.getContacts(
         withProperties: true,
         withPhoto: false,
@@ -589,12 +604,19 @@ class TurnaContactsDirectory {
         final displayName = contact.displayName.trim();
         if (displayName.isEmpty) continue;
         final phones = <String>[];
+        final canonicalPhones = <String>{};
         for (final phone in contact.phones) {
-          final rawNumber = phone.number.trim();
-          if (rawNumber.isNotEmpty) {
-            phones.add(rawNumber);
+          final canonicalPhone = _canonicalPhoneLookupKey(
+            phone.number,
+            defaultCountryIso: defaultCountryIso,
+          );
+          if (canonicalPhone != null && canonicalPhones.add(canonicalPhone)) {
+            phones.add(canonicalPhone);
           }
-          for (final key in _phoneLookupKeys(phone.number)) {
+          for (final key in _phoneLookupKeys(
+            phone.number,
+            defaultCountryIso: defaultCountryIso,
+          )) {
             next.putIfAbsent(key, () => displayName);
           }
         }
@@ -623,7 +645,81 @@ class TurnaContactsDirectory {
     }
   }
 
-  static List<String> _phoneLookupKeys(String? raw) {
+  static String? _countryDialCodeDigits(String? countryIso) {
+    final normalized = countryIso?.trim().toUpperCase();
+    if (normalized == null || normalized.isEmpty) return null;
+
+    for (final country in _kTurnaCountries) {
+      if (country.iso == normalized) {
+        return country.dialCode.replaceAll(RegExp(r'\D+'), '');
+      }
+    }
+
+    return null;
+  }
+
+  static String? _detectInternationalDialCode(String digits) {
+    for (final dialCode in _knownDialCodes) {
+      if (!digits.startsWith(dialCode)) continue;
+      final national = digits.substring(dialCode.length);
+      if (national.length >= 4) {
+        return dialCode;
+      }
+    }
+
+    return null;
+  }
+
+  static String? _canonicalPhoneLookupKey(
+    String? raw, {
+    String? defaultCountryIso,
+  }) {
+    final source = raw?.trim() ?? '';
+    if (source.isEmpty) return null;
+
+    final digits = source.replaceAll(RegExp(r'\D+'), '');
+    if (digits.length < 7) return null;
+
+    if (source.startsWith('+')) {
+      return digits;
+    }
+
+    if (digits.startsWith('00') && digits.length > 2) {
+      return digits.substring(2);
+    }
+
+    if (digits.length > 10) {
+      final detectedDialCode = _detectInternationalDialCode(digits);
+      if (detectedDialCode != null) {
+        return digits;
+      }
+    }
+
+    final defaultDialCode = _countryDialCodeDigits(defaultCountryIso);
+    if (defaultDialCode == null || defaultDialCode.isEmpty) {
+      return digits;
+    }
+
+    final nationalDigits = digits.replaceFirst(RegExp(r'^0+'), '');
+    if (digits.startsWith('0')) {
+      return nationalDigits.length >= 4
+          ? '$defaultDialCode$nationalDigits'
+          : null;
+    }
+
+    if (digits.length <= 10) {
+      return nationalDigits.length >= 4
+          ? '$defaultDialCode$nationalDigits'
+          : null;
+    }
+
+    return digits;
+  }
+
+  static List<String> _phoneLookupKeys(
+    String? raw, {
+    String? defaultCountryIso,
+  }) {
     final source = raw?.trim() ?? '';
     if (source.isEmpty) return const <String>[];
 
@@ -637,19 +733,27 @@ class TurnaContactsDirectory {
       keys.add(normalized);
     }
 
+    final canonical = _canonicalPhoneLookupKey(
+      raw,
+      defaultCountryIso: defaultCountryIso,
+    );
+    if (canonical != null) {
+      addKey(canonical);
+    }
     addKey(digits);
-    if (digits.startsWith('00') && digits.length > 2) {
-      addKey(digits.substring(2));
-    }
-    if (digits.startsWith('90') && digits.length == 12) {
-      addKey(digits.substring(2));
-      addKey('0${digits.substring(2)}');
-    }
-    if (digits.startsWith('1') && digits.length == 11) {
-      addKey(digits.substring(1));
-    }
-    if (digits.length > 10) {
-      addKey(digits.substring(digits.length - 10));
+
+    final internationalDigits = canonical ?? digits;
+    final dialCode =
+        _detectInternationalDialCode(internationalDigits) ??
+        _countryDialCodeDigits(defaultCountryIso);
+    if (dialCode != null && internationalDigits.startsWith(dialCode)) {
+      final nationalDigits = internationalDigits
+          .substring(dialCode.length)
+          .replaceFirst(RegExp(r'^0+'), '');
+      if (nationalDigits.length >= 4) {
+        addKey(nationalDigits);
+        addKey('0$nationalDigits');
+      }
     }
 
     return keys;

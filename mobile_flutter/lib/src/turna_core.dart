@@ -2364,12 +2364,13 @@ class ProfileApi {
     AuthSession session,
     List<TurnaContactSyncEntry> contacts,
   ) async {
+    final headers = await TurnaDeviceContext.buildHeaders(
+      authToken: session.token,
+      includeJsonContentType: true,
+    );
     final res = await http.post(
       Uri.parse('$kBackendBaseUrl/api/profile/contacts/sync'),
-      headers: {
-        'Authorization': 'Bearer ${session.token}',
-        'Content-Type': 'application/json',
-      },
+      headers: headers,
       body: jsonEncode({
         'contacts': contacts.map((item) => item.toMap()).toList(),
       }),
