@@ -3781,6 +3781,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     final hasText = displayText.isNotEmpty;
     final hasLocation = locationPayload != null;
     final hasContact = contactPayload != null;
+    final hasSingleAudioAttachment =
+        visibleAttachments.length == 1 &&
+        _isAudioAttachment(visibleAttachments.first);
     final hasSingleVisualAttachment =
         visibleAttachments.length == 1 &&
         !_isAudioAttachment(visibleAttachments.first) &&
@@ -3793,7 +3796,10 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         !hasText &&
         !hasError &&
         parsed.reply == null &&
-        (locationPayload != null || hasSingleVisualAttachment);
+        (locationPayload != null ||
+            contactPayload != null ||
+            hasSingleVisualAttachment ||
+            hasSingleAudioAttachment);
     final isHighlighted = _highlightedMessageId == msg.id;
     final footer = _MessageMetaFooter(
       timeLabel: _formatMessageTime(msg.createdAt),
@@ -3950,6 +3956,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                   session: widget.session,
                   callCoordinator: widget.callCoordinator,
                   onSessionExpired: widget.onSessionExpired,
+                  overlayFooter: useEmbeddedMediaBubble ? embeddedFooter : null,
                 ),
                 if (hasText) const SizedBox(height: 8),
               ],
@@ -5676,12 +5683,14 @@ class _VoiceMessageBubble extends StatefulWidget {
     required this.mine,
     required this.authToken,
     this.onLongPress,
+    this.overlayFooter,
   });
 
   final ChatAttachment attachment;
   final bool mine;
   final String authToken;
   final VoidCallback? onLongPress;
+  final Widget? overlayFooter;
 
   @override
   State<_VoiceMessageBubble> createState() => _VoiceMessageBubbleState();
@@ -5791,13 +5800,16 @@ class _VoiceMessageBubbleState extends State<_VoiceMessageBubble> {
 
   @override
   Widget build(BuildContext context) {
+    final showOverlay = widget.overlayFooter != null;
     final totalMillis = _duration.inMilliseconds <= 0
         ? math.max(1, (widget.attachment.durationSeconds ?? 0) * 1000)
         : _duration.inMilliseconds;
     final progress = (_position.inMilliseconds / totalMillis).clamp(0.0, 1.0);
-    final backgroundColor = widget.mine
-        ? Colors.white.withValues(alpha: 0.26)
-        : TurnaColors.chatUnreadBg;
+    final backgroundColor = showOverlay
+        ? (widget.mine ? TurnaColors.chatOutgoing : Colors.white)
+        : (widget.mine
+              ? Colors.white.withValues(alpha: 0.26)
+              : TurnaColors.chatUnreadBg);
     final foregroundColor = widget.mine
         ? TurnaColors.chatOutgoingText
         : TurnaColors.primary;
@@ -5805,80 +5817,102 @@ class _VoiceMessageBubbleState extends State<_VoiceMessageBubble> {
         ? TurnaColors.chatOutgoingText.withValues(alpha: 0.74)
         : TurnaColors.textMuted;
     return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
+      padding: EdgeInsets.only(bottom: showOverlay ? 0 : 8),
       child: InkWell(
         onTap: _togglePlayback,
         onLongPress: widget.onLongPress,
         borderRadius: BorderRadius.circular(18),
         child: Container(
           width: 236,
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          padding: EdgeInsets.fromLTRB(
+            12,
+            12,
+            12,
+            showOverlay ? 36 : 12,
+          ),
           decoration: BoxDecoration(
             color: backgroundColor,
             borderRadius: BorderRadius.circular(18),
+            border: showOverlay
+                ? Border.all(
+                    color: widget.mine
+                        ? TurnaColors.chatOutgoing.withValues(alpha: 0.92)
+                        : TurnaColors.border,
+                  )
+                : null,
           ),
-          child: Row(
+          child: Stack(
             children: [
-              Container(
-                width: 34,
-                height: 34,
-                decoration: BoxDecoration(
-                  color: widget.mine
-                      ? Colors.white.withValues(alpha: 0.34)
-                      : TurnaColors.primary,
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  _playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                  color: foregroundColor,
-                  size: 20,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _VoiceWaveformStrip(
-                      color: foregroundColor,
-                      fadedColor: foregroundColor.withValues(alpha: 0.3),
-                      activeBars: math.max(
-                        1,
-                        (_VoiceWaveformStrip.barCount * progress).round(),
-                      ),
+              Row(
+                children: [
+                  Container(
+                    width: 34,
+                    height: 34,
+                    decoration: BoxDecoration(
+                      color: widget.mine
+                          ? Colors.white.withValues(alpha: 0.34)
+                          : TurnaColors.primary,
+                      shape: BoxShape.circle,
                     ),
-                    const SizedBox(height: 8),
-                    Row(
+                    child: Icon(
+                      _playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                      color: foregroundColor,
+                      size: 20,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          _formatDuration(),
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: subColor,
-                            fontWeight: FontWeight.w600,
+                        _VoiceWaveformStrip(
+                          color: foregroundColor,
+                          fadedColor: foregroundColor.withValues(alpha: 0.3),
+                          activeBars: math.max(
+                            1,
+                            (_VoiceWaveformStrip.barCount * progress).round(),
                           ),
                         ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(999),
-                            child: LinearProgressIndicator(
-                              minHeight: 3,
-                              value: progress,
-                              backgroundColor: foregroundColor.withValues(
-                                alpha: 0.16,
-                              ),
-                              valueColor: AlwaysStoppedAnimation<Color>(
-                                foregroundColor,
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            Text(
+                              _formatDuration(),
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: subColor,
+                                fontWeight: FontWeight.w600,
                               ),
                             ),
-                          ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(999),
+                                child: LinearProgressIndicator(
+                                  minHeight: 3,
+                                  value: progress,
+                                  backgroundColor: foregroundColor.withValues(
+                                    alpha: 0.16,
+                                  ),
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                    foregroundColor,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ],
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
+              if (showOverlay)
+                Positioned(
+                  right: 8,
+                  bottom: 8,
+                  child: widget.overlayFooter!,
+                ),
             ],
           ),
         ),
@@ -6134,6 +6168,7 @@ class _ChatAttachmentList extends StatelessWidget {
             mine: mine,
             authToken: authToken,
             onLongPress: onLongPress,
+            overlayFooter: showOverlay ? overlayFooter : null,
           );
         }
 

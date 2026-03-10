@@ -824,6 +824,7 @@ class _TurnaSharedContactMessageCard extends StatelessWidget {
     required this.session,
     required this.callCoordinator,
     required this.onSessionExpired,
+    this.overlayFooter,
   });
 
   final TurnaSharedContactPayload payload;
@@ -831,6 +832,7 @@ class _TurnaSharedContactMessageCard extends StatelessWidget {
   final AuthSession session;
   final TurnaCallCoordinator callCoordinator;
   final VoidCallback onSessionExpired;
+  final Widget? overlayFooter;
 
   @override
   Widget build(BuildContext context) {
@@ -845,6 +847,7 @@ class _TurnaSharedContactMessageCard extends StatelessWidget {
     final headerColor = mine
         ? Colors.white.withValues(alpha: 0.18)
         : const Color(0xFFF2F3F5);
+    final showOverlayFooter = overlayFooter != null;
 
     return Container(
       width: 280,
@@ -853,138 +856,153 @@ class _TurnaSharedContactMessageCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(22),
         border: Border.all(color: borderColor),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Stack(
         children: [
-          Material(
-            color: headerColor,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
-            child: InkWell(
-              borderRadius: const BorderRadius.vertical(
-                top: Radius.circular(22),
-              ),
-              onTap: () {
-                unawaited(
-                  openTurnaSharedContactCard(
-                    context,
-                    payload,
-                    session: session,
-                    callCoordinator: callCoordinator,
-                    onSessionExpired: onSessionExpired,
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Material(
+                color: headerColor,
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
+                child: InkWell(
+                  borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(22),
                   ),
-                );
-              },
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
+                  onTap: () {
+                    unawaited(
+                      openTurnaSharedContactCard(
+                        context,
+                        payload,
+                        session: session,
+                        callCoordinator: callCoordinator,
+                        onSessionExpired: onSessionExpired,
+                      ),
+                    );
+                  },
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(
+                      14,
+                      14,
+                      14,
+                      showOverlayFooter ? 40 : 12,
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Container(
-                          width: 58,
-                          height: 58,
-                          decoration: BoxDecoration(
-                            color: mine
-                                ? Colors.white.withValues(alpha: 0.8)
-                                : const Color(0xFFE3E4E8),
-                            shape: BoxShape.circle,
-                          ),
-                          alignment: Alignment.center,
-                          child: Icon(
-                            Icons.person_rounded,
-                            color: mine
-                                ? TurnaColors.chatOutgoingText
-                                : TurnaColors.textMuted,
-                            size: 28,
-                          ),
+                        Row(
+                          children: [
+                            Container(
+                              width: 58,
+                              height: 58,
+                              decoration: BoxDecoration(
+                                color: mine
+                                    ? Colors.white.withValues(alpha: 0.8)
+                                    : const Color(0xFFE3E4E8),
+                                shape: BoxShape.circle,
+                              ),
+                              alignment: Alignment.center,
+                              child: Icon(
+                                Icons.person_rounded,
+                                color: mine
+                                    ? TurnaColors.chatOutgoingText
+                                    : TurnaColors.textMuted,
+                                size: 28,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                payload.previewLabel,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: textColor,
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 16,
+                                ),
+                              ),
+                            ),
+                            Icon(
+                              Icons.chevron_right_rounded,
+                              color: textColor.withValues(alpha: 0.72),
+                              size: 24,
+                            ),
+                          ],
                         ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Text(
-                            payload.previewLabel,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: textColor,
-                              fontWeight: FontWeight.w700,
-                              fontSize: 16,
+                        const SizedBox(height: 12),
+                        for (final phone in phones) ...[
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 6),
+                            child: Text(
+                              formatTurnaSharedPhone(phone),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: textColor.withValues(alpha: 0.88),
+                                fontSize: 13,
+                              ),
                             ),
                           ),
-                        ),
-                        Icon(
-                          Icons.chevron_right_rounded,
-                          color: textColor.withValues(alpha: 0.72),
-                          size: 24,
-                        ),
+                        ],
+                        if (payload.phones.length > phones.length)
+                          Text(
+                            '+${payload.phones.length - phones.length} numara daha',
+                            style: TextStyle(
+                              color: textColor.withValues(alpha: 0.72),
+                              fontSize: 12,
+                            ),
+                          ),
                       ],
                     ),
-                    const SizedBox(height: 12),
-                    for (final phone in phones) ...[
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 6),
-                        child: Text(
-                          formatTurnaSharedPhone(phone),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: textColor.withValues(alpha: 0.88),
-                            fontSize: 13,
-                          ),
-                        ),
+                  ),
+                ),
+              ),
+              Container(
+                decoration: BoxDecoration(
+                  border: Border(top: BorderSide(color: borderColor)),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: _TurnaSharedContactCardButton(
+                        label: 'Mesaj',
+                        color: TurnaColors.success,
+                        onTap: () {
+                          unawaited(
+                            openTurnaSharedContactMessage(
+                              context,
+                              session: session,
+                              callCoordinator: callCoordinator,
+                              onSessionExpired: onSessionExpired,
+                              payload: payload,
+                            ),
+                          );
+                        },
                       ),
-                    ],
-                    if (payload.phones.length > phones.length)
-                      Text(
-                        '+${payload.phones.length - phones.length} numara daha',
-                        style: TextStyle(
-                          color: textColor.withValues(alpha: 0.72),
-                          fontSize: 12,
-                        ),
+                    ),
+                    Container(width: 1, height: 54, color: borderColor),
+                    Expanded(
+                      child: _TurnaSharedContactCardButton(
+                        label: 'Kisi ekle',
+                        color: TurnaColors.success,
+                        onTap: () {
+                          unawaited(
+                            addTurnaSharedContactToAddressBook(context, payload),
+                          );
+                        },
                       ),
+                    ),
                   ],
                 ),
               ),
-            ),
+            ],
           ),
-          Container(
-            decoration: BoxDecoration(
-              border: Border(top: BorderSide(color: borderColor)),
+          if (showOverlayFooter)
+            Positioned(
+              right: 8,
+              bottom: 8,
+              child: overlayFooter!,
             ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: _TurnaSharedContactCardButton(
-                    label: 'Mesaj',
-                    color: TurnaColors.success,
-                    onTap: () {
-                      unawaited(
-                        openTurnaSharedContactMessage(
-                          context,
-                          session: session,
-                          callCoordinator: callCoordinator,
-                          onSessionExpired: onSessionExpired,
-                          payload: payload,
-                        ),
-                      );
-                    },
-                  ),
-                ),
-                Container(width: 1, height: 54, color: borderColor),
-                Expanded(
-                  child: _TurnaSharedContactCardButton(
-                    label: 'Kisi ekle',
-                    color: TurnaColors.success,
-                    onTap: () {
-                      unawaited(
-                        addTurnaSharedContactToAddressBook(context, payload),
-                      );
-                    },
-                  ),
-                ),
-              ],
-            ),
-          ),
         ],
       ),
     );
