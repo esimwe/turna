@@ -3,6 +3,24 @@ import { z } from "zod";
 
 config();
 
+function emptyStringToUndefined(value: unknown): unknown {
+  if (typeof value !== "string") {
+    return value;
+  }
+
+  const trimmed = value.trim();
+  return trimmed === "" ? undefined : trimmed;
+}
+
+const optionalNonEmptyString = z.preprocess(emptyStringToUndefined, z.string().min(1).optional());
+const optionalFixedOtpCode = z.preprocess(
+  emptyStringToUndefined,
+  z
+    .string()
+    .regex(/^\d{4,8}$/)
+    .optional()
+);
+
 const resolvedEnv = {
   NODE_ENV: process.env.NODE_ENV,
   PORT: process.env.PORT,
@@ -97,14 +115,11 @@ const envSchema = z.object({
   LIVEKIT_API_KEY: z.string().min(1).optional(),
   LIVEKIT_API_SECRET: z.string().min(1).optional(),
   SMS_PROVIDER: z.enum(["netgsm_bulk", "netgsm_otp", "mock"]).default("mock"),
-  NETGSM_USERCODE: z.string().min(1).optional(),
-  NETGSM_PASSWORD: z.string().min(1).optional(),
-  NETGSM_HEADER: z.string().min(1).optional(),
+  NETGSM_USERCODE: optionalNonEmptyString,
+  NETGSM_PASSWORD: optionalNonEmptyString,
+  NETGSM_HEADER: optionalNonEmptyString,
   OTP_SECRET: z.string().min(12).default("turna-otp-dev-secret-change-me"),
-  FIXED_OTP_CODE: z
-    .string()
-    .regex(/^\d{4,8}$/)
-    .optional(),
+  FIXED_OTP_CODE: optionalFixedOtpCode,
   OTP_TTL_SECONDS: z.coerce.number().int().min(30).max(900).default(180),
   OTP_RESEND_COOLDOWN_SECONDS: z.coerce.number().int().min(15).max(300).default(60),
   OTP_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(5),

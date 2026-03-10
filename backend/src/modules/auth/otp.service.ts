@@ -14,6 +14,7 @@ import {
   normalizeNationalNumber
 } from "./phone.js";
 import { assertOtpRequestAllowed, getOtpCooldownSeconds, setOtpCooldown } from "./rate-limit.js";
+import { sendOtpCode } from "./sms.provider.js";
 
 const prismaUser = (prisma as unknown as { user: any }).user;
 const prismaOtpCode = (prisma as unknown as { otpCode: any }).otpCode;
@@ -58,7 +59,7 @@ function nextOtpCode(): string {
     return env.FIXED_OTP_CODE;
   }
 
-  throw new Error("otp_provider_not_configured");
+  return randomInt(0, 1_000_000).toString().padStart(6, "0");
 }
 
 function secondsBetween(now: Date, later: Date): number {
@@ -153,8 +154,9 @@ export class OtpService {
     phone: string;
     purpose: OtpPurpose;
     ipAddress: string | null;
+    code: string;
+    provider: "MOCK" | "NETGSM_BULK";
   }): Promise<void> {
-    const code = nextOtpCode();
     const nonce = randomBytes(12).toString("hex");
     await prismaOtpCode.create({
       data: {
@@ -163,11 +165,11 @@ export class OtpService {
           phone: input.phone,
           purpose: input.purpose,
           nonce,
-          code
+          code: input.code
         }),
         nonce,
         purpose: input.purpose,
-        provider: env.FIXED_OTP_CODE ? "MOCK" : "NETGSM_BULK",
+        provider: input.provider,
         expiresAt: new Date(Date.now() + env.OTP_TTL_SECONDS * 1000),
         requestIp: input.ipAddress,
         lastSentAt: new Date()
@@ -299,11 +301,19 @@ export class OtpService {
       ipAddress: input.ipAddress
     });
 
+    const code = nextOtpCode();
     await this.consumeExistingOtps(normalized.phone, "LOGIN");
+    const sendResult = await sendOtpCode({
+      phone: normalized.phone,
+      code,
+      purpose: "LOGIN"
+    });
     await this.createOtpRecord({
       phone: normalized.phone,
       purpose: "LOGIN",
-      ipAddress: input.ipAddress
+      ipAddress: input.ipAddress,
+      code,
+      provider: sendResult.provider
     });
     await setOtpCooldown(normalized.phone);
 
@@ -443,11 +453,19 @@ export class OtpService {
       ipAddress: input.ipAddress
     });
 
+    const code = nextOtpCode();
     await this.consumeExistingOtps(normalized.phone, "PHONE_CHANGE");
+    const sendResult = await sendOtpCode({
+      phone: normalized.phone,
+      code,
+      purpose: "PHONE_CHANGE"
+    });
     await this.createOtpRecord({
       phone: normalized.phone,
       purpose: "PHONE_CHANGE",
-      ipAddress: input.ipAddress
+      ipAddress: input.ipAddress,
+      code,
+      provider: sendResult.provider
     });
     await setOtpCooldown(normalized.phone);
 
@@ -526,6 +544,7 @@ export class OtpService {
       case "signup_temporarily_unavailable":
       case "phone_change_temporarily_unavailable":
       case "otp_provider_not_configured":
+      case "otp_provider_request_failed":
         return { status: 503, error: error.message };
       case "user_not_found":
         return { status: 404, error: "user_not_found" };

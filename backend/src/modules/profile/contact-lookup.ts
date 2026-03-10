@@ -35,6 +35,21 @@ export function buildPhoneLookupKeys(raw: string | null | undefined): string[] {
   return keys;
 }
 
+export function buildCanonicalPhoneLookupKey(
+  raw: string | null | undefined
+): string | null {
+  const keys = buildPhoneLookupKeys(raw);
+  if (keys.length === 0) return null;
+
+  const sorted = [...keys].sort((left, right) => {
+    const lengthCompare = left.length - right.length;
+    if (lengthCompare !== 0) return lengthCompare;
+    return left.localeCompare(right);
+  });
+
+  return sorted[0] ?? null;
+}
+
 export function findLookupDisplayName(
   rawPhone: string | null | undefined,
   labelsByKey: Map<string, string>

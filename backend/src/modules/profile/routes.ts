@@ -14,7 +14,7 @@ import {
 } from "../../lib/storage.js";
 import { requireAuth } from "../../middleware/auth.js";
 import { buildAvatarUrl } from "./avatar-url.js";
-import { buildPhoneLookupKeys } from "./contact-lookup.js";
+import { buildCanonicalPhoneLookupKey, buildPhoneLookupKeys } from "./contact-lookup.js";
 import { isValidUsername, normalizeUsername } from "./username.js";
 
 export const profileRouter = Router();
@@ -245,10 +245,9 @@ profileRouter.post("/contacts/sync", requireAuth, async (req, res) => {
     if (!displayName) continue;
 
     for (const rawPhone of contact.phones) {
-      for (const key of buildPhoneLookupKeys(rawPhone)) {
-        if (!labelsByKey.has(key)) {
-          labelsByKey.set(key, displayName);
-        }
+      const key = buildCanonicalPhoneLookupKey(rawPhone);
+      if (key && !labelsByKey.has(key)) {
+        labelsByKey.set(key, displayName);
       }
     }
   }
