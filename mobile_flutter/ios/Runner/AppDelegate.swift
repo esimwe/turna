@@ -270,14 +270,30 @@ import Darwin
       return
     }
 
+    let lowerMimeType = (mimeType ?? "").lowercased()
+    let isVideo = lowerMimeType.starts(with: "video/")
+
     let performSave = {
+      let preparedUrl = self.preparePhotosCompatibleUrl(for: fileUrl, mimeType: lowerMimeType) ?? fileUrl
+      if preparedUrl != fileUrl && !FileManager.default.fileExists(atPath: preparedUrl.path) {
+        result(
+          FlutterError(code: "save_failed", message: "Geçici medya dosyası hazırlanamadı.", details: nil)
+        )
+        return
+      }
+
       PHPhotoLibrary.shared().performChanges({
-        if (mimeType ?? "").lowercased().starts(with: "video/") {
-          PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: fileUrl)
+        if isVideo {
+          PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: preparedUrl)
+        } else if let data = try? Data(contentsOf: preparedUrl), let image = UIImage(data: data) {
+          PHAssetChangeRequest.creationRequestForAsset(from: image)
         } else {
-          PHAssetChangeRequest.creationRequestForAssetFromImage(atFileURL: fileUrl)
+          PHAssetChangeRequest.creationRequestForAssetFromImage(atFileURL: preparedUrl)
         }
       }) { success, error in
+        if preparedUrl != fileUrl {
+          try? FileManager.default.removeItem(at: preparedUrl)
+        }
         if let error {
           result(
             FlutterError(code: "save_failed", message: error.localizedDescription, details: nil)
@@ -311,6 +327,54 @@ import Darwin
         }
       }
     }
+  }
+
+  private func preparePhotosCompatibleUrl(for fileUrl: URL, mimeType: String) -> URL? {
+    let currentExt = fileUrl.pathExtension.lowercased()
+    if currentExt != "bin" {
+      return fileUrl
+    }
+
+    let ext = preferredMediaExtension(for: mimeType, originalUrl: fileUrl)
+    guard !ext.isEmpty else { return fileUrl }
+
+    let tempUrl = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString)
+      .appendingPathExtension(ext)
+
+    do {
+      if FileManager.default.fileExists(atPath: tempUrl.path) {
+        try FileManager.default.removeItem(at: tempUrl)
+      }
+      try FileManager.default.copyItem(at: fileUrl, to: tempUrl)
+      return tempUrl
+    } catch {
+      return nil
+    }
+  }
+
+  private func preferredMediaExtension(for mimeType: String, originalUrl: URL) -> String {
+    let currentExt = originalUrl.pathExtension.lowercased()
+    if !currentExt.isEmpty && currentExt != "bin" {
+      return currentExt
+    }
+
+    if mimeType.starts(with: "image/") {
+      if mimeType.contains("png") { return "png" }
+      if mimeType.contains("webp") { return "webp" }
+      if mimeType.contains("heic") || mimeType.contains("heif") { return "heic" }
+      if mimeType.contains("gif") { return "gif" }
+      return "jpg"
+    }
+
+    if mimeType.starts(with: "video/") {
+      if mimeType.contains("quicktime") { return "mov" }
+      if mimeType.contains("webm") { return "webm" }
+      if mimeType.contains("x-matroska") || mimeType.contains("mkv") { return "mkv" }
+      return "mp4"
+    }
+
+    return ""
   }
 
   private func buildDeviceContextPayload() -> [String: Any] {
