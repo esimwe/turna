@@ -105,13 +105,15 @@ function isLiveLocationActive(payload: TurnaLocationPayload): boolean {
 
 function summarizeLocation(payload: TurnaLocationPayload): string {
   if (payload.live) {
-    return isLiveLocationActive(payload) ? "Canli konum" : "Canli konum (sona erdi)";
+    return isLiveLocationActive(payload)
+      ? "Canlı konum"
+      : "Canlı konum (sona erdi)";
   }
   return payload.title ?? "Konum";
 }
 
 function summarizeContact(payload: TurnaContactPayload): string {
-  return payload.displayName ?? "Kisi";
+  return payload.displayName ?? "Kişi";
 }
 
 export function parseTurnaMessageText(rawText: string | null | undefined): ParsedTurnaMessageText {

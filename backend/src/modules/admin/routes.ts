@@ -179,9 +179,9 @@ function summarizeMessage(row: {
   const text = row.text?.trim();
   if (text) return text;
   const firstKind = row.attachments?.[0]?.kind?.toUpperCase?.();
-  if (!firstKind) return "Sohbet baslat";
-  if ((row.attachments?.length ?? 0) > 1) return `${row.attachments?.length ?? 0} ek gonderildi`;
-  if (firstKind === "IMAGE") return "Fotograf";
+  if (!firstKind) return "Sohbet başlat";
+  if ((row.attachments?.length ?? 0) > 1) return `${row.attachments?.length ?? 0} ek gönderildi`;
+  if (firstKind === "IMAGE") return "Fotoğraf";
   if (firstKind === "VIDEO") return "Video";
   return "Dosya";
 }

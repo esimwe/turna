@@ -159,18 +159,18 @@ function buildPushBody(message: ChatMessage): string {
   }
 
   if (message.attachments.length > 1) {
-    return `${message.attachments.length} ek gonderdi`;
+    return `${message.attachments.length} ek gönderdi`;
   }
 
   switch (message.attachments[0].kind) {
     case "image":
-      return "Fotograf gonderdi";
+      return "Fotoğraf gönderdi";
     case "video":
-      return "Video gonderdi";
+      return "Video gönderdi";
     default:
       return isAudioAttachmentMeta(message.attachments[0])
-        ? "Ses kaydi gonderdi"
-        : "Dosya gonderdi";
+        ? "Ses kaydı gönderdi"
+        : "Dosya gönderdi";
   }
 }
 

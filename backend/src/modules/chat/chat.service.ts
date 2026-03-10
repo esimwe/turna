@@ -119,16 +119,16 @@ function summarizeMessage(row: {
   if (text) return text;
 
   const attachments = row.attachments ?? [];
-  if (attachments.length === 0) return "Sohbet baslat";
-  if (attachments.length > 1) return `${attachments.length} ek gonderildi`;
+  if (attachments.length === 0) return "Sohbet başlat";
+  if (attachments.length > 1) return `${attachments.length} ek gönderildi`;
 
   switch (attachments[0].kind) {
     case AttachmentKind.IMAGE:
-      return "Fotograf";
+      return "Fotoğraf";
     case AttachmentKind.VIDEO:
       return "Video";
     default:
-      return isAudioAttachmentMeta(attachments[0]) ? "Ses kaydi" : "Dosya";
+      return isAudioAttachmentMeta(attachments[0]) ? "Ses kaydı" : "Dosya";
   }
 }
 
@@ -672,7 +672,7 @@ export class ChatService {
         return {
           chatId: chat.id,
           title: peer?.phone ?? peer?.displayName ?? "New Chat",
-          lastMessage: visibleLast ? summarizeMessage(visibleLast) : "Sohbet baslat",
+          lastMessage: visibleLast ? summarizeMessage(visibleLast) : "Sohbet başlat",
           lastMessageAt: visibleLast ? visibleLast.createdAt.toISOString() : null,
           unreadCount,
           peerId: peer?.id ?? null,
