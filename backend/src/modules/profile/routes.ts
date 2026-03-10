@@ -108,6 +108,9 @@ const syncContactsSchema = z.object({
   ).max(5000)
 });
 
+const USERNAME_CHANGE_WINDOW_DAYS = 14;
+const USERNAME_CHANGE_LIMIT = 2;
+
 function toProfileDto(
   req: Request,
   user: {
@@ -174,6 +177,50 @@ async function ensureUsernameAvailable(username: string, excludeUserId?: string)
   });
 
   return !existing;
+}
+
+function resolveUsernameChangeRateLimit(
+  currentUser: {
+    username: string | null;
+    usernameChangeWindowStartedAt?: Date | null;
+    usernameChangeCount?: number | null;
+  },
+  nextUsername: string
+) {
+  const currentUsername = currentUser.username?.trim() || null;
+  if (!currentUsername || currentUsername === nextUsername) {
+    return { allowed: true as const, data: null };
+  }
+
+  const now = new Date();
+  const windowStartedAt = currentUser.usernameChangeWindowStartedAt ?? null;
+  const changeCount = Math.max(0, currentUser.usernameChangeCount ?? 0);
+  const windowMs = USERNAME_CHANGE_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+
+  if (!windowStartedAt || now.getTime() - windowStartedAt.getTime() >= windowMs) {
+    return {
+      allowed: true as const,
+      data: {
+        usernameChangeWindowStartedAt: now,
+        usernameChangeCount: 1
+      }
+    };
+  }
+
+  if (changeCount >= USERNAME_CHANGE_LIMIT) {
+    return {
+      allowed: false as const,
+      retryAt: new Date(windowStartedAt.getTime() + windowMs)
+    };
+  }
+
+  return {
+    allowed: true as const,
+    data: {
+      usernameChangeWindowStartedAt: windowStartedAt,
+      usernameChangeCount: changeCount + 1
+    }
+  };
 }
 
 profileRouter.get("/me", requireAuth, async (req, res) => {
@@ -494,7 +541,13 @@ profileRouter.put("/me", requireAuth, async (req, res) => {
 
   const currentUser = await prismaUser.findUnique({
     where: { id: userId },
-    select: { id: true, phone: true, username: true }
+    select: {
+      id: true,
+      phone: true,
+      username: true,
+      usernameChangeWindowStartedAt: true,
+      usernameChangeCount: true
+    }
   });
   if (!currentUser) {
     res.status(404).json({ error: "user_not_found" });
@@ -523,12 +576,28 @@ profileRouter.put("/me", requireAuth, async (req, res) => {
   }
 
   const normalizedCurrentUsername = currentUser.username?.trim() || null;
+  let usernameChangeData:
+    | {
+        usernameChangeWindowStartedAt: Date;
+        usernameChangeCount: number;
+      }
+    | null = null;
   if (parsed.data.username !== normalizedCurrentUsername) {
     const usernameAvailable = await ensureUsernameAvailable(parsed.data.username, userId);
     if (!usernameAvailable) {
       res.status(409).json({ error: "username_already_in_use" });
       return;
     }
+
+    const rateLimit = resolveUsernameChangeRateLimit(currentUser, parsed.data.username);
+    if (!rateLimit.allowed) {
+      res.status(429).json({
+        error: "username_change_rate_limited",
+        retryAt: rateLimit.retryAt.toISOString()
+      });
+      return;
+    }
+    usernameChangeData = rateLimit.data;
   }
 
   const user = await prismaUser.update({
@@ -538,7 +607,8 @@ profileRouter.put("/me", requireAuth, async (req, res) => {
       username: parsed.data.username,
       about: parsed.data.about,
       phone: parsed.data.phone,
-      email: parsed.data.email
+      email: parsed.data.email,
+      ...(usernameChangeData ?? {})
     },
     select: {
       id: true,
