@@ -583,6 +583,65 @@ class _TurnaBottomBarItem extends StatelessWidget {
   }
 }
 
+class _TurnaCachedImage extends StatelessWidget {
+  const _TurnaCachedImage({
+    required this.cacheKey,
+    required this.imageUrl,
+    required this.fit,
+    this.authToken,
+    this.loading,
+    this.error,
+  });
+
+  final String cacheKey;
+  final String imageUrl;
+  final String? authToken;
+  final BoxFit fit;
+  final Widget? loading;
+  final Widget? error;
+
+  @override
+  Widget build(BuildContext context) {
+    final cachedFile = TurnaLocalMediaCache.peek(cacheKey);
+    if (cachedFile != null) {
+      return Image.file(
+        cachedFile,
+        fit: fit,
+        gaplessPlayback: true,
+        errorBuilder: (_, _, _) =>
+            error ?? const Center(child: Icon(Icons.broken_image_outlined)),
+      );
+    }
+
+    return FutureBuilder<File?>(
+      future: TurnaLocalMediaCache.getOrDownloadFile(
+        cacheKey: cacheKey,
+        url: imageUrl,
+        authToken: authToken,
+      ),
+      builder: (context, snapshot) {
+        final file = snapshot.data;
+        if (file != null) {
+          return Image.file(
+            file,
+            fit: fit,
+            gaplessPlayback: true,
+            errorBuilder: (_, _, _) =>
+                error ?? const Center(child: Icon(Icons.broken_image_outlined)),
+          );
+        }
+
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return loading ??
+              const Center(child: CircularProgressIndicator(strokeWidth: 2));
+        }
+
+        return error ?? const Center(child: Icon(Icons.broken_image_outlined));
+      },
+    );
+  }
+}
+
 class _ProfileAvatar extends StatelessWidget {
   const _ProfileAvatar({
     required this.label,
@@ -596,34 +655,27 @@ class _ProfileAvatar extends StatelessWidget {
   final String? authToken;
   final double radius;
 
+  Widget _buildInitial(String initial) {
+    return Center(
+      child: Text(
+        initial,
+        style: TextStyle(
+          color: TurnaColors.textInverse,
+          fontWeight: FontWeight.w700,
+          fontSize: radius * 0.65,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final trimmedUrl = avatarUrl?.trim() ?? '';
-    if (trimmedUrl.isNotEmpty) {
-      return Container(
-        width: radius * 2,
-        height: radius * 2,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          gradient: TurnaColors.avatarGradient,
-          boxShadow: const [TurnaColors.shadowSoft],
-          image: DecorationImage(
-            image: NetworkImage(
-              trimmedUrl,
-              headers: authToken == null || authToken!.trim().isEmpty
-                  ? null
-                  : {'Authorization': 'Bearer ${authToken!.trim()}'},
-            ),
-            fit: BoxFit.cover,
-          ),
-        ),
-      );
-    }
-
     final safeLabel = label.trim();
     final initial = safeLabel.isEmpty
         ? '?'
         : safeLabel.characters.first.toUpperCase();
+    final trimmedUrl = avatarUrl?.trim() ?? '';
+
     return Container(
       width: radius * 2,
       height: radius * 2,
@@ -632,14 +684,17 @@ class _ProfileAvatar extends StatelessWidget {
         gradient: TurnaColors.avatarGradient,
         boxShadow: const [TurnaColors.shadowSoft],
       ),
-      alignment: Alignment.center,
-      child: Text(
-        initial,
-        style: TextStyle(
-          color: TurnaColors.textInverse,
-          fontWeight: FontWeight.w700,
-          fontSize: radius * 0.65,
-        ),
+      child: ClipOval(
+        child: trimmedUrl.isEmpty
+            ? _buildInitial(initial)
+            : _TurnaCachedImage(
+                cacheKey: 'avatar:$trimmedUrl',
+                imageUrl: trimmedUrl,
+                authToken: authToken,
+                fit: BoxFit.cover,
+                loading: _buildInitial(initial),
+                error: _buildInitial(initial),
+              ),
       ),
     );
   }
@@ -684,23 +739,47 @@ class AvatarViewerPage extends StatelessWidget {
         foregroundColor: Colors.white,
         title: Text(title),
       ),
-      body: InteractiveViewer(
-        minScale: 0.8,
-        maxScale: 4,
-        child: Center(
-          child: Image.network(
-            imageUrl,
-            headers: {'Authorization': 'Bearer $token'},
-            fit: BoxFit.contain,
-            errorBuilder: (_, _, _) => const Padding(
+      body: FutureBuilder<File?>(
+        future: TurnaLocalMediaCache.getOrDownloadFile(
+          cacheKey: 'avatar:$imageUrl',
+          url: imageUrl,
+          authToken: token,
+        ),
+        builder: (context, snapshot) {
+          final file = snapshot.data;
+          if (file == null) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            return const Padding(
               padding: EdgeInsets.all(24),
-              child: Text(
-                'Gorsel yuklenemedi.',
-                style: TextStyle(color: Colors.white),
+              child: Center(
+                child: Text(
+                  'Gorsel yuklenemedi.',
+                  style: TextStyle(color: Colors.white),
+                ),
+              ),
+            );
+          }
+
+          return InteractiveViewer(
+            minScale: 0.8,
+            maxScale: 4,
+            child: Center(
+              child: Image.file(
+                file,
+                fit: BoxFit.contain,
+                errorBuilder: (_, _, _) => const Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Text(
+                    'Gorsel yuklenemedi.',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                ),
               ),
             ),
-          ),
-        ),
+          );
+        },
       ),
     );
   }

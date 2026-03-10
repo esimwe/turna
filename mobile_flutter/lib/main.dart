@@ -301,6 +301,139 @@ void turnaLog(String message, [Object? data]) {
   debugPrint('[turna-mobile] $message');
 }
 
+Map<String, String>? buildTurnaAuthHeaders(String? authToken) {
+  final trimmed = authToken?.trim() ?? '';
+  if (trimmed.isEmpty) return null;
+  return {'Authorization': 'Bearer $trimmed'};
+}
+
+class TurnaLocalMediaCache {
+  static const String _cacheDirName = 'turna-media-cache';
+  static Directory? _cacheDir;
+  static final Map<String, File> _resolvedFiles = {};
+  static final Map<String, Future<File?>> _pendingFiles = {};
+
+  static File? peek(String cacheKey) {
+    final file = _resolvedFiles[cacheKey];
+    if (file == null) return null;
+    if (!file.existsSync()) {
+      _resolvedFiles.remove(cacheKey);
+      return null;
+    }
+    return file;
+  }
+
+  static Future<File?> getOrDownloadFile({
+    required String cacheKey,
+    required String url,
+    String? authToken,
+  }) async {
+    final cached = peek(cacheKey);
+    if (cached != null) {
+      return cached;
+    }
+
+    final pending = _pendingFiles[cacheKey];
+    if (pending != null) {
+      return pending;
+    }
+
+    final future = _resolveOrDownload(
+      cacheKey: cacheKey,
+      url: url,
+      authToken: authToken,
+    );
+    _pendingFiles[cacheKey] = future;
+
+    try {
+      return await future;
+    } finally {
+      if (identical(_pendingFiles[cacheKey], future)) {
+        _pendingFiles.remove(cacheKey);
+      }
+    }
+  }
+
+  static Future<File?> _resolveOrDownload({
+    required String cacheKey,
+    required String url,
+    String? authToken,
+  }) async {
+    try {
+      final file = await _fileForKey(cacheKey);
+      if (await file.exists()) {
+        final length = await file.length();
+        if (length > 0) {
+          _resolvedFiles[cacheKey] = file;
+          return file;
+        }
+        try {
+          await file.delete();
+        } catch (_) {}
+      }
+
+      final response = await http.get(
+        Uri.parse(url),
+        headers: buildTurnaAuthHeaders(authToken),
+      );
+      if (response.statusCode >= 400) {
+        turnaLog('media cache download failed', {
+          'cacheKey': cacheKey,
+          'statusCode': response.statusCode,
+          'url': url,
+        });
+        return null;
+      }
+
+      if (response.bodyBytes.isEmpty) {
+        turnaLog('media cache empty response', {
+          'cacheKey': cacheKey,
+          'url': url,
+        });
+        return null;
+      }
+
+      await file.writeAsBytes(response.bodyBytes, flush: true);
+      _resolvedFiles[cacheKey] = file;
+      return file;
+    } catch (error) {
+      turnaLog('media cache resolve failed', {
+        'cacheKey': cacheKey,
+        'url': url,
+        'error': '$error',
+      });
+      return null;
+    }
+  }
+
+  static Future<Directory> _ensureCacheDir() async {
+    final existing = _cacheDir;
+    if (existing != null) return existing;
+
+    final baseDir = await getApplicationSupportDirectory();
+    final dir = Directory('${baseDir.path}/$_cacheDirName');
+    if (!await dir.exists()) {
+      await dir.create(recursive: true);
+    }
+    _cacheDir = dir;
+    return dir;
+  }
+
+  static Future<File> _fileForKey(String cacheKey) async {
+    final dir = await _ensureCacheDir();
+    return File('${dir.path}/${_hashKey(cacheKey)}.bin');
+  }
+
+  static String _hashKey(String value) {
+    var hash = 0x811c9dc5;
+    for (final unit in utf8.encode(value)) {
+      hash ^= unit;
+      hash = (hash * 0x01000193) & 0xffffffff;
+    }
+    return '${hash.toRadixString(16).padLeft(8, '0')}-${value.length}';
+  }
+}
+
 class TurnaDeviceContext {
   static const MethodChannel _channel = MethodChannel('turna/device');
   static const String _deviceIdKey = 'turna_app_scoped_device_id';

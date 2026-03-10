@@ -2690,18 +2690,17 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     if (url.isEmpty) {
       throw TurnaApiException('Iletilecek ek icin link bulunamadi.');
     }
-    final uri = Uri.parse(url);
-    var response = await http.get(uri);
-    if (response.statusCode >= 400) {
-      response = await http.get(
-        uri,
-        headers: {'Authorization': 'Bearer ${widget.session.token}'},
-      );
+
+    final cachedFile = await TurnaLocalMediaCache.getOrDownloadFile(
+      cacheKey: 'attachment:${attachment.objectKey}',
+      url: url,
+      authToken: widget.session.token,
+    );
+    if (cachedFile != null) {
+      return cachedFile.readAsBytes();
     }
-    if (response.statusCode >= 400) {
-      throw TurnaApiException('Ek indirilemedi.');
-    }
-    return response.bodyBytes;
+
+    throw TurnaApiException('Ek indirilemedi.');
   }
 
   Future<void> _forwardMessage(ChatMessage msg) async {
@@ -4369,6 +4368,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         context,
         MaterialPageRoute(
           builder: (_) => ChatAttachmentViewerPage(
+            cacheKey: 'attachment:${attachment.objectKey}',
             imageUrl: url,
             title: attachment.fileName ?? 'Gorsel',
           ),
@@ -5332,7 +5332,15 @@ class _VoiceMessageBubbleState extends State<_VoiceMessageBubble> {
         return;
       }
       _preparedUrl = url;
-      await _player.play(ap.UrlSource(url));
+      final cachedFile = await TurnaLocalMediaCache.getOrDownloadFile(
+        cacheKey: 'attachment:${widget.attachment.objectKey}',
+        url: url,
+      );
+      if (cachedFile == null) {
+        widget.onFallbackTap();
+        return;
+      }
+      await _player.play(ap.DeviceFileSource(cachedFile.path));
     } catch (error) {
       turnaLog('voice playback failed', error);
       widget.onFallbackTap();
@@ -5694,10 +5702,14 @@ class _ChatAttachmentList extends StatelessWidget {
                       ? const Center(
                           child: Icon(Icons.image_not_supported_outlined),
                         )
-                      : Image.network(
-                          imageUrl,
+                      : _TurnaCachedImage(
+                          cacheKey: 'attachment:${attachment.objectKey}',
+                          imageUrl: imageUrl,
                           fit: BoxFit.cover,
-                          errorBuilder: (_, _, _) => const Center(
+                          loading: const Center(
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                          error: const Center(
                             child: Icon(Icons.broken_image_outlined),
                           ),
                         ),
@@ -5771,10 +5783,12 @@ class _ChatAttachmentList extends StatelessWidget {
 class ChatAttachmentViewerPage extends StatelessWidget {
   const ChatAttachmentViewerPage({
     super.key,
+    required this.cacheKey,
     required this.imageUrl,
     required this.title,
   });
 
+  final String cacheKey;
   final String imageUrl;
   final String title;
 
@@ -5787,22 +5801,44 @@ class ChatAttachmentViewerPage extends StatelessWidget {
         foregroundColor: Colors.white,
         title: Text(title),
       ),
-      body: InteractiveViewer(
-        minScale: 0.8,
-        maxScale: 4,
-        child: Center(
-          child: Image.network(
-            imageUrl,
-            fit: BoxFit.contain,
-            errorBuilder: (_, _, _) => const Padding(
+      body: FutureBuilder<File?>(
+        future: TurnaLocalMediaCache.getOrDownloadFile(
+          cacheKey: cacheKey,
+          url: imageUrl,
+        ),
+        builder: (context, snapshot) {
+          final file = snapshot.data;
+          if (file == null) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            return const Padding(
               padding: EdgeInsets.all(24),
               child: Text(
                 'Gorsel yuklenemedi.',
                 style: TextStyle(color: Colors.white),
               ),
+            );
+          }
+
+          return InteractiveViewer(
+            minScale: 0.8,
+            maxScale: 4,
+            child: Center(
+              child: Image.file(
+                file,
+                fit: BoxFit.contain,
+                errorBuilder: (_, _, _) => const Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Text(
+                    'Gorsel yuklenemedi.',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                ),
+              ),
             ),
-          ),
-        ),
+          );
+        },
       ),
     );
   }
