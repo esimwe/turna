@@ -4681,11 +4681,21 @@ class ActiveCallPage extends StatefulWidget {
   State<ActiveCallPage> createState() => _ActiveCallPageState();
 }
 
+enum _CallPreviewCorner { topLeft, topRight, bottomLeft, bottomRight }
+
 class _ActiveCallPageState extends State<ActiveCallPage> {
   late final TurnaManagedCallSession _callSession;
   bool _ending = false;
   bool _handledSessionEnd = false;
   bool _showLocalVideoPrimary = false;
+  _CallPreviewCorner _previewCorner = _CallPreviewCorner.topRight;
+  Offset? _previewDragTopLeft;
+
+  static const double _previewMargin = 16;
+  static const double _previewWidth = 96;
+  static const double _previewHeight = 170;
+  static const double _previewBottomReserved = 112;
+  static const double _previewSnapThreshold = 84;
 
   @override
   void initState() {
@@ -4769,6 +4779,75 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
     setState(() => _showLocalVideoPrimary = !_showLocalVideoPrimary);
   }
 
+  Offset _previewAnchorOffset(Size size, _CallPreviewCorner corner) {
+    final maxLeft = math.max(_previewMargin, size.width - _previewMargin - _previewWidth);
+    final bottomTop = math.max(
+      _previewMargin,
+      size.height - _previewBottomReserved - _previewHeight,
+    );
+    return switch (corner) {
+      _CallPreviewCorner.topLeft => const Offset(_previewMargin, _previewMargin),
+      _CallPreviewCorner.topRight => Offset(maxLeft, _previewMargin),
+      _CallPreviewCorner.bottomLeft => Offset(_previewMargin, bottomTop),
+      _CallPreviewCorner.bottomRight => Offset(maxLeft, bottomTop),
+    };
+  }
+
+  Offset _clampPreviewOffset(Size size, Offset value) {
+    final maxLeft = math.max(_previewMargin, size.width - _previewMargin - _previewWidth);
+    final maxTop = math.max(
+      _previewMargin,
+      size.height - _previewBottomReserved - _previewHeight,
+    );
+    return Offset(
+      value.dx.clamp(_previewMargin, maxLeft),
+      value.dy.clamp(_previewMargin, maxTop),
+    );
+  }
+
+  void _startPreviewDrag(Size size) {
+    _previewDragTopLeft ??= _previewAnchorOffset(size, _previewCorner);
+  }
+
+  void _updatePreviewDrag(Size size, DragUpdateDetails details) {
+    final base = _previewDragTopLeft ?? _previewAnchorOffset(size, _previewCorner);
+    setState(() {
+      _previewDragTopLeft = _clampPreviewOffset(size, base + details.delta);
+    });
+  }
+
+  void _endPreviewDrag(Size size) {
+    final dragTopLeft = _previewDragTopLeft;
+    if (dragTopLeft == null) return;
+
+    final targetCenter = dragTopLeft +
+        const Offset(_previewWidth / 2, _previewHeight / 2);
+    _CallPreviewCorner? snappedCorner;
+    var snappedDistance = double.infinity;
+
+    for (final corner in _CallPreviewCorner.values) {
+      final cornerCenter = _previewAnchorOffset(size, corner) +
+          const Offset(_previewWidth / 2, _previewHeight / 2);
+      final distance = (cornerCenter - targetCenter).distance;
+      if (distance < snappedDistance) {
+        snappedDistance = distance;
+        snappedCorner = corner;
+      }
+    }
+
+    setState(() {
+      if (snappedCorner != null && snappedDistance <= _previewSnapThreshold) {
+        _previewCorner = snappedCorner;
+      }
+      _previewDragTopLeft = null;
+    });
+  }
+
+  void _cancelPreviewDrag() {
+    if (_previewDragTopLeft == null) return;
+    setState(() => _previewDragTopLeft = null);
+  }
+
   Widget _buildCallControlButton({
     required VoidCallback? onPressed,
     required Widget child,
@@ -4837,13 +4916,19 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
 
   Widget _buildVideoPreviewCard({
     required Widget child,
-    required VoidCallback? onTap,
+    Widget? overlay,
   }) {
     return Material(
       color: Colors.black,
       borderRadius: BorderRadius.circular(18),
       clipBehavior: Clip.antiAlias,
-      child: InkWell(onTap: onTap, child: child),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          child,
+          ...?overlay == null ? null : <Widget>[overlay],
+        ],
+      ),
     );
   }
 
@@ -4891,11 +4976,6 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
         adapter.cameraPosition == lk.CameraPosition.front
         ? lk.VideoViewMirrorMode.mirror
         : lk.VideoViewMirrorMode.off;
-    const previewTop = 16.0;
-    const previewRight = 16.0;
-    const previewWidth = 96.0;
-    const previewHeight = 170.0;
-    final previewBottom = previewTop + previewHeight + 12;
 
     Widget primaryContent;
     if (isVideo && showLocalVideoPrimary) {
@@ -4921,31 +5001,67 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
     if (isVideo && localVideo != null) {
       final previewChild = showLocalVideoPrimary
           ? (remoteVideo != null
-                ? lk.VideoTrackRenderer(
-                    remoteVideo,
-                    key: ValueKey('preview-remote-${_callSession.call.id}'),
-                    fit: lk.VideoViewFit.cover,
+                ? IgnorePointer(
+                    child: lk.VideoTrackRenderer(
+                      remoteVideo,
+                      key: ValueKey('preview-remote-${_callSession.call.id}'),
+                      fit: lk.VideoViewFit.cover,
+                    ),
                   )
                 : _buildPreviewPlaceholder(showLocalUser: false))
-          : lk.VideoTrackRenderer(
-              localVideo,
-              key: ValueKey(
-                'preview-local-${_callSession.call.id}-${adapter.cameraPosition.name}',
+          : IgnorePointer(
+              child: lk.VideoTrackRenderer(
+                localVideo,
+                key: ValueKey(
+                  'preview-local-${_callSession.call.id}-${adapter.cameraPosition.name}',
+                ),
+                fit: lk.VideoViewFit.cover,
+                mirrorMode: localPreviewMirrorMode,
               ),
-              fit: lk.VideoViewFit.cover,
-              mirrorMode: localPreviewMirrorMode,
             );
 
       previewOverlays.add(
-        Positioned(
-          right: previewRight,
-          top: previewTop,
-          width: previewWidth,
-          height: previewHeight,
-          child: _buildVideoPreviewCard(
-            onTap: _toggleVideoSwap,
-            child: previewChild,
-          ),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final viewport = Size(constraints.maxWidth, constraints.maxHeight);
+            final previewOffset =
+                _previewDragTopLeft ?? _previewAnchorOffset(viewport, _previewCorner);
+            return Positioned(
+              left: previewOffset.dx,
+              top: previewOffset.dy,
+              width: _previewWidth,
+              height: _previewHeight,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: _toggleVideoSwap,
+                onPanStart: (_) => _startPreviewDrag(viewport),
+                onPanUpdate: (details) => _updatePreviewDrag(viewport, details),
+                onPanEnd: (_) => _endPreviewDrag(viewport),
+                onPanCancel: _cancelPreviewDrag,
+                child: _buildVideoPreviewCard(
+                  child: previewChild,
+                  overlay: adapter.cameraEnabled
+                      ? Positioned(
+                          right: 8,
+                          bottom: 8,
+                          child: _buildCallControlButton(
+                            size: 36,
+                            backgroundColor: Colors.black54,
+                            onPressed: adapter.connecting
+                                ? null
+                                : () => adapter.flipCamera(),
+                            child: const Icon(
+                              Icons.cameraswitch_outlined,
+                              color: Colors.white,
+                              size: 18,
+                            ),
+                          ),
+                        )
+                      : null,
+                ),
+              ),
+            );
+          },
         ),
       );
     }
@@ -4973,21 +5089,6 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
             children: [
               Positioned.fill(child: primaryContent),
               ...previewOverlays,
-              if (localVideo != null && isVideo && adapter.cameraEnabled)
-                Positioned(
-                  right: previewRight,
-                  top: previewBottom,
-                  child: _buildCallControlButton(
-                    backgroundColor: Colors.black54,
-                    onPressed: adapter.connecting
-                        ? null
-                        : () => adapter.flipCamera(),
-                    child: const Icon(
-                      Icons.cameraswitch_outlined,
-                      color: Colors.white,
-                    ),
-                  ),
-                ),
               Positioned(
                 left: 24,
                 right: 24,
