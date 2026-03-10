@@ -1627,9 +1627,21 @@ class _UserProfilePageState extends State<UserProfilePage> {
             children: [
               _UserProfileRow(
                 icon: Icons.photo_library_outlined,
-                title: 'Medya, baglanti ve belgeler',
+                title: 'Medya, bağlantı ve belgeler',
                 trailingText: _formatConversationCount(),
-                onTap: () => _showPlaceholderAction('Medya listesi'),
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => ConversationMediaPage(
+                      session: widget.session,
+                      chatId: ChatApi.buildDirectChatId(
+                        widget.session.userId,
+                        widget.userId,
+                      ),
+                      peerName: name,
+                    ),
+                  ),
+                ),
               ),
               _UserProfileRow(
                 icon: Icons.folder_outlined,
@@ -1752,6 +1764,843 @@ class _UserConversationStats {
 
   final int attachmentCount;
   final int totalBytes;
+}
+
+enum _ConversationLibraryTab { media, links, documents }
+
+extension _ConversationLibraryTabX on _ConversationLibraryTab {
+  String get label => switch (this) {
+    _ConversationLibraryTab.media => 'Medya',
+    _ConversationLibraryTab.links => 'Bağlantılar',
+    _ConversationLibraryTab.documents => 'Belgeler',
+  };
+}
+
+class ConversationMediaPage extends StatefulWidget {
+  const ConversationMediaPage({
+    super.key,
+    required this.session,
+    required this.chatId,
+    required this.peerName,
+  });
+
+  final AuthSession session;
+  final String chatId;
+  final String peerName;
+
+  @override
+  State<ConversationMediaPage> createState() => _ConversationMediaPageState();
+}
+
+class _ConversationMediaPageState extends State<ConversationMediaPage> {
+  static final _kMessageLinkPattern = RegExp(
+    r'((?:https?:\/\/|www\.)[^\s<]+)',
+    caseSensitive: false,
+  );
+
+  _ConversationLibraryTab _selectedTab = _ConversationLibraryTab.media;
+  bool _loading = true;
+  String? _error;
+  List<_ConversationMediaItem> _mediaItems = const [];
+  List<_ConversationMonthSection<_ConversationLinkItem>> _linkSections =
+      const [];
+  List<_ConversationMonthSection<_ConversationDocumentItem>> _documentSections =
+      const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadContent();
+  }
+
+  Future<void> _loadContent() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+
+    try {
+      final messages = await _fetchAllMessages();
+      messages.sort(
+        (a, b) => _messageTimestamp(b).compareTo(_messageTimestamp(a)),
+      );
+
+      final mediaItems = <_ConversationMediaItem>[];
+      final linkItems = <_ConversationLinkItem>[];
+      final documentItems = <_ConversationDocumentItem>[];
+      final seenLinks = <String>{};
+
+      for (final message in messages) {
+        final parsed = parseTurnaMessageText(message.text);
+        if (parsed.deletedForEveryone) continue;
+        final createdAt = _messageTimestamp(message);
+
+        for (final attachment in message.attachments) {
+          if (attachment.kind == ChatAttachmentKind.image ||
+              attachment.kind == ChatAttachmentKind.video) {
+            mediaItems.add(
+              _ConversationMediaItem(
+                message: message,
+                attachment: attachment,
+                createdAt: createdAt,
+              ),
+            );
+            continue;
+          }
+          if (attachment.kind == ChatAttachmentKind.file &&
+              !_isAudioAttachment(attachment)) {
+            documentItems.add(
+              _ConversationDocumentItem(
+                message: message,
+                attachment: attachment,
+                createdAt: createdAt,
+              ),
+            );
+          }
+        }
+
+        final normalizedText = parsed.text.trim();
+        if (normalizedText.isEmpty) continue;
+        for (final match in _kMessageLinkPattern.allMatches(normalizedText)) {
+          final rawUrl = (match.group(0) ?? '').trim();
+          final uri = _parseSharedUri(rawUrl);
+          if (uri == null) continue;
+          final key = '${message.id}|${uri.toString()}';
+          if (!seenLinks.add(key)) continue;
+          linkItems.add(
+            _ConversationLinkItem(
+              message: message,
+              uri: uri,
+              createdAt: createdAt,
+              title: _linkTitleForMessage(normalizedText, uri),
+              subtitle: _linkSubtitleForUri(uri),
+            ),
+          );
+        }
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _mediaItems = mediaItems;
+        _linkSections = _buildMonthSections(
+          linkItems,
+          (item) => item.createdAt,
+        );
+        _documentSections = _buildMonthSections(
+          documentItems,
+          (item) => item.createdAt,
+        );
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = error.toString();
+      });
+    }
+  }
+
+  Future<List<ChatMessage>> _fetchAllMessages() async {
+    final items = <ChatMessage>[];
+    String? before;
+    var hasMore = true;
+
+    while (hasMore) {
+      final page = await ChatApi.fetchMessagesPage(
+        widget.session.token,
+        widget.chatId,
+        before: before,
+        limit: 100,
+      );
+      items.addAll(page.items);
+      hasMore = page.hasMore;
+      before = page.nextBefore;
+      if (page.items.isEmpty) break;
+    }
+
+    return items;
+  }
+
+  DateTime _messageTimestamp(ChatMessage message) {
+    final created = DateTime.tryParse(message.createdAt);
+    if (created != null) return created.toLocal();
+    final edited = DateTime.tryParse(message.editedAt ?? '');
+    if (edited != null) return edited.toLocal();
+    return DateTime.now();
+  }
+
+  Uri? _parseSharedUri(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return null;
+    final normalized = trimmed.startsWith('http://') ||
+            trimmed.startsWith('https://')
+        ? trimmed
+        : 'https://$trimmed';
+    return Uri.tryParse(normalized);
+  }
+
+  String _linkTitleForMessage(String text, Uri uri) {
+    final cleaned = text
+        .replaceAll(_kMessageLinkPattern, '')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    if (cleaned.isNotEmpty) return cleaned;
+    final host = uri.host.replaceFirst(RegExp(r'^www\.'), '');
+    return host.isEmpty ? uri.toString() : host;
+  }
+
+  String _linkSubtitleForUri(Uri uri) {
+    final host = uri.host.replaceFirst(RegExp(r'^www\.'), '');
+    if (host.isEmpty) return uri.toString();
+    final path = uri.path.trim();
+    if (path.isEmpty || path == '/') return host;
+    return '$host$path';
+  }
+
+  List<_ConversationMonthSection<T>> _buildMonthSections<T>(
+    List<T> items,
+    DateTime Function(T item) getDate,
+  ) {
+    if (items.isEmpty) return const [];
+
+    final sections = <_ConversationMonthSection<T>>[];
+    String? activeKey;
+    for (final item in items) {
+      final date = getDate(item);
+      final sectionKey = '${date.year}-${date.month}';
+      if (sectionKey != activeKey) {
+        sections.add(
+          _ConversationMonthSection<T>(
+            label: _formatTurkishMonthYear(date),
+            items: <T>[item],
+          ),
+        );
+        activeKey = sectionKey;
+      } else {
+        sections.last.items.add(item);
+      }
+    }
+
+    return sections;
+  }
+
+  String _formatTurkishMonthYear(DateTime date) {
+    const months = [
+      'Ocak',
+      'Şubat',
+      'Mart',
+      'Nisan',
+      'Mayıs',
+      'Haziran',
+      'Temmuz',
+      'Ağustos',
+      'Eylül',
+      'Ekim',
+      'Kasım',
+      'Aralık',
+    ];
+    return '${months[date.month - 1]} ${date.year}';
+  }
+
+  Future<void> _openMedia(_ConversationMediaItem item) async {
+    final url = item.attachment.url?.trim() ?? '';
+    if (url.isEmpty) {
+      _showSnackBar('Medya açılamadı.');
+      return;
+    }
+
+    if (item.attachment.kind == ChatAttachmentKind.image) {
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => ChatAttachmentViewerPage(
+            cacheKey: 'library:${item.attachment.objectKey}',
+            imageUrl: url,
+            title: item.attachment.fileName ?? widget.peerName,
+          ),
+        ),
+      );
+      return;
+    }
+
+    final opened = await launchUrl(
+      Uri.parse(url),
+      mode: LaunchMode.externalApplication,
+    );
+    if (!opened && mounted) {
+      _showSnackBar('Video açılamadı.');
+    }
+  }
+
+  Future<void> _openExternalUri(Uri uri, String errorText) async {
+    final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!opened && mounted) {
+      _showSnackBar(errorText);
+    }
+  }
+
+  Future<void> _openDocument(_ConversationDocumentItem item) async {
+    final url = item.attachment.url?.trim() ?? '';
+    if (url.isEmpty) {
+      _showSnackBar('Belge açılamadı.');
+      return;
+    }
+    await _openExternalUri(Uri.parse(url), 'Belge açılamadı.');
+  }
+
+  void _showSnackBar(String message) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Widget _buildSegmentedTabs() {
+    return Container(
+      height: 34,
+      decoration: BoxDecoration(
+        color: const Color(0xFFF1F3F5),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      padding: const EdgeInsets.all(2),
+      child: Row(
+        children: [
+          for (final tab in _ConversationLibraryTab.values)
+            Expanded(
+              child: GestureDetector(
+                onTap: () => setState(() => _selectedTab = tab),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 180),
+                  curve: Curves.easeOut,
+                  decoration: BoxDecoration(
+                    color: _selectedTab == tab ? Colors.white : Colors.transparent,
+                    borderRadius: BorderRadius.circular(8),
+                    boxShadow: _selectedTab == tab
+                        ? const [
+                            BoxShadow(
+                              color: Color(0x14000000),
+                              blurRadius: 6,
+                              offset: Offset(0, 2),
+                            ),
+                          ]
+                        : null,
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    tab.label,
+                    style: TextStyle(
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w600,
+                      color: _selectedTab == tab
+                          ? const Color(0xFF202124)
+                          : const Color(0xFF636A68),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBody() {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_error != null) {
+      return _CenteredState(
+        icon: Icons.error_outline_rounded,
+        title: 'İçerik yüklenemedi',
+        message: _error!,
+        primaryLabel: 'Tekrar dene',
+        onPrimary: _loadContent,
+      );
+    }
+
+    return switch (_selectedTab) {
+      _ConversationLibraryTab.media => _buildMediaTab(),
+      _ConversationLibraryTab.links => _buildLinksTab(),
+      _ConversationLibraryTab.documents => _buildDocumentsTab(),
+    };
+  }
+
+  Widget _buildMediaTab() {
+    if (_mediaItems.isEmpty) {
+      return const _CenteredListState(
+        icon: Icons.photo_library_outlined,
+        title: 'Medya yok',
+        message: 'Bu sohbette henüz fotoğraf veya video paylaşılmamış.',
+      );
+    }
+
+    final hasVideo = _mediaItems.any(
+      (item) => item.attachment.kind == ChatAttachmentKind.video,
+    );
+    final footerLabel =
+        hasVideo ? '${_mediaItems.length} Medya' : '${_mediaItems.length} Fotoğraf';
+
+    return CustomScrollView(
+      slivers: [
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(2, 10, 2, 0),
+          sliver: SliverGrid(
+            delegate: SliverChildBuilderDelegate((context, index) {
+              final item = _mediaItems[index];
+              return GestureDetector(
+                onTap: () => _openMedia(item),
+                child: _ConversationMediaTile(
+                  item: item,
+                  authToken: widget.session.token,
+                ),
+              );
+            }, childCount: _mediaItems.length),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 4,
+              mainAxisSpacing: 2,
+              crossAxisSpacing: 2,
+            ),
+          ),
+        ),
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 18, 16, 26),
+            child: Center(
+              child: Text(
+                footerLabel,
+                style: const TextStyle(
+                  fontSize: 14,
+                  color: Color(0xFF4A5150),
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildLinksTab() {
+    if (_linkSections.isEmpty) {
+      return const _CenteredListState(
+        icon: Icons.link_rounded,
+        title: 'Bağlantı yok',
+        message: 'Bu sohbette henüz bağlantı paylaşılmamış.',
+      );
+    }
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 24),
+      children: [
+        for (final section in _linkSections) ...[
+          _ConversationSectionHeader(label: section.label),
+          const SizedBox(height: 8),
+          for (final item in section.items) ...[
+            _ConversationLinkTile(
+              item: item,
+              onTap: () => _openExternalUri(item.uri, 'Bağlantı açılamadı.'),
+            ),
+            const SizedBox(height: 10),
+          ],
+        ],
+      ],
+    );
+  }
+
+  Widget _buildDocumentsTab() {
+    final totalDocuments = _documentSections.fold<int>(
+      0,
+      (sum, section) => sum + section.items.length,
+    );
+    if (totalDocuments == 0) {
+      return const _CenteredListState(
+        icon: Icons.insert_drive_file_outlined,
+        title: 'Belge yok',
+        message: 'Bu sohbette henüz belge paylaşılmamış.',
+      );
+    }
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 24),
+      children: [
+        for (final section in _documentSections) ...[
+          _ConversationSectionHeader(label: section.label),
+          const SizedBox(height: 8),
+          for (final item in section.items) ...[
+            _ConversationDocumentTile(
+              item: item,
+              onTap: () => _openDocument(item),
+            ),
+            const SizedBox(height: 10),
+          ],
+        ],
+        Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: Center(
+            child: Text(
+              '$totalDocuments Belge',
+              style: const TextStyle(
+                fontSize: 14,
+                color: Color(0xFF4A5150),
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF5F6F7),
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        titleSpacing: 0,
+        title: Padding(
+          padding: const EdgeInsets.only(right: 8),
+          child: _buildSegmentedTabs(),
+        ),
+        actions: const [
+          Center(
+            child: Padding(
+              padding: EdgeInsets.only(right: 16),
+              child: Text(
+                'Seç',
+                style: TextStyle(
+                  color: Color(0xFF1C2120),
+                  fontSize: 16,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+      body: _buildBody(),
+    );
+  }
+}
+
+class _ConversationMediaItem {
+  const _ConversationMediaItem({
+    required this.message,
+    required this.attachment,
+    required this.createdAt,
+  });
+
+  final ChatMessage message;
+  final ChatAttachment attachment;
+  final DateTime createdAt;
+}
+
+class _ConversationLinkItem {
+  const _ConversationLinkItem({
+    required this.message,
+    required this.uri,
+    required this.createdAt,
+    required this.title,
+    required this.subtitle,
+  });
+
+  final ChatMessage message;
+  final Uri uri;
+  final DateTime createdAt;
+  final String title;
+  final String subtitle;
+}
+
+class _ConversationDocumentItem {
+  const _ConversationDocumentItem({
+    required this.message,
+    required this.attachment,
+    required this.createdAt,
+  });
+
+  final ChatMessage message;
+  final ChatAttachment attachment;
+  final DateTime createdAt;
+}
+
+class _ConversationMonthSection<T> {
+  _ConversationMonthSection({required this.label, required this.items});
+
+  final String label;
+  final List<T> items;
+}
+
+class _ConversationSectionHeader extends StatelessWidget {
+  const _ConversationSectionHeader({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 2),
+      child: Text(
+        label,
+        style: const TextStyle(
+          fontSize: 15,
+          color: Color(0xFF3E4443),
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+}
+
+class _ConversationMediaTile extends StatelessWidget {
+  const _ConversationMediaTile({required this.item, required this.authToken});
+
+  final _ConversationMediaItem item;
+  final String authToken;
+
+  @override
+  Widget build(BuildContext context) {
+    final attachment = item.attachment;
+    final imageUrl = attachment.url?.trim() ?? '';
+    final isVideo = attachment.kind == ChatAttachmentKind.video;
+
+    return DecoratedBox(
+      decoration: const BoxDecoration(color: Color(0xFFE6E9EE)),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          if (!isVideo && imageUrl.isNotEmpty)
+            _TurnaCachedImage(
+              cacheKey: 'library:${attachment.objectKey}',
+              imageUrl: imageUrl,
+              authToken: authToken,
+              fit: BoxFit.cover,
+              loading: const ColoredBox(color: Color(0xFFE2E5EA)),
+              error: const ColoredBox(
+                color: Color(0xFFE2E5EA),
+                child: Center(
+                  child: Icon(Icons.broken_image_outlined, color: Colors.white70),
+                ),
+              ),
+            )
+          else
+            Container(
+              color: const Color(0xFFCFD5DE),
+              alignment: Alignment.center,
+              child: Icon(
+                isVideo ? Icons.play_circle_fill_rounded : Icons.image_outlined,
+                size: 28,
+                color: Colors.white,
+              ),
+            ),
+          if (isVideo)
+            const Positioned.fill(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [Color(0x12000000), Color(0x4D000000)],
+                  ),
+                ),
+              ),
+            ),
+          if (isVideo)
+            const Center(
+              child: Icon(
+                Icons.play_circle_fill_rounded,
+                size: 34,
+                color: Colors.white,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ConversationLinkTile extends StatelessWidget {
+  const _ConversationLinkTile({required this.item, required this.onTap});
+
+  final _ConversationLinkItem item;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(10, 10, 8, 10),
+          child: Row(
+            children: [
+              Container(
+                width: 58,
+                height: 58,
+                decoration: BoxDecoration(
+                  color: TurnaColors.backgroundMuted,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                alignment: Alignment.center,
+                child: const Icon(
+                  Icons.link_rounded,
+                  color: TurnaColors.primary,
+                  size: 24,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      item.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 14.5,
+                        height: 1.22,
+                        color: Color(0xFF171C1B),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      item.subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        color: Color(0xFF69706D),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Mesajı görüntüle',
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        color: Color(0xFF7D8380),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              const Icon(
+                Icons.chevron_right_rounded,
+                color: Color(0xFF9BA09F),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ConversationDocumentTile extends StatelessWidget {
+  const _ConversationDocumentTile({required this.item, required this.onTap});
+
+  final _ConversationDocumentItem item;
+  final VoidCallback onTap;
+
+  String _extensionLabel(ChatAttachment attachment) {
+    final fileName = (attachment.fileName ?? '').trim();
+    if (fileName.contains('.')) {
+      return fileName.split('.').last.toLowerCase();
+    }
+    final contentType = attachment.contentType.toLowerCase();
+    if (contentType.contains('/')) {
+      return contentType.split('/').last.toLowerCase();
+    }
+    return 'dosya';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final attachment = item.attachment;
+    final extension = _extensionLabel(attachment);
+    final title = (attachment.fileName ?? '').trim().isEmpty
+        ? 'Belge'
+        : attachment.fileName!.trim();
+    final meta = '${formatBytesLabel(attachment.sizeBytes)} • $extension';
+
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
+          child: Row(
+            children: [
+              Container(
+                width: 52,
+                height: 62,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF5F7FA),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFFE0E5EA)),
+                ),
+                alignment: Alignment.center,
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(
+                      Icons.insert_drive_file_outlined,
+                      color: TurnaColors.textMuted,
+                      size: 22,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      extension.toUpperCase(),
+                      style: const TextStyle(
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF7A817D),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        height: 1.2,
+                        color: Color(0xFF171C1B),
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      meta,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        color: Color(0xFF7A817D),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _UserProfileGroupCard extends StatelessWidget {
