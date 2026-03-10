@@ -4622,11 +4622,25 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                     color: TurnaColors.textMuted,
                   ),
                 ),
-                const SizedBox(height: 18),
-                const SizedBox(
-                  width: 24,
-                  height: 24,
-                  child: CircularProgressIndicator(strokeWidth: 2.4),
+                const SizedBox(height: 10),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF6F7F9),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: const Text(
+                    'Cok yakinda Turna odemeleri burada olacak.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      color: TurnaColors.textMuted,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
                 ),
                 const SizedBox(height: 18),
                 TextButton(
@@ -4669,9 +4683,13 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                   ),
                 ),
                 const SizedBox(height: 18),
-                Wrap(
-                  spacing: 18,
-                  runSpacing: 18,
+                GridView.count(
+                  crossAxisCount: 4,
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  mainAxisSpacing: 18,
+                  crossAxisSpacing: 12,
+                  childAspectRatio: 0.82,
                   children: [
                     _AttachmentQuickAction(
                       icon: Icons.photo_library_outlined,
@@ -5320,10 +5338,10 @@ class _AttachmentQuickAction extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: 78,
-      child: GestureDetector(
-        onTap: onTap,
+    return GestureDetector(
+      onTap: onTap,
+      child: SizedBox(
+        width: double.infinity,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -5703,6 +5721,7 @@ class _VoiceMessageBubbleState extends State<_VoiceMessageBubble> {
   bool _playing = false;
   String? _preparedUrl;
   String? _preparedPath;
+  Uint8List? _preparedBytes;
 
   @override
   void initState() {
@@ -5750,6 +5769,9 @@ class _VoiceMessageBubbleState extends State<_VoiceMessageBubble> {
 
   Future<void> _togglePlayback() async {
     final url = widget.attachment.url?.trim() ?? '';
+    final mimeType = widget.attachment.contentType.trim().isEmpty
+        ? null
+        : widget.attachment.contentType.trim();
     if (url.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -5768,7 +5790,16 @@ class _VoiceMessageBubbleState extends State<_VoiceMessageBubble> {
             (_duration > Duration.zero &&
                 _position >= _duration - const Duration(milliseconds: 320));
         if (shouldReplayFromStart) {
-          await _player.play(ap.DeviceFileSource(_preparedPath!));
+          final preparedBytes = _preparedBytes;
+          if (preparedBytes != null) {
+            await _player.play(
+              ap.BytesSource(preparedBytes, mimeType: mimeType),
+            );
+          } else {
+            await _player.play(
+              ap.DeviceFileSource(_preparedPath!, mimeType: mimeType),
+            );
+          }
           return;
         }
         await _player.resume();
@@ -5788,7 +5819,9 @@ class _VoiceMessageBubbleState extends State<_VoiceMessageBubble> {
         return;
       }
       _preparedPath = cachedFile.path;
-      await _player.play(ap.DeviceFileSource(cachedFile.path));
+      final bytes = await cachedFile.readAsBytes();
+      _preparedBytes = bytes;
+      await _player.play(ap.BytesSource(bytes, mimeType: mimeType));
     } catch (error) {
       turnaLog('voice playback failed', error);
       if (!mounted) return;
@@ -5810,9 +5843,15 @@ class _VoiceMessageBubbleState extends State<_VoiceMessageBubble> {
         : (widget.mine
               ? Colors.white.withValues(alpha: 0.26)
               : TurnaColors.chatUnreadBg);
-    final foregroundColor = widget.mine
+    final accentColor = widget.mine
         ? TurnaColors.chatOutgoingText
         : TurnaColors.primary;
+    final playButtonColor = widget.mine
+        ? Colors.white.withValues(alpha: 0.34)
+        : TurnaColors.primary;
+    final playIconColor = widget.mine
+        ? TurnaColors.chatOutgoingText
+        : Colors.white;
     final subColor = widget.mine
         ? TurnaColors.chatOutgoingText.withValues(alpha: 0.74)
         : TurnaColors.textMuted;
@@ -5824,12 +5863,7 @@ class _VoiceMessageBubbleState extends State<_VoiceMessageBubble> {
         borderRadius: BorderRadius.circular(18),
         child: Container(
           width: 236,
-          padding: EdgeInsets.fromLTRB(
-            12,
-            12,
-            12,
-            showOverlay ? 36 : 12,
-          ),
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
           decoration: BoxDecoration(
             color: backgroundColor,
             borderRadius: BorderRadius.circular(18),
@@ -5841,7 +5875,8 @@ class _VoiceMessageBubbleState extends State<_VoiceMessageBubble> {
                   )
                 : null,
           ),
-          child: Stack(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
               Row(
                 children: [
@@ -5849,14 +5884,12 @@ class _VoiceMessageBubbleState extends State<_VoiceMessageBubble> {
                     width: 34,
                     height: 34,
                     decoration: BoxDecoration(
-                      color: widget.mine
-                          ? Colors.white.withValues(alpha: 0.34)
-                          : TurnaColors.primary,
+                      color: playButtonColor,
                       shape: BoxShape.circle,
                     ),
                     child: Icon(
                       _playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                      color: foregroundColor,
+                      color: playIconColor,
                       size: 20,
                     ),
                   ),
@@ -5866,8 +5899,8 @@ class _VoiceMessageBubbleState extends State<_VoiceMessageBubble> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         _VoiceWaveformStrip(
-                          color: foregroundColor,
-                          fadedColor: foregroundColor.withValues(alpha: 0.3),
+                          color: accentColor,
+                          fadedColor: accentColor.withValues(alpha: 0.3),
                           activeBars: math.max(
                             1,
                             (_VoiceWaveformStrip.barCount * progress).round(),
@@ -5891,11 +5924,11 @@ class _VoiceMessageBubbleState extends State<_VoiceMessageBubble> {
                                 child: LinearProgressIndicator(
                                   minHeight: 3,
                                   value: progress,
-                                  backgroundColor: foregroundColor.withValues(
+                                  backgroundColor: accentColor.withValues(
                                     alpha: 0.16,
                                   ),
                                   valueColor: AlwaysStoppedAnimation<Color>(
-                                    foregroundColor,
+                                    accentColor,
                                   ),
                                 ),
                               ),
@@ -5907,12 +5940,13 @@ class _VoiceMessageBubbleState extends State<_VoiceMessageBubble> {
                   ),
                 ],
               ),
-              if (showOverlay)
-                Positioned(
-                  right: 8,
-                  bottom: 8,
+              if (showOverlay) ...[
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerRight,
                   child: widget.overlayFooter!,
                 ),
+              ],
             ],
           ),
         ),

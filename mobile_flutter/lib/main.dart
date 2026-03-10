@@ -479,10 +479,20 @@ class TurnaLocalMediaCache {
         } catch (_) {}
       }
 
-      final response = await http.get(
-        Uri.parse(url),
-        headers: buildTurnaAuthHeaders(authToken),
-      );
+      Future<http.Response> request(String? token) {
+        return http.get(
+          Uri.parse(url),
+          headers: buildTurnaAuthHeaders(token),
+        );
+      }
+
+      var response = await request(authToken);
+      if (response.statusCode >= 400 &&
+          authToken != null &&
+          authToken.trim().isNotEmpty) {
+        response = await request(null);
+      }
+
       if (response.statusCode >= 400) {
         turnaLog('media cache download failed', {
           'cacheKey': cacheKey,
