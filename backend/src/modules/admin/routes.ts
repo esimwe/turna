@@ -14,10 +14,12 @@ import { env } from "../../config/env.js";
 import { revokeAllAuthSessionsForUser } from "../../lib/auth-sessions.js";
 import { signAdminAccessToken } from "../../lib/jwt.js";
 import { prisma } from "../../lib/prisma.js";
+import { redis } from "../../lib/redis.js";
 import { createObjectReadUrl } from "../../lib/storage.js";
 import { writeAdminAuditLog } from "../../lib/admin-audit.js";
 import { requireAdminAuth, requireAdminRole } from "../../middleware/admin-auth.js";
 import { buildAvatarUrl } from "../profile/avatar-url.js";
+import { buildPhoneLookupKeys } from "../profile/contact-lookup.js";
 
 export const adminRouter = Router();
 const prismaUser = (prisma as unknown as { user: any }).user;
@@ -30,6 +32,7 @@ const prismaAdminAuditLog = (prisma as unknown as { adminAuditLog: any }).adminA
 const prismaChatMember = (prisma as unknown as { chatMember: any }).chatMember;
 const prismaMessage = (prisma as unknown as { message: any }).message;
 const prismaMessageAttachment = (prisma as unknown as { messageAttachment: any }).messageAttachment;
+const prismaUserContact = (prisma as unknown as { userContact: any }).userContact;
 
 const adminLoginSchema = z.object({
   username: z.string().trim().min(3).max(64),
@@ -148,6 +151,11 @@ const listAuditLogsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(100)
 });
 
+const listGenericQuerySchema = z.object({
+  q: z.string().trim().min(1).max(120).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(100)
+});
+
 const listSessionsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(50)
 });
@@ -249,6 +257,27 @@ function resolveReportFinalState(status: ReportStatusValue): { resolvedAt: Date 
     return { resolvedAt: new Date(), resolvedByAdminId: null };
   }
   return { resolvedAt: null, resolvedByAdminId: null };
+}
+
+function toAdminUserSummary(
+  req: Parameters<typeof buildAvatarUrl>[0],
+  user: {
+    id: string;
+    displayName: string;
+    username?: string | null;
+    phone?: string | null;
+    avatarUrl?: string | null;
+    updatedAt?: Date | null;
+  }
+) {
+  return {
+    id: user.id,
+    displayName: user.displayName,
+    username: user.username ?? null,
+    phone: user.phone ?? null,
+    avatarUrl:
+      user.avatarUrl && user.updatedAt ? buildAvatarUrl(req, user.id, user.updatedAt) : null
+  };
 }
 
 adminRouter.post("/auth/login", async (req, res) => {
@@ -1241,4 +1270,517 @@ adminRouter.get("/audit-logs", requireAdminAuth, async (req, res) => {
   });
 
   res.json({ data: logs });
+});
+
+adminRouter.get("/contacts", requireAdminAuth, async (req, res) => {
+  const parsed = listGenericQuerySchema.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
+    return;
+  }
+
+  const search = parsed.data.q?.trim();
+  const contacts = await prismaUserContact.findMany({
+    where: search
+      ? {
+          OR: [
+            { displayName: { contains: search, mode: "insensitive" } },
+            { lookupKey: { contains: search } },
+            { owner: { displayName: { contains: search, mode: "insensitive" } } },
+            { owner: { username: { contains: search, mode: "insensitive" } } },
+            { owner: { phone: { contains: search, mode: "insensitive" } } }
+          ]
+        }
+      : undefined,
+    orderBy: { updatedAt: "desc" },
+    take: parsed.data.limit,
+    include: {
+      owner: {
+        select: {
+          id: true,
+          displayName: true,
+          username: true,
+          phone: true,
+          avatarUrl: true,
+          updatedAt: true
+        }
+      }
+    }
+  });
+
+  const users = await prismaUser.findMany({
+    where: { phone: { not: null } },
+    select: {
+      id: true,
+      displayName: true,
+      username: true,
+      phone: true,
+      avatarUrl: true,
+      updatedAt: true
+    }
+  });
+
+  const usersByLookupKey = new Map<string, any>();
+  for (const user of users) {
+    for (const key of buildPhoneLookupKeys(user.phone)) {
+      if (!usersByLookupKey.has(key)) {
+        usersByLookupKey.set(key, user);
+      }
+    }
+  }
+
+  res.json({
+    data: contacts.map((contact: any) => {
+      const matchedUser = usersByLookupKey.get(contact.lookupKey) ?? null;
+      return {
+        id: contact.id,
+        displayName: contact.displayName,
+        lookupKey: contact.lookupKey,
+        createdAt: contact.createdAt.toISOString(),
+        updatedAt: contact.updatedAt.toISOString(),
+        owner: toAdminUserSummary(req, contact.owner),
+        matchedUser: matchedUser ? toAdminUserSummary(req, matchedUser) : null
+      };
+    })
+  });
+});
+
+adminRouter.get("/chats", requireAdminAuth, async (req, res) => {
+  const parsed = listGenericQuerySchema.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
+    return;
+  }
+
+  const chats = await prisma.chat.findMany({
+    orderBy: { createdAt: "desc" },
+    take: parsed.data.limit,
+    include: {
+      members: {
+        select: {
+          userId: true,
+          user: {
+            select: {
+              id: true,
+              displayName: true,
+              username: true,
+              phone: true,
+              avatarUrl: true,
+              updatedAt: true
+            }
+          }
+        }
+      },
+      messages: {
+        take: 1,
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true,
+          text: true,
+          createdAt: true,
+          senderId: true,
+          attachments: {
+            select: { kind: true }
+          }
+        }
+      }
+    }
+  });
+
+  res.json({
+    data: chats.map((chat: any) => ({
+      id: chat.id,
+      type: chat.type.toLowerCase(),
+      createdAt: chat.createdAt.toISOString(),
+      memberCount: chat.members.length,
+      members: chat.members.map((member: any) => toAdminUserSummary(req, member.user)),
+      lastMessage: chat.messages[0]
+        ? {
+            id: chat.messages[0].id,
+            senderId: chat.messages[0].senderId,
+            text: summarizeMessage(chat.messages[0]),
+            createdAt: chat.messages[0].createdAt.toISOString()
+          }
+        : null
+    }))
+  });
+});
+
+adminRouter.get("/messages", requireAdminAuth, async (req, res) => {
+  const parsed = listGenericQuerySchema.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
+    return;
+  }
+
+  const search = parsed.data.q?.trim();
+  const messages = await prismaMessage.findMany({
+    where: search
+      ? {
+          OR: [
+            { text: { contains: search, mode: "insensitive" } },
+            { sender: { displayName: { contains: search, mode: "insensitive" } } },
+            { sender: { username: { contains: search, mode: "insensitive" } } },
+            { sender: { phone: { contains: search, mode: "insensitive" } } }
+          ]
+        }
+      : undefined,
+    orderBy: { createdAt: "desc" },
+    take: parsed.data.limit,
+    include: {
+      sender: {
+        select: {
+          id: true,
+          displayName: true,
+          username: true,
+          phone: true,
+          avatarUrl: true,
+          updatedAt: true
+        }
+      },
+      attachments: {
+        orderBy: { createdAt: "asc" }
+      }
+    }
+  });
+
+  const items = await Promise.all(
+    messages.map(async (message: any) => ({
+      id: message.id,
+      chatId: message.chatId,
+      text: message.text,
+      status: message.status,
+      createdAt: message.createdAt.toISOString(),
+      editedAt: message.editedAt?.toISOString?.() ?? null,
+      editCount: message.editCount ?? 0,
+      sender: toAdminUserSummary(req, message.sender),
+      attachmentCount: message.attachments.length,
+      attachmentKinds: message.attachments.map((attachment: any) => attachment.kind.toLowerCase()),
+      attachments: await Promise.all(
+        (message.attachments ?? []).map((attachment: any) =>
+          resolveAttachmentAdminPayload(attachment)
+        )
+      )
+    }))
+  );
+
+  res.json({ data: items });
+});
+
+adminRouter.get("/media", requireAdminAuth, async (req, res) => {
+  const parsed = listGenericQuerySchema.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
+    return;
+  }
+
+  const search = parsed.data.q?.trim();
+  const attachments = await prismaMessageAttachment.findMany({
+    where: search
+      ? {
+          OR: [
+            { fileName: { contains: search, mode: "insensitive" } },
+            { objectKey: { contains: search, mode: "insensitive" } },
+            { message: { sender: { displayName: { contains: search, mode: "insensitive" } } } },
+            { message: { sender: { username: { contains: search, mode: "insensitive" } } } },
+            { message: { sender: { phone: { contains: search, mode: "insensitive" } } } }
+          ]
+        }
+      : undefined,
+    orderBy: { createdAt: "desc" },
+    take: parsed.data.limit,
+    include: {
+      message: {
+        select: {
+          id: true,
+          chatId: true,
+          text: true,
+          createdAt: true,
+          sender: {
+            select: {
+              id: true,
+              displayName: true,
+              username: true,
+              phone: true,
+              avatarUrl: true,
+              updatedAt: true
+            }
+          }
+        }
+      }
+    }
+  });
+
+  const items = await Promise.all(
+    attachments.map(async (attachment: any) => ({
+      ...(await resolveAttachmentAdminPayload(attachment)),
+      messageId: attachment.message.id,
+      chatId: attachment.message.chatId,
+      messageText: attachment.message.text,
+      messageCreatedAt: attachment.message.createdAt.toISOString(),
+      sender: toAdminUserSummary(req, attachment.message.sender)
+    }))
+  );
+
+  res.json({ data: items });
+});
+
+adminRouter.get("/sessions", requireAdminAuth, async (req, res) => {
+  const parsed = listGenericQuerySchema.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
+    return;
+  }
+
+  const search = parsed.data.q?.trim();
+  const sessions = await prismaAuthSession.findMany({
+    where: search
+      ? {
+          OR: [
+            { user: { displayName: { contains: search, mode: "insensitive" } } },
+            { user: { username: { contains: search, mode: "insensitive" } } },
+            { user: { phone: { contains: search, mode: "insensitive" } } },
+            { deviceModel: { contains: search, mode: "insensitive" } },
+            { ipAddress: { contains: search, mode: "insensitive" } }
+          ]
+        }
+      : undefined,
+    orderBy: { lastSeenAt: "desc" },
+    take: parsed.data.limit,
+    include: {
+      user: {
+        select: {
+          id: true,
+          displayName: true,
+          username: true,
+          phone: true,
+          avatarUrl: true,
+          updatedAt: true
+        }
+      }
+    }
+  });
+
+  res.json({
+    data: sessions.map((session: any) => ({
+      id: session.id,
+      user: toAdminUserSummary(req, session.user),
+      deviceId: session.deviceId,
+      platform: session.platform,
+      deviceModel: session.deviceModel,
+      osVersion: session.osVersion,
+      appVersion: session.appVersion,
+      localeTag: session.localeTag,
+      regionCode: session.regionCode,
+      connectionType: session.connectionType,
+      countryIso: session.countryIso,
+      ipCountryIso: session.ipCountryIso,
+      ipAddress: session.ipAddress,
+      userAgent: session.userAgent,
+      createdAt: session.createdAt.toISOString(),
+      lastSeenAt: session.lastSeenAt.toISOString(),
+      revokedAt: session.revokedAt?.toISOString?.() ?? null,
+      revokeReason: session.revokeReason ?? null
+    }))
+  });
+});
+
+adminRouter.get("/calls", requireAdminAuth, async (req, res) => {
+  const parsed = listGenericQuerySchema.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
+    return;
+  }
+
+  const search = parsed.data.q?.trim();
+  const calls = await prisma.call.findMany({
+    where: search
+      ? {
+          OR: [
+            { caller: { displayName: { contains: search, mode: "insensitive" } } },
+            { caller: { username: { contains: search, mode: "insensitive" } } },
+            { caller: { phone: { contains: search, mode: "insensitive" } } },
+            { callee: { displayName: { contains: search, mode: "insensitive" } } },
+            { callee: { username: { contains: search, mode: "insensitive" } } },
+            { callee: { phone: { contains: search, mode: "insensitive" } } }
+          ]
+        }
+      : undefined,
+    orderBy: { createdAt: "desc" },
+    take: parsed.data.limit,
+    include: {
+      caller: {
+        select: {
+          id: true,
+          displayName: true,
+          username: true,
+          phone: true,
+          avatarUrl: true,
+          updatedAt: true
+        }
+      },
+      callee: {
+        select: {
+          id: true,
+          displayName: true,
+          username: true,
+          phone: true,
+          avatarUrl: true,
+          updatedAt: true
+        }
+      }
+    }
+  });
+
+  res.json({
+    data: calls.map((call: any) => ({
+      id: call.id,
+      type: call.type.toLowerCase(),
+      status: call.status.toLowerCase(),
+      provider: call.provider.toLowerCase(),
+      createdAt: call.createdAt.toISOString(),
+      acceptedAt: call.acceptedAt?.toISOString?.() ?? null,
+      endedAt: call.endedAt?.toISOString?.() ?? null,
+      caller: toAdminUserSummary(req, call.caller),
+      callee: toAdminUserSummary(req, call.callee)
+    }))
+  });
+});
+
+adminRouter.get("/push/devices", requireAdminAuth, async (req, res) => {
+  const parsed = listGenericQuerySchema.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
+    return;
+  }
+
+  const search = parsed.data.q?.trim();
+  const devices = await prisma.deviceToken.findMany({
+    where: search
+      ? {
+          OR: [
+            { user: { displayName: { contains: search, mode: "insensitive" } } },
+            { user: { username: { contains: search, mode: "insensitive" } } },
+            { user: { phone: { contains: search, mode: "insensitive" } } },
+            { deviceLabel: { contains: search, mode: "insensitive" } },
+            { token: { contains: search, mode: "insensitive" } }
+          ]
+        }
+      : undefined,
+    orderBy: { updatedAt: "desc" },
+    take: parsed.data.limit,
+    include: {
+      user: {
+        select: {
+          id: true,
+          displayName: true,
+          username: true,
+          phone: true,
+          avatarUrl: true,
+          updatedAt: true
+        }
+      }
+    }
+  });
+
+  res.json({
+    data: devices.map((device: any) => ({
+      id: device.id,
+      user: toAdminUserSummary(req, device.user),
+      platform: device.platform.toLowerCase(),
+      tokenKind: device.tokenKind.toLowerCase(),
+      deviceLabel: device.deviceLabel ?? null,
+      isActive: device.isActive,
+      createdAt: device.createdAt.toISOString(),
+      updatedAt: device.updatedAt.toISOString(),
+      tokenPreview: `${String(device.token).slice(0, 12)}...`
+    }))
+  });
+});
+
+adminRouter.get("/otp/settings", requireAdminAuth, async (_req, res) => {
+  const [otpLoginFlag, phoneChangeFlag] = await Promise.all([
+    prismaFeatureFlag.findUnique({ where: { key: "otp_login_enabled" } }),
+    prismaFeatureFlag.findUnique({ where: { key: "phone_change_enabled" } })
+  ]);
+
+  res.json({
+    data: {
+      provider: env.SMS_PROVIDER,
+      fixedOtpCodeEnabled: Boolean(env.FIXED_OTP_CODE),
+      ttlSeconds: env.OTP_TTL_SECONDS,
+      resendCooldownSeconds: env.OTP_RESEND_COOLDOWN_SECONDS,
+      maxAttempts: env.OTP_MAX_ATTEMPTS,
+      phoneLimit10m: env.OTP_PHONE_LIMIT_10M,
+      phoneLimit24h: env.OTP_PHONE_LIMIT_24H,
+      ipLimit10m: env.OTP_IP_LIMIT_10M,
+      ipLimit24h: env.OTP_IP_LIMIT_24H,
+      otpLoginEnabled: otpLoginFlag?.enabled ?? true,
+      phoneChangeEnabled: phoneChangeFlag?.enabled ?? true
+    }
+  });
+});
+
+adminRouter.get("/admins", requireAdminAuth, requireAdminRole("SUPER_ADMIN", "OPS_ADMIN"), async (req, res) => {
+  const parsed = listGenericQuerySchema.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
+    return;
+  }
+
+  const search = parsed.data.q?.trim();
+  const admins = await prismaAdminUser.findMany({
+    where: search
+      ? {
+          OR: [
+            { username: { contains: search, mode: "insensitive" } },
+            { displayName: { contains: search, mode: "insensitive" } }
+          ]
+        }
+      : undefined,
+    orderBy: { createdAt: "desc" },
+    take: parsed.data.limit,
+    select: {
+      id: true,
+      username: true,
+      displayName: true,
+      role: true,
+      isActive: true,
+      lastLoginAt: true,
+      createdAt: true
+    }
+  });
+
+  res.json({ data: admins });
+});
+
+adminRouter.get("/system/health", requireAdminAuth, async (_req, res) => {
+  let redisStatus = "disconnected";
+  let databaseStatus = "disconnected";
+
+  try {
+    const pong = await redis.ping();
+    redisStatus = pong === "PONG" ? "ok" : "unexpected";
+  } catch (_) {
+    redisStatus = "error";
+  }
+
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    databaseStatus = "ok";
+  } catch (_) {
+    databaseStatus = "error";
+  }
+
+  res.json({
+    data: {
+      nodeVersion: process.version,
+      environment: env.NODE_ENV,
+      uptimeSeconds: Math.floor(process.uptime()),
+      smsProvider: env.SMS_PROVIDER,
+      fixedOtpCodeEnabled: Boolean(env.FIXED_OTP_CODE),
+      databaseStatus,
+      redisStatus
+    }
+  });
 });

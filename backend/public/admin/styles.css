@@ -96,6 +96,39 @@ input {
   gap: 6px;
 }
 
+.sidebar-nav {
+  display: grid;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.nav-item {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(255, 255, 255, 0.82);
+  border-radius: 14px;
+  padding: 11px 14px;
+  text-align: left;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    transform 120ms ease;
+}
+
+.nav-item:hover {
+  transform: translateY(-1px);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.nav-item.active {
+  background: linear-gradient(135deg, rgba(91, 176, 255, 0.28), rgba(31, 111, 235, 0.34));
+  border-color: rgba(143, 203, 255, 0.55);
+  color: #fff;
+  box-shadow: 0 14px 30px rgba(9, 20, 37, 0.26);
+}
+
 .content {
   padding: 26px;
   display: grid;
@@ -208,6 +241,11 @@ input {
   gap: 14px;
 }
 
+.page-content {
+  display: grid;
+  gap: 20px;
+}
+
 .metric-card {
   background: rgba(255, 255, 255, 0.92);
   border: 1px solid rgba(219, 230, 243, 0.9);
@@ -233,6 +271,37 @@ input {
   grid-template-columns: 360px 1fr;
   gap: 20px;
   min-height: 640px;
+}
+
+.topbar,
+.page-panel {
+  padding: 22px;
+}
+
+.table-list {
+  display: grid;
+  gap: 12px;
+}
+
+.list-card {
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 16px;
+  background: linear-gradient(180deg, #fff, #fbfdff);
+  box-shadow: 0 10px 24px rgba(16, 32, 51, 0.04);
+}
+
+.list-title-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 8px;
+}
+
+.list-title-row strong {
+  font-size: 15px;
+  line-height: 1.35;
 }
 
 .users-panel,
@@ -605,5 +674,9 @@ input {
   .summary-grid,
   .overview-grid {
     grid-template-columns: 1fr;
+  }
+
+  .sidebar-nav {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
