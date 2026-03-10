@@ -1361,9 +1361,12 @@ class AuthApi {
     required String dialCode,
     required String nationalNumber,
   }) async {
+    final headers = await TurnaDeviceContext.buildHeaders(
+      includeJsonContentType: true,
+    );
     final res = await http.post(
       Uri.parse('$kBackendBaseUrl/api/auth/request-otp'),
-      headers: {'Content-Type': 'application/json'},
+      headers: headers,
       body: jsonEncode({
         'countryIso': countryIso,
         'dialCode': dialCode,
@@ -1389,9 +1392,12 @@ class AuthApi {
     required String phone,
     required String code,
   }) async {
+    final headers = await TurnaDeviceContext.buildHeaders(
+      includeJsonContentType: true,
+    );
     final res = await http.post(
       Uri.parse('$kBackendBaseUrl/api/auth/verify-otp'),
-      headers: {'Content-Type': 'application/json'},
+      headers: headers,
       body: jsonEncode({'phone': phone, 'code': code}),
     );
     if (res.statusCode >= 400) {
@@ -1516,12 +1522,13 @@ class PushApi {
     String tokenKind = 'standard',
     String? deviceLabel,
   }) async {
+    final headers = await TurnaDeviceContext.buildHeaders(
+      authToken: session.token,
+      includeJsonContentType: true,
+    );
     final res = await http.post(
       Uri.parse('$kBackendBaseUrl/api/push/devices'),
-      headers: {
-        'Authorization': 'Bearer ${session.token}',
-        'Content-Type': 'application/json',
-      },
+      headers: headers,
       body: jsonEncode({
         'token': token,
         'platform': platform,
@@ -1540,12 +1547,13 @@ class PushApi {
     AuthSession session, {
     required String token,
   }) async {
+    final headers = await TurnaDeviceContext.buildHeaders(
+      authToken: session.token,
+      includeJsonContentType: true,
+    );
     final res = await http.delete(
       Uri.parse('$kBackendBaseUrl/api/push/devices'),
-      headers: {
-        'Authorization': 'Bearer ${session.token}',
-        'Content-Type': 'application/json',
-      },
+      headers: headers,
       body: jsonEncode({'token': token}),
     );
     if (res.statusCode >= 400) {
@@ -2497,7 +2505,9 @@ class ChatApi {
     int refreshTick = 0,
   }) async {
     try {
-      final headers = {'Authorization': 'Bearer ${session.token}'};
+      final headers = await TurnaDeviceContext.buildHeaders(
+        authToken: session.token,
+      );
       turnaLog('api fetchChats', {'refreshTick': refreshTick});
 
       final chatsRes = await http.get(
