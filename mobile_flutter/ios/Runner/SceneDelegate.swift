@@ -1,7 +1,9 @@
 import Flutter
 import UIKit
+import flutter_contacts
 
 class SceneDelegate: FlutterSceneDelegate {
+  private static var contactsPluginRegistered = false
   private var displayChannel: FlutterMethodChannel?
 
   override func scene(
@@ -10,7 +12,26 @@ class SceneDelegate: FlutterSceneDelegate {
     options connectionOptions: UIScene.ConnectionOptions
   ) {
     super.scene(scene, willConnectTo: session, options: connectionOptions)
+    if let appDelegate = UIApplication.shared.delegate as? AppDelegate {
+      appDelegate.window = window
+    }
+    registerDeferredPluginsIfNeeded()
     configureDisplayChannel()
+  }
+
+  private func registerDeferredPluginsIfNeeded() {
+    guard !Self.contactsPluginRegistered else {
+      return
+    }
+    guard let controller = window?.rootViewController as? FlutterViewController else {
+      return
+    }
+    guard let registrar = controller.registrar(forPlugin: "FlutterContactsPlugin") else {
+      return
+    }
+
+    FlutterContactsPlugin.register(with: registrar)
+    Self.contactsPluginRegistered = true
   }
 
   private func configureDisplayChannel() {
