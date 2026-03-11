@@ -8,6 +8,68 @@ const List<Color> _kStatusTextBackgrounds = <Color>[
   Color(0xFFBE123C),
   Color(0xFF374151),
 ];
+const double _kStatusCaptureBottomInset = 132;
+const double _kStatusGalleryPanelHeight = 328;
+const int _kStatusGalleryPageSize = 60;
+const Size _kStatusGalleryThumbSize = Size(240, 240);
+const Size _kStatusCollageOutputSize = Size(1080, 1920);
+
+List<cam.CameraDescription>? _kStatusCameraCache;
+
+enum _StatusCaptureMode { photo, video }
+
+class _StatusCollageLayout {
+  const _StatusCollageLayout({
+    required this.id,
+    required this.label,
+    required this.slots,
+  });
+
+  final String id;
+  final String label;
+  final List<Rect> slots;
+}
+
+const List<_StatusCollageLayout> _kStatusCollageLayouts = [
+  _StatusCollageLayout(
+    id: 'split-v',
+    label: 'Iki dikey',
+    slots: [Rect.fromLTWH(0, 0, 0.5, 1), Rect.fromLTWH(0.5, 0, 0.5, 1)],
+  ),
+  _StatusCollageLayout(
+    id: 'split-h',
+    label: 'Iki yatay',
+    slots: [Rect.fromLTWH(0, 0, 1, 0.5), Rect.fromLTWH(0, 0.5, 1, 0.5)],
+  ),
+  _StatusCollageLayout(
+    id: 'hero-right',
+    label: 'Buyuk sol',
+    slots: [
+      Rect.fromLTWH(0, 0, 0.58, 1),
+      Rect.fromLTWH(0.58, 0, 0.42, 0.5),
+      Rect.fromLTWH(0.58, 0.5, 0.42, 0.5),
+    ],
+  ),
+  _StatusCollageLayout(
+    id: 'hero-top',
+    label: 'Buyuk ust',
+    slots: [
+      Rect.fromLTWH(0, 0, 1, 0.56),
+      Rect.fromLTWH(0, 0.56, 0.5, 0.44),
+      Rect.fromLTWH(0.5, 0.56, 0.5, 0.44),
+    ],
+  ),
+  _StatusCollageLayout(
+    id: 'quad',
+    label: 'Dortlu',
+    slots: [
+      Rect.fromLTWH(0, 0, 0.5, 0.5),
+      Rect.fromLTWH(0.5, 0, 0.5, 0.5),
+      Rect.fromLTWH(0, 0.5, 0.5, 0.5),
+      Rect.fromLTWH(0.5, 0.5, 0.5, 0.5),
+    ],
+  ),
+];
 
 class StatusesPage extends StatefulWidget {
   const StatusesPage({
@@ -24,7 +86,6 @@ class StatusesPage extends StatefulWidget {
 }
 
 class _StatusesPageState extends State<StatusesPage> {
-  final ImagePicker _picker = ImagePicker();
   late Future<TurnaStatusFeedData> _feedFuture;
   TurnaStatusFeedData? _cachedFeed;
   bool _actionBusy = false;
@@ -102,128 +163,19 @@ class _StatusesPageState extends State<StatusesPage> {
     }
   }
 
-  Future<void> _pickAndComposeMedia(TurnaStatusType type) async {
-    try {
-      final XFile? file = switch (type) {
-        TurnaStatusType.video => await _picker.pickVideo(
-          source: ImageSource.gallery,
-        ),
-        _ => await _picker.pickImage(
-          source: ImageSource.gallery,
-          imageQuality: kInlineImagePickerQuality,
-          maxWidth: kInlineImagePickerMaxDimension,
-          maxHeight: kInlineImagePickerMaxDimension,
-        ),
-      };
-      if (file == null || !mounted) return;
-
-      final posted = await Navigator.push<bool>(
-        context,
-        MaterialPageRoute(
-          builder: (_) => StatusMediaComposerPage(
-            session: widget.session,
-            file: file,
-            type: type,
-            onSessionExpired: widget.onSessionExpired,
-          ),
-        ),
-      );
-      if (posted == true && mounted) {
-        setState(_scheduleReload);
-      }
-    } catch (error) {
-      if (!mounted) return;
-      _handleError(error);
-    }
-  }
-
-  Future<void> _openTextComposer() async {
+  Future<void> _openCapturePage(TurnaStatusPrivacySettings privacy) async {
     final posted = await Navigator.push<bool>(
       context,
       MaterialPageRoute(
-        builder: (_) => TextStatusComposerPage(
+        builder: (_) => StatusCapturePage(
           session: widget.session,
+          privacy: privacy,
           onSessionExpired: widget.onSessionExpired,
         ),
       ),
     );
     if (posted == true && mounted) {
       setState(_scheduleReload);
-    }
-  }
-
-  Future<void> _showComposeSheet(TurnaStatusPrivacySettings privacy) async {
-    final action = await showModalBottomSheet<String>(
-      context: context,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (context) {
-        return SafeArea(
-          top: false,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Durum paylaş',
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w800,
-                    color: TurnaColors.text,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  _privacyModeLabel(privacy.mode),
-                  style: const TextStyle(
-                    fontSize: 13,
-                    color: TurnaColors.textMuted,
-                  ),
-                ),
-                const SizedBox(height: 18),
-                _StatusActionSheetTile(
-                  icon: Icons.edit_rounded,
-                  title: 'Metin durumu',
-                  subtitle: 'Renkli arka plan üstünde kısa bir durum paylaş.',
-                  onTap: () => Navigator.pop(context, 'text'),
-                ),
-                const SizedBox(height: 10),
-                _StatusActionSheetTile(
-                  icon: Icons.photo_rounded,
-                  title: 'Fotoğraf durumu',
-                  subtitle: 'Galeriden bir fotoğraf seç ve 24 saat paylaş.',
-                  onTap: () => Navigator.pop(context, 'image'),
-                ),
-                const SizedBox(height: 10),
-                _StatusActionSheetTile(
-                  icon: Icons.videocam_rounded,
-                  title: 'Video durumu',
-                  subtitle:
-                      'Kısa bir video seç. En fazla $kStatusMaxVideoDurationSeconds saniye.',
-                  onTap: () => Navigator.pop(context, 'video'),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-
-    if (!mounted || action == null) return;
-    switch (action) {
-      case 'text':
-        await _openTextComposer();
-        break;
-      case 'image':
-        await _pickAndComposeMedia(TurnaStatusType.image);
-        break;
-      case 'video':
-        await _pickAndComposeMedia(TurnaStatusType.video);
-        break;
     }
   }
 
@@ -284,7 +236,7 @@ class _StatusesPageState extends State<StatusesPage> {
                 tooltip: 'Durum paylaş',
                 onPressed: data == null
                     ? null
-                    : () => _showComposeSheet(data.privacy),
+                    : () => _openCapturePage(data.privacy),
                 icon: const Icon(Icons.add_circle_outline_rounded),
               ),
             ],
@@ -319,9 +271,9 @@ class _StatusesPageState extends State<StatusesPage> {
                           _openUserFeed(widget.session.userId);
                           return;
                         }
-                        _showComposeSheet(data.privacy);
+                        _openCapturePage(data.privacy);
                       },
-                      onAdd: () => _showComposeSheet(data.privacy),
+                      onAdd: () => _openCapturePage(data.privacy),
                     ),
                     const SizedBox(height: 18),
                     if (updates.isNotEmpty) ...[
@@ -341,7 +293,7 @@ class _StatusesPageState extends State<StatusesPage> {
                     ],
                     if (updates.isEmpty && mutedUpdates.isEmpty)
                       _StatusEmptyView(
-                        onCreate: () => _showComposeSheet(data.privacy),
+                        onCreate: () => _openCapturePage(data.privacy),
                       ),
                     if (mutedUpdates.isNotEmpty) ...[
                       const SizedBox(height: 12),
@@ -635,72 +587,6 @@ class _StatusSectionLabel extends StatelessWidget {
   }
 }
 
-class _StatusActionSheetTile extends StatelessWidget {
-  const _StatusActionSheetTile({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: TurnaColors.backgroundSoft,
-      borderRadius: BorderRadius.circular(18),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(18),
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Row(
-            children: [
-              Container(
-                width: 42,
-                height: 42,
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: Icon(icon, color: TurnaColors.primary),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                        color: TurnaColors.text,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      subtitle,
-                      style: const TextStyle(
-                        fontSize: 13,
-                        color: TurnaColors.textMuted,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class _StatusEmptyView extends StatelessWidget {
   const _StatusEmptyView({required this.onCreate});
 
@@ -791,6 +677,1301 @@ class _StatusErrorView extends StatelessWidget {
             const SizedBox(height: 14),
             FilledButton(onPressed: onRetry, child: const Text('Tekrar dene')),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class StatusCapturePage extends StatefulWidget {
+  const StatusCapturePage({
+    super.key,
+    required this.session,
+    required this.privacy,
+    required this.onSessionExpired,
+  });
+
+  final AuthSession session;
+  final TurnaStatusPrivacySettings privacy;
+  final VoidCallback onSessionExpired;
+
+  @override
+  State<StatusCapturePage> createState() => _StatusCapturePageState();
+}
+
+class _StatusCapturePageState extends State<StatusCapturePage>
+    with WidgetsBindingObserver {
+  cam.CameraController? _cameraController;
+  Future<void>? _cameraInitFuture;
+  List<cam.CameraDescription> _cameras = const [];
+  cam.CameraDescription? _selectedCamera;
+  _StatusCaptureMode _mode = _StatusCaptureMode.photo;
+  bool _cameraInitializing = true;
+  bool _cameraBusy = false;
+  String? _cameraError;
+  bool _galleryOpen = true;
+  bool _galleryLoading = true;
+  String? _galleryError;
+  List<pm.AssetEntity> _recentAssets = const [];
+  bool _collagePickerVisible = false;
+  _StatusCollageLayout? _collageLayout;
+  final List<XFile> _collageFrames = <XFile>[];
+  bool _recording = false;
+  Duration _recordingDuration = Duration.zero;
+  Timer? _recordingTimer;
+
+  bool get _cameraReady {
+    final controller = _cameraController;
+    return !_cameraInitializing &&
+        _cameraError == null &&
+        controller != null &&
+        controller.value.isInitialized;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _bootstrap();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _recordingTimer?.cancel();
+    _cameraController?.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (!mounted) return;
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused) {
+      _disposeCamera();
+      return;
+    }
+    if (state == AppLifecycleState.resumed) {
+      _initializeCamera(
+        preferredLensDirection:
+            _selectedCamera?.lensDirection ?? cam.CameraLensDirection.back,
+      );
+    }
+  }
+
+  Future<void> _bootstrap() async {
+    await Future.wait<void>([
+      _loadGallery(),
+      _initializeCamera(preferredLensDirection: cam.CameraLensDirection.back),
+    ]);
+  }
+
+  Future<void> _disposeCamera() async {
+    final controller = _cameraController;
+    _cameraController = null;
+    _cameraInitFuture = null;
+    if (controller != null) {
+      await controller.dispose();
+    }
+  }
+
+  Future<List<cam.CameraDescription>> _loadAvailableCameras() async {
+    final cached = _kStatusCameraCache;
+    if (cached != null && cached.isNotEmpty) {
+      return cached;
+    }
+    final cameras = await cam.availableCameras();
+    _kStatusCameraCache = cameras;
+    return cameras;
+  }
+
+  cam.CameraDescription _pickCamera(
+    List<cam.CameraDescription> cameras,
+    cam.CameraLensDirection preferredLensDirection,
+  ) {
+    for (final camera in cameras) {
+      if (camera.lensDirection == preferredLensDirection) {
+        return camera;
+      }
+    }
+    return cameras.first;
+  }
+
+  Future<void> _initializeCamera({
+    required cam.CameraLensDirection preferredLensDirection,
+  }) async {
+    if (!mounted) return;
+    setState(() {
+      _cameraInitializing = true;
+      _cameraError = null;
+    });
+
+    final previous = _cameraController;
+    try {
+      final cameras = await _loadAvailableCameras();
+      if (cameras.isEmpty) {
+        throw TurnaApiException('Kamera bulunamadi.');
+      }
+      final selected = _pickCamera(cameras, preferredLensDirection);
+      final controller = cam.CameraController(
+        selected,
+        _mode == _StatusCaptureMode.video
+            ? cam.ResolutionPreset.high
+            : cam.ResolutionPreset.veryHigh,
+        enableAudio: _mode == _StatusCaptureMode.video,
+      );
+      _cameras = cameras;
+      _selectedCamera = selected;
+      _cameraController = controller;
+      _cameraInitFuture = controller.initialize().then((_) async {
+        try {
+          await controller.setFlashMode(cam.FlashMode.off);
+        } catch (_) {}
+      });
+      await _cameraInitFuture;
+      await previous?.dispose();
+      if (!mounted || _cameraController != controller) {
+        await controller.dispose();
+        return;
+      }
+      setState(() {
+        _cameraInitializing = false;
+        _cameraError = null;
+      });
+    } catch (error) {
+      await previous?.dispose();
+      if (!mounted) return;
+      setState(() {
+        _cameraController = null;
+        _cameraInitFuture = null;
+        _cameraInitializing = false;
+        _cameraError = error is TurnaApiException
+            ? error.message
+            : 'Kamera acilamadi.';
+      });
+    }
+  }
+
+  Future<void> _loadGallery() async {
+    if (!mounted) return;
+    setState(() {
+      _galleryLoading = true;
+      _galleryError = null;
+    });
+
+    try {
+      final permission = await pm.PhotoManager.requestPermissionExtend();
+      if (!permission.isAuth) {
+        throw TurnaApiException('Galeri erisimi verilmedi.');
+      }
+      final albums = await pm.PhotoManager.getAssetPathList(
+        onlyAll: true,
+        type: pm.RequestType.common,
+        filterOption: pm.FilterOptionGroup(
+          orders: const <pm.OrderOption>[
+            pm.OrderOption(type: pm.OrderOptionType.createDate, asc: false),
+          ],
+        ),
+      );
+      final recent = albums.isEmpty ? null : albums.first;
+      final assets = recent == null
+          ? const <pm.AssetEntity>[]
+          : await recent.getAssetListPaged(
+              page: 0,
+              size: _kStatusGalleryPageSize,
+            );
+      if (!mounted) return;
+      setState(() {
+        _recentAssets = assets;
+        _galleryLoading = false;
+        _galleryError = null;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _galleryLoading = false;
+        _galleryError = error is TurnaApiException
+            ? error.message
+            : 'Galeri yuklenemedi.';
+      });
+    }
+  }
+
+  Future<void> _setMode(_StatusCaptureMode mode) async {
+    if (_mode == mode || _cameraBusy || _recording) return;
+    setState(() {
+      _mode = mode;
+      if (mode != _StatusCaptureMode.photo) {
+        _collagePickerVisible = false;
+        _collageLayout = null;
+        _collageFrames.clear();
+      }
+    });
+    await _initializeCamera(
+      preferredLensDirection:
+          _selectedCamera?.lensDirection ?? cam.CameraLensDirection.back,
+    );
+  }
+
+  void _handlePreviewSwipe(DragEndDetails details) {
+    final velocity = details.primaryVelocity ?? 0;
+    if (velocity.abs() < 220) return;
+    if (velocity < 0 && _mode == _StatusCaptureMode.photo) {
+      _setMode(_StatusCaptureMode.video);
+    } else if (velocity > 0 && _mode == _StatusCaptureMode.video) {
+      _setMode(_StatusCaptureMode.photo);
+    }
+  }
+
+  Future<void> _switchCamera() async {
+    if (_cameras.length < 2 || _cameraBusy || _recording) return;
+    final current =
+        _selectedCamera?.lensDirection ?? cam.CameraLensDirection.back;
+    final next = current == cam.CameraLensDirection.front
+        ? cam.CameraLensDirection.back
+        : cam.CameraLensDirection.front;
+    await _initializeCamera(preferredLensDirection: next);
+  }
+
+  Future<void> _openTextComposer() async {
+    if (_cameraBusy || _recording) return;
+    final posted = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => TextStatusComposerPage(
+          session: widget.session,
+          onSessionExpired: widget.onSessionExpired,
+        ),
+      ),
+    );
+    if (posted == true && mounted) {
+      Navigator.pop(context, true);
+    }
+  }
+
+  Future<bool?> _openMediaComposer(XFile file, TurnaStatusType type) {
+    return Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => StatusMediaComposerPage(
+          session: widget.session,
+          file: file,
+          type: type,
+          onSessionExpired: widget.onSessionExpired,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _handleCapturePressed() async {
+    if (_galleryOpen) {
+      setState(() => _galleryOpen = false);
+      return;
+    }
+    if (_mode == _StatusCaptureMode.video) {
+      if (_recording) {
+        await _stopVideoRecording();
+      } else {
+        await _startVideoRecording();
+      }
+      return;
+    }
+    await _takePhoto();
+  }
+
+  Future<void> _takePhoto() async {
+    if (_cameraBusy || !_cameraReady) return;
+    final controller = _cameraController;
+    if (controller == null) return;
+    setState(() => _cameraBusy = true);
+    try {
+      if (_cameraInitFuture != null) {
+        await _cameraInitFuture;
+      }
+      final file = await controller.takePicture();
+      if (!mounted) return;
+      if (_collageLayout != null) {
+        await _appendCollageFrame(file);
+      } else {
+        final posted = await _openMediaComposer(file, TurnaStatusType.image);
+        if (posted == true && mounted) {
+          Navigator.pop(context, true);
+        }
+      }
+    } catch (error) {
+      if (!mounted) return;
+      _showMessage(
+        error is TurnaApiException ? error.message : 'Fotograf cekilemedi.',
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _cameraBusy = false);
+      }
+    }
+  }
+
+  Future<void> _startVideoRecording() async {
+    if (_cameraBusy || !_cameraReady) return;
+    final controller = _cameraController;
+    if (controller == null) return;
+    setState(() {
+      _cameraBusy = true;
+      _galleryOpen = false;
+    });
+    try {
+      if (_cameraInitFuture != null) {
+        await _cameraInitFuture;
+      }
+      if (Platform.isIOS) {
+        await controller.prepareForVideoRecording();
+      }
+      await controller.startVideoRecording();
+      _recordingTimer?.cancel();
+      _recordingTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+        if (!mounted) return;
+        final next = _recordingDuration + const Duration(seconds: 1);
+        if (next.inSeconds >= kStatusMaxVideoDurationSeconds) {
+          timer.cancel();
+          _stopVideoRecording();
+          return;
+        }
+        setState(() => _recordingDuration = next);
+      });
+      if (!mounted) return;
+      setState(() {
+        _recording = true;
+        _recordingDuration = Duration.zero;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      _showMessage('Video kaydi baslatilamadi.');
+    } finally {
+      if (mounted) {
+        setState(() => _cameraBusy = false);
+      }
+    }
+  }
+
+  Future<void> _stopVideoRecording() async {
+    final controller = _cameraController;
+    if (controller == null || !_recording) return;
+    setState(() => _cameraBusy = true);
+    _recordingTimer?.cancel();
+    try {
+      final file = await controller.stopVideoRecording();
+      if (!mounted) return;
+      setState(() {
+        _recording = false;
+        _recordingDuration = Duration.zero;
+      });
+      final posted = await _openMediaComposer(file, TurnaStatusType.video);
+      if (posted == true && mounted) {
+        Navigator.pop(context, true);
+      }
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _recording = false;
+        _recordingDuration = Duration.zero;
+      });
+      _showMessage('Video kaydi durdurulamadi.');
+    } finally {
+      if (mounted) {
+        setState(() => _cameraBusy = false);
+      }
+    }
+  }
+
+  Future<void> _appendCollageFrame(XFile file) async {
+    final layout = _collageLayout;
+    if (layout == null) return;
+    setState(() {
+      if (_collageFrames.length >= layout.slots.length) {
+        _collageFrames.clear();
+      }
+      _collageFrames.add(file);
+    });
+    if (_collageFrames.length < layout.slots.length) {
+      _showMessage(
+        '${_collageFrames.length}/${layout.slots.length} kare yerlestirildi.',
+      );
+      return;
+    }
+
+    try {
+      final collageFile = await _renderCollageFile(layout, _collageFrames);
+      if (!mounted) return;
+      final posted = await _openMediaComposer(
+        collageFile,
+        TurnaStatusType.image,
+      );
+      if (posted == true && mounted) {
+        Navigator.pop(context, true);
+      }
+    } catch (error) {
+      if (!mounted) return;
+      _showMessage(
+        error is TurnaApiException ? error.message : 'Kolaj hazirlanamadi.',
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _collageFrames.clear());
+      }
+    }
+  }
+
+  Future<XFile> _renderCollageFile(
+    _StatusCollageLayout layout,
+    List<XFile> frames,
+  ) async {
+    final width = _kStatusCollageOutputSize.width.round();
+    final height = _kStatusCollageOutputSize.height.round();
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(
+      recorder,
+      Rect.fromLTWH(0, 0, width.toDouble(), height.toDouble()),
+    );
+    final backgroundPaint = Paint()..color = Colors.black;
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, width.toDouble(), height.toDouble()),
+      backgroundPaint,
+    );
+
+    for (var index = 0; index < layout.slots.length; index += 1) {
+      final slot = layout.slots[index];
+      final bytes = await frames[index].readAsBytes();
+      final codec = await ui.instantiateImageCodec(bytes);
+      final frame = await codec.getNextFrame();
+      final image = frame.image;
+      final targetRect = Rect.fromLTWH(
+        slot.left * width,
+        slot.top * height,
+        slot.width * width,
+        slot.height * height,
+      );
+      canvas.save();
+      canvas.clipRect(targetRect);
+      _paintStatusCoverImage(canvas, image, targetRect);
+      canvas.restore();
+    }
+
+    final rendered = await recorder.endRecording().toImage(width, height);
+    final data = await rendered.toByteData(format: ui.ImageByteFormat.rawRgba);
+    if (data == null) {
+      throw TurnaApiException('Kolaj hazirlanamadi.');
+    }
+    final encoded = img.Image.fromBytes(
+      width: width,
+      height: height,
+      bytes: data.buffer,
+      numChannels: 4,
+      order: img.ChannelOrder.rgba,
+    );
+    final jpgBytes = Uint8List.fromList(img.encodeJpg(encoded, quality: 92));
+    final tempDir = await getTemporaryDirectory();
+    final fileName =
+        'status-collage-${DateTime.now().millisecondsSinceEpoch}.jpg';
+    final output = File('${tempDir.path}/$fileName');
+    await output.writeAsBytes(jpgBytes, flush: true);
+    return XFile(output.path, mimeType: 'image/jpeg', name: fileName);
+  }
+
+  Future<void> _handleGalleryAssetTap(pm.AssetEntity asset) async {
+    if (_cameraBusy) return;
+    final file = await asset.file;
+    if (file == null) {
+      _showMessage('Medya dosyasi acilamadi.');
+      return;
+    }
+    final fileName = file.uri.pathSegments.isEmpty
+        ? 'durum-${DateTime.now().millisecondsSinceEpoch}'
+        : file.uri.pathSegments.last;
+    final type = asset.type == pm.AssetType.video
+        ? TurnaStatusType.video
+        : TurnaStatusType.image;
+    final picked = XFile(
+      file.path,
+      name: fileName,
+      mimeType: guessContentTypeForFileName(fileName),
+    );
+    if (_collageLayout != null && type == TurnaStatusType.image) {
+      await _appendCollageFrame(picked);
+      return;
+    }
+    final posted = await _openMediaComposer(picked, type);
+    if (posted == true && mounted) {
+      Navigator.pop(context, true);
+    }
+  }
+
+  void _toggleCollagePicker() {
+    if (_mode != _StatusCaptureMode.photo || _cameraBusy || _recording) return;
+    setState(() {
+      _collagePickerVisible = !_collagePickerVisible;
+    });
+  }
+
+  void _selectCollageLayout(_StatusCollageLayout? layout) {
+    setState(() {
+      _collageLayout = layout;
+      _collageFrames.clear();
+      _collagePickerVisible = false;
+    });
+  }
+
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Widget _buildPreviewLayer() {
+    final controller = _cameraController;
+    if (_cameraError != null) {
+      return Container(
+        color: Colors.black,
+        alignment: Alignment.center,
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(
+              Icons.camera_alt_outlined,
+              color: Colors.white70,
+              size: 42,
+            ),
+            const SizedBox(height: 14),
+            Text(
+              _cameraError!,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.white70, fontSize: 15),
+            ),
+          ],
+        ),
+      );
+    }
+    if (_cameraInitializing ||
+        controller == null ||
+        !controller.value.isInitialized) {
+      return Container(
+        color: Colors.black,
+        alignment: Alignment.center,
+        child: const CircularProgressIndicator(color: Colors.white),
+      );
+    }
+    final previewSize = controller.value.previewSize;
+    if (previewSize == null) {
+      return const SizedBox.expand(child: ColoredBox(color: Colors.black));
+    }
+    return SizedBox.expand(
+      child: FittedBox(
+        fit: BoxFit.cover,
+        child: SizedBox(
+          width: previewSize.height,
+          height: previewSize.width,
+          child: cam.CameraPreview(controller),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCollageOverlay() {
+    final layout = _collageLayout;
+    if (layout == null) return const SizedBox.shrink();
+    return Positioned.fill(
+      child: IgnorePointer(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            return Stack(
+              children: List<Widget>.generate(layout.slots.length, (index) {
+                final slot = layout.slots[index];
+                final left = slot.left * constraints.maxWidth;
+                final top = slot.top * constraints.maxHeight;
+                final width = slot.width * constraints.maxWidth;
+                final height = slot.height * constraints.maxHeight;
+                final file = index < _collageFrames.length
+                    ? File(_collageFrames[index].path)
+                    : null;
+                return Positioned(
+                  left: left,
+                  top: top,
+                  width: width,
+                  height: height,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Colors.white70, width: 1.1),
+                      color: file == null
+                          ? Colors.black.withValues(alpha: 0.24)
+                          : Colors.transparent,
+                    ),
+                    child: file == null
+                        ? Center(
+                            child: Text(
+                              '${index + 1}',
+                              style: const TextStyle(
+                                color: Colors.white70,
+                                fontSize: 20,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          )
+                        : Image.file(file, fit: BoxFit.cover),
+                  ),
+                );
+              }),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTopBar() {
+    final collageSlots = _collageLayout?.slots.length ?? 0;
+    final collageProgress = collageSlots == 0
+        ? null
+        : '${_collageFrames.length}/$collageSlots kare';
+
+    return SafeArea(
+      bottom: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                if (_mode == _StatusCaptureMode.photo)
+                  _StatusCaptureTopButton(
+                    icon: Icons.grid_view_rounded,
+                    selected: _collagePickerVisible || _collageLayout != null,
+                    onTap: _toggleCollagePicker,
+                  ),
+                if (_mode == _StatusCaptureMode.photo)
+                  const SizedBox(width: 10),
+                if (collageProgress != null)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.34),
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.12),
+                      ),
+                    ),
+                    child: Text(
+                      collageProgress,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                const Spacer(),
+                _StatusCaptureTopButton(
+                  icon: Icons.text_fields_rounded,
+                  onTap: _openTextComposer,
+                ),
+                const SizedBox(width: 10),
+                _StatusCaptureTopButton(
+                  icon: Icons.close_rounded,
+                  onTap: () => Navigator.pop(context),
+                ),
+              ],
+            ),
+            if (_mode == _StatusCaptureMode.photo && _collagePickerVisible) ...[
+              const SizedBox(height: 14),
+              SizedBox(
+                height: 72,
+                child: ListView(
+                  scrollDirection: Axis.horizontal,
+                  children: [
+                    _StatusCollageLayoutTile(
+                      label: 'Tekli',
+                      selected: _collageLayout == null,
+                      onTap: () => _selectCollageLayout(null),
+                      child: const Icon(
+                        Icons.crop_portrait_rounded,
+                        color: Colors.white,
+                      ),
+                    ),
+                    ..._kStatusCollageLayouts.map(
+                      (layout) => _StatusCollageLayoutTile(
+                        label: layout.label,
+                        selected: _collageLayout?.id == layout.id,
+                        onTap: () => _selectCollageLayout(layout),
+                        child: _StatusCollageLayoutPreview(layout: layout),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGalleryPanel() {
+    return AnimatedPositioned(
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOutCubic,
+      left: 0,
+      right: 0,
+      bottom: _galleryOpen
+          ? _kStatusCaptureBottomInset
+          : -_kStatusGalleryPanelHeight,
+      height: _kStatusGalleryPanelHeight,
+      child: IgnorePointer(
+        ignoring: !_galleryOpen,
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.78),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+          ),
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
+                child: Row(
+                  children: [
+                    _StatusCaptureTopButton(
+                      icon: Icons.close_rounded,
+                      compact: true,
+                      onTap: () => setState(() => _galleryOpen = false),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Text(
+                            'Son zamanlarda',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            _privacyModeLabel(widget.privacy.mode),
+                            style: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.68),
+                              fontSize: 11,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 44),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: Builder(
+                  builder: (context) {
+                    if (_galleryLoading) {
+                      return const Center(
+                        child: CircularProgressIndicator(color: Colors.white),
+                      );
+                    }
+                    if (_galleryError != null) {
+                      return Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(24),
+                          child: Text(
+                            _galleryError!,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(color: Colors.white70),
+                          ),
+                        ),
+                      );
+                    }
+                    if (_recentAssets.isEmpty) {
+                      return const Center(
+                        child: Text(
+                          'Galeride gosterilecek medya bulunamadi.',
+                          style: TextStyle(color: Colors.white70),
+                        ),
+                      );
+                    }
+                    return GridView.builder(
+                      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                      gridDelegate:
+                          const SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: 3,
+                            crossAxisSpacing: 6,
+                            mainAxisSpacing: 6,
+                          ),
+                      itemCount: _recentAssets.length,
+                      itemBuilder: (context, index) {
+                        final asset = _recentAssets[index];
+                        return _StatusGalleryAssetTile(
+                          asset: asset,
+                          onTap: () => _handleGalleryAssetTap(asset),
+                        );
+                      },
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBottomControls() {
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (_recording)
+              Container(
+                margin: const EdgeInsets.only(bottom: 12),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.red.withValues(alpha: 0.9),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Text(
+                  '${_recordingDuration.inSeconds.toString().padLeft(2, '0')} sn',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                _StatusGalleryLauncherButton(
+                  asset: _recentAssets.isEmpty ? null : _recentAssets.first,
+                  onTap: () {
+                    setState(() => _galleryOpen = !_galleryOpen);
+                  },
+                ),
+                _StatusCaptureShutterButton(
+                  mode: _mode,
+                  recording: _recording,
+                  busy: _cameraBusy,
+                  onTap: _handleCapturePressed,
+                ),
+                _StatusCaptureTopButton(
+                  icon: Icons.cameraswitch_rounded,
+                  compact: true,
+                  onTap: _switchCamera,
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.48),
+                borderRadius: BorderRadius.circular(22),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const _StatusModeChip(
+                    label: 'CANLI',
+                    selected: false,
+                    enabled: false,
+                  ),
+                  _StatusModeChip(
+                    label: 'VIDEO',
+                    selected: _mode == _StatusCaptureMode.video,
+                    onTap: () => _setMode(_StatusCaptureMode.video),
+                  ),
+                  _StatusModeChip(
+                    label: 'FOTOGRAF',
+                    selected: _mode == _StatusCaptureMode.photo,
+                    onTap: () => _setMode(_StatusCaptureMode.photo),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: GestureDetector(
+        onHorizontalDragEnd: _handlePreviewSwipe,
+        child: Stack(
+          children: [
+            Positioned.fill(child: _buildPreviewLayer()),
+            if (_galleryOpen)
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: ColoredBox(
+                    color: Colors.black.withValues(alpha: 0.18),
+                  ),
+                ),
+              ),
+            _buildCollageOverlay(),
+            Positioned(left: 0, right: 0, top: 0, child: _buildTopBar()),
+            _buildGalleryPanel(),
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: _buildBottomControls(),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _StatusCaptureTopButton extends StatelessWidget {
+  const _StatusCaptureTopButton({
+    required this.icon,
+    required this.onTap,
+    this.selected = false,
+    this.compact = false,
+  });
+
+  final IconData icon;
+  final VoidCallback onTap;
+  final bool selected;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final size = compact ? 42.0 : 46.0;
+    return Material(
+      color: selected
+          ? TurnaColors.primary.withValues(alpha: 0.92)
+          : Colors.black.withValues(alpha: 0.34),
+      shape: const CircleBorder(),
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: onTap,
+        child: SizedBox(
+          width: size,
+          height: size,
+          child: Icon(icon, color: Colors.white),
+        ),
+      ),
+    );
+  }
+}
+
+class _StatusModeChip extends StatelessWidget {
+  const _StatusModeChip({
+    required this.label,
+    required this.selected,
+    this.enabled = true,
+    this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final bool enabled;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = !enabled
+        ? Colors.white38
+        : selected
+        ? const Color(0xFFF7D543)
+        : Colors.white;
+    return GestureDetector(
+      onTap: enabled ? onTap : null,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: color,
+            fontSize: 14,
+            fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _StatusCaptureShutterButton extends StatelessWidget {
+  const _StatusCaptureShutterButton({
+    required this.mode,
+    required this.recording,
+    required this.busy,
+    required this.onTap,
+  });
+
+  final _StatusCaptureMode mode;
+  final bool recording;
+  final bool busy;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final isVideo = mode == _StatusCaptureMode.video;
+    return GestureDetector(
+      onTap: busy ? null : onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 140),
+        width: 84,
+        height: 84,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: Colors.white.withValues(alpha: busy ? 0.42 : 0.95),
+            width: 4,
+          ),
+          color: Colors.white.withValues(alpha: 0.12),
+        ),
+        child: Center(
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 140),
+            width: recording ? 28 : 62,
+            height: recording ? 28 : 62,
+            decoration: BoxDecoration(
+              color: isVideo ? const Color(0xFFEF4444) : Colors.white,
+              borderRadius: BorderRadius.circular(recording ? 10 : 31),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _StatusGalleryLauncherButton extends StatelessWidget {
+  const _StatusGalleryLauncherButton({
+    required this.asset,
+    required this.onTap,
+  });
+
+  final pm.AssetEntity? asset;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 54,
+        height: 54,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+          color: Colors.black.withValues(alpha: 0.3),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: asset == null
+            ? const Icon(Icons.photo_library_outlined, color: Colors.white)
+            : FutureBuilder<Uint8List?>(
+                future: asset!.thumbnailDataWithSize(
+                  pm.ThumbnailSize(
+                    _kStatusGalleryThumbSize.width.round(),
+                    _kStatusGalleryThumbSize.height.round(),
+                  ),
+                  quality: 90,
+                ),
+                builder: (context, snapshot) {
+                  final bytes = snapshot.data;
+                  if (bytes == null || bytes.isEmpty) {
+                    return const Icon(
+                      Icons.photo_library_outlined,
+                      color: Colors.white,
+                    );
+                  }
+                  return Image.memory(bytes, fit: BoxFit.cover);
+                },
+              ),
+      ),
+    );
+  }
+}
+
+class _StatusGalleryAssetTile extends StatelessWidget {
+  const _StatusGalleryAssetTile({required this.asset, required this.onTap});
+
+  final pm.AssetEntity asset;
+  final VoidCallback onTap;
+
+  String _durationLabel(int seconds) {
+    final minutes = (seconds ~/ 60).toString().padLeft(2, '0');
+    final remaining = (seconds % 60).toString().padLeft(2, '0');
+    return '$minutes:$remaining';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(14),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            FutureBuilder<Uint8List?>(
+              future: asset.thumbnailDataWithSize(
+                pm.ThumbnailSize(
+                  _kStatusGalleryThumbSize.width.round(),
+                  _kStatusGalleryThumbSize.height.round(),
+                ),
+                quality: 88,
+              ),
+              builder: (context, snapshot) {
+                final bytes = snapshot.data;
+                if (bytes == null || bytes.isEmpty) {
+                  return ColoredBox(
+                    color: Colors.white.withValues(alpha: 0.06),
+                    child: const Icon(
+                      Icons.photo_outlined,
+                      color: Colors.white70,
+                    ),
+                  );
+                }
+                return Image.memory(bytes, fit: BoxFit.cover);
+              },
+            ),
+            if (asset.type == pm.AssetType.video)
+              Positioned(
+                left: 8,
+                right: 8,
+                bottom: 8,
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.videocam_rounded,
+                      size: 14,
+                      color: Colors.white,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      _durationLabel(asset.duration),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _StatusCollageLayoutTile extends StatelessWidget {
+  const _StatusCollageLayoutTile({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    required this.child,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 10),
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: 86,
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          decoration: BoxDecoration(
+            color: selected
+                ? TurnaColors.primary.withValues(alpha: 0.92)
+                : Colors.black.withValues(alpha: 0.3),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: Colors.white.withValues(alpha: selected ? 0.22 : 0.1),
+            ),
+          ),
+          child: Column(
+            children: [
+              Expanded(child: Center(child: child)),
+              const SizedBox(height: 6),
+              Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _StatusCollageLayoutPreview extends StatelessWidget {
+  const _StatusCollageLayoutPreview({required this.layout});
+
+  final _StatusCollageLayout layout;
+
+  @override
+  Widget build(BuildContext context) {
+    return AspectRatio(
+      aspectRatio: 9 / 16,
+      child: Container(
+        decoration: BoxDecoration(
+          border: Border.all(color: Colors.white.withValues(alpha: 0.75)),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            return Stack(
+              children: layout.slots.map((slot) {
+                return Positioned(
+                  left: slot.left * constraints.maxWidth,
+                  top: slot.top * constraints.maxHeight,
+                  width: slot.width * constraints.maxWidth,
+                  height: slot.height * constraints.maxHeight,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.75),
+                        width: 1,
+                      ),
+                    ),
+                  ),
+                );
+              }).toList(),
+            );
+          },
         ),
       ),
     );
@@ -946,7 +2127,7 @@ class _TextStatusComposerPageState extends State<TextStatusComposerPage> {
   }
 }
 
-class StatusMediaComposerPage extends StatefulWidget {
+class StatusMediaComposerPage extends StatelessWidget {
   const StatusMediaComposerPage({
     super.key,
     required this.session,
@@ -960,68 +2141,30 @@ class StatusMediaComposerPage extends StatefulWidget {
   final TurnaStatusType type;
   final VoidCallback onSessionExpired;
 
-  @override
-  State<StatusMediaComposerPage> createState() =>
-      _StatusMediaComposerPageState();
-}
-
-class _StatusMediaComposerPageState extends State<StatusMediaComposerPage> {
-  vp.VideoPlayerController? _videoController;
-  Future<void>? _videoInitFuture;
-  bool _saving = false;
-
-  @override
-  void initState() {
-    super.initState();
-    if (widget.type == TurnaStatusType.video) {
-      final controller = vp.VideoPlayerController.file(File(widget.file.path));
-      _videoController = controller;
-      _videoInitFuture = controller.initialize().then((_) {
-        controller
-          ..setLooping(true)
-          ..play();
-      });
+  Future<bool> _submitPrepared(
+    List<_PreparedComposerAttachment> attachments,
+    String? caption,
+    MediaComposerQuality quality,
+  ) async {
+    if (attachments.isEmpty) {
+      throw TurnaApiException('Paylasilacak medya bulunamadi.');
     }
-  }
+    final prepared = attachments.first;
+    final fileName = prepared.fileName.trim().isEmpty
+        ? 'durum-${DateTime.now().millisecondsSinceEpoch}'
+        : prepared.fileName.trim();
+    final contentType = prepared.contentType.trim().isEmpty
+        ? (type == TurnaStatusType.video ? 'video/mp4' : 'image/jpeg')
+        : prepared.contentType.trim();
 
-  @override
-  void dispose() {
-    _videoController?.dispose();
-    super.dispose();
-  }
+    int? width = prepared.width;
+    int? height = prepared.height;
+    int? durationSeconds;
 
-  Future<void> _submit() async {
-    if (_saving) return;
-    setState(() => _saving = true);
-
-    try {
-      final bytes = await widget.file.readAsBytes();
-      final fileName = widget.file.name.trim().isEmpty
-          ? 'durum-${DateTime.now().millisecondsSinceEpoch}'
-          : widget.file.name.trim();
-      final contentType = widget.file.mimeType?.trim().isNotEmpty == true
-          ? widget.file.mimeType!.trim()
-          : (guessContentTypeForFileName(fileName) ??
-                (widget.type == TurnaStatusType.video
-                    ? 'video/mp4'
-                    : 'image/jpeg'));
-
-      int? width;
-      int? height;
-      int? durationSeconds;
-
-      if (widget.type == TurnaStatusType.image) {
-        final image = await decodeImageFromList(bytes);
-        width = image.width;
-        height = image.height;
-      } else {
-        final controller = _videoController;
-        if (controller == null) {
-          throw TurnaApiException('Video hazırlanamadi.');
-        }
-        if (_videoInitFuture != null) {
-          await _videoInitFuture;
-        }
+    if (type == TurnaStatusType.video) {
+      final controller = vp.VideoPlayerController.file(File(file.path));
+      try {
+        await controller.initialize();
         durationSeconds = controller.value.duration.inSeconds;
         if (durationSeconds > kStatusMaxVideoDurationSeconds) {
           throw TurnaApiException(
@@ -1030,151 +2173,71 @@ class _StatusMediaComposerPageState extends State<StatusMediaComposerPage> {
         }
         width = controller.value.size.width.round();
         height = controller.value.size.height.round();
+      } finally {
+        await controller.dispose();
       }
-
-      final upload = await TurnaStatusApi.createUpload(
-        widget.session,
-        type: widget.type,
-        contentType: contentType,
-        fileName: fileName,
-      );
-
-      final uploadRes = await http.put(
-        Uri.parse(upload.uploadUrl),
-        headers: upload.headers,
-        body: bytes,
-      );
-      if (uploadRes.statusCode >= 400) {
-        throw TurnaApiException('Dosya yüklenemedi.');
-      }
-
-      await TurnaStatusApi.createMediaStatus(
-        widget.session,
-        type: widget.type,
-        objectKey: upload.objectKey,
-        contentType: contentType,
-        fileName: fileName,
-        sizeBytes: bytes.length,
-        width: width,
-        height: height,
-        durationSeconds: durationSeconds,
-      );
-
-      if (!mounted) return;
-      Navigator.pop(context, true);
-    } on TurnaUnauthorizedException {
-      if (!mounted) return;
-      widget.onSessionExpired();
-      Navigator.pop(context);
-    } catch (error) {
-      if (!mounted) return;
-      setState(() => _saving = false);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(error.toString())));
     }
+
+    final upload = await TurnaStatusApi.createUpload(
+      session,
+      type: type,
+      contentType: contentType,
+      fileName: fileName,
+    );
+
+    final uploadRes = await http.put(
+      Uri.parse(upload.uploadUrl),
+      headers: upload.headers,
+      body: prepared.bytes,
+    );
+    if (uploadRes.statusCode >= 400) {
+      throw TurnaApiException('Dosya yüklenemedi.');
+    }
+
+    await TurnaStatusApi.createMediaStatus(
+      session,
+      type: type,
+      objectKey: upload.objectKey,
+      contentType: contentType,
+      fileName: fileName,
+      sizeBytes: prepared.bytes.length,
+      width: width,
+      height: height,
+      durationSeconds: durationSeconds,
+    );
+    return true;
   }
 
   @override
   Widget build(BuildContext context) {
-    final isVideo = widget.type == TurnaStatusType.video;
+    int sizeBytes = 0;
+    try {
+      sizeBytes = File(file.path).lengthSync();
+    } catch (_) {}
 
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
-        backgroundColor: Colors.black,
-        foregroundColor: Colors.white,
-        actions: [
-          TextButton(
-            onPressed: _saving ? null : _submit,
-            child: Text(
-              _saving ? 'Paylaşılıyor...' : 'Paylaş',
-              style: const TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-        ],
-      ),
-      body: Stack(
-        children: [
-          Positioned.fill(
-            child: isVideo
-                ? FutureBuilder<void>(
-                    future: _videoInitFuture,
-                    builder: (context, snapshot) {
-                      final controller = _videoController;
-                      if (snapshot.connectionState != ConnectionState.done ||
-                          controller == null ||
-                          !controller.value.isInitialized) {
-                        return const Center(child: CircularProgressIndicator());
-                      }
-                      return GestureDetector(
-                        onTap: () {
-                          if (controller.value.isPlaying) {
-                            controller.pause();
-                          } else {
-                            controller.play();
-                          }
-                          setState(() {});
-                        },
-                        child: Stack(
-                          alignment: Alignment.center,
-                          children: [
-                            Center(
-                              child: AspectRatio(
-                                aspectRatio: controller.value.aspectRatio,
-                                child: vp.VideoPlayer(controller),
-                              ),
-                            ),
-                            if (!controller.value.isPlaying)
-                              Container(
-                                width: 68,
-                                height: 68,
-                                decoration: BoxDecoration(
-                                  color: Colors.black.withValues(alpha: 0.42),
-                                  shape: BoxShape.circle,
-                                ),
-                                child: const Icon(
-                                  Icons.play_arrow_rounded,
-                                  size: 38,
-                                  color: Colors.white,
-                                ),
-                              ),
-                          ],
-                        ),
-                      );
-                    },
-                  )
-                : Center(
-                    child: Image.file(
-                      File(widget.file.path),
-                      fit: BoxFit.contain,
-                    ),
-                  ),
-          ),
-          Positioned(
-            left: 18,
-            right: 18,
-            bottom: 24,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.45),
-                borderRadius: BorderRadius.circular(18),
-              ),
-              child: Text(
-                isVideo
-                    ? 'Video durumları $kStatusMaxVideoDurationSeconds saniyeye kadar paylaşılır ve 24 saat sonra silinir.'
-                    : 'Fotoğraf durumları 24 saat görünür.',
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.white, fontSize: 13),
-              ),
-            ),
-          ),
-        ],
-      ),
+    return _MediaComposerPage(
+      session: session,
+      items: [
+        MediaComposerSeed(
+          kind: type == TurnaStatusType.video
+              ? ChatAttachmentKind.video
+              : ChatAttachmentKind.image,
+          file: file,
+          fileName: file.name.trim().isEmpty
+              ? 'durum-${DateTime.now().millisecondsSinceEpoch}'
+              : file.name.trim(),
+          contentType: file.mimeType?.trim().isNotEmpty == true
+              ? file.mimeType!.trim()
+              : (guessContentTypeForFileName(file.name) ??
+                    (type == TurnaStatusType.video
+                        ? 'video/mp4'
+                        : 'image/jpeg')),
+          sizeBytes: sizeBytes,
+        ),
+      ],
+      onSessionExpired: onSessionExpired,
+      onPreparedSend: _submitPrepared,
+      captionEnabled: false,
     );
   }
 }
@@ -2042,4 +3105,13 @@ Color _colorFromHex(String? raw, Color fallback) {
   final parsed = int.tryParse(normalized, radix: 16);
   if (parsed == null) return fallback;
   return Color(parsed);
+}
+
+void _paintStatusCoverImage(Canvas canvas, ui.Image image, Rect targetRect) {
+  final outputSize = targetRect.size;
+  final inputSize = Size(image.width.toDouble(), image.height.toDouble());
+  final fitted = applyBoxFit(BoxFit.cover, inputSize, outputSize);
+  final src = Alignment.center.inscribe(fitted.source, Offset.zero & inputSize);
+  final dst = Alignment.center.inscribe(fitted.destination, targetRect);
+  canvas.drawImageRect(image, src, dst, Paint()..isAntiAlias = true);
 }

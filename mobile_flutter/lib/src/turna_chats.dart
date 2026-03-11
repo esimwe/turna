@@ -4806,7 +4806,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     final message = await Navigator.push<ChatMessage>(
       context,
       MaterialPageRoute(
-        builder: (_) => MediaComposerPage(
+        builder: (_) => _MediaComposerPage(
           session: widget.session,
           chat: widget.chat,
           items: seeds,
@@ -8230,6 +8230,13 @@ class MediaComposerSeed {
   final int sizeBytes;
 }
 
+typedef _MediaComposerPreparedSend =
+    Future<dynamic> Function(
+      List<_PreparedComposerAttachment> attachments,
+      String? caption,
+      MediaComposerQuality quality,
+    );
+
 class _MediaCropPreset {
   const _MediaCropPreset({
     required this.id,
@@ -8250,25 +8257,31 @@ class _MediaCropPreset {
 
 enum _MediaComposerCropHandle { topLeft, topRight, bottomLeft, bottomRight }
 
-class MediaComposerPage extends StatefulWidget {
-  const MediaComposerPage({
-    super.key,
+class _MediaComposerPage extends StatefulWidget {
+  const _MediaComposerPage({
     required this.session,
-    required this.chat,
     required this.items,
     required this.onSessionExpired,
-  });
+    this.chat,
+    this.onPreparedSend,
+    this.captionEnabled = true,
+  }) : assert(
+         chat != null || onPreparedSend != null,
+         'chat veya onPreparedSend verilmelidir.',
+       );
 
   final AuthSession session;
-  final ChatPreview chat;
+  final ChatPreview? chat;
   final List<MediaComposerSeed> items;
   final VoidCallback onSessionExpired;
+  final _MediaComposerPreparedSend? onPreparedSend;
+  final bool captionEnabled;
 
   @override
-  State<MediaComposerPage> createState() => _MediaComposerPageState();
+  State<_MediaComposerPage> createState() => _MediaComposerPageState();
 }
 
-class _MediaComposerPageState extends State<MediaComposerPage> {
+class _MediaComposerPageState extends State<_MediaComposerPage> {
   final TextEditingController _captionController = TextEditingController();
   final TextEditingController _inlineTextController = TextEditingController();
   final FocusNode _inlineTextFocusNode = FocusNode();
@@ -9165,6 +9178,7 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
     });
 
     try {
+      final preparedAttachments = <_PreparedComposerAttachment>[];
       final attachments = <OutgoingAttachmentDraft>[];
       for (var index = 0; index < _items.length; index++) {
         final item = _items[index];
@@ -9175,9 +9189,14 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
         }
 
         final prepared = await _prepareAttachment(item);
+        preparedAttachments.add(prepared);
+        if (widget.onPreparedSend != null) {
+          continue;
+        }
+        final chat = widget.chat!;
         final upload = await ChatApi.createAttachmentUpload(
           widget.session,
-          chatId: widget.chat.chatId,
+          chatId: chat.chatId,
           kind: prepared.kind,
           contentType: prepared.contentType,
           fileName: prepared.fileName,
@@ -9206,15 +9225,29 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
       }
 
       final caption = _captionController.text.trim();
+      final normalizedCaption = caption.isEmpty ? null : caption;
+
+      if (widget.onPreparedSend != null) {
+        final result = await widget.onPreparedSend!(
+          preparedAttachments,
+          normalizedCaption,
+          _quality,
+        );
+        if (!mounted) return;
+        Navigator.pop(context, result);
+        return;
+      }
+
+      final chat = widget.chat!;
       final message = await ChatApi.sendMessage(
         widget.session,
-        chatId: widget.chat.chatId,
-        text: caption.isEmpty ? null : caption,
+        chatId: chat.chatId,
+        text: normalizedCaption,
         attachments: attachments,
       );
 
       await TurnaAnalytics.logEvent('attachment_sent', {
-        'chat_id': widget.chat.chatId,
+        'chat_id': chat.chatId,
         'quality': _quality.name,
         'count': attachments.length,
         'kind': attachments.length == 1 ? attachments.first.kind.name : 'album',
@@ -9740,25 +9773,26 @@ class _MediaComposerPageState extends State<MediaComposerPage> {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _captionController,
-                      minLines: 1,
-                      maxLines: 4,
-                      style: const TextStyle(color: Colors.white),
-                      decoration: InputDecoration(
-                        hintText: 'Açıklama ekle',
-                        hintStyle: const TextStyle(color: Color(0xFF7C8380)),
-                        filled: true,
-                        fillColor: const Color(0xFF162033),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(24),
-                          borderSide: BorderSide.none,
+                  if (widget.captionEnabled)
+                    Expanded(
+                      child: TextField(
+                        controller: _captionController,
+                        minLines: 1,
+                        maxLines: 4,
+                        style: const TextStyle(color: Colors.white),
+                        decoration: InputDecoration(
+                          hintText: 'Açıklama ekle',
+                          hintStyle: const TextStyle(color: Color(0xFF7C8380)),
+                          filled: true,
+                          fillColor: const Color(0xFF162033),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(24),
+                            borderSide: BorderSide.none,
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 12),
+                  if (widget.captionEnabled) const SizedBox(width: 12),
                   Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
