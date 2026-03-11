@@ -147,7 +147,7 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
         callCoordinator: _callCoordinator,
         onSessionExpired: _handleSessionExpired,
       ),
-      const PlaceholderPage(title: 'Araclar'),
+      const TurnaPaymentToolsPage(),
       ChatsPage(
         session: widget.session,
         inboxUpdateNotifier: _inboxUpdateNotifier,

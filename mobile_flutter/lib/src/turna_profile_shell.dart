@@ -107,11 +107,11 @@ class _SettingsPageState extends State<SettingsPage> {
           builder: (context, snapshot) {
             final profile = snapshot.data;
             final about = profile?.about?.trim();
-            final statusText =
-                (about != null && about.isNotEmpty)
-                    ? about
-                    : 'Şu anki ruh halim';
-            final displayName = profile?.displayName ?? widget.session.displayName;
+            final statusText = (about != null && about.isNotEmpty)
+                ? about
+                : 'Şu anki ruh halim';
+            final displayName =
+                profile?.displayName ?? widget.session.displayName;
             final avatarUrl = profile?.avatarUrl ?? widget.session.avatarUrl;
 
             return ListView(
@@ -280,7 +280,9 @@ class _SettingsPageState extends State<SettingsPage> {
                     icon: Icons.person_add_alt_1_outlined,
                     label: 'Arkadaşlarınızı davet edin',
                     onTap: () => _openPage(
-                      const PlaceholderPage(title: 'Arkadaşlarınızı davet edin'),
+                      const PlaceholderPage(
+                        title: 'Arkadaşlarınızı davet edin',
+                      ),
                     ),
                   ),
                 ]),
@@ -298,6 +300,1046 @@ class _SettingsPageState extends State<SettingsPage> {
               ],
             );
           },
+        ),
+      ),
+    );
+  }
+}
+
+class TurnaPaymentToolsPage extends StatelessWidget {
+  const TurnaPaymentToolsPage({super.key});
+
+  static const List<_TurnaPaymentToolItem> _tools = [
+    _TurnaPaymentToolItem(
+      title: 'Taksi Öde',
+      shortDescription: 'Username veya mesaj üzerinden ödeme yapın',
+      longDescription:
+          'Taksiciye mesajdan veya username ile anında ödeme yapın. Kartınızla saniyeler içinde.',
+      icon: Icons.local_taxi,
+      color: Color(0xFF2F80ED),
+      status: 'Yakında',
+    ),
+    _TurnaPaymentToolItem(
+      title: 'Yemek Siparişi Öde',
+      shortDescription: 'Restoran ödemelerini hızlıca tamamlayın',
+      longDescription:
+          'Restoran seçin, menüyü görün, ödemeyi Turna ile tamamlayın. Sipariş kapıya gelsin.',
+      icon: Icons.restaurant,
+      color: Color(0xFFF59E0B),
+      status: 'Yakında',
+    ),
+    _TurnaPaymentToolItem(
+      title: 'Fatura Öde',
+      shortDescription: 'Faturalarınızı tek yerden ödeyin',
+      longDescription:
+          'Elektrik, su, doğalgaz, internet ve telefon faturalarınızı tek dokunuşla ödeyin. Hatırlatma desteği de sunulur.',
+      icon: Icons.receipt_long,
+      color: Color(0xFF22C55E),
+      status: 'Yakında',
+    ),
+    _TurnaPaymentToolItem(
+      title: 'Etkinlik Bileti Al',
+      shortDescription: 'Konser, sinema ve tiyatro biletleri alın',
+      longDescription:
+          'Konser, etkinlik, tiyatro ve sinema biletlerini Turna üzerinden kolayca satın alın.',
+      icon: Icons.confirmation_number,
+      color: Color(0xFF7C3AED),
+      status: 'Yakında',
+    ),
+    _TurnaPaymentToolItem(
+      title: 'Market Alışverişi Öde',
+      shortDescription: 'Market siparişlerini uygulamadan tamamlayın',
+      longDescription:
+          'Seçili marketlerden alışveriş yapın, ödemenizi Turna ile tamamlayın. Kapıya teslim kolaylığı sağlayın.',
+      icon: Icons.local_grocery_store,
+      color: Color(0xFFEF4444),
+      status: 'Yakında',
+    ),
+    _TurnaPaymentToolItem(
+      title: 'Su & İçecek Teslimi',
+      shortDescription: 'Su ve içecek siparişini kolayca verin',
+      longDescription:
+          'Damacana su, kahve ve içecek siparişlerinizi Turna ile verin, ödemenizi kolayca tamamlayın.',
+      icon: Icons.local_drink,
+      color: Color(0xFF06B6D4),
+      status: 'Yakında',
+    ),
+    _TurnaPaymentToolItem(
+      title: 'Çiçek & Hediye Gönder',
+      shortDescription: 'Hediye ve çiçek siparişleri için hızlı ödeme',
+      longDescription:
+          'Sevdiklerinize çiçek, çikolata veya hediye paketi gönderin. Ödeme ve teslimat sürecini Turna üzerinden yönetin.',
+      icon: Icons.card_giftcard,
+      color: Color(0xFFEC4899),
+      status: 'Yakında',
+    ),
+    _TurnaPaymentToolItem(
+      title: 'Kira & Aidat Öde',
+      shortDescription: 'Kira ve aidat işlemlerini düzenli yönetin',
+      longDescription:
+          'Ev sahibi veya site yönetimine kira ve aidat ödemelerinizi yapın. Dekontlar otomatik olarak saklanır.',
+      icon: Icons.home,
+      color: Color(0xFF4F46E5),
+      status: 'Yakında',
+    ),
+    _TurnaPaymentToolItem(
+      title: 'Bağış Yap',
+      shortDescription: 'Kuruluşlara hızlı ve güvenli bağış gönderin',
+      longDescription:
+          'Seçtiğiniz kurumlara hızlı ve güvenli şekilde bağış yapın. Turna üzerinden şeffaf bağış deneyimi sunulur.',
+      icon: Icons.volunteer_activism,
+      color: Color(0xFF0F766E),
+      status: 'Yakında',
+    ),
+  ];
+
+  static const _TurnaPaymentToolItem _supportItem = _TurnaPaymentToolItem(
+    title: 'Destek',
+    shortDescription: 'Ödeme, şikayet ve hesap sorunları için',
+    longDescription:
+        'Hatalı para gönderimi, ödeme sorunları, şikayetler veya hesap güvenliği ile ilgili destek alın. Turna destek ekibi size yardımcı olur.',
+    icon: Icons.support_agent,
+    color: Color(0xFF64748B),
+    status: 'Aktif',
+  );
+
+  Future<void> _showToolSheet(
+    BuildContext context,
+    _TurnaPaymentToolItem item,
+  ) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.white,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      builder: (context) {
+        return SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(24, 18, 24, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 44,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 18),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      width: 56,
+                      height: 56,
+                      decoration: BoxDecoration(
+                        color: item.color.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(18),
+                      ),
+                      child: Icon(item.icon, color: item.color, size: 28),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            item.title,
+                            style: const TextStyle(
+                              color: TurnaColors.text,
+                              fontSize: 22,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          _TurnaPaymentStatusChip(
+                            label: item.status,
+                            color: item.color,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                Text(
+                  item.shortDescription,
+                  style: const TextStyle(
+                    color: TurnaColors.textSoft,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  item.longDescription,
+                  style: const TextStyle(
+                    color: TurnaColors.textMuted,
+                    fontSize: 15,
+                    height: 1.45,
+                  ),
+                ),
+                const SizedBox(height: 22),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: item.color,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                    ),
+                    child: Text(
+                      item.status == 'Aktif'
+                          ? 'Destek seçeneklerini görüntüle'
+                          : 'Tamam',
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildSectionLabel(String label) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 2, bottom: 10),
+      child: Text(
+        label,
+        style: const TextStyle(
+          color: TurnaColors.textMuted,
+          fontSize: 13,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.2,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildToolCard(BuildContext context, _TurnaPaymentToolItem item) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(24),
+          onTap: () => _showToolSheet(context, item),
+          child: Ink(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(24),
+              boxShadow: const [TurnaColors.shadowSoft],
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 52,
+                    height: 52,
+                    decoration: BoxDecoration(
+                      color: item.color.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: Icon(item.icon, color: item.color, size: 28),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          item.title,
+                          style: const TextStyle(
+                            color: TurnaColors.text,
+                            fontSize: 17,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          item.shortDescription,
+                          style: const TextStyle(
+                            color: TurnaColors.textMuted,
+                            fontSize: 14,
+                            height: 1.35,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      _TurnaPaymentStatusChip(
+                        label: item.status,
+                        color: item.color,
+                      ),
+                      const SizedBox(height: 14),
+                      Icon(
+                        Icons.chevron_right_rounded,
+                        color: Colors.black.withValues(alpha: 0.34),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: TurnaColors.backgroundSoft,
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
+          children: [
+            const TurnaOdemeHeaderMock(),
+            const SizedBox(height: 12),
+            _buildSectionLabel('Araçlar'),
+            for (final item in _tools) _buildToolCard(context, item),
+            const SizedBox(height: 8),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Divider(
+                      color: Colors.black.withValues(alpha: 0.12),
+                      thickness: 1,
+                    ),
+                  ),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 12),
+                    child: Text(
+                      'Destek',
+                      style: TextStyle(
+                        color: TurnaColors.textMuted,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: Divider(
+                      color: Colors.black.withValues(alpha: 0.12),
+                      thickness: 1,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            _buildToolCard(context, _supportItem),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class TurnaOdemeHeaderMock extends StatefulWidget {
+  const TurnaOdemeHeaderMock({super.key});
+
+  @override
+  State<TurnaOdemeHeaderMock> createState() => _TurnaOdemeHeaderMockState();
+}
+
+class _TurnaOdemeHeaderMockState extends State<TurnaOdemeHeaderMock> {
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: const Color(0xFFF7F9FC),
+      padding: const EdgeInsets.fromLTRB(0, 0, 0, 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Expanded(
+            child: Padding(
+              padding: EdgeInsets.only(top: 6),
+              child: Text(
+                'Turna Ödeme',
+                style: TextStyle(
+                  fontSize: 30,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF0F172A),
+                  letterSpacing: -0.4,
+                ),
+              ),
+            ),
+          ),
+          _buildWalletButton(context),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildWalletButton(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(18),
+      onTap: () => _showWalletModal(context),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: const Color(0xFFD8E6F5)),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x0D000000),
+              blurRadius: 16,
+              offset: Offset(0, 6),
+            ),
+          ],
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.account_balance_wallet_rounded,
+              size: 18,
+              color: Color(0xFF2F80ED),
+            ),
+            SizedBox(width: 8),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Turna Cüzdan',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF64748B),
+                  ),
+                ),
+                SizedBox(height: 2),
+                Text(
+                  '0,00 ₺',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF0F172A),
+                  ),
+                ),
+              ],
+            ),
+            SizedBox(width: 10),
+            Icon(Icons.add_circle_rounded, size: 20, color: Color(0xFF00C2FF)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showWalletModal(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => const _WalletMockModal(),
+    );
+  }
+}
+
+enum WalletMethod { card, giftCode }
+
+class _WalletMockModal extends StatefulWidget {
+  const _WalletMockModal();
+
+  @override
+  State<_WalletMockModal> createState() => _WalletMockModalState();
+}
+
+class _WalletMockModalState extends State<_WalletMockModal> {
+  final TextEditingController _amountController = TextEditingController();
+  final TextEditingController _giftCodeController = TextEditingController();
+
+  WalletMethod? _selectedMethod;
+  bool _showAmountField = false;
+
+  @override
+  void dispose() {
+    _amountController.dispose();
+    _giftCodeController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottom = MediaQuery.of(context).viewInsets.bottom;
+
+    return Container(
+      padding: EdgeInsets.fromLTRB(20, 14, 20, 20 + bottom),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 42,
+                height: 5,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE2E8F0),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+              ),
+              const SizedBox(height: 18),
+              Container(
+                width: 62,
+                height: 62,
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFF38BDF8), Color(0xFF2F80ED)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: const Icon(
+                  Icons.account_balance_wallet_rounded,
+                  color: Colors.white,
+                  size: 30,
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Turna Cüzdan',
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF0F172A),
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Cüzdanınıza bakiye eklemek için bir yöntem seçin',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 14,
+                  height: 1.4,
+                  color: Color(0xFF64748B),
+                ),
+              ),
+              const SizedBox(height: 20),
+              Row(
+                children: [
+                  Expanded(
+                    child: _buildMethodCard(
+                      selected: _selectedMethod == WalletMethod.card,
+                      icon: Icons.credit_card_rounded,
+                      title: 'Banka / Kredi Kartı',
+                      subtitle: 'Kartla bakiye yükleyin',
+                      onTap: () {
+                        setState(() {
+                          _selectedMethod = WalletMethod.card;
+                          _showAmountField = false;
+                        });
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: _buildMethodCard(
+                      selected: _selectedMethod == WalletMethod.giftCode,
+                      icon: Icons.redeem_rounded,
+                      title: 'Hediye Kodu',
+                      subtitle: 'Kod ile bakiye tanımlayın',
+                      onTap: () {
+                        setState(() {
+                          _selectedMethod = WalletMethod.giftCode;
+                          _showAmountField = false;
+                        });
+                      },
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 220),
+                child: _buildSelectedContent(),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSelectedContent() {
+    switch (_selectedMethod) {
+      case WalletMethod.card:
+        return Column(
+          key: const ValueKey('card-content'),
+          children: [
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF1F6FEB), Color(0xFF163EA8)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                borderRadius: BorderRadius.circular(22),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x1F2F80ED),
+                    blurRadius: 20,
+                    offset: Offset(0, 10),
+                  ),
+                ],
+              ),
+              child: const Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    Icons.credit_card_rounded,
+                    color: Colors.white,
+                    size: 24,
+                  ),
+                  SizedBox(height: 24),
+                  Text(
+                    '**** **** **** 4242',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      letterSpacing: 1.2,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Turna Kart',
+                          style: TextStyle(
+                            color: Color(0xFFDCEBFF),
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                      Text(
+                        '12/28',
+                        style: TextStyle(
+                          color: Color(0xFFDCEBFF),
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 18),
+            _buildActionTile(
+              icon: Icons.add_card_rounded,
+              title: 'Kart Ekle',
+              subtitle: 'Yeni bir banka veya kredi kartı ekleyin',
+              onTap: () {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Mock kart ekleme ekranı')),
+                );
+              },
+            ),
+            const SizedBox(height: 10),
+            _buildActionTile(
+              icon: Icons.autorenew_rounded,
+              title: 'Otomatik Öde',
+              subtitle: 'Yakında aktif olacak',
+              onTap: () {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Otomatik Öde yakında aktif olacak'),
+                  ),
+                );
+              },
+            ),
+            const SizedBox(height: 10),
+            _buildActionTile(
+              icon: Icons.account_balance_wallet_outlined,
+              title: 'Bakiye Ekle',
+              subtitle: 'Cüzdana tutar yükleyin',
+              onTap: () {
+                setState(() {
+                  _showAmountField = !_showAmountField;
+                });
+              },
+            ),
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 220),
+              child: _showAmountField
+                  ? Padding(
+                      key: const ValueKey('amount-field'),
+                      padding: const EdgeInsets.only(top: 14),
+                      child: Column(
+                        children: [
+                          TextField(
+                            controller: _amountController,
+                            keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true,
+                            ),
+                            decoration: InputDecoration(
+                              hintText: 'Yüklenecek tutar',
+                              prefixText: '₺ ',
+                              filled: true,
+                              fillColor: const Color(0xFFF7F9FC),
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 16,
+                              ),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(16),
+                                borderSide: const BorderSide(
+                                  color: Color(0xFFD8E6F5),
+                                ),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(16),
+                                borderSide: const BorderSide(
+                                  color: Color(0xFF2F80ED),
+                                  width: 1.4,
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 14),
+                          SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton(
+                              onPressed: () {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('Mock ödeme ekranı'),
+                                  ),
+                                );
+                              },
+                              style: ElevatedButton.styleFrom(
+                                elevation: 0,
+                                backgroundColor: const Color(0xFF2F80ED),
+                                foregroundColor: Colors.white,
+                                minimumSize: const Size.fromHeight(54),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                              ),
+                              child: const Text(
+                                'Şimdi Öde',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  : const SizedBox.shrink(),
+            ),
+          ],
+        );
+
+      case WalletMethod.giftCode:
+        return Column(
+          key: const ValueKey('gift-code-content'),
+          children: [
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF7F9FC),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: const Color(0xFFD8E6F5)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Hediye Kodu',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF0F172A),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Size verilen hediye kodunu girerek Turna Cüzdan bakiyenize tanımlayabilirsiniz.',
+                    style: TextStyle(
+                      fontSize: 13,
+                      height: 1.45,
+                      color: Color(0xFF64748B),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  TextField(
+                    controller: _giftCodeController,
+                    textCapitalization: TextCapitalization.characters,
+                    decoration: InputDecoration(
+                      hintText: 'Kodunuzu girin',
+                      filled: true,
+                      fillColor: Colors.white,
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 16,
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(16),
+                        borderSide: const BorderSide(color: Color(0xFFD8E6F5)),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(16),
+                        borderSide: const BorderSide(
+                          color: Color(0xFF2F80ED),
+                          width: 1.4,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: () {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Mock hediye kodu uygulama ekranı'),
+                          ),
+                        );
+                      },
+                      style: ElevatedButton.styleFrom(
+                        elevation: 0,
+                        backgroundColor: const Color(0xFF2F80ED),
+                        foregroundColor: Colors.white,
+                        minimumSize: const Size.fromHeight(54),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                      ),
+                      child: const Text(
+                        'Kodu Uygula',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        );
+
+      default:
+        return Container(
+          key: const ValueKey('empty-content'),
+          width: double.infinity,
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF7F9FC),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: const Color(0xFFD8E6F5)),
+          ),
+          child: const Text(
+            'Devam etmek için bir yöntem seçin.',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 14, color: Color(0xFF64748B)),
+          ),
+        );
+    }
+  }
+
+  Widget _buildMethodCard({
+    required bool selected,
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color: selected ? const Color(0xFFEEF7FF) : const Color(0xFFF7F9FC),
+      borderRadius: BorderRadius.circular(18),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: selected
+                  ? const Color(0xFF2F80ED)
+                  : const Color(0xFFD8E6F5),
+              width: selected ? 1.4 : 1,
+            ),
+          ),
+          child: Column(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Icon(icon, color: const Color(0xFF2F80ED), size: 22),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                title,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF0F172A),
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                subtitle,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 12,
+                  height: 1.35,
+                  color: Color(0xFF64748B),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildActionTile({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color: const Color(0xFFF7F9FC),
+      borderRadius: BorderRadius.circular(18),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: onTap,
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(14),
+          child: Row(
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Icon(icon, color: const Color(0xFF2F80ED), size: 22),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF0F172A),
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        color: Color(0xFF64748B),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(Icons.chevron_right_rounded, color: Color(0xFF94A3B8)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TurnaPaymentToolItem {
+  const _TurnaPaymentToolItem({
+    required this.title,
+    required this.shortDescription,
+    required this.longDescription,
+    required this.icon,
+    required this.color,
+    required this.status,
+  });
+
+  final String title;
+  final String shortDescription;
+  final String longDescription;
+  final IconData icon;
+  final Color color;
+  final String status;
+}
+
+class _TurnaPaymentStatusChip extends StatelessWidget {
+  const _TurnaPaymentStatusChip({required this.label, required this.color});
+
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: color,
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
         ),
       ),
     );
@@ -1062,7 +2104,10 @@ class _ProfilePageState extends State<ProfilePage> {
         ? value
         : _emailController.text.trim();
 
-    final usernameError = _validateField(_ProfileEditableField.username, username);
+    final usernameError = _validateField(
+      _ProfileEditableField.username,
+      username,
+    );
     if (usernameError != null) {
       throw TurnaApiException(usernameError);
     }
@@ -1165,7 +2210,9 @@ class _ProfilePageState extends State<ProfilePage> {
                 displayValue,
                 style: TextStyle(
                   fontSize: 16,
-                  color: hasValue ? const Color(0xFF202124) : TurnaColors.success,
+                  color: hasValue
+                      ? const Color(0xFF202124)
+                      : TurnaColors.success,
                   fontWeight: FontWeight.w500,
                 ),
               ),
@@ -1358,13 +2405,13 @@ extension _ProfileEditableFieldX on _ProfileEditableField {
 
   String? get description => switch (this) {
     _ProfileEditableField.username => 'Kullanıcılar bu ad ile sizi bulabilir.',
-    _ProfileEditableField.about => 'Profilinizde kısa bir durum olarak görünür.',
+    _ProfileEditableField.about =>
+      'Profilinizde kısa bir durum olarak görünür.',
     _ProfileEditableField.displayName =>
       'Etkileşimde bulunduğunuz kullanıcıların kişilerinde kayıtlı değilseniz bu ad görünür.',
     _ProfileEditableField.email =>
       'Hesap bildirimleri ve güvenlik işlemleri için kullanılabilir.',
-    _ProfileEditableField.phone =>
-      'Telefon numaranız hesabınızla ilişkilidir.',
+    _ProfileEditableField.phone => 'Telefon numaranız hesabınızla ilişkilidir.',
     _ProfileEditableField.links => null,
   };
 
@@ -1385,8 +2432,7 @@ extension _ProfileEditableFieldX on _ProfileEditableField {
     _ => TextCapitalization.none,
   };
 
-  String? get prefixText =>
-      this == _ProfileEditableField.username ? '@' : null;
+  String? get prefixText => this == _ProfileEditableField.username ? '@' : null;
 
   List<TextInputFormatter> get inputFormatters => switch (this) {
     _ProfileEditableField.username => [
@@ -1422,7 +2468,8 @@ class _ProfileFieldEditorPage extends StatefulWidget {
   final Future<void> Function(String value) onSave;
 
   @override
-  State<_ProfileFieldEditorPage> createState() => _ProfileFieldEditorPageState();
+  State<_ProfileFieldEditorPage> createState() =>
+      _ProfileFieldEditorPageState();
 }
 
 class _ProfileFieldEditorPageState extends State<_ProfileFieldEditorPage> {
@@ -1722,10 +2769,7 @@ class _ProfileFieldEditorPageState extends State<_ProfileFieldEditorPage> {
             const SizedBox(height: 12),
             Text(
               _error!,
-              style: const TextStyle(
-                fontSize: 13,
-                color: TurnaColors.error,
-              ),
+              style: const TextStyle(fontSize: 13, color: TurnaColors.error),
             ),
           ],
         ],
@@ -2275,7 +3319,8 @@ class _ConversationMediaPageState extends State<ConversationMediaPage> {
         final createdAt = _messageTimestamp(message);
 
         for (final attachment in message.attachments) {
-          if (_isImageAttachment(attachment) || _isVideoAttachment(attachment)) {
+          if (_isImageAttachment(attachment) ||
+              _isVideoAttachment(attachment)) {
             mediaItems.add(
               _ConversationMediaItem(
                 message: message,
@@ -2519,7 +3564,9 @@ class _ConversationMediaPageState extends State<ConversationMediaPage> {
                   duration: const Duration(milliseconds: 180),
                   curve: Curves.easeOut,
                   decoration: BoxDecoration(
-                    color: _selectedTab == tab ? Colors.white : Colors.transparent,
+                    color: _selectedTab == tab
+                        ? Colors.white
+                        : Colors.transparent,
                     borderRadius: BorderRadius.circular(8),
                     boxShadow: _selectedTab == tab
                         ? const [
@@ -2580,9 +3627,12 @@ class _ConversationMediaPageState extends State<ConversationMediaPage> {
       );
     }
 
-    final hasVideo = _mediaItems.any((item) => _isVideoAttachment(item.attachment));
-    final footerLabel =
-        hasVideo ? '${_mediaItems.length} Medya' : '${_mediaItems.length} Fotoğraf';
+    final hasVideo = _mediaItems.any(
+      (item) => _isVideoAttachment(item.attachment),
+    );
+    final footerLabel = hasVideo
+        ? '${_mediaItems.length} Medya'
+        : '${_mediaItems.length} Fotoğraf';
 
     return CustomScrollView(
       slivers: [
@@ -2822,7 +3872,10 @@ class _ConversationMediaTile extends StatelessWidget {
               error: const ColoredBox(
                 color: Color(0xFFE2E5EA),
                 child: Center(
-                  child: Icon(Icons.broken_image_outlined, color: Colors.white70),
+                  child: Icon(
+                    Icons.broken_image_outlined,
+                    color: Colors.white70,
+                  ),
                 ),
               ),
             )
@@ -2903,7 +3956,10 @@ class _ConversationLinkTile extends StatelessWidget {
         final preview = snapshot.data;
         final host = preview?.host.isNotEmpty == true
             ? preview!.host
-            : item.uri.host.replaceFirst(RegExp(r'^www\.', caseSensitive: false), '');
+            : item.uri.host.replaceFirst(
+                RegExp(r'^www\.', caseSensitive: false),
+                '',
+              );
         final title = (preview?.title.trim().isNotEmpty ?? false)
             ? preview!.title.trim()
             : host;
