@@ -5376,6 +5376,7 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
   void _toggleVideoSwap() {
     final adapter = _callSession.adapter;
     if (_callSession.call.type != TurnaCallType.video ||
+        !adapter.cameraEnabled ||
         adapter.localVideoTrack == null ||
         adapter.primaryRemoteVideoTrack == null) {
       return;
@@ -5623,7 +5624,7 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
 
   Widget _buildVideoWaitingScreen(
     LiveKitCallAdapter adapter, {
-    required lk.VideoTrack localVideo,
+    required lk.VideoTrack? localVideo,
   }) {
     return Scaffold(
       backgroundColor: const Color(0xFF101314),
@@ -5743,28 +5744,44 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
     );
   }
 
+  Widget _buildSelfPreviewPlaceholder() {
+    return Container(
+      color: const Color(0xFF1A1F20),
+      child: Center(
+        child: _ProfileAvatar(
+          label: _callSession.session.displayName,
+          avatarUrl: _callSession.session.avatarUrl,
+          authToken: _callSession.session.token,
+          radius: 22,
+        ),
+      ),
+    );
+  }
+
   Widget _buildFloatingVideoPreview({
     required Size viewport,
     required LiveKitCallAdapter adapter,
-    required lk.VideoTrack localVideo,
+    required lk.VideoTrack? localVideo,
     required lk.VideoTrack? remoteVideo,
     required bool showLocalVideoPrimary,
   }) {
     final previewOffset =
         _previewDragTopLeft ?? _previewAnchorOffset(viewport, _previewCorner);
 
-    final localPreview = IgnorePointer(
-      child: lk.VideoTrackRenderer(
-        localVideo,
-        key: ValueKey(
-          'preview-local-${_callSession.call.id}-${adapter.cameraPosition.name}',
-        ),
-        fit: lk.VideoViewFit.cover,
-        mirrorMode: adapter.cameraPosition == lk.CameraPosition.front
-            ? lk.VideoViewMirrorMode.mirror
-            : lk.VideoViewMirrorMode.off,
-      ),
-    );
+    final localPreview = adapter.cameraEnabled && localVideo != null
+        ? IgnorePointer(
+            child: lk.VideoTrackRenderer(
+              localVideo,
+              key: ValueKey(
+                'preview-local-${_callSession.call.id}-${adapter.cameraPosition.name}',
+              ),
+              fit: lk.VideoViewFit.cover,
+              mirrorMode: adapter.cameraPosition == lk.CameraPosition.front
+                  ? lk.VideoViewMirrorMode.mirror
+                  : lk.VideoViewMirrorMode.off,
+            ),
+          )
+        : _buildSelfPreviewPlaceholder();
 
     Widget previewChild;
     if (showLocalVideoPrimary && remoteVideo != null) {
@@ -5833,7 +5850,7 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
         child: _buildAudioCallScreen(adapter),
       );
     }
-    if (remoteVideo == null && localVideo != null) {
+    if (remoteVideo == null) {
       return PopScope(
         canPop: false,
         onPopInvokedWithResult: (didPop, _) {
@@ -5845,7 +5862,8 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
       );
     }
 
-    final canSwapVideoViews = isVideo && localVideo != null;
+    final canSwapVideoViews =
+        isVideo && localVideo != null && adapter.cameraEnabled;
     final showLocalVideoPrimary = canSwapVideoViews && _showLocalVideoPrimary;
     final localPreviewMirrorMode =
         adapter.cameraPosition == lk.CameraPosition.front
@@ -5862,7 +5880,7 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
         fit: lk.VideoViewFit.cover,
         mirrorMode: localPreviewMirrorMode,
       );
-    } else if (remoteVideo != null && isVideo) {
+    } else if (isVideo) {
       primaryContent = lk.VideoTrackRenderer(
         remoteVideo,
         key: ValueKey('primary-remote-${_callSession.call.id}'),
@@ -5900,7 +5918,7 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
               return Stack(
                 children: [
                   Positioned.fill(child: primaryContent),
-                  if (isVideo && localVideo != null)
+                  if (isVideo)
                     _buildFloatingVideoPreview(
                       viewport: viewport,
                       adapter: adapter,
