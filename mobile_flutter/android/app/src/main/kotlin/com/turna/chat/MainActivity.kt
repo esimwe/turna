@@ -3,8 +3,10 @@ package com.turna.chat
 import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageInfo
+import android.content.pm.PackageManager
 import android.os.Environment
 import android.os.Build
+import android.os.PowerManager
 import android.provider.MediaStore
 import android.telephony.TelephonyManager
 import android.view.WindowManager
@@ -17,6 +19,8 @@ import java.io.File
 import java.util.Locale
 
 class MainActivity : FlutterActivity() {
+    private var proximityWakeLock: PowerManager.WakeLock? = null
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
@@ -35,6 +39,18 @@ class MainActivity : FlutterActivity() {
                         }
                     }
                     result.success(null)
+                }
+
+                "setProximityScreenLockEnabled" -> {
+                    val enabled = call.argument<Boolean>("enabled") ?: false
+                    runOnUiThread {
+                        try {
+                            setProximityScreenLockEnabled(enabled)
+                            result.success(null)
+                        } catch (error: Throwable) {
+                            result.success(null)
+                        }
+                    }
                 }
 
                 "setAppBadgeCount" -> {
@@ -111,6 +127,49 @@ class MainActivity : FlutterActivity() {
 
                 else -> result.notImplemented()
             }
+        }
+    }
+
+    override fun onDestroy() {
+        releaseProximityWakeLock()
+        super.onDestroy()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun setProximityScreenLockEnabled(enabled: Boolean) {
+        if (!packageManager.hasSystemFeature(PackageManager.FEATURE_SENSOR_PROXIMITY)) {
+            releaseProximityWakeLock()
+            return
+        }
+
+        if (!enabled) {
+            releaseProximityWakeLock()
+            return
+        }
+
+        val manager = getSystemService(POWER_SERVICE) as? PowerManager ?: return
+        val wakeLock =
+            proximityWakeLock
+                ?: manager.newWakeLock(
+                    PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK,
+                    "$packageName:turna-proximity",
+                ).apply {
+                    setReferenceCounted(false)
+                    proximityWakeLock = this
+                }
+        if (!wakeLock.isHeld) {
+            wakeLock.acquire()
+        }
+    }
+
+    private fun releaseProximityWakeLock() {
+        try {
+            proximityWakeLock?.let { wakeLock ->
+                if (wakeLock.isHeld) {
+                    wakeLock.release()
+                }
+            }
+        } catch (_: Throwable) {
         }
     }
 
