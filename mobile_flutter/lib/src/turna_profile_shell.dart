@@ -312,83 +312,38 @@ class TurnaPaymentToolsPage extends StatelessWidget {
   static const List<_TurnaPaymentToolItem> _tools = [
     _TurnaPaymentToolItem(
       title: 'Taksi Öde',
-      shortDescription: 'Username veya mesaj üzerinden ödeme yapın',
+      shortDescription: 'Sohbetten veya @username ile taksi ödeyin',
       longDescription:
-          'Taksiciye mesajdan veya username ile anında ödeme yapın. Kartınızla saniyeler içinde.',
+          'Taksiciye IBAN istemeden, sohbetten veya @username ile saniyeler içinde ödeme yapın.',
       icon: Icons.local_taxi,
       color: Color(0xFF2F80ED),
       status: 'Yakında',
     ),
     _TurnaPaymentToolItem(
-      title: 'Yemek Siparişi Öde',
-      shortDescription: 'Restoran ödemelerini hızlıca tamamlayın',
+      title: 'Kişiye Para Gönder',
+      shortDescription: 'Rehberden veya @username ile para yollayın',
       longDescription:
-          'Restoran seçin, menüyü görün, ödemeyi Turna ile tamamlayın. Sipariş kapıya gelsin.',
-      icon: Icons.restaurant,
+          'Bir kişiye hesap numarası istemeden, rehberden seçerek ya da @username yazarak para gönderin.',
+      icon: Icons.person_rounded,
       color: Color(0xFFF59E0B),
       status: 'Yakında',
     ),
     _TurnaPaymentToolItem(
-      title: 'Fatura Öde',
-      shortDescription: 'Faturalarınızı tek yerden ödeyin',
+      title: 'Ödeme İste',
+      shortDescription: 'Sohbetten hızlıca ödeme talebi oluşturun',
       longDescription:
-          'Elektrik, su, doğalgaz, internet ve telefon faturalarınızı tek dokunuşla ödeyin. Hatırlatma desteği de sunulur.',
-      icon: Icons.receipt_long,
+          'Bir kişiden ya da müşteriden ödeme istemek için tutarı yazın, talebi gönderin ve sohbet içinde takip edin.',
+      icon: Icons.chat_bubble_rounded,
       color: Color(0xFF22C55E),
       status: 'Yakında',
     ),
     _TurnaPaymentToolItem(
-      title: 'Etkinlik Bileti Al',
-      shortDescription: 'Konser, sinema ve tiyatro biletleri alın',
+      title: 'QR ile Öde',
+      shortDescription: 'QR okutup fiziksel ödemeyi tamamlayın',
       longDescription:
-          'Konser, etkinlik, tiyatro ve sinema biletlerini Turna üzerinden kolayca satın alın.',
-      icon: Icons.confirmation_number,
+          'Kasada veya masada QR kodu okutun, kart veya Turna Cüzdan ile ödemenizi hızlıca tamamlayın.',
+      icon: Icons.qr_code_scanner_rounded,
       color: Color(0xFF7C3AED),
-      status: 'Yakında',
-    ),
-    _TurnaPaymentToolItem(
-      title: 'Market Alışverişi Öde',
-      shortDescription: 'Market siparişlerini uygulamadan tamamlayın',
-      longDescription:
-          'Seçili marketlerden alışveriş yapın, ödemenizi Turna ile tamamlayın. Kapıya teslim kolaylığı sağlayın.',
-      icon: Icons.local_grocery_store,
-      color: Color(0xFFEF4444),
-      status: 'Yakında',
-    ),
-    _TurnaPaymentToolItem(
-      title: 'Su & İçecek Teslimi',
-      shortDescription: 'Su ve içecek siparişini kolayca verin',
-      longDescription:
-          'Damacana su, kahve ve içecek siparişlerinizi Turna ile verin, ödemenizi kolayca tamamlayın.',
-      icon: Icons.local_drink,
-      color: Color(0xFF06B6D4),
-      status: 'Yakında',
-    ),
-    _TurnaPaymentToolItem(
-      title: 'Çiçek & Hediye Gönder',
-      shortDescription: 'Hediye ve çiçek siparişleri için hızlı ödeme',
-      longDescription:
-          'Sevdiklerinize çiçek, çikolata veya hediye paketi gönderin. Ödeme ve teslimat sürecini Turna üzerinden yönetin.',
-      icon: Icons.card_giftcard,
-      color: Color(0xFFEC4899),
-      status: 'Yakında',
-    ),
-    _TurnaPaymentToolItem(
-      title: 'Kira & Aidat Öde',
-      shortDescription: 'Kira ve aidat işlemlerini düzenli yönetin',
-      longDescription:
-          'Ev sahibi veya site yönetimine kira ve aidat ödemelerinizi yapın. Dekontlar otomatik olarak saklanır.',
-      icon: Icons.home,
-      color: Color(0xFF4F46E5),
-      status: 'Yakında',
-    ),
-    _TurnaPaymentToolItem(
-      title: 'Bağış Yap',
-      shortDescription: 'Kuruluşlara hızlı ve güvenli bağış gönderin',
-      longDescription:
-          'Seçtiğiniz kurumlara hızlı ve güvenli şekilde bağış yapın. Turna üzerinden şeffaf bağış deneyimi sunulur.',
-      icon: Icons.volunteer_activism,
-      color: Color(0xFF0F766E),
       status: 'Yakında',
     ),
   ];
