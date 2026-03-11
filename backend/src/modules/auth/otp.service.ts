@@ -5,6 +5,7 @@ import { createAuthSessionForRequest, getRequestIp } from "../../lib/auth-sessio
 import { signAccessToken } from "../../lib/jwt.js";
 import { prisma } from "../../lib/prisma.js";
 import { assertUserCanAccessApp, assertUserCanUseOtp } from "../../lib/user-access.js";
+import { buildAvatarUrl } from "../profile/avatar-url.js";
 import {
   buildDefaultDisplayName,
   formatE164Phone,
@@ -352,6 +353,7 @@ export class OtpService {
         displayName: true,
         phone: true,
         avatarUrl: true,
+        updatedAt: true,
         onboardingCompletedAt: true,
         accountStatus: true,
         otpBlocked: true,
@@ -374,6 +376,7 @@ export class OtpService {
           displayName: true,
           phone: true,
           avatarUrl: true,
+          updatedAt: true,
           onboardingCompletedAt: true,
           accountStatus: true,
           otpBlocked: true,
@@ -402,7 +405,7 @@ export class OtpService {
         displayName: user.displayName,
         phone: user.phone ?? null,
         username: user.username ?? null,
-        avatarUrl: user.avatarUrl ?? null
+        avatarUrl: user.avatarUrl ? buildAvatarUrl(req, user.id, user.updatedAt) : null
       },
       isNewUser,
       needsOnboarding

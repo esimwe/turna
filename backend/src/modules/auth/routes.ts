@@ -7,6 +7,7 @@ import { prisma } from "../../lib/prisma.js";
 import { createAuthSessionForRequest, revokeAuthSession } from "../../lib/auth-sessions.js";
 import { assertUserCanAccessApp } from "../../lib/user-access.js";
 import { requireAuth } from "../../middleware/auth.js";
+import { buildAvatarUrl } from "../profile/avatar-url.js";
 
 export const authRouter = Router();
 const prismaUser = (prisma as unknown as { user: any }).user;
@@ -132,7 +133,19 @@ authRouter.post("/login", async (req, res) => {
   const username = parsed.data.username.toLowerCase();
 
   const user = await prismaUser.findFirst({
-    where: { username }
+    where: { username },
+    select: {
+      id: true,
+      username: true,
+      displayName: true,
+      passwordHash: true,
+      avatarUrl: true,
+      updatedAt: true,
+      accountStatus: true,
+      otpBlocked: true,
+      sendRestricted: true,
+      callRestricted: true
+    }
   });
 
   if (!user) {
@@ -171,7 +184,8 @@ authRouter.post("/login", async (req, res) => {
     user: {
       id: user.id,
       username: user.username,
-      displayName: user.displayName
+      displayName: user.displayName,
+      avatarUrl: user.avatarUrl ? buildAvatarUrl(req, user.id, user.updatedAt) : null
     }
   });
 });
@@ -184,6 +198,8 @@ authRouter.get("/me", requireAuth, async (req, res) => {
       username: true,
       displayName: true,
       phone: true,
+      avatarUrl: true,
+      updatedAt: true,
       email: true,
       createdAt: true,
       accountStatus: true,
@@ -198,7 +214,12 @@ authRouter.get("/me", requireAuth, async (req, res) => {
     return;
   }
 
-  res.json({ data: user });
+  res.json({
+    data: {
+      ...user,
+      avatarUrl: user.avatarUrl ? buildAvatarUrl(req, user.id, user.updatedAt) : null
+    }
+  });
 });
 
 authRouter.post("/logout", requireAuth, async (req, res) => {
