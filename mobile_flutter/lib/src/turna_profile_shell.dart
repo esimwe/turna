@@ -1350,9 +1350,9 @@ class _BottomWalletTabIcon extends StatelessWidget {
   Widget build(BuildContext context) {
     return AnimatedContainer(
       duration: const Duration(milliseconds: 160),
-      width: 28,
-      height: 28,
-      padding: const EdgeInsets.all(2),
+      width: 40,
+      height: 40,
+      padding: const EdgeInsets.all(1),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(10),
         border: Border.all(
@@ -1602,6 +1602,21 @@ class _TurnaCachedImage extends StatelessWidget {
   }
 }
 
+String _buildAvatarCacheKey(String imageUrl) {
+  final trimmed = imageUrl.trim();
+  final uri = Uri.tryParse(trimmed);
+  if (uri == null || uri.path.trim().isEmpty) {
+    return 'avatar:$trimmed';
+  }
+
+  final version = uri.queryParameters['v']?.trim();
+  final normalizedPath = uri.path.trim().toLowerCase();
+  if (version == null || version.isEmpty) {
+    return 'avatar:$normalizedPath';
+  }
+  return 'avatar:$normalizedPath?v=$version';
+}
+
 class _ProfileAvatar extends StatelessWidget {
   const _ProfileAvatar({
     required this.label,
@@ -1648,7 +1663,7 @@ class _ProfileAvatar extends StatelessWidget {
         child: trimmedUrl.isEmpty
             ? _buildInitial(initial)
             : _TurnaCachedImage(
-                cacheKey: 'avatar:$trimmedUrl',
+                cacheKey: _buildAvatarCacheKey(trimmedUrl),
                 imageUrl: trimmedUrl,
                 authToken: authToken,
                 fit: BoxFit.cover,

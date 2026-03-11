@@ -3571,6 +3571,7 @@ class _CallsPageState extends State<CallsPage> {
                   trailing: SizedBox(
                     width: 58,
                     child: Column(
+                      mainAxisSize: MainAxisSize.min,
                       mainAxisAlignment: MainAxisAlignment.center,
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
@@ -3586,8 +3587,13 @@ class _CallsPageState extends State<CallsPage> {
                           onPressed: isStartingCall
                               ? null
                               : () => _startCall(item),
-                          visualDensity: VisualDensity.compact,
-                          splashRadius: 18,
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints.tightFor(
+                            width: 24,
+                            height: 24,
+                          ),
+                          splashRadius: 16,
+                          iconSize: 20,
                           icon: isStartingCall
                               ? const SizedBox(
                                   width: 18,
