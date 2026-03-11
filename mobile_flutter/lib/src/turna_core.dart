@@ -5376,7 +5376,8 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
   void _toggleVideoSwap() {
     final adapter = _callSession.adapter;
     if (_callSession.call.type != TurnaCallType.video ||
-        adapter.localVideoTrack == null) {
+        adapter.localVideoTrack == null ||
+        adapter.primaryRemoteVideoTrack == null) {
       return;
     }
     setState(() => _showLocalVideoPrimary = !_showLocalVideoPrimary);
@@ -5620,6 +5621,113 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
     );
   }
 
+  Widget _buildVideoWaitingScreen(
+    LiveKitCallAdapter adapter, {
+    required lk.VideoTrack localVideo,
+  }) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF101314),
+      body: SafeArea(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final viewport = Size(constraints.maxWidth, constraints.maxHeight);
+            return Stack(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 18, 24, 28),
+                  child: Column(
+                    children: [
+                      const SizedBox(height: 8),
+                      Text(
+                        _callSession.call.peer.displayName,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 28,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        adapter.connecting
+                            ? 'Bağlanıyor...'
+                            : _callSession.formatDuration(),
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Color(0xFFB7BCB9),
+                          fontSize: 16,
+                        ),
+                      ),
+                      Expanded(
+                        child: Center(
+                          child: _ProfileAvatar(
+                            label: _callSession.call.peer.displayName,
+                            avatarUrl: _callSession.call.peer.avatarUrl,
+                            authToken: _callSession.session.token,
+                            radius: 66,
+                          ),
+                        ),
+                      ),
+                      _AudioCallControlDock(
+                        children: [
+                          _AudioCallControlButton(
+                            onTap: adapter.connecting
+                                ? null
+                                : () => adapter.toggleCamera(),
+                            icon: Icon(
+                              adapter.cameraEnabled
+                                  ? Icons.videocam
+                                  : Icons.videocam_off,
+                            ),
+                            active: adapter.cameraEnabled,
+                          ),
+                          _AudioCallControlButton(
+                            onTap: adapter.connecting
+                                ? null
+                                : () => adapter.toggleSpeaker(),
+                            icon: Icon(
+                              adapter.speakerEnabled
+                                  ? Icons.volume_up_rounded
+                                  : Icons.hearing_rounded,
+                            ),
+                            active: adapter.speakerEnabled,
+                          ),
+                          _AudioCallControlButton(
+                            onTap: adapter.connecting
+                                ? null
+                                : () => adapter.toggleMicrophone(),
+                            icon: Icon(
+                              adapter.microphoneEnabled
+                                  ? Icons.mic_none_rounded
+                                  : Icons.mic_off_rounded,
+                            ),
+                            active: !adapter.microphoneEnabled,
+                          ),
+                          _AudioCallControlButton(
+                            onTap: _ending ? null : _endCall,
+                            icon: const Icon(Icons.call_end_rounded),
+                            destructive: true,
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                _buildFloatingVideoPreview(
+                  viewport: viewport,
+                  adapter: adapter,
+                  localVideo: localVideo,
+                  remoteVideo: null,
+                  showLocalVideoPrimary: false,
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+
   Widget _buildVideoPreviewCard({required Widget child, Widget? overlay}) {
     return Material(
       color: Colors.black,
@@ -5635,33 +5743,74 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
     );
   }
 
-  Widget _buildPreviewPlaceholder({required bool showLocalUser}) {
-    return Container(
-      color: const Color(0xFF1A1F20),
-      padding: const EdgeInsets.all(14),
-      child: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              showLocalUser ? Icons.videocam_off : Icons.person,
-              color: Colors.white70,
-              size: 24,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              showLocalUser ? 'Sen' : _callSession.call.peer.displayName,
-              textAlign: TextAlign.center,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
+  Widget _buildFloatingVideoPreview({
+    required Size viewport,
+    required LiveKitCallAdapter adapter,
+    required lk.VideoTrack localVideo,
+    required lk.VideoTrack? remoteVideo,
+    required bool showLocalVideoPrimary,
+  }) {
+    final previewOffset =
+        _previewDragTopLeft ?? _previewAnchorOffset(viewport, _previewCorner);
+
+    final localPreview = IgnorePointer(
+      child: lk.VideoTrackRenderer(
+        localVideo,
+        key: ValueKey(
+          'preview-local-${_callSession.call.id}-${adapter.cameraPosition.name}',
+        ),
+        fit: lk.VideoViewFit.cover,
+        mirrorMode: adapter.cameraPosition == lk.CameraPosition.front
+            ? lk.VideoViewMirrorMode.mirror
+            : lk.VideoViewMirrorMode.off,
+      ),
+    );
+
+    Widget previewChild;
+    if (showLocalVideoPrimary && remoteVideo != null) {
+      previewChild = IgnorePointer(
+        child: lk.VideoTrackRenderer(
+          remoteVideo,
+          key: ValueKey('preview-remote-${_callSession.call.id}'),
+          fit: lk.VideoViewFit.cover,
+        ),
+      );
+    } else {
+      previewChild = localPreview;
+    }
+
+    return Positioned(
+      left: previewOffset.dx,
+      top: previewOffset.dy,
+      width: _previewWidth,
+      height: _previewHeight,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: _toggleVideoSwap,
+        onPanStart: (_) => _startPreviewDrag(viewport),
+        onPanUpdate: (details) => _updatePreviewDrag(viewport, details),
+        onPanEnd: (_) => _endPreviewDrag(viewport),
+        onPanCancel: _cancelPreviewDrag,
+        child: _buildVideoPreviewCard(
+          child: previewChild,
+          overlay: adapter.cameraEnabled
+              ? Positioned(
+                  right: 8,
+                  bottom: 8,
+                  child: _buildCallControlButton(
+                    size: 36,
+                    backgroundColor: Colors.black54,
+                    onPressed: adapter.connecting
+                        ? null
+                        : () => adapter.flipCamera(),
+                    child: const Icon(
+                      Icons.cameraswitch_outlined,
+                      color: Colors.white,
+                      size: 18,
+                    ),
+                  ),
+                )
+              : null,
         ),
       ),
     );
@@ -5682,6 +5831,17 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
           }
         },
         child: _buildAudioCallScreen(adapter),
+      );
+    }
+    if (remoteVideo == null && localVideo != null) {
+      return PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, _) {
+          if (!didPop) {
+            _minimizeCall();
+          }
+        },
+        child: _buildVideoWaitingScreen(adapter, localVideo: localVideo),
       );
     }
 
@@ -5712,76 +5872,6 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
       primaryContent = _buildPrimaryCallPlaceholder();
     }
 
-    final previewOverlays = <Widget>[];
-    if (isVideo && localVideo != null) {
-      final previewChild = showLocalVideoPrimary
-          ? (remoteVideo != null
-                ? IgnorePointer(
-                    child: lk.VideoTrackRenderer(
-                      remoteVideo,
-                      key: ValueKey('preview-remote-${_callSession.call.id}'),
-                      fit: lk.VideoViewFit.cover,
-                    ),
-                  )
-                : _buildPreviewPlaceholder(showLocalUser: false))
-          : IgnorePointer(
-              child: lk.VideoTrackRenderer(
-                localVideo,
-                key: ValueKey(
-                  'preview-local-${_callSession.call.id}-${adapter.cameraPosition.name}',
-                ),
-                fit: lk.VideoViewFit.cover,
-                mirrorMode: localPreviewMirrorMode,
-              ),
-            );
-
-      previewOverlays.add(
-        LayoutBuilder(
-          builder: (context, constraints) {
-            final viewport = Size(constraints.maxWidth, constraints.maxHeight);
-            final previewOffset =
-                _previewDragTopLeft ??
-                _previewAnchorOffset(viewport, _previewCorner);
-            return Positioned(
-              left: previewOffset.dx,
-              top: previewOffset.dy,
-              width: _previewWidth,
-              height: _previewHeight,
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: _toggleVideoSwap,
-                onPanStart: (_) => _startPreviewDrag(viewport),
-                onPanUpdate: (details) => _updatePreviewDrag(viewport, details),
-                onPanEnd: (_) => _endPreviewDrag(viewport),
-                onPanCancel: _cancelPreviewDrag,
-                child: _buildVideoPreviewCard(
-                  child: previewChild,
-                  overlay: adapter.cameraEnabled
-                      ? Positioned(
-                          right: 8,
-                          bottom: 8,
-                          child: _buildCallControlButton(
-                            size: 36,
-                            backgroundColor: Colors.black54,
-                            onPressed: adapter.connecting
-                                ? null
-                                : () => adapter.flipCamera(),
-                            child: const Icon(
-                              Icons.cameraswitch_outlined,
-                              color: Colors.white,
-                              size: 18,
-                            ),
-                          ),
-                        )
-                      : null,
-                ),
-              ),
-            );
-          },
-        ),
-      );
-    }
-
     return PopScope(
       canPop: !isVideo,
       onPopInvokedWithResult: (didPop, _) {
@@ -5801,59 +5891,79 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
           title: Text(_callSession.call.peer.displayName),
         ),
         body: SafeArea(
-          child: Stack(
-            children: [
-              Positioned.fill(child: primaryContent),
-              ...previewOverlays,
-              Positioned(
-                left: 24,
-                right: 24,
-                bottom: 24,
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    if (isVideo) ...[
-                      _buildCallControlButton(
-                        onPressed: adapter.connecting
-                            ? null
-                            : () => adapter.toggleCamera(),
-                        child: Icon(
-                          adapter.cameraEnabled
-                              ? Icons.videocam
-                              : Icons.videocam_off,
-                          color: Colors.white,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final viewport = Size(
+                constraints.maxWidth,
+                constraints.maxHeight,
+              );
+              return Stack(
+                children: [
+                  Positioned.fill(child: primaryContent),
+                  if (isVideo && localVideo != null)
+                    _buildFloatingVideoPreview(
+                      viewport: viewport,
+                      adapter: adapter,
+                      localVideo: localVideo,
+                      remoteVideo: remoteVideo,
+                      showLocalVideoPrimary: showLocalVideoPrimary,
+                    ),
+                  Positioned(
+                    left: 24,
+                    right: 24,
+                    bottom: 24,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        if (isVideo) ...[
+                          _buildCallControlButton(
+                            onPressed: adapter.connecting
+                                ? null
+                                : () => adapter.toggleCamera(),
+                            child: Icon(
+                              adapter.cameraEnabled
+                                  ? Icons.videocam
+                                  : Icons.videocam_off,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ],
+                        _buildCallControlButton(
+                          onPressed: adapter.connecting
+                              ? null
+                              : () => adapter.toggleSpeaker(),
+                          child: Icon(
+                            adapter.speakerEnabled
+                                ? Icons.volume_up
+                                : Icons.hearing,
+                            color: Colors.white,
+                          ),
                         ),
-                      ),
-                    ],
-                    _buildCallControlButton(
-                      onPressed: adapter.connecting
-                          ? null
-                          : () => adapter.toggleSpeaker(),
-                      child: Icon(
-                        adapter.speakerEnabled
-                            ? Icons.volume_up
-                            : Icons.hearing,
-                        color: Colors.white,
-                      ),
+                        _buildCallControlButton(
+                          onPressed: adapter.connecting
+                              ? null
+                              : () => adapter.toggleMicrophone(),
+                          child: Icon(
+                            adapter.microphoneEnabled
+                                ? Icons.mic
+                                : Icons.mic_off,
+                            color: Colors.white,
+                          ),
+                        ),
+                        _buildCallControlButton(
+                          backgroundColor: Colors.red.shade400,
+                          onPressed: _ending ? null : _endCall,
+                          child: const Icon(
+                            Icons.call_end,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ],
                     ),
-                    _buildCallControlButton(
-                      onPressed: adapter.connecting
-                          ? null
-                          : () => adapter.toggleMicrophone(),
-                      child: Icon(
-                        adapter.microphoneEnabled ? Icons.mic : Icons.mic_off,
-                        color: Colors.white,
-                      ),
-                    ),
-                    _buildCallControlButton(
-                      backgroundColor: Colors.red.shade400,
-                      onPressed: _ending ? null : _endCall,
-                      child: const Icon(Icons.call_end, color: Colors.white),
-                    ),
-                  ],
-                ),
-              ),
-            ],
+                  ),
+                ],
+              );
+            },
           ),
         ),
       ),
