@@ -3579,35 +3579,35 @@ class _CallsPageState extends State<CallsPage> {
                           _formatTime(item.createdAt),
                           style: const TextStyle(
                             fontSize: 12,
+                            height: 1,
                             color: Color(0xFF777C79),
                           ),
                         ),
-                        const SizedBox(height: 2),
-                        IconButton(
-                          onPressed: isStartingCall
-                              ? null
-                              : () => _startCall(item),
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints.tightFor(
-                            width: 24,
-                            height: 24,
+                        const SizedBox(height: 4),
+                        GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: isStartingCall ? null : () => _startCall(item),
+                          child: SizedBox(
+                            width: 26,
+                            height: 26,
+                            child: Center(
+                              child: isStartingCall
+                                  ? const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : Icon(
+                                      item.type == TurnaCallType.video
+                                          ? Icons.videocam_outlined
+                                          : Icons.call_outlined,
+                                      size: 22,
+                                      color: const Color(0xFF777C79),
+                                    ),
+                            ),
                           ),
-                          splashRadius: 16,
-                          iconSize: 20,
-                          icon: isStartingCall
-                              ? const SizedBox(
-                                  width: 18,
-                                  height: 18,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                )
-                              : Icon(
-                                  item.type == TurnaCallType.video
-                                      ? Icons.videocam_outlined
-                                      : Icons.call_outlined,
-                                  color: const Color(0xFF777C79),
-                                ),
                         ),
                       ],
                     ),
