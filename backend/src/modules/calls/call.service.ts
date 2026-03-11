@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { prisma } from "../../lib/prisma.js";
 import { areUsersBlocked } from "../../lib/user-relationship.js";
 import type { CallProvider } from "./call.provider.js";
@@ -19,6 +20,12 @@ import type {
 type CallRow = Awaited<ReturnType<CallService["getCallRowById"]>>;
 type PrismaCallStatus = "RINGING" | "ACCEPTED" | "DECLINED" | "MISSED" | "ENDED" | "CANCELLED";
 type PrismaCallType = "AUDIO" | "VIDEO";
+type CallEventRow = {
+  type: string;
+  actorUserId: string | null;
+  payload: unknown;
+  createdAt: Date;
+};
 
 const prismaCall = (prisma as unknown as { call: any }).call;
 const prismaCallEvent = (prisma as unknown as { callEvent: any }).callEvent;
@@ -113,6 +120,89 @@ export class CallService {
         payload: payload ?? undefined
       }
     });
+  }
+
+  private readVideoUpgradeRequestId(payload: unknown): string | null {
+    if (!payload || typeof payload !== "object") return null;
+    const value = (payload as { requestId?: unknown }).requestId;
+    const text = typeof value === "string" ? value.trim() : "";
+    return text || null;
+  }
+
+  private readVideoUpgradeRequesterId(
+    event: CallEventRow
+  ): string | null {
+    if (event.actorUserId?.trim()) {
+      return event.actorUserId.trim();
+    }
+    if (!event.payload || typeof event.payload !== "object") {
+      return null;
+    }
+    const value = (event.payload as { requestedByUserId?: unknown }).requestedByUserId;
+    const text = typeof value === "string" ? value.trim() : "";
+    return text || null;
+  }
+
+  private async findPendingVideoUpgradeRequest(
+    callId: string
+  ): Promise<{ requestId: string; requesterUserId: string } | null> {
+    const events = (await prismaCallEvent.findMany({
+      where: {
+        callId,
+        type: {
+          in: [
+            "video_upgrade_requested",
+            "video_upgrade_accepted",
+            "video_upgrade_declined"
+          ]
+        }
+      },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+      select: {
+        type: true,
+        actorUserId: true,
+        payload: true,
+        createdAt: true
+      }
+    })) as CallEventRow[];
+
+    const resolvedRequestIds = new Set<string>();
+    for (const event of events) {
+      if (
+        event.type !== "video_upgrade_accepted" &&
+        event.type !== "video_upgrade_declined"
+      ) {
+        continue;
+      }
+      const requestId = this.readVideoUpgradeRequestId(event.payload);
+      if (requestId) {
+        resolvedRequestIds.add(requestId);
+      }
+    }
+
+    for (const event of events) {
+      if (event.type !== "video_upgrade_requested") continue;
+      const requestId = this.readVideoUpgradeRequestId(event.payload);
+      const requesterUserId = this.readVideoUpgradeRequesterId(event);
+      if (!requestId || !requesterUserId) continue;
+      if (resolvedRequestIds.has(requestId)) continue;
+      return { requestId, requesterUserId };
+    }
+
+    return null;
+  }
+
+  private ensureAcceptedParticipant(
+    row: NonNullable<CallRow>,
+    userId: string
+  ): void {
+    if (row.callerId !== userId && row.calleeId !== userId) {
+      throw new Error("forbidden_call_access");
+    }
+    if (row.status !== "ACCEPTED") {
+      throw new Error("call_not_accepted");
+    }
   }
 
   private async getCallRowById(callId: string) {
@@ -515,6 +605,95 @@ export class CallService {
         [row.calleeId]: calleeToken
       }
     };
+  }
+
+  async requestVideoUpgrade(params: {
+    callId: string;
+    userId: string;
+  }): Promise<{ call: CallRecord; requestId: string }> {
+    const row = await this.getCallRowById(params.callId);
+    if (!row) throw new Error("call_not_found");
+    this.ensureAcceptedParticipant(row, params.userId);
+    if (row.type === "VIDEO") {
+      throw new Error("call_already_video");
+    }
+
+    const pendingRequest = await this.findPendingVideoUpgradeRequest(params.callId);
+    if (pendingRequest) {
+      throw new Error("video_upgrade_request_conflict");
+    }
+
+    const requestId = randomUUID();
+    await this.recordEvent(params.callId, "video_upgrade_requested", params.userId, {
+      requestId,
+      requestedByUserId: params.userId
+    });
+
+    return {
+      call: await this.getCallByIdForUser(params.callId, params.userId),
+      requestId
+    };
+  }
+
+  async acceptVideoUpgrade(params: {
+    callId: string;
+    userId: string;
+    requestId: string;
+  }): Promise<CallRecord> {
+    const row = await this.getCallRowById(params.callId);
+    if (!row) throw new Error("call_not_found");
+    this.ensureAcceptedParticipant(row, params.userId);
+    if (row.type === "VIDEO") {
+      throw new Error("call_already_video");
+    }
+
+    const pendingRequest = await this.findPendingVideoUpgradeRequest(params.callId);
+    if (!pendingRequest || pendingRequest.requestId !== params.requestId) {
+      throw new Error("call_no_pending_video_upgrade");
+    }
+    if (pendingRequest.requesterUserId === params.userId) {
+      throw new Error("video_upgrade_invalid_request");
+    }
+
+    await prismaCall.update({
+      where: { id: params.callId },
+      data: {
+        type: "VIDEO"
+      }
+    });
+
+    await this.recordEvent(params.callId, "video_upgrade_accepted", params.userId, {
+      requestId: params.requestId
+    });
+
+    return this.getCallByIdForUser(params.callId, params.userId);
+  }
+
+  async declineVideoUpgrade(params: {
+    callId: string;
+    userId: string;
+    requestId: string;
+  }): Promise<CallRecord> {
+    const row = await this.getCallRowById(params.callId);
+    if (!row) throw new Error("call_not_found");
+    this.ensureAcceptedParticipant(row, params.userId);
+    if (row.type === "VIDEO") {
+      throw new Error("call_already_video");
+    }
+
+    const pendingRequest = await this.findPendingVideoUpgradeRequest(params.callId);
+    if (!pendingRequest || pendingRequest.requestId !== params.requestId) {
+      throw new Error("call_no_pending_video_upgrade");
+    }
+    if (pendingRequest.requesterUserId === params.userId) {
+      throw new Error("video_upgrade_invalid_request");
+    }
+
+    await this.recordEvent(params.callId, "video_upgrade_declined", params.userId, {
+      requestId: params.requestId
+    });
+
+    return this.getCallByIdForUser(params.callId, params.userId);
   }
 
   async declineCall(params: {

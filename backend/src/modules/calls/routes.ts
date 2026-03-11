@@ -27,6 +27,10 @@ const startCallSchema = z.object({
   type: z.enum(["audio", "video"])
 });
 
+const videoUpgradeActionSchema = z.object({
+  requestId: z.string().trim().min(1)
+});
+
 const listCallsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50)
 });
@@ -79,6 +83,25 @@ function serializeHistoryItem(origin: string, item: CallHistoryItem) {
     durationSeconds: item.durationSeconds,
     peer: withAvatarUrl(origin, item.peer)
   };
+}
+
+function emitVideoUpgradeEvent(
+  origin: string,
+  call: CallRecord,
+  eventName:
+    | "call:video-upgrade:requested"
+    | "call:video-upgrade:accepted"
+    | "call:video-upgrade:declined",
+  payload: Record<string, unknown>
+): void {
+  emitUserEvent([call.callerId], eventName, {
+    call: serializeCallForViewer(origin, call, call.callerId),
+    ...payload
+  });
+  emitUserEvent([call.calleeId], eventName, {
+    call: serializeCallForViewer(origin, call, call.calleeId),
+    ...payload
+  });
 }
 
 async function emitResolvedCall(
@@ -142,6 +165,21 @@ function respondCallError(res: Response, error: unknown): boolean {
       return true;
     case "call_not_active":
       res.status(409).json({ error: "call_not_active" });
+      return true;
+    case "call_not_accepted":
+      res.status(409).json({ error: "call_not_accepted" });
+      return true;
+    case "call_already_video":
+      res.status(409).json({ error: "call_already_video" });
+      return true;
+    case "video_upgrade_request_conflict":
+      res.status(409).json({ error: "video_upgrade_request_conflict" });
+      return true;
+    case "call_no_pending_video_upgrade":
+      res.status(409).json({ error: "call_no_pending_video_upgrade" });
+      return true;
+    case "video_upgrade_invalid_request":
+      res.status(409).json({ error: "video_upgrade_invalid_request" });
       return true;
     default:
       return false;
@@ -372,6 +410,101 @@ callRouter.post("/:callId/decline", requireAuth, async (req, res) => {
     if (respondCallError(res, error)) return;
     logError("call decline failed", error);
     res.status(500).json({ error: "failed_to_decline_call" });
+  }
+});
+
+callRouter.post("/:callId/video-upgrade/request", requireAuth, async (req, res) => {
+  const origin = getRequestOrigin(req);
+  try {
+    const result = await callService.requestVideoUpgrade({
+      callId: getRouteParam(req, "callId"),
+      userId: req.authUserId!
+    });
+
+    res.json({
+      data: {
+        call: serializeCallForViewer(origin, result.call, req.authUserId!),
+        requestId: result.requestId,
+        requestedByUserId: req.authUserId!
+      }
+    });
+
+    emitVideoUpgradeEvent(origin, result.call, "call:video-upgrade:requested", {
+      requestId: result.requestId,
+      requestedByUserId: req.authUserId!
+    });
+  } catch (error) {
+    if (respondCallError(res, error)) return;
+    logError("call video upgrade request failed", error);
+    res.status(500).json({ error: "failed_to_request_video_upgrade" });
+  }
+});
+
+callRouter.post("/:callId/video-upgrade/accept", requireAuth, async (req, res) => {
+  const origin = getRequestOrigin(req);
+  const parsed = videoUpgradeActionSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
+    return;
+  }
+
+  try {
+    const call = await callService.acceptVideoUpgrade({
+      callId: getRouteParam(req, "callId"),
+      userId: req.authUserId!,
+      requestId: parsed.data.requestId
+    });
+
+    res.json({
+      data: {
+        call: serializeCallForViewer(origin, call, req.authUserId!),
+        requestId: parsed.data.requestId,
+        actedByUserId: req.authUserId!
+      }
+    });
+
+    emitVideoUpgradeEvent(origin, call, "call:video-upgrade:accepted", {
+      requestId: parsed.data.requestId,
+      actedByUserId: req.authUserId!
+    });
+  } catch (error) {
+    if (respondCallError(res, error)) return;
+    logError("call video upgrade accept failed", error);
+    res.status(500).json({ error: "failed_to_accept_video_upgrade" });
+  }
+});
+
+callRouter.post("/:callId/video-upgrade/decline", requireAuth, async (req, res) => {
+  const origin = getRequestOrigin(req);
+  const parsed = videoUpgradeActionSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
+    return;
+  }
+
+  try {
+    const call = await callService.declineVideoUpgrade({
+      callId: getRouteParam(req, "callId"),
+      userId: req.authUserId!,
+      requestId: parsed.data.requestId
+    });
+
+    res.json({
+      data: {
+        call: serializeCallForViewer(origin, call, req.authUserId!),
+        requestId: parsed.data.requestId,
+        actedByUserId: req.authUserId!
+      }
+    });
+
+    emitVideoUpgradeEvent(origin, call, "call:video-upgrade:declined", {
+      requestId: parsed.data.requestId,
+      actedByUserId: req.authUserId!
+    });
+  } catch (error) {
+    if (respondCallError(res, error)) return;
+    logError("call video upgrade decline failed", error);
+    res.status(500).json({ error: "failed_to_decline_video_upgrade" });
   }
 });
 
