@@ -4973,7 +4973,7 @@ class TurnaManagedCallSession extends ChangeNotifier {
 
   void _syncProximityScreenLock() {
     final shouldEnable =
-        Platform.isAndroid &&
+        (Platform.isAndroid || Platform.isIOS) &&
         !_ended &&
         adapter.connected &&
         call.type == TurnaCallType.audio &&

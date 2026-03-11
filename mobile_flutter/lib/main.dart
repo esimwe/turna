@@ -1344,7 +1344,7 @@ class TurnaProximityScreenLock {
   static final Set<String> _holders = <String>{};
 
   static Future<void> acquire(String reason) async {
-    if (!Platform.isAndroid) return;
+    if (!Platform.isAndroid && !Platform.isIOS) return;
     final wasEmpty = _holders.isEmpty;
     _holders.add(reason);
     if (!wasEmpty) return;
@@ -1352,7 +1352,7 @@ class TurnaProximityScreenLock {
   }
 
   static Future<void> release(String reason) async {
-    if (!Platform.isAndroid) return;
+    if (!Platform.isAndroid && !Platform.isIOS) return;
     final removed = _holders.remove(reason);
     if (!removed || _holders.isNotEmpty) return;
     await _setEnabled(false);
