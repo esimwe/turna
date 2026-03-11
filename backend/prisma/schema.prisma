@@ -96,6 +96,18 @@ enum ReportStatus {
   RESOLVED
 }
 
+enum StatusType {
+  TEXT
+  IMAGE
+  VIDEO
+}
+
+enum StatusPrivacyMode {
+  MY_CONTACTS
+  EXCLUDED_CONTACTS
+  ONLY_SHARED_WITH
+}
+
 model User {
   id                    String             @id @default(uuid())
   username              String?            @unique
@@ -126,6 +138,9 @@ model User {
   blockedUsers          UserBlock[]        @relation("UserBlocks")
   blockedByUsers        UserBlock[]        @relation("BlockedByUsers")
   syncedContacts        UserContact[]
+  statusItems           StatusItem[]       @relation("StatusAuthor")
+  statusViews           StatusView[]       @relation("StatusViewer")
+  statusPreference      StatusPreference?
   submittedReports      ReportCase[]       @relation("SubmittedReports")
   reportsAgainst        ReportCase[]       @relation("ReportedUsers")
 
@@ -202,6 +217,55 @@ model UserBlock {
 
   @@id([blockerId, blockedUserId])
   @@index([blockedUserId])
+}
+
+model StatusItem {
+  id              String      @id @default(uuid())
+  authorId        String
+  type            StatusType
+  text            String?
+  backgroundColor String?
+  textColor       String?
+  objectKey       String?     @unique
+  contentType     String?
+  fileName        String?
+  sizeBytes       Int?
+  width           Int?
+  height          Int?
+  durationSeconds Int?
+  createdAt       DateTime    @default(now())
+  expiresAt       DateTime
+  updatedAt       DateTime    @updatedAt
+
+  author          User        @relation("StatusAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+  views           StatusView[]
+
+  @@index([authorId, createdAt(sort: Desc)])
+  @@index([expiresAt])
+  @@index([authorId, expiresAt])
+}
+
+model StatusView {
+  statusId      String
+  viewerUserId  String
+  viewedAt      DateTime   @default(now())
+
+  status        StatusItem @relation(fields: [statusId], references: [id], onDelete: Cascade)
+  viewer        User       @relation("StatusViewer", fields: [viewerUserId], references: [id], onDelete: Cascade)
+
+  @@id([statusId, viewerUserId])
+  @@index([viewerUserId, viewedAt(sort: Desc)])
+}
+
+model StatusPreference {
+  userId         String            @id
+  privacyMode    StatusPrivacyMode @default(MY_CONTACTS)
+  targetUserIds  Json?
+  mutedUserIds   Json?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  user           User              @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model Message {

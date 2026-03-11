@@ -10,6 +10,7 @@ import { callRouter } from "./modules/calls/routes.js";
 import { healthRouter } from "./modules/health/routes.js";
 import { profileRouter } from "./modules/profile/routes.js";
 import { pushRouter } from "./modules/push/routes.js";
+import { statusRouter } from "./modules/status/routes.js";
 
 export function createApp() {
   const app = express();
@@ -49,6 +50,7 @@ export function createApp() {
   app.use("/api/chats", chatRouter);
   app.use("/api/calls", callRouter);
   app.use("/api/push", pushRouter);
+  app.use("/api/statuses", statusRouter);
 
   return app;
 }

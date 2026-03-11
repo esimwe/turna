@@ -27,6 +27,7 @@ const VIDEO_EXTENSION_BY_CONTENT_TYPE: Record<string, string> = {
 };
 
 export type ChatUploadKind = "image" | "video" | "file";
+export type StatusUploadKind = "image" | "video";
 
 let storageClient: S3Client | null = null;
 
@@ -120,6 +121,23 @@ export function isChatAttachmentKeyOwnedByUser(params: {
   return params.objectKey.startsWith(`chat-media/${params.chatId}/${params.userId}/`);
 }
 
+export function buildStatusAttachmentObjectKey(params: {
+  userId: string;
+  kind: StatusUploadKind;
+  contentType: string;
+  fileName?: string | null;
+}): string {
+  const extension = inferExtension(params.contentType, params.fileName);
+  return `statuses/${params.userId}/${params.kind}/${Date.now()}-${randomUUID()}.${extension}`;
+}
+
+export function isStatusAttachmentKeyOwnedByUser(params: {
+  userId: string;
+  objectKey: string;
+}): boolean {
+  return params.objectKey.startsWith(`statuses/${params.userId}/`);
+}
+
 export async function createAvatarUploadUrl(params: {
   userId: string;
   contentType: string;
@@ -162,6 +180,36 @@ export async function createChatAttachmentUploadUrl(params: {
 }> {
   const client = getStorageClient();
   const objectKey = buildChatAttachmentObjectKey(params);
+  const command = new PutObjectCommand({
+    Bucket: env.R2_BUCKET!,
+    Key: objectKey,
+    ContentType: params.contentType,
+    CacheControl: "private, max-age=31536000"
+  });
+
+  const uploadUrl = await getSignedUrl(client, command, { expiresIn: 60 * 5 });
+
+  return {
+    objectKey,
+    uploadUrl,
+    headers: {
+      "Content-Type": params.contentType
+    }
+  };
+}
+
+export async function createStatusAttachmentUploadUrl(params: {
+  userId: string;
+  kind: StatusUploadKind;
+  contentType: string;
+  fileName?: string | null;
+}): Promise<{
+  objectKey: string;
+  uploadUrl: string;
+  headers: Record<string, string>;
+}> {
+  const client = getStorageClient();
+  const objectKey = buildStatusAttachmentObjectKey(params);
   const command = new PutObjectCommand({
     Bucket: env.R2_BUCKET!,
     Key: objectKey,
