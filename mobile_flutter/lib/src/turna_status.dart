@@ -732,7 +732,10 @@ class _StatusCapturePageState extends State<StatusCapturePage>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _bootstrap();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(_bootstrap());
+    });
   }
 
   @override
@@ -746,24 +749,27 @@ class _StatusCapturePageState extends State<StatusCapturePage>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (!mounted) return;
-    if (state == AppLifecycleState.inactive ||
-        state == AppLifecycleState.paused) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
       _disposeCamera();
       return;
     }
     if (state == AppLifecycleState.resumed) {
-      _initializeCamera(
-        preferredLensDirection:
-            _selectedCamera?.lensDirection ?? cam.CameraLensDirection.back,
+      unawaited(
+        _initializeCamera(
+          preferredLensDirection:
+              _selectedCamera?.lensDirection ?? cam.CameraLensDirection.back,
+        ),
       );
     }
   }
 
   Future<void> _bootstrap() async {
-    await Future.wait<void>([
-      _loadGallery(),
-      _initializeCamera(preferredLensDirection: cam.CameraLensDirection.back),
-    ]);
+    await _initializeCamera(
+      preferredLensDirection: cam.CameraLensDirection.back,
+    );
+    if (!mounted) return;
+    await _loadGallery();
   }
 
   Future<void> _disposeCamera() async {
@@ -801,6 +807,10 @@ class _StatusCapturePageState extends State<StatusCapturePage>
     required cam.CameraLensDirection preferredLensDirection,
   }) async {
     if (!mounted) return;
+    turnaLog('status camera init start', {
+      'mode': _mode.name,
+      'preferredLensDirection': preferredLensDirection.name,
+    });
     setState(() {
       _cameraInitializing = true;
       _cameraError = null;
@@ -838,8 +848,13 @@ class _StatusCapturePageState extends State<StatusCapturePage>
         _cameraInitializing = false;
         _cameraError = null;
       });
+      turnaLog('status camera init success', {
+        'lensDirection': selected.lensDirection.name,
+        'aspectRatio': controller.value.aspectRatio,
+      });
     } catch (error) {
       await previous?.dispose();
+      turnaLog('status camera init failed', {'error': '$error'});
       if (!mounted) return;
       setState(() {
         _cameraController = null;
@@ -1264,11 +1279,11 @@ class _StatusCapturePageState extends State<StatusCapturePage>
       return const SizedBox.expand(child: ColoredBox(color: Colors.black));
     }
     return SizedBox.expand(
-      child: FittedBox(
-        fit: BoxFit.cover,
-        child: SizedBox(
-          width: previewSize.height,
-          height: previewSize.width,
+      child: Center(
+        child: AspectRatio(
+          aspectRatio: controller.value.aspectRatio == 0
+              ? (previewSize.height / previewSize.width)
+              : controller.value.aspectRatio,
           child: cam.CameraPreview(controller),
         ),
       ),
