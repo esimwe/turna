@@ -1386,6 +1386,33 @@ class _BottomProfileTabIcon extends StatelessWidget {
   }
 }
 
+class _BottomWalletTabIcon extends StatelessWidget {
+  const _BottomWalletTabIcon({this.selected = false});
+
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 160),
+      width: 28,
+      height: 28,
+      padding: const EdgeInsets.all(2),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: selected ? TurnaColors.primary : Colors.transparent,
+          width: 1.6,
+        ),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: Image.asset('assets/turna-icon.png', fit: BoxFit.cover),
+      ),
+    );
+  }
+}
+
 class _SettingsMenuAction {
   const _SettingsMenuAction({
     required this.icon,
@@ -1451,13 +1478,10 @@ class _TurnaBottomBar extends StatelessWidget {
             ),
             Expanded(
               child: _TurnaBottomBarItem(
-                label: 'Araçlar',
+                label: 'Cüzdan',
                 selected: selectedIndex == 2,
-                iconBuilder: (selected) => Icon(
-                  Icons.business_center_outlined,
-                  size: 22,
-                  color: selected ? TurnaColors.primary : TurnaColors.textMuted,
-                ),
+                iconBuilder: (selected) =>
+                    _BottomWalletTabIcon(selected: selected),
                 onTap: () => onSelect(2),
               ),
             ),
