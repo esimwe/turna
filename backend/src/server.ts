@@ -22,6 +22,6 @@ registerChatSocket(io);
 
 redis.connect().then(() => logInfo("redis connected")).catch((err: unknown) => logError("redis connect failed", err));
 
-httpServer.listen(env.PORT, () => {
-  logInfo(`backend listening on :${env.PORT}`);
+httpServer.listen(env.PORT, env.BIND_HOST, () => {
+  logInfo(`backend listening on ${env.BIND_HOST}:${env.PORT}`);
 });

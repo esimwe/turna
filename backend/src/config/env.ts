@@ -24,6 +24,7 @@ const optionalFixedOtpCode = z.preprocess(
 const resolvedEnv = {
   NODE_ENV: process.env.NODE_ENV,
   PORT: process.env.PORT,
+  BIND_HOST: process.env.BIND_HOST,
   CORS_ORIGIN: process.env.CORS_ORIGIN,
   PUBLIC_BASE_URL:
     process.env.PUBLIC_BASE_URL ??
@@ -80,6 +81,7 @@ const resolvedEnv = {
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().default(4000),
+  BIND_HOST: optionalNonEmptyString,
   CORS_ORIGIN: z.string().default("*"),
   PUBLIC_BASE_URL: z.string().url().optional(),
   TRUST_PROXY: z
@@ -90,7 +92,7 @@ const envSchema = z.object({
     .string()
     .optional()
     .transform((value) => (value == null ? false : value === "true")),
-  REDIS_URL: z.string().default("redis://localhost:6379"),
+  REDIS_URL: z.string().default("redis://127.0.0.1:6379"),
   DATABASE_URL: z.string().url(),
   JWT_SECRET: z.string().min(12).default("turna-dev-secret-change-me"),
   ADMIN_JWT_SECRET: z.string().min(12).default("turna-admin-dev-secret-change-me"),
@@ -134,4 +136,10 @@ const envSchema = z.object({
   OTP_IP_LIMIT_24H: z.coerce.number().int().min(1).max(500).default(20)
 });
 
-export const env = envSchema.parse(resolvedEnv);
+const parsedEnv = envSchema.parse(resolvedEnv);
+
+export const env = {
+  ...parsedEnv,
+  BIND_HOST:
+    parsedEnv.BIND_HOST ?? (parsedEnv.NODE_ENV === "production" ? "127.0.0.1" : "0.0.0.0")
+};
