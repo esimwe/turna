@@ -296,9 +296,9 @@ class TurnaPaymentToolsPage extends StatelessWidget {
   static const List<_TurnaPaymentToolItem> _tools = [
     _TurnaPaymentToolItem(
       title: 'Taksi Öde',
-      shortDescription: 'Sohbetten veya @username ile taksi ödeyin',
+      shortDescription: '@username veya plaka ile ödeme yapın',
       longDescription:
-          'Taksiciye IBAN istemeden, sohbetten veya @username ile saniyeler içinde ödeme yapın.',
+          'Taksiciye IBAN istemeden, @username veya plaka ile saniyeler içinde ödeme yapın.',
       icon: Icons.local_taxi,
       color: Color(0xFF2F80ED),
       status: 'Yakında',

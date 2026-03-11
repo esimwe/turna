@@ -3368,11 +3368,22 @@ class CallsPage extends StatefulWidget {
 class _CallsPageState extends State<CallsPage> {
   int _refreshTick = 0;
   String? _startingCallHistoryId;
+  late Future<List<TurnaCallHistoryItem>> _callsFuture;
 
   @override
   void initState() {
     super.initState();
+    _callsFuture = _buildCallsFuture();
     widget.callCoordinator.addListener(_onCallUpdate);
+  }
+
+  @override
+  void didUpdateWidget(covariant CallsPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.session.userId != widget.session.userId ||
+        oldWidget.session.token != widget.session.token) {
+      _reloadCalls();
+    }
   }
 
   @override
@@ -3383,7 +3394,19 @@ class _CallsPageState extends State<CallsPage> {
 
   void _onCallUpdate() {
     if (!mounted) return;
-    setState(() => _refreshTick++);
+    _reloadCalls();
+  }
+
+  Future<List<TurnaCallHistoryItem>> _buildCallsFuture() {
+    return CallApi.fetchCalls(widget.session, refreshTick: _refreshTick);
+  }
+
+  void _reloadCalls() {
+    if (!mounted) return;
+    setState(() {
+      _refreshTick++;
+      _callsFuture = _buildCallsFuture();
+    });
   }
 
   Future<void> _openPeerProfile(TurnaCallHistoryItem item) async {
@@ -3410,7 +3433,7 @@ class _CallsPageState extends State<CallsPage> {
     );
 
     if (!mounted) return;
-    setState(() => _refreshTick++);
+    _reloadCalls();
   }
 
   Future<void> _startCall(TurnaCallHistoryItem item) async {
@@ -3447,7 +3470,7 @@ class _CallsPageState extends State<CallsPage> {
       );
 
       if (!mounted) return;
-      setState(() => _refreshTick++);
+      _reloadCalls();
     } on TurnaUnauthorizedException {
       if (!mounted) return;
       widget.onSessionExpired();
@@ -3494,7 +3517,7 @@ class _CallsPageState extends State<CallsPage> {
     return Scaffold(
       appBar: AppBar(title: const Text('Aramalar')),
       body: FutureBuilder<List<TurnaCallHistoryItem>>(
-        future: CallApi.fetchCalls(widget.session, refreshTick: _refreshTick),
+        future: _callsFuture,
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
@@ -3511,7 +3534,7 @@ class _CallsPageState extends State<CallsPage> {
               title: 'Aramalar yüklenemedi',
               message: error.toString(),
               primaryLabel: 'Tekrar dene',
-              onPrimary: () => setState(() => _refreshTick++),
+              onPrimary: _reloadCalls,
             );
           }
 
@@ -3525,7 +3548,7 @@ class _CallsPageState extends State<CallsPage> {
           }
 
           return RefreshIndicator(
-            onRefresh: () async => setState(() => _refreshTick++),
+            onRefresh: () async => _reloadCalls(),
             child: ListView.separated(
               physics: const AlwaysScrollableScrollPhysics(),
               itemCount: calls.length,
@@ -3813,6 +3836,7 @@ class OutgoingCallPage extends StatefulWidget {
 class _OutgoingCallPageState extends State<OutgoingCallPage> {
   bool _ending = false;
   bool _navigatedToActive = false;
+  bool _closed = false;
 
   String get _wakeLockReason => 'outgoing-call:${widget.initialCall.id}';
 
@@ -3863,6 +3887,12 @@ class _OutgoingCallPageState extends State<OutgoingCallPage> {
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text(message)));
+    _closePage();
+  }
+
+  void _closePage() {
+    if (_closed || !mounted) return;
+    _closed = true;
     Navigator.of(context).pop();
   }
 
@@ -3879,9 +3909,7 @@ class _OutgoingCallPageState extends State<OutgoingCallPage> {
 
     widget.coordinator.clearCall(widget.initialCall.id);
     await TurnaNativeCallManager.endCallUi(widget.initialCall.id);
-    if (mounted) {
-      Navigator.of(context).pop();
-    }
+    _closePage();
   }
 
   @override
@@ -4799,6 +4827,7 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
   late final TurnaManagedCallSession _callSession;
   bool _ending = false;
   bool _handledSessionEnd = false;
+  bool _leaving = false;
   bool _showLocalVideoPrimary = false;
   _CallPreviewCorner _previewCorner = _CallPreviewCorner.topRight;
   Offset? _previewDragTopLeft;
@@ -4845,6 +4874,8 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
   }
 
   void _leaveCallView() {
+    if (_leaving) return;
+    _leaving = true;
     final returnChat = _callSession.returnChatOnExit;
     if (returnChat == null) {
       Navigator.of(context).pop();
