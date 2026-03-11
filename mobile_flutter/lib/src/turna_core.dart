@@ -1694,6 +1694,25 @@ class AuthSession {
   }
 }
 
+String? resolveTurnaSessionAvatarUrl(
+  AuthSession session, {
+  String? overrideAvatarUrl,
+}) {
+  final raw = (overrideAvatarUrl ?? session.avatarUrl)?.trim() ?? '';
+  if (raw.isEmpty) return null;
+
+  final parsed = Uri.tryParse(raw);
+  final isAbsoluteUrl =
+      parsed != null &&
+      parsed.hasScheme &&
+      (parsed.host.isNotEmpty || raw.startsWith('file:'));
+  if (isAbsoluteUrl) {
+    return normalizeTurnaRemoteUrl(raw);
+  }
+
+  return '$kBackendBaseUrl/api/profile/avatar/${Uri.encodeComponent(session.userId)}';
+}
+
 class TurnaOtpRequestTicket {
   TurnaOtpRequestTicket({
     required this.phone,
@@ -6404,7 +6423,7 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
       child: Center(
         child: _ProfileAvatar(
           label: _callSession.session.displayName,
-          avatarUrl: _callSession.session.avatarUrl,
+          avatarUrl: resolveTurnaSessionAvatarUrl(_callSession.session),
           authToken: _callSession.session.token,
           radius: 22,
         ),

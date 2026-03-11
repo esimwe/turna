@@ -119,7 +119,10 @@ class _SettingsPageState extends State<SettingsPage> {
         ? about
         : 'Şu anki ruh halim';
     final displayName = _profile.displayName;
-    final avatarUrl = _profile.avatarUrl ?? widget.session.avatarUrl;
+    final avatarUrl = resolveTurnaSessionAvatarUrl(
+      widget.session,
+      overrideAvatarUrl: _profile.avatarUrl,
+    );
 
     return Scaffold(
       backgroundColor: TurnaColors.backgroundSoft,
@@ -1298,7 +1301,7 @@ class _SessionAvatar extends StatelessWidget {
   Widget build(BuildContext context) {
     return _ProfileAvatar(
       label: session.displayName,
-      avatarUrl: session.avatarUrl,
+      avatarUrl: resolveTurnaSessionAvatarUrl(session),
       authToken: session.token,
       radius: radius,
     );
@@ -2231,7 +2234,10 @@ class _ProfilePageState extends State<ProfilePage> {
     final displayName = _displayNameController.text.trim().isEmpty
         ? widget.session.displayName
         : _displayNameController.text.trim();
-    final avatarUrl = profile.avatarUrl ?? widget.session.avatarUrl;
+    final avatarUrl = resolveTurnaSessionAvatarUrl(
+      widget.session,
+      overrideAvatarUrl: profile.avatarUrl,
+    );
     final username = _normalizeUsername(_usernameController.text);
 
     return ListView(

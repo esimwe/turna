@@ -405,7 +405,7 @@ class _MyStatusTile extends StatelessWidget {
                   _StatusRingAvatar(
                     radius: 28,
                     label: session.displayName,
-                    avatarUrl: session.avatarUrl,
+                    avatarUrl: resolveTurnaSessionAvatarUrl(session),
                     authToken: session.token,
                     highlighted: summary.hasStatuses,
                   ),

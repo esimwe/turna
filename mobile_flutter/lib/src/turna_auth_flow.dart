@@ -1421,7 +1421,10 @@ class _TurnaProfileOnboardingPageState
 
   @override
   Widget build(BuildContext context) {
-    final avatarUrl = _avatarUrlOverride ?? widget.session.avatarUrl;
+    final avatarUrl = resolveTurnaSessionAvatarUrl(
+      widget.session,
+      overrideAvatarUrl: _avatarUrlOverride,
+    );
     final label = _displayNameController.text.trim().isEmpty
         ? 'Profil'
         : _displayNameController.text.trim();
