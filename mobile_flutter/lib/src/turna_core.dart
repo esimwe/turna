@@ -4776,6 +4776,7 @@ class TurnaManagedCallSession extends ChangeNotifier {
   int _durationSeconds = 0;
   Timer? _durationTicker;
   bool _wakeLockHeld = false;
+  bool _proximityLockHeld = false;
   TurnaCallVideoUpgradeRequestEvent? _pendingVideoUpgradeRequest;
   String? _outgoingVideoUpgradeRequestId;
 
@@ -4783,6 +4784,7 @@ class TurnaManagedCallSession extends ChangeNotifier {
   bool get ended => _ended;
   int get durationSeconds => _durationSeconds;
   String get _wakeLockReason => 'active-call:${call.id}';
+  String get _proximityReason => 'active-call-proximity:${call.id}';
   int get noticeRevision => _noticeRevision;
   TurnaCallVideoUpgradeRequestEvent? get pendingVideoUpgradeRequest =>
       _pendingVideoUpgradeRequest;
@@ -4807,6 +4809,7 @@ class TurnaManagedCallSession extends ChangeNotifier {
     _started = true;
     _acquireWakeLock();
     await adapter.connect();
+    _syncProximityScreenLock();
   }
 
   void setFullScreenVisible(bool value) {
@@ -4827,6 +4830,7 @@ class TurnaManagedCallSession extends ChangeNotifier {
     await adapter.disconnect();
     await TurnaNativeCallManager.endCallUi(call.id);
     _releaseWakeLock();
+    _releaseProximityScreenLock();
     _ended = true;
     terminalMessage = null;
     notifyListeners();
@@ -4886,6 +4890,7 @@ class TurnaManagedCallSession extends ChangeNotifier {
       _reportedConnected = true;
       TurnaNativeCallManager.setCallConnected(call.id);
     }
+    _syncProximityScreenLock();
     notifyListeners();
   }
 
@@ -4924,6 +4929,7 @@ class TurnaManagedCallSession extends ChangeNotifier {
       _ => 'Arama sonlandı.',
     };
     _releaseWakeLock();
+    _releaseProximityScreenLock();
     _ended = true;
     unawaited(adapter.disconnect());
     unawaited(TurnaNativeCallManager.endCallUi(call.id));
@@ -4943,6 +4949,7 @@ class TurnaManagedCallSession extends ChangeNotifier {
     if (nextCall.type == TurnaCallType.video) {
       unawaited(adapter.enableVideoMode());
     }
+    _syncProximityScreenLock();
   }
 
   void _pushNotice(String message) {
@@ -4964,12 +4971,35 @@ class TurnaManagedCallSession extends ChangeNotifier {
     unawaited(TurnaDisplayWakeLock.release(_wakeLockReason));
   }
 
+  void _syncProximityScreenLock() {
+    final shouldEnable =
+        Platform.isAndroid &&
+        !_ended &&
+        adapter.connected &&
+        call.type == TurnaCallType.audio &&
+        !adapter.speakerEnabled;
+    if (shouldEnable) {
+      if (_proximityLockHeld) return;
+      _proximityLockHeld = true;
+      unawaited(TurnaProximityScreenLock.acquire(_proximityReason));
+      return;
+    }
+    _releaseProximityScreenLock();
+  }
+
+  void _releaseProximityScreenLock() {
+    if (!_proximityLockHeld) return;
+    _proximityLockHeld = false;
+    unawaited(TurnaProximityScreenLock.release(_proximityReason));
+  }
+
   @override
   void dispose() {
     adapter.removeListener(_handleAdapterChanged);
     coordinator.removeListener(_handleCoordinatorChanged);
     _durationTicker?.cancel();
     _releaseWakeLock();
+    _releaseProximityScreenLock();
     adapter.dispose();
     super.dispose();
   }
@@ -5235,6 +5265,7 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
   bool _showLocalVideoPrimary = false;
   _CallPreviewCorner _previewCorner = _CallPreviewCorner.topRight;
   Offset? _previewDragTopLeft;
+  bool _previewDragMoved = false;
 
   static const double _previewMargin = 16;
   static const double _previewWidth = 96;
@@ -5427,11 +5458,15 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
 
   void _startPreviewDrag(Size size) {
     _previewDragTopLeft ??= _previewAnchorOffset(size, _previewCorner);
+    _previewDragMoved = false;
   }
 
   void _updatePreviewDrag(Size size, DragUpdateDetails details) {
     final base =
         _previewDragTopLeft ?? _previewAnchorOffset(size, _previewCorner);
+    if (details.delta.distanceSquared > 1) {
+      _previewDragMoved = true;
+    }
     setState(() {
       _previewDragTopLeft = _clampPreviewOffset(size, base + details.delta);
     });
@@ -5440,6 +5475,11 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
   void _endPreviewDrag(Size size) {
     final dragTopLeft = _previewDragTopLeft;
     if (dragTopLeft == null) return;
+    if (!_previewDragMoved) {
+      _previewDragTopLeft = null;
+      _toggleVideoSwap();
+      return;
+    }
 
     final targetCenter =
         dragTopLeft + const Offset(_previewWidth / 2, _previewHeight / 2);
@@ -5462,12 +5502,16 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
         _previewCorner = snappedCorner;
       }
       _previewDragTopLeft = null;
+      _previewDragMoved = false;
     });
   }
 
   void _cancelPreviewDrag() {
     if (_previewDragTopLeft == null) return;
-    setState(() => _previewDragTopLeft = null);
+    setState(() {
+      _previewDragTopLeft = null;
+      _previewDragMoved = false;
+    });
   }
 
   Widget _buildCallControlButton({
@@ -5809,7 +5853,6 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
       height: _previewHeight,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: _toggleVideoSwap,
         onPanStart: (_) => _startPreviewDrag(viewport),
         onPanUpdate: (details) => _updatePreviewDrag(viewport, details),
         onPanEnd: (_) => _endPreviewDrag(viewport),

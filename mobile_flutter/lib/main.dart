@@ -368,9 +368,7 @@ String buildTurnaReplyEncodedText({
   return '[[turna-reply:$encoded]]\n$text';
 }
 
-String buildTurnaLocationEncodedText({
-  required TurnaLocationPayload location,
-}) {
+String buildTurnaLocationEncodedText({required TurnaLocationPayload location}) {
   final encoded = base64UrlEncode(
     utf8.encode(jsonEncode(location.toMap())),
   ).replaceAll('=', '');
@@ -443,8 +441,7 @@ final RegExp _kTurnaSharedUrlPattern = RegExp(
 
 String _trimTurnaUrlEdgePunctuation(String value) {
   var current = value.trim();
-  while (current.isNotEmpty &&
-      RegExp(r'[\])},.!?;:]+$').hasMatch(current)) {
+  while (current.isNotEmpty && RegExp(r'[\])},.!?;:]+$').hasMatch(current)) {
     current = current.substring(0, current.length - 1);
   }
   return current;
@@ -521,7 +518,10 @@ class TurnaLinkPreviewCache {
   }
 
   static Future<TurnaLinkPreviewMetadata> _fetch(Uri uri) async {
-    final host = uri.host.replaceFirst(RegExp(r'^www\.', caseSensitive: false), '');
+    final host = uri.host.replaceFirst(
+      RegExp(r'^www\.', caseSensitive: false),
+      '',
+    );
     final displayUrl = host.isEmpty ? uri.toString() : '$host${uri.path}';
 
     try {
@@ -796,10 +796,7 @@ class TurnaLocalMediaCache {
     return '${hash.toRadixString(16).padLeft(8, '0')}-${value.length}';
   }
 
-  static String _preferredMediaExtension({
-    String? mimeType,
-    String? fileName,
-  }) {
+  static String _preferredMediaExtension({String? mimeType, String? fileName}) {
     final lowerMime = (mimeType ?? '').toLowerCase();
     final lowerName = (fileName ?? '').toLowerCase();
 
@@ -1342,6 +1339,36 @@ class TurnaDisplayWakeLock {
   }
 }
 
+class TurnaProximityScreenLock {
+  static const MethodChannel _channel = MethodChannel('turna/display');
+  static final Set<String> _holders = <String>{};
+
+  static Future<void> acquire(String reason) async {
+    if (!Platform.isAndroid) return;
+    final wasEmpty = _holders.isEmpty;
+    _holders.add(reason);
+    if (!wasEmpty) return;
+    await _setEnabled(true);
+  }
+
+  static Future<void> release(String reason) async {
+    if (!Platform.isAndroid) return;
+    final removed = _holders.remove(reason);
+    if (!removed || _holders.isNotEmpty) return;
+    await _setEnabled(false);
+  }
+
+  static Future<void> _setEnabled(bool enabled) async {
+    try {
+      await _channel.invokeMethod('setProximityScreenLockEnabled', {
+        'enabled': enabled,
+      });
+    } catch (error) {
+      turnaLog('proximity screen lock update skipped', error);
+    }
+  }
+}
+
 class TurnaAppBadge {
   static const MethodChannel _channel = MethodChannel('turna/display');
 
@@ -1657,9 +1684,7 @@ class _TurnaAppState extends State<TurnaApp> with WidgetsBindingObserver {
       home: _bootstrapping
           ? const _TurnaLaunchPage()
           : _session == null
-          ? TurnaPhoneAuthPage(
-              onAuthenticated: _updateSession,
-            )
+          ? TurnaPhoneAuthPage(onAuthenticated: _updateSession)
           : _session!.needsOnboarding
           ? TurnaProfileOnboardingPage(
               session: _session!,
