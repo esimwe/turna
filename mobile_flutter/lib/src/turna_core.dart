@@ -3526,9 +3526,11 @@ class _CallsPageState extends State<CallsPage> {
 
           return RefreshIndicator(
             onRefresh: () async => setState(() => _refreshTick++),
-            child: ListView.builder(
+            child: ListView.separated(
               physics: const AlwaysScrollableScrollPhysics(),
               itemCount: calls.length,
+              separatorBuilder: (context, index) =>
+                  const Divider(height: 1, indent: 76, endIndent: 16),
               itemBuilder: (context, index) {
                 final item = calls[index];
                 final isStartingCall = _startingCallHistoryId == item.id;
