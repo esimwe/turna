@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+import 'package:camera/camera.dart' as cam;
 import 'package:audioplayers/audioplayers.dart' as ap;
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:firebase_analytics/firebase_analytics.dart';
@@ -25,6 +26,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart' as ll;
 import 'package:livekit_client/livekit_client.dart' as lk;
 import 'package:path_provider/path_provider.dart';
+import 'package:photo_manager/photo_manager.dart' as pm;
 import 'package:record/record.dart' as rec;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
