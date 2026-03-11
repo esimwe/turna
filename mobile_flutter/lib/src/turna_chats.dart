@@ -144,7 +144,10 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
 
   Widget _buildTabPage(int index) {
     return switch (index) {
-      0 => const PlaceholderPage(title: 'Durum'),
+      0 => StatusesPage(
+        session: widget.session,
+        onSessionExpired: _handleSessionExpired,
+      ),
       1 => CallsPage(
         session: widget.session,
         callCoordinator: _callCoordinator,

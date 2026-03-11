@@ -37,6 +37,7 @@ part 'src/turna_profile_shell.dart';
 part 'src/turna_core.dart';
 part 'src/turna_location.dart';
 part 'src/turna_contact.dart';
+part 'src/turna_status.dart';
 
 String _normalizeTurnaBaseUrl(String value) {
   final trimmed = value.trim();
@@ -78,6 +79,7 @@ const bool kTurnaDebugLogs = true;
 const String kChatRoomRouteName = 'chat-room';
 const int kComposerMediaLimit = 30;
 const int kInlineAttachmentSoftLimitBytes = 64 * 1024 * 1024;
+const int kStatusMaxVideoDurationSeconds = 60;
 const int kInlineImagePickerQuality = 82;
 const double kInlineImagePickerMaxDimension = 2200;
 const double kInlineImageSdMaxDimension = 1280;
