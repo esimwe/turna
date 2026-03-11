@@ -22,6 +22,7 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
   late final PresenceSocketClient _presenceClient;
   final _inboxUpdateNotifier = ValueNotifier<int>(0);
   final _callCoordinator = TurnaCallCoordinator();
+  final Set<int> _visitedTabs = <int>{3};
   String? _activeIncomingCallId;
   bool _endingSession = false;
 
@@ -55,6 +56,9 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
       onCallDeclined: _callCoordinator.handleDeclined,
       onCallMissed: _callCoordinator.handleMissed,
       onCallEnded: _callCoordinator.handleEnded,
+      onCallVideoUpgradeRequested: _callCoordinator.handleVideoUpgradeRequested,
+      onCallVideoUpgradeAccepted: _callCoordinator.handleVideoUpgradeAccepted,
+      onCallVideoUpgradeDeclined: _callCoordinator.handleVideoUpgradeDeclined,
     )..connect();
     _callCoordinator.addListener(_handleCallCoordinator);
   }
@@ -138,17 +142,16 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
     });
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final pages = <Widget>[
-      const PlaceholderPage(title: 'Durum'),
-      CallsPage(
+  Widget _buildTabPage(int index) {
+    return switch (index) {
+      0 => const PlaceholderPage(title: 'Durum'),
+      1 => CallsPage(
         session: widget.session,
         callCoordinator: _callCoordinator,
         onSessionExpired: _handleSessionExpired,
       ),
-      const TurnaPaymentToolsPage(),
-      ChatsPage(
+      2 => const TurnaPaymentToolsPage(),
+      3 => ChatsPage(
         session: widget.session,
         inboxUpdateNotifier: _inboxUpdateNotifier,
         callCoordinator: _callCoordinator,
@@ -159,20 +162,39 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
           unawaited(TurnaAppBadge.setCount(count));
         },
       ),
-      SettingsPage(
+      _ => SettingsPage(
         session: widget.session,
         onSessionUpdated: widget.onSessionUpdated,
         onLogout: _handleSessionExpired,
       ),
-    ];
+    };
+  }
 
+  void _selectTab(int index) {
+    if (_index == index && _visitedTabs.contains(index)) return;
+    setState(() {
+      _index = index;
+      _visitedTabs.add(index);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
-      body: pages[_index],
+      body: IndexedStack(
+        index: _index,
+        children: List<Widget>.generate(
+          5,
+          (index) => _visitedTabs.contains(index)
+              ? _buildTabPage(index)
+              : const SizedBox.shrink(),
+        ),
+      ),
       bottomNavigationBar: _TurnaBottomBar(
         selectedIndex: _index,
         unreadChats: _totalUnreadChats,
         session: widget.session,
-        onSelect: (index) => setState(() => _index = index),
+        onSelect: _selectTab,
       ),
     );
   }
@@ -208,20 +230,51 @@ class _ChatsPageState extends State<ChatsPage> {
   bool _bulkActionBusy = false;
   final TextEditingController _searchController = TextEditingController();
   final Set<String> _selectedChatIds = <String>{};
+  late Future<ChatInboxData> _inboxFuture;
+  ChatInboxData? _cachedInbox;
   String _selectedFilterId = _allChatsFilterId;
 
   @override
   void initState() {
     super.initState();
+    _inboxFuture = _fetchInbox();
     widget.inboxUpdateNotifier?.addListener(_onInboxUpdate);
     _searchController.addListener(_onSearchChanged);
     TurnaContactsDirectory.revision.addListener(_onContactsChanged);
     unawaited(TurnaContactsDirectory.ensureLoaded());
   }
 
+  @override
+  void didUpdateWidget(covariant ChatsPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.session.token != widget.session.token ||
+        oldWidget.session.userId != widget.session.userId) {
+      _refreshTick = 0;
+      _cachedInbox = null;
+      _inboxFuture = _fetchInbox();
+    }
+  }
+
+  Future<ChatInboxData> _fetchInbox() {
+    return ChatApi.fetchChats(widget.session, refreshTick: _refreshTick);
+  }
+
+  void _scheduleInboxReload() {
+    _refreshTick++;
+    _inboxFuture = _fetchInbox();
+  }
+
+  Future<void> _reloadInbox() async {
+    if (!mounted) return;
+    setState(_scheduleInboxReload);
+    try {
+      await _inboxFuture;
+    } catch (_) {}
+  }
+
   void _onInboxUpdate() {
     if (!mounted) return;
-    setState(() => _refreshTick++);
+    setState(_scheduleInboxReload);
   }
 
   void _onSearchChanged() {
@@ -231,7 +284,7 @@ class _ChatsPageState extends State<ChatsPage> {
 
   void _onContactsChanged() {
     if (!mounted) return;
-    setState(() => _refreshTick++);
+    setState(_scheduleInboxReload);
   }
 
   @override
@@ -255,7 +308,7 @@ class _ChatsPageState extends State<ChatsPage> {
       ),
     );
     if (created == true && mounted) {
-      setState(() => _refreshTick++);
+      setState(_scheduleInboxReload);
     }
   }
 
@@ -271,7 +324,7 @@ class _ChatsPageState extends State<ChatsPage> {
       ),
     );
     if (!mounted) return;
-    setState(() => _refreshTick++);
+    setState(_scheduleInboxReload);
   }
 
   void _enterSelectionMode([String? initialChatId]) {
@@ -336,7 +389,7 @@ class _ChatsPageState extends State<ChatsPage> {
       if (!mounted) return;
       setState(() {
         _bulkActionBusy = false;
-        _refreshTick++;
+        _scheduleInboxReload();
       });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -395,7 +448,7 @@ class _ChatsPageState extends State<ChatsPage> {
         _bulkActionBusy = false;
         _selectionMode = false;
         _selectedChatIds.clear();
-        _refreshTick++;
+        _scheduleInboxReload();
       });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -424,7 +477,7 @@ class _ChatsPageState extends State<ChatsPage> {
       if (!mounted) return;
       setState(() {
         _bulkActionBusy = false;
-        _refreshTick++;
+        _scheduleInboxReload();
       });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -454,7 +507,7 @@ class _ChatsPageState extends State<ChatsPage> {
       if (!mounted) return;
       setState(() {
         _bulkActionBusy = false;
-        _refreshTick++;
+        _scheduleInboxReload();
       });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -484,7 +537,7 @@ class _ChatsPageState extends State<ChatsPage> {
       if (!mounted) return;
       setState(() {
         _bulkActionBusy = false;
-        _refreshTick++;
+        _scheduleInboxReload();
       });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -567,7 +620,7 @@ class _ChatsPageState extends State<ChatsPage> {
         if (_selectedFilterId == folder.id) {
           _selectedFilterId = _allChatsFilterId;
         }
-        _refreshTick++;
+        _scheduleInboxReload();
       });
       ScaffoldMessenger.of(
         context,
@@ -654,7 +707,7 @@ class _ChatsPageState extends State<ChatsPage> {
       if (!mounted) return;
       setState(() {
         _bulkActionBusy = false;
-        _refreshTick++;
+        _scheduleInboxReload();
       });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -703,7 +756,7 @@ class _ChatsPageState extends State<ChatsPage> {
       if (!mounted) return;
       setState(() {
         _bulkActionBusy = false;
-        _refreshTick++;
+        _scheduleInboxReload();
       });
       ScaffoldMessenger.of(
         context,
@@ -756,7 +809,7 @@ class _ChatsPageState extends State<ChatsPage> {
       if (!mounted) return;
       setState(() {
         _bulkActionBusy = false;
-        _refreshTick++;
+        _scheduleInboxReload();
       });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -809,7 +862,7 @@ class _ChatsPageState extends State<ChatsPage> {
       if (!mounted) return;
       setState(() {
         _bulkActionBusy = false;
-        _refreshTick++;
+        _scheduleInboxReload();
       });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -991,32 +1044,37 @@ class _ChatsPageState extends State<ChatsPage> {
               ],
       ),
       body: FutureBuilder<ChatInboxData>(
-        future: ChatApi.fetchChats(widget.session, refreshTick: _refreshTick),
+        future: _inboxFuture,
+        initialData: _cachedInbox,
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
+          final error = snapshot.error;
+          if (snapshot.hasData) {
+            _cachedInbox = snapshot.data;
+          }
+          if (error is TurnaUnauthorizedException) {
+            return buildTurnaSessionExpiredRedirect(widget.onSessionExpired);
+          }
+
+          final inbox = snapshot.data ?? _cachedInbox;
+          if (snapshot.connectionState == ConnectionState.waiting &&
+              inbox == null) {
             return const Center(child: CircularProgressIndicator());
           }
 
-          if (snapshot.hasError) {
-            final error = snapshot.error;
-            final isAuthError = error is TurnaUnauthorizedException;
-            if (isAuthError) {
-              return buildTurnaSessionExpiredRedirect(widget.onSessionExpired);
-            }
+          if (error != null && inbox == null) {
             return _CenteredState(
               icon: Icons.cloud_off_outlined,
               title: 'Sohbetler yüklenemedi',
               message: error.toString(),
               primaryLabel: 'Tekrar dene',
-              onPrimary: () => setState(() => _refreshTick++),
+              onPrimary: _reloadInbox,
             );
           }
 
-          final inbox =
-              snapshot.data ??
-              ChatInboxData(chats: const [], folders: const []);
-          final chats = inbox.chats;
-          final folders = inbox.folders;
+          final resolvedInbox =
+              inbox ?? ChatInboxData(chats: const [], folders: const []);
+          final chats = resolvedInbox.chats;
+          final folders = resolvedInbox.folders;
           final hasSelectedFolder =
               _selectedFilterId == _allChatsFilterId ||
               folders.any((folder) => folder.id == _selectedFilterId);
@@ -1056,7 +1114,7 @@ class _ChatsPageState extends State<ChatsPage> {
               1 + (archivedTopVisible ? 1 : 0) + (filtersVisible ? 1 : 0);
 
           return RefreshIndicator(
-            onRefresh: () async => setState(() => _refreshTick++),
+            onRefresh: _reloadInbox,
             child: ListView.builder(
               physics: const AlwaysScrollableScrollPhysics(),
               itemCount: filteredChats.isEmpty
@@ -2133,10 +2191,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     Uri uri, {
     String errorMessage = 'Bağlantı açılamadı.',
   }) async {
-    final launched = await launchUrl(
-      uri,
-      mode: LaunchMode.externalApplication,
-    );
+    final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
     if (!mounted) return;
     if (!launched) {
       ScaffoldMessenger.of(
@@ -2146,19 +2201,17 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   }
 
   String _stripLinksFromText(String text) {
-    return text.replaceAll(_kTurnaSharedUrlPattern, '').replaceAll(
-      RegExp(r'\s+'),
-      ' ',
-    ).trim();
+    return text
+        .replaceAll(_kTurnaSharedUrlPattern, '')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
   }
 
   Widget _buildLinkifiedMessageText(String text, {required bool mine}) {
     final baseStyle = TextStyle(
       fontSize: 16,
       height: 1.28,
-      color: mine
-          ? TurnaColors.chatOutgoingText
-          : TurnaColors.chatIncomingText,
+      color: mine ? TurnaColors.chatOutgoingText : TurnaColors.chatIncomingText,
     );
     final matches = _kTurnaSharedUrlPattern.allMatches(text).toList();
     if (matches.isEmpty) {
@@ -2194,7 +2247,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       spans.add(TextSpan(text: text.substring(cursor)));
     }
 
-    return RichText(text: TextSpan(style: baseStyle, children: spans));
+    return RichText(
+      text: TextSpan(style: baseStyle, children: spans),
+    );
   }
 
   String _timelineCreatedAt(_ChatTimelineEntry entry) {
@@ -2311,9 +2366,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       widget.onSessionExpired();
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Konum gönderilemedi: $error')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Konum gönderilemedi: $error')));
     } finally {
       if (mounted) {
         setState(() => _attachmentBusy = false);
@@ -2360,9 +2415,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       widget.onSessionExpired();
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Kişi gönderilemedi: $error')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Kişi gönderilemedi: $error')));
     } finally {
       if (mounted) {
         setState(() => _attachmentBusy = false);
@@ -2382,9 +2437,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     try {
       await TurnaLiveLocationManager.instance.stopShare(msg.id);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Canlı konum durduruldu.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Canlı konum durduruldu.')));
     } finally {
       if (mounted) {
         setState(() => _attachmentBusy = false);
@@ -2483,9 +2538,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       setState(() => _voiceRecorderBusy = false);
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(
-        const SnackBar(content: Text('Ses kaydı başlatılamadı.')),
-      );
+      ).showSnackBar(const SnackBar(content: Text('Ses kaydı başlatılamadı.')));
       turnaLog('voice record start failed', error);
     }
   }
@@ -2886,7 +2939,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     ChatMessage? targetMessage,
   }) {
     if (targetMessage != null) {
-      return targetMessage.senderId == widget.session.userId ? 'Siz' : _chatDisplayName;
+      return targetMessage.senderId == widget.session.userId
+          ? 'Siz'
+          : _chatDisplayName;
     }
     final label = reply.senderLabel.trim();
     return label == 'Sen' ? 'Siz' : label;
@@ -2975,7 +3030,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       final parsed = parseTurnaMessageText(message.text);
       if (_isMessageDeletedPlaceholder(message, parsed: parsed)) continue;
       for (final attachment in message.attachments) {
-        if (!_isImageAttachment(attachment) && !_isVideoAttachment(attachment)) {
+        if (!_isImageAttachment(attachment) &&
+            !_isVideoAttachment(attachment)) {
           continue;
         }
         final url = attachment.url?.trim() ?? '';
@@ -3472,15 +3528,16 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     final isStarred = _starredMessageIds.contains(msg.id);
     final textOnly = parsed.text.trim();
     final canEdit = _canEditMessage(msg, parsed: parsed);
-    final visualAttachment = attachment != null &&
+    final visualAttachment =
+        attachment != null &&
             (_isImageAttachment(attachment) || _isVideoAttachment(attachment))
         ? attachment
         : msg.attachments.cast<ChatAttachment?>().firstWhere(
-              (item) =>
-                  item != null &&
-                  (_isImageAttachment(item) || _isVideoAttachment(item)),
-              orElse: () => null,
-            );
+            (item) =>
+                item != null &&
+                (_isImageAttachment(item) || _isVideoAttachment(item)),
+            orElse: () => null,
+          );
     await showModalBottomSheet<void>(
       context: context,
       builder: (sheetContext) {
@@ -4139,7 +4196,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                         replyTarget,
                       ),
                       authToken: widget.session.token,
-                      onTap: () => _scrollToReplyTarget(parsed.reply!.messageId),
+                      onTap: () =>
+                          _scrollToReplyTarget(parsed.reply!.messageId),
                     );
                   },
                 ),
@@ -4169,7 +4227,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                       ? embeddedFooterPlain
                       : null,
                 ),
-                if (hasText || hasLocation || hasContact) const SizedBox(height: 8),
+                if (hasText || hasLocation || hasContact)
+                  const SizedBox(height: 8),
               ],
               if (locationPayload != null) ...[
                 _TurnaLocationMessageCard(
@@ -4178,8 +4237,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                   messageId: msg.id,
                   liveClient: _client,
                   overlayFooter: useEmbeddedMediaBubble ? embeddedFooter : null,
-                  onStopShare:
-                      mine && locationPayload.isLiveActive
+                  onStopShare: mine && locationPayload.isLiveActive
                       ? () => _stopLiveLocation(msg, locationPayload)
                       : null,
                 ),
@@ -4859,10 +4917,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                 const Text(
                   'Hazırlanıyor...',
                   textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 15,
-                    color: TurnaColors.textMuted,
-                  ),
+                  style: TextStyle(fontSize: 15, color: TurnaColors.textMuted),
                 ),
                 const SizedBox(height: 10),
                 Container(
@@ -5403,10 +5458,7 @@ class _MessageMetaFooter extends StatelessWidget {
         ],
         Text(
           edited ? 'düzenlendi $timeLabel' : timeLabel,
-          style: TextStyle(
-            fontSize: 11,
-            color: textColor,
-          ),
+          style: TextStyle(fontSize: 11, color: textColor),
         ),
         if (mine) ...[
           const SizedBox(width: 6),
@@ -5770,13 +5822,13 @@ class _ReplySnippetCard extends StatelessWidget {
     final accent = repliedToCurrentUser
         ? const Color(0xFF1976D2)
         : const Color(0xFFD35F49);
-    final background = mine
-        ? const Color(0xFFD8EDC7)
-        : const Color(0xFFF4F5F7);
+    final background = mine ? const Color(0xFFD8EDC7) : const Color(0xFFF4F5F7);
     final textColor = TurnaColors.text;
     final attachment = previewAttachment;
     final hasThumbnail = attachment != null;
-    final mediaLabel = reply.previewText.trim().isEmpty ? 'Medya' : reply.previewText;
+    final mediaLabel = reply.previewText.trim().isEmpty
+        ? 'Medya'
+        : reply.previewText;
 
     return Material(
       color: Colors.transparent,
@@ -5895,9 +5947,7 @@ class _ReplySnippetThumbnail extends StatelessWidget {
                       decoration: BoxDecoration(color: Color(0xFFBEC5C8)),
                     ),
                   ),
-                  Container(
-                    color: Colors.black.withValues(alpha: 0.16),
-                  ),
+                  Container(color: Colors.black.withValues(alpha: 0.16)),
                   const Center(
                     child: Icon(
                       Icons.play_circle_fill_rounded,
@@ -5946,7 +5996,10 @@ class _TurnaMessageLinkPreviewCard extends StatelessWidget {
         final preview = snapshot.data;
         final host = preview?.host.isNotEmpty == true
             ? preview!.host
-            : uri.host.replaceFirst(RegExp(r'^www\.', caseSensitive: false), '');
+            : uri.host.replaceFirst(
+                RegExp(r'^www\.', caseSensitive: false),
+                '',
+              );
         final title = (preview?.title.trim().isNotEmpty ?? false)
             ? preview!.title.trim()
             : (host.isEmpty ? uri.toString() : host);
@@ -5980,7 +6033,9 @@ class _TurnaMessageLinkPreviewCard extends StatelessWidget {
                     alignment: Alignment.center,
                     child: Icon(
                       Icons.link_rounded,
-                      color: mine ? TurnaColors.primary800 : TurnaColors.primary,
+                      color: mine
+                          ? TurnaColors.primary800
+                          : TurnaColors.primary,
                       size: 22,
                     ),
                   ),
@@ -6010,7 +6065,9 @@ class _TurnaMessageLinkPreviewCard extends StatelessWidget {
                           style: TextStyle(
                             fontSize: 12.5,
                             color: mine
-                                ? TurnaColors.chatOutgoingText.withValues(alpha: 0.72)
+                                ? TurnaColors.chatOutgoingText.withValues(
+                                    alpha: 0.72,
+                                  )
                                 : TurnaColors.textMuted,
                           ),
                         ),
@@ -6377,17 +6434,17 @@ class _VoiceMessageBubbleState extends State<_VoiceMessageBubble> {
     } catch (error) {
       turnaLog('voice playback failed', error);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Ses kaydı oynatılamadı.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Ses kaydı oynatılamadı.')));
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final showOverlay = widget.overlayFooter != null;
-    final progress =
-        (_position.inMilliseconds / _effectiveDurationMillis).clamp(0.0, 1.0);
+    final progress = (_position.inMilliseconds / _effectiveDurationMillis)
+        .clamp(0.0, 1.0);
     final backgroundColor = showOverlay
         ? (widget.mine ? TurnaColors.chatOutgoing : Colors.white)
         : (widget.mine
@@ -6498,8 +6555,9 @@ class _VoiceMessageBubbleState extends State<_VoiceMessageBubble> {
                                       child: LinearProgressIndicator(
                                         minHeight: 3,
                                         value: progress,
-                                        backgroundColor: accentColor
-                                            .withValues(alpha: 0.16),
+                                        backgroundColor: accentColor.withValues(
+                                          alpha: 0.16,
+                                        ),
                                         valueColor:
                                             AlwaysStoppedAnimation<Color>(
                                               accentColor,
@@ -6780,7 +6838,9 @@ class _ChatAttachmentList extends StatelessWidget {
             attachment: attachment,
             mine: mine,
             authToken: authToken,
-            onLongPress: onLongPress == null ? null : () => onLongPress!(attachment),
+            onLongPress: onLongPress == null
+                ? null
+                : () => onLongPress!(attachment),
             overlayFooter: showOverlay
                 ? (audioOverlayFooter ?? overlayFooter)
                 : null,
@@ -6794,7 +6854,9 @@ class _ChatAttachmentList extends StatelessWidget {
             child: InkWell(
               borderRadius: BorderRadius.circular(22),
               onTap: () => onTap(attachment),
-              onLongPress: onLongPress == null ? null : () => onLongPress!(attachment),
+              onLongPress: onLongPress == null
+                  ? null
+                  : () => onLongPress!(attachment),
               child: SizedBox(
                 width: 220,
                 height: 220,
@@ -6815,7 +6877,9 @@ class _ChatAttachmentList extends StatelessWidget {
                                 imageUrl: imageUrl,
                                 fit: BoxFit.cover,
                                 loading: const Center(
-                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
                                 ),
                                 error: const Center(
                                   child: Icon(Icons.broken_image_outlined),
@@ -6849,11 +6913,7 @@ class _ChatAttachmentList extends StatelessWidget {
                         ),
                       ),
                     if (showOverlay)
-                      Positioned(
-                        right: 8,
-                        bottom: 8,
-                        child: overlayFooter!,
-                      ),
+                      Positioned(right: 8, bottom: 8, child: overlayFooter!),
                   ],
                 ),
               ),
@@ -6867,7 +6927,9 @@ class _ChatAttachmentList extends StatelessWidget {
             padding: EdgeInsets.only(bottom: showOverlay ? 0 : 8),
             child: InkWell(
               onTap: () => onTap(attachment),
-              onLongPress: onLongPress == null ? null : () => onLongPress!(attachment),
+              onLongPress: onLongPress == null
+                  ? null
+                  : () => onLongPress!(attachment),
               borderRadius: BorderRadius.circular(22),
               child: SizedBox(
                 width: 220,
@@ -6965,11 +7027,7 @@ class _ChatAttachmentList extends StatelessWidget {
                         ),
                       ),
                       if (showOverlay)
-                        Positioned(
-                          right: 8,
-                          bottom: 8,
-                          child: overlayFooter!,
-                        ),
+                        Positioned(right: 8, bottom: 8, child: overlayFooter!),
                     ],
                   ),
                 ),
@@ -6982,7 +7040,9 @@ class _ChatAttachmentList extends StatelessWidget {
           padding: const EdgeInsets.only(bottom: 8),
           child: InkWell(
             onTap: () => onTap(attachment),
-            onLongPress: onLongPress == null ? null : () => onLongPress!(attachment),
+            onLongPress: onLongPress == null
+                ? null
+                : () => onLongPress!(attachment),
             borderRadius: BorderRadius.circular(14),
             child: Container(
               width: 220,
@@ -7080,7 +7140,8 @@ class ChatAttachmentViewerPage extends StatefulWidget {
   final Future<void> Function(ChatMessage message)? onDeleteForMe;
 
   @override
-  State<ChatAttachmentViewerPage> createState() => _ChatAttachmentViewerPageState();
+  State<ChatAttachmentViewerPage> createState() =>
+      _ChatAttachmentViewerPageState();
 }
 
 class _ChatAttachmentViewerPageState extends State<ChatAttachmentViewerPage> {
@@ -7322,8 +7383,8 @@ class _ChatAttachmentViewerPageState extends State<ChatAttachmentViewerPage> {
           opaque: false,
           transitionDuration: const Duration(milliseconds: 180),
           reverseTransitionDuration: const Duration(milliseconds: 160),
-          transitionsBuilder:
-              (context, animation, secondaryAnimation, child) => FadeTransition(
+          transitionsBuilder: (context, animation, secondaryAnimation, child) =>
+              FadeTransition(
                 opacity: CurvedAnimation(
                   parent: animation,
                   curve: Curves.easeOut,
@@ -7706,10 +7767,7 @@ class _TurnaAttachmentVideoSurfaceState
   Widget build(BuildContext context) {
     if (_error != null) {
       return Center(
-        child: Text(
-          _error!,
-          style: const TextStyle(color: Colors.white),
-        ),
+        child: Text(_error!, style: const TextStyle(color: Colors.white)),
       );
     }
 
@@ -7875,7 +7933,10 @@ class _TurnaFullscreenVideoPageState extends State<_TurnaFullscreenVideoPage> {
       body: GestureDetector(
         onVerticalDragUpdate: (details) {
           setState(() {
-            _dragOffsetY = (_dragOffsetY + details.delta.dy).clamp(-260.0, 260.0);
+            _dragOffsetY = (_dragOffsetY + details.delta.dy).clamp(
+              -260.0,
+              260.0,
+            );
           });
         },
         onVerticalDragEnd: (details) {
@@ -7902,7 +7963,8 @@ class _TurnaFullscreenVideoPageState extends State<_TurnaFullscreenVideoPage> {
                       : FutureBuilder<void>(
                           future: initFuture,
                           builder: (context, snapshot) {
-                            if (snapshot.connectionState != ConnectionState.done ||
+                            if (snapshot.connectionState !=
+                                    ConnectionState.done ||
                                 !controller.value.isInitialized) {
                               return const CircularProgressIndicator(
                                 color: Colors.white,
@@ -7915,7 +7977,8 @@ class _TurnaFullscreenVideoPageState extends State<_TurnaFullscreenVideoPage> {
                                 children: [
                                   Center(
                                     child: AspectRatio(
-                                      aspectRatio: controller.value.aspectRatio <= 0
+                                      aspectRatio:
+                                          controller.value.aspectRatio <= 0
                                           ? 16 / 9
                                           : controller.value.aspectRatio,
                                       child: vp.VideoPlayer(controller),
@@ -7926,7 +7989,9 @@ class _TurnaFullscreenVideoPageState extends State<_TurnaFullscreenVideoPage> {
                                       width: 84,
                                       height: 84,
                                       decoration: BoxDecoration(
-                                        color: Colors.black.withValues(alpha: 0.38),
+                                        color: Colors.black.withValues(
+                                          alpha: 0.38,
+                                        ),
                                         shape: BoxShape.circle,
                                       ),
                                       child: const Icon(

@@ -1087,6 +1087,9 @@ class PresenceSocketClient {
     this.onCallDeclined,
     this.onCallMissed,
     this.onCallEnded,
+    this.onCallVideoUpgradeRequested,
+    this.onCallVideoUpgradeAccepted,
+    this.onCallVideoUpgradeDeclined,
   });
 
   final String token;
@@ -1097,6 +1100,10 @@ class PresenceSocketClient {
   final void Function(Map<String, dynamic> payload)? onCallDeclined;
   final void Function(Map<String, dynamic> payload)? onCallMissed;
   final void Function(Map<String, dynamic> payload)? onCallEnded;
+  final void Function(Map<String, dynamic> payload)?
+  onCallVideoUpgradeRequested;
+  final void Function(Map<String, dynamic> payload)? onCallVideoUpgradeAccepted;
+  final void Function(Map<String, dynamic> payload)? onCallVideoUpgradeDeclined;
   io.Socket? _socket;
   Timer? _refreshDebounce;
 
@@ -1184,6 +1191,24 @@ class PresenceSocketClient {
       if (map == null) return;
       turnaLog('presence call:ended received', map);
       onCallEnded?.call(map);
+    });
+    _socket!.on('call:video-upgrade:requested', (data) {
+      final map = _asMap(data);
+      if (map == null) return;
+      turnaLog('presence call:video-upgrade:requested received', map);
+      onCallVideoUpgradeRequested?.call(map);
+    });
+    _socket!.on('call:video-upgrade:accepted', (data) {
+      final map = _asMap(data);
+      if (map == null) return;
+      turnaLog('presence call:video-upgrade:accepted received', map);
+      onCallVideoUpgradeAccepted?.call(map);
+    });
+    _socket!.on('call:video-upgrade:declined', (data) {
+      final map = _asMap(data);
+      if (map == null) return;
+      turnaLog('presence call:video-upgrade:declined received', map);
+      onCallVideoUpgradeDeclined?.call(map);
     });
 
     _socket!.connect();
@@ -2483,6 +2508,16 @@ class ProfileApi {
           return 'Bu arama artik cevaplanamaz.';
         case 'call_not_active':
           return 'Arama zaten sonlanmış.';
+        case 'call_not_accepted':
+          return 'Bu işlem sadece aktif görüşmede yapılabilir.';
+        case 'call_already_video':
+          return 'Görüşme zaten görüntülü.';
+        case 'video_upgrade_request_conflict':
+          return 'Zaten bekleyen bir görüntülü arama isteği var.';
+        case 'call_no_pending_video_upgrade':
+          return 'Bekleyen görüntülü arama isteği bulunamadı.';
+        case 'video_upgrade_invalid_request':
+          return 'Bu görüntülü arama isteği geçersiz.';
         case 'account_suspended':
           return 'Hesap geçici olarak durduruldu.';
         case 'account_banned':
@@ -3126,6 +3161,32 @@ class TurnaCallSummary {
   final TurnaCallPeer caller;
   final TurnaCallPeer callee;
 
+  TurnaCallSummary copyWith({
+    TurnaCallType? type,
+    TurnaCallStatus? status,
+    String? acceptedAt,
+    bool clearAcceptedAt = false,
+    String? endedAt,
+    bool clearEndedAt = false,
+  }) {
+    return TurnaCallSummary(
+      id: id,
+      callerId: callerId,
+      calleeId: calleeId,
+      type: type ?? this.type,
+      status: status ?? this.status,
+      provider: provider,
+      direction: direction,
+      peer: peer,
+      caller: caller,
+      callee: callee,
+      roomName: roomName,
+      createdAt: createdAt,
+      acceptedAt: clearAcceptedAt ? null : (acceptedAt ?? this.acceptedAt),
+      endedAt: clearEndedAt ? null : (endedAt ?? this.endedAt),
+    );
+  }
+
   factory TurnaCallSummary.fromMap(Map<String, dynamic> map) {
     return TurnaCallSummary(
       id: (map['id'] ?? '').toString(),
@@ -3292,10 +3353,64 @@ class TurnaTerminalCallEvent {
   }
 }
 
+class TurnaCallVideoUpgradeRequestEvent {
+  TurnaCallVideoUpgradeRequestEvent({
+    required this.call,
+    required this.requestId,
+    required this.requestedByUserId,
+  });
+
+  final TurnaCallSummary call;
+  final String requestId;
+  final String requestedByUserId;
+
+  factory TurnaCallVideoUpgradeRequestEvent.fromMap(Map<String, dynamic> map) {
+    return TurnaCallVideoUpgradeRequestEvent(
+      call: TurnaCallSummary.fromMap(
+        Map<String, dynamic>.from(map['call'] as Map? ?? const {}),
+      ),
+      requestId: (map['requestId'] ?? '').toString(),
+      requestedByUserId: (map['requestedByUserId'] ?? '').toString(),
+    );
+  }
+}
+
+class TurnaCallVideoUpgradeResolutionEvent {
+  TurnaCallVideoUpgradeResolutionEvent({
+    required this.kind,
+    required this.call,
+    required this.requestId,
+    required this.actedByUserId,
+  });
+
+  final String kind;
+  final TurnaCallSummary call;
+  final String requestId;
+  final String actedByUserId;
+
+  factory TurnaCallVideoUpgradeResolutionEvent.fromMap(
+    String kind,
+    Map<String, dynamic> map,
+  ) {
+    return TurnaCallVideoUpgradeResolutionEvent(
+      kind: kind,
+      call: TurnaCallSummary.fromMap(
+        Map<String, dynamic>.from(map['call'] as Map? ?? const {}),
+      ),
+      requestId: (map['requestId'] ?? '').toString(),
+      actedByUserId: (map['actedByUserId'] ?? '').toString(),
+    );
+  }
+}
+
 class TurnaCallCoordinator extends ChangeNotifier {
   TurnaIncomingCallEvent? _pendingIncoming;
   final Map<String, TurnaAcceptedCallEvent> _acceptedEvents = {};
   final Map<String, TurnaTerminalCallEvent> _terminalEvents = {};
+  final Map<String, TurnaCallVideoUpgradeRequestEvent> _videoUpgradeRequests =
+      {};
+  final Map<String, TurnaCallVideoUpgradeResolutionEvent>
+  _videoUpgradeResolutions = {};
 
   void handleIncoming(Map<String, dynamic> payload) {
     _pendingIncoming = TurnaIncomingCallEvent.fromMap(payload);
@@ -3326,6 +3441,30 @@ class TurnaCallCoordinator extends ChangeNotifier {
     notifyListeners();
   }
 
+  void handleVideoUpgradeRequested(Map<String, dynamic> payload) {
+    final event = TurnaCallVideoUpgradeRequestEvent.fromMap(payload);
+    _videoUpgradeRequests[event.call.id] = event;
+    notifyListeners();
+  }
+
+  void handleVideoUpgradeAccepted(Map<String, dynamic> payload) {
+    final event = TurnaCallVideoUpgradeResolutionEvent.fromMap(
+      'accepted',
+      payload,
+    );
+    _videoUpgradeResolutions[event.call.id] = event;
+    notifyListeners();
+  }
+
+  void handleVideoUpgradeDeclined(Map<String, dynamic> payload) {
+    final event = TurnaCallVideoUpgradeResolutionEvent.fromMap(
+      'declined',
+      payload,
+    );
+    _videoUpgradeResolutions[event.call.id] = event;
+    notifyListeners();
+  }
+
   TurnaIncomingCallEvent? takeIncomingCall() {
     final event = _pendingIncoming;
     _pendingIncoming = null;
@@ -3340,12 +3479,24 @@ class TurnaCallCoordinator extends ChangeNotifier {
     return _terminalEvents.remove(callId);
   }
 
+  TurnaCallVideoUpgradeRequestEvent? consumeVideoUpgradeRequest(String callId) {
+    return _videoUpgradeRequests.remove(callId);
+  }
+
+  TurnaCallVideoUpgradeResolutionEvent? consumeVideoUpgradeResolution(
+    String callId,
+  ) {
+    return _videoUpgradeResolutions.remove(callId);
+  }
+
   void clearCall(String callId) {
     if (_pendingIncoming?.call.id == callId) {
       _pendingIncoming = null;
     }
     _acceptedEvents.remove(callId);
     _terminalEvents.remove(callId);
+    _videoUpgradeRequests.remove(callId);
+    _videoUpgradeResolutions.remove(callId);
   }
 }
 
@@ -3916,32 +4067,60 @@ class _OutgoingCallPageState extends State<OutgoingCallPage> {
   Widget build(BuildContext context) {
     final call = widget.initialCall;
     return Scaffold(
-      backgroundColor: const Color(0xFF0F1112),
+      backgroundColor: const Color(0xFF101314),
       body: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Stack(
+          padding: const EdgeInsets.fromLTRB(24, 18, 24, 28),
+          child: Column(
             children: [
-              Center(
-                child: _CallIdentityPanel(
-                  authToken: widget.session.token,
-                  displayName: call.peer.displayName,
-                  avatarUrl: call.peer.avatarUrl,
-                  subtitle: call.type == TurnaCallType.video
-                      ? 'Görüntülü arama çalıyor...'
-                      : 'Sesli arama çalıyor...',
+              const SizedBox(height: 8),
+              Text(
+                call.peer.displayName,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 28,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
-              Align(
-                alignment: Alignment.bottomCenter,
-                child: Padding(
-                  padding: const EdgeInsets.only(bottom: 24),
-                  child: FloatingActionButton(
-                    backgroundColor: Colors.red.shade400,
-                    onPressed: _ending ? null : _cancelCall,
-                    child: const Icon(Icons.call_end, color: Colors.white),
+              const SizedBox(height: 6),
+              Text(
+                call.type == TurnaCallType.video
+                    ? 'Görüntülü arama çalıyor...'
+                    : 'Sesli arama çalıyor...',
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Color(0xFFB7BCB9), fontSize: 16),
+              ),
+              Expanded(
+                child: Center(
+                  child: _ProfileAvatar(
+                    label: call.peer.displayName,
+                    avatarUrl: call.peer.avatarUrl,
+                    authToken: widget.session.token,
+                    radius: 66,
                   ),
                 ),
+              ),
+              _AudioCallControlDock(
+                children: [
+                  const _AudioCallControlButton(
+                    onTap: null,
+                    icon: Icon(Icons.videocam_outlined),
+                  ),
+                  const _AudioCallControlButton(
+                    onTap: null,
+                    icon: Icon(Icons.hearing_rounded),
+                  ),
+                  const _AudioCallControlButton(
+                    onTap: null,
+                    icon: Icon(Icons.mic_none_rounded),
+                  ),
+                  _AudioCallControlButton(
+                    onTap: _ending ? null : _cancelCall,
+                    icon: const Icon(Icons.call_end_rounded),
+                    destructive: true,
+                  ),
+                ],
               ),
             ],
           ),
@@ -4031,7 +4210,7 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
   });
 
   final TurnaCallConnectPayload connectPayload;
-  final bool videoEnabled;
+  bool videoEnabled;
   lk.Room? _room;
   lk.EventsListener<lk.RoomEvent>? _listener;
   bool connecting = false;
@@ -4373,6 +4552,7 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
   }
 
   Future<void> toggleCamera() async {
+    if (!videoEnabled) return;
     final next = !cameraEnabled;
     final localParticipant = room.localParticipant;
     if (localParticipant == null) return;
@@ -4392,6 +4572,36 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
     } else {
       await localParticipant.setCameraEnabled(false);
       cameraEnabled = false;
+    }
+    notifyListeners();
+  }
+
+  Future<void> enableVideoMode({bool enableCamera = true}) async {
+    if (videoEnabled) {
+      if (enableCamera && connected && !cameraEnabled) {
+        await toggleCamera();
+      }
+      return;
+    }
+
+    videoEnabled = true;
+    notifyListeners();
+
+    if (!connected || !enableCamera) return;
+    final localParticipant = room.localParticipant;
+    if (localParticipant == null || cameraEnabled) return;
+
+    final enabled = await _enableCameraWithFallback(
+      localParticipant,
+      origin: 'video_upgrade_accept',
+    );
+    cameraEnabled = enabled;
+    if (enabled) {
+      if (mediaError == 'Kamera acilamadi.') {
+        mediaError = null;
+      }
+    } else {
+      mediaError = 'Kamera acilamadi.';
     }
     notifyListeners();
   }
@@ -4524,11 +4734,12 @@ class TurnaManagedCallSession extends ChangeNotifier {
   TurnaManagedCallSession({
     required this.session,
     required this.coordinator,
-    required this.call,
+    required TurnaCallSummary call,
     required this.connect,
     required this.onSessionExpired,
     this.returnChatOnExit,
-  }) : adapter = LiveKitCallAdapter(
+  }) : _call = call,
+       adapter = LiveKitCallAdapter(
          connectPayload: connect,
          videoEnabled: call.type == TurnaCallType.video,
        ) {
@@ -4543,24 +4754,41 @@ class TurnaManagedCallSession extends ChangeNotifier {
 
   final AuthSession session;
   final TurnaCallCoordinator coordinator;
-  final TurnaCallSummary call;
   final TurnaCallConnectPayload connect;
   final VoidCallback onSessionExpired;
   final ChatPreview? returnChatOnExit;
   final LiveKitCallAdapter adapter;
+  TurnaCallSummary _call;
 
   bool _started = false;
   bool _ended = false;
   bool _reportedConnected = false;
   bool presentingFullScreen = false;
   String? terminalMessage;
+  String? noticeMessage;
+  int _noticeRevision = 0;
   int _durationSeconds = 0;
   Timer? _durationTicker;
   bool _wakeLockHeld = false;
+  TurnaCallVideoUpgradeRequestEvent? _pendingVideoUpgradeRequest;
+  String? _outgoingVideoUpgradeRequestId;
 
+  TurnaCallSummary get call => _call;
   bool get ended => _ended;
   int get durationSeconds => _durationSeconds;
   String get _wakeLockReason => 'active-call:${call.id}';
+  int get noticeRevision => _noticeRevision;
+  TurnaCallVideoUpgradeRequestEvent? get pendingVideoUpgradeRequest =>
+      _pendingVideoUpgradeRequest;
+  String? get outgoingVideoUpgradeRequestId => _outgoingVideoUpgradeRequestId;
+  bool get isVideoUpgradePending =>
+      (_outgoingVideoUpgradeRequestId ?? '').isNotEmpty ||
+      _pendingVideoUpgradeRequest != null;
+  bool get canRequestVideoUpgrade =>
+      !_ended &&
+      adapter.connected &&
+      call.type == TurnaCallType.audio &&
+      !isVideoUpgradePending;
 
   String formatDuration() {
     final minutes = (_durationSeconds ~/ 60).toString().padLeft(2, '0');
@@ -4599,6 +4827,54 @@ class TurnaManagedCallSession extends ChangeNotifier {
     kTurnaCallUiController.clearEndedSession(this);
   }
 
+  Future<void> requestVideoUpgrade() async {
+    if (!canRequestVideoUpgrade) return;
+    try {
+      final request = await CallApi.requestVideoUpgrade(
+        session,
+        callId: call.id,
+      );
+      _outgoingVideoUpgradeRequestId = request.requestId;
+      _pushNotice('Görüntülü arama isteği gönderildi.');
+      notifyListeners();
+    } on TurnaUnauthorizedException {
+      onSessionExpired();
+    } catch (error) {
+      _pushNotice(error.toString());
+      notifyListeners();
+    }
+  }
+
+  Future<void> respondVideoUpgrade({required bool accept}) async {
+    final request = _pendingVideoUpgradeRequest;
+    if (request == null) return;
+
+    try {
+      if (accept) {
+        final accepted = await CallApi.acceptVideoUpgrade(
+          session,
+          callId: call.id,
+          requestId: request.requestId,
+        );
+        _pendingVideoUpgradeRequest = null;
+        _applyVideoUpgrade(accepted.call);
+      } else {
+        await CallApi.declineVideoUpgrade(
+          session,
+          callId: call.id,
+          requestId: request.requestId,
+        );
+        _pendingVideoUpgradeRequest = null;
+      }
+      notifyListeners();
+    } on TurnaUnauthorizedException {
+      onSessionExpired();
+    } catch (error) {
+      _pushNotice(error.toString());
+      notifyListeners();
+    }
+  }
+
   void _handleAdapterChanged() {
     if (adapter.connected && !_reportedConnected) {
       _reportedConnected = true;
@@ -4608,6 +4884,31 @@ class TurnaManagedCallSession extends ChangeNotifier {
   }
 
   void _handleCoordinatorChanged() {
+    final requested = coordinator.consumeVideoUpgradeRequest(call.id);
+    if (requested != null && !_ended) {
+      if (requested.requestedByUserId == session.userId) {
+        _outgoingVideoUpgradeRequestId = requested.requestId;
+      } else {
+        _pendingVideoUpgradeRequest = requested;
+      }
+      notifyListeners();
+    }
+
+    final upgradeResolution = coordinator.consumeVideoUpgradeResolution(
+      call.id,
+    );
+    if (upgradeResolution != null && !_ended) {
+      _outgoingVideoUpgradeRequestId = null;
+      _pendingVideoUpgradeRequest = null;
+      if (upgradeResolution.kind == 'accepted') {
+        _applyVideoUpgrade(upgradeResolution.call);
+        _pushNotice('Görüntülü aramaya geçildi.');
+      } else if (upgradeResolution.actedByUserId != session.userId) {
+        _pushNotice('Görüntülü arama isteği reddedildi.');
+      }
+      notifyListeners();
+    }
+
     final terminal = coordinator.consumeTerminal(call.id);
     if (terminal == null || _ended) return;
     coordinator.clearCall(call.id);
@@ -4622,6 +4923,27 @@ class TurnaManagedCallSession extends ChangeNotifier {
     unawaited(TurnaNativeCallManager.endCallUi(call.id));
     notifyListeners();
     kTurnaCallUiController.clearEndedSession(this);
+  }
+
+  void _applyVideoUpgrade(TurnaCallSummary nextCall) {
+    _call = _call.copyWith(
+      type: nextCall.type,
+      status: nextCall.status,
+      acceptedAt: nextCall.acceptedAt,
+      endedAt: nextCall.endedAt,
+      clearAcceptedAt: nextCall.acceptedAt == null,
+      clearEndedAt: nextCall.endedAt == null,
+    );
+    if (nextCall.type == TurnaCallType.video) {
+      unawaited(adapter.enableVideoMode());
+    }
+  }
+
+  void _pushNotice(String message) {
+    final trimmed = message.trim();
+    if (trimmed.isEmpty) return;
+    noticeMessage = trimmed;
+    _noticeRevision++;
   }
 
   void _acquireWakeLock() {
@@ -4812,6 +5134,79 @@ class _MiniCallOverlay extends StatelessWidget {
   }
 }
 
+class _AudioCallControlDock extends StatelessWidget {
+  const _AudioCallControlDock({required this.children});
+
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.42),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (var index = 0; index < children.length; index++) ...[
+            children[index],
+            if (index != children.length - 1) const SizedBox(width: 12),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _AudioCallControlButton extends StatelessWidget {
+  const _AudioCallControlButton({
+    this.onTap,
+    this.icon,
+    this.child,
+    this.active = false,
+    this.destructive = false,
+  });
+
+  final VoidCallback? onTap;
+  final Widget? icon;
+  final Widget? child;
+  final bool active;
+  final bool destructive;
+
+  @override
+  Widget build(BuildContext context) {
+    final backgroundColor = destructive
+        ? const Color(0xFFFF445A)
+        : active
+        ? Colors.white.withValues(alpha: 0.18)
+        : const Color(0xFF2A2D31);
+    final foregroundColor = onTap == null && !destructive
+        ? Colors.white38
+        : Colors.white;
+
+    return SizedBox(
+      width: 48,
+      height: 48,
+      child: Material(
+        color: backgroundColor,
+        shape: const CircleBorder(),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: Center(
+            child: IconTheme(
+              data: IconThemeData(size: 24, color: foregroundColor),
+              child: child ?? icon ?? const SizedBox.shrink(),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class ActiveCallPage extends StatefulWidget {
   const ActiveCallPage({super.key, required this.callSession});
 
@@ -4828,6 +5223,9 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
   bool _ending = false;
   bool _handledSessionEnd = false;
   bool _leaving = false;
+  bool _showingVideoUpgradeDialog = false;
+  int _lastNoticeRevision = 0;
+  String? _lastHandledVideoUpgradeRequestId;
   bool _showLocalVideoPrimary = false;
   _CallPreviewCorner _previewCorner = _CallPreviewCorner.topRight;
   Offset? _previewDragTopLeft;
@@ -4870,7 +5268,65 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
       _leaveCallView();
       return;
     }
+    _maybeShowUpgradeNotice();
+    _maybeShowVideoUpgradeDialog();
     if (mounted) setState(() {});
+  }
+
+  void _maybeShowUpgradeNotice() {
+    if (!mounted || _callSession.noticeRevision == _lastNoticeRevision) return;
+    _lastNoticeRevision = _callSession.noticeRevision;
+    final message = _callSession.noticeMessage?.trim();
+    if (message == null || message.isEmpty) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  void _maybeShowVideoUpgradeDialog() {
+    final request = _callSession.pendingVideoUpgradeRequest;
+    if (!mounted ||
+        request == null ||
+        request.requestId == _lastHandledVideoUpgradeRequestId ||
+        _showingVideoUpgradeDialog) {
+      return;
+    }
+
+    _showingVideoUpgradeDialog = true;
+    _lastHandledVideoUpgradeRequestId = request.requestId;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) {
+        _showingVideoUpgradeDialog = false;
+        return;
+      }
+
+      final accepted = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) {
+          return AlertDialog(
+            title: const Text('Görüntülü arama isteği'),
+            content: Text(
+              '${request.call.peer.displayName} görüntülü aramaya geçmek istiyor.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('Reddet'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                child: const Text('Onayla'),
+              ),
+            ],
+          );
+        },
+      );
+
+      _showingVideoUpgradeDialog = false;
+      if (!mounted) return;
+      await _callSession.respondVideoUpgrade(accept: accepted == true);
+    });
   }
 
   void _leaveCallView() {
@@ -4911,6 +5367,10 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
     if (mounted) {
       _leaveCallView();
     }
+  }
+
+  Future<void> _requestVideoUpgrade() async {
+    await _callSession.requestVideoUpgrade();
   }
 
   void _toggleVideoSwap() {
@@ -5068,6 +5528,98 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
     );
   }
 
+  Widget _buildAudioCallScreen(LiveKitCallAdapter adapter) {
+    final requestPending = _callSession.outgoingVideoUpgradeRequestId != null;
+    final cameraEnabled =
+        _callSession.canRequestVideoUpgrade && !requestPending;
+    final statusText = adapter.connecting
+        ? 'Bağlanıyor...'
+        : (adapter.connected ? _callSession.formatDuration() : 'Aranıyor...');
+
+    return Scaffold(
+      backgroundColor: const Color(0xFF101314),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 18, 24, 28),
+          child: Column(
+            children: [
+              const SizedBox(height: 8),
+              Text(
+                _callSession.call.peer.displayName,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 28,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                statusText,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Color(0xFFB7BCB9), fontSize: 16),
+              ),
+              Expanded(
+                child: Center(
+                  child: _ProfileAvatar(
+                    label: _callSession.call.peer.displayName,
+                    avatarUrl: _callSession.call.peer.avatarUrl,
+                    authToken: _callSession.session.token,
+                    radius: 66,
+                  ),
+                ),
+              ),
+              _AudioCallControlDock(
+                children: [
+                  _AudioCallControlButton(
+                    onTap: cameraEnabled ? _requestVideoUpgrade : null,
+                    icon: requestPending
+                        ? null
+                        : const Icon(Icons.videocam_outlined),
+                    child: requestPending
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : null,
+                  ),
+                  _AudioCallControlButton(
+                    onTap: adapter.connecting
+                        ? null
+                        : () => adapter.toggleSpeaker(),
+                    icon: Icon(
+                      adapter.speakerEnabled
+                          ? Icons.volume_up_rounded
+                          : Icons.hearing_rounded,
+                    ),
+                    active: adapter.speakerEnabled,
+                  ),
+                  _AudioCallControlButton(
+                    onTap: adapter.connecting
+                        ? null
+                        : () => adapter.toggleMicrophone(),
+                    icon: Icon(
+                      adapter.microphoneEnabled
+                          ? Icons.mic_none_rounded
+                          : Icons.mic_off_rounded,
+                    ),
+                    active: !adapter.microphoneEnabled,
+                  ),
+                  _AudioCallControlButton(
+                    onTap: _ending ? null : _endCall,
+                    icon: const Icon(Icons.call_end_rounded),
+                    destructive: true,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildVideoPreviewCard({required Widget child, Widget? overlay}) {
     return Material(
       color: Colors.black,
@@ -5121,6 +5673,18 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
     final remoteVideo = adapter.primaryRemoteVideoTrack;
     final localVideo = adapter.localVideoTrack;
     final isVideo = _callSession.call.type == TurnaCallType.video;
+    if (!isVideo) {
+      return PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, _) {
+          if (!didPop) {
+            _leaveCallView();
+          }
+        },
+        child: _buildAudioCallScreen(adapter),
+      );
+    }
+
     final canSwapVideoViews = isVideo && localVideo != null;
     final showLocalVideoPrimary = canSwapVideoViews && _showLocalVideoPrimary;
     final localPreviewMirrorMode =
@@ -5420,6 +5984,79 @@ class CallApi {
       rethrow;
     } catch (_) {
       throw TurnaApiException('Arama sonlandırılamadı.');
+    }
+  }
+
+  static Future<TurnaCallVideoUpgradeRequestEvent> requestVideoUpgrade(
+    AuthSession session, {
+    required String callId,
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse('$kBackendBaseUrl/api/calls/$callId/video-upgrade/request'),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+      );
+      ChatApi._throwIfApiError(res);
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = Map<String, dynamic>.from(map['data'] as Map? ?? const {});
+      return TurnaCallVideoUpgradeRequestEvent.fromMap(data);
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Görüntülü arama isteği gönderilemedi.');
+    }
+  }
+
+  static Future<TurnaCallVideoUpgradeResolutionEvent> acceptVideoUpgrade(
+    AuthSession session, {
+    required String callId,
+    required String requestId,
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse('$kBackendBaseUrl/api/calls/$callId/video-upgrade/accept'),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'requestId': requestId}),
+      );
+      ChatApi._throwIfApiError(res);
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = Map<String, dynamic>.from(map['data'] as Map? ?? const {});
+      return TurnaCallVideoUpgradeResolutionEvent.fromMap('accepted', data);
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Görüntülü arama isteği kabul edilemedi.');
+    }
+  }
+
+  static Future<TurnaCallVideoUpgradeResolutionEvent> declineVideoUpgrade(
+    AuthSession session, {
+    required String callId,
+    required String requestId,
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse('$kBackendBaseUrl/api/calls/$callId/video-upgrade/decline'),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'requestId': requestId}),
+      );
+      ChatApi._throwIfApiError(res);
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = Map<String, dynamic>.from(map['data'] as Map? ?? const {});
+      return TurnaCallVideoUpgradeResolutionEvent.fromMap('declined', data);
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Görüntülü arama isteği reddedilemedi.');
     }
   }
 
