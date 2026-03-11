@@ -3529,8 +3529,12 @@ class _CallsPageState extends State<CallsPage> {
             child: ListView.separated(
               physics: const AlwaysScrollableScrollPhysics(),
               itemCount: calls.length,
-              separatorBuilder: (context, index) =>
-                  const Divider(height: 1, indent: 76, endIndent: 16),
+              separatorBuilder: (context, index) => const Divider(
+                height: 1,
+                indent: 76,
+                endIndent: 16,
+                color: Color(0x12000000),
+              ),
               itemBuilder: (context, index) {
                 final item = calls[index];
                 final isStartingCall = _startingCallHistoryId == item.id;

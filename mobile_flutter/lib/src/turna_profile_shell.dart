@@ -17,33 +17,43 @@ class SettingsPage extends StatefulWidget {
 }
 
 class _SettingsPageState extends State<SettingsPage> {
-  late Future<TurnaUserProfile> _profileFuture;
+  late TurnaUserProfile _profile;
 
   @override
   void initState() {
     super.initState();
-    _profileFuture = ProfileApi.fetchMe(widget.session);
+    _profile = _profileFromSession(widget.session);
   }
 
   @override
   void didUpdateWidget(covariant SettingsPage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.session.userId != widget.session.userId ||
-        oldWidget.session.token != widget.session.token) {
-      _profileFuture = ProfileApi.fetchMe(widget.session);
-    }
+    _profile = _profileFromSession(widget.session, previous: _profile);
   }
 
-  void _reloadProfile() {
-    setState(() {
-      _profileFuture = ProfileApi.fetchMe(widget.session);
-    });
+  TurnaUserProfile _profileFromSession(
+    AuthSession session, {
+    TurnaUserProfile? previous,
+  }) {
+    return TurnaUserProfile(
+      id: session.userId,
+      displayName: session.displayName,
+      username: session.username,
+      phone: session.phone,
+      about: previous?.about,
+      email: previous?.email,
+      avatarUrl: session.avatarUrl,
+      onboardingCompletedAt: previous?.onboardingCompletedAt,
+      createdAt: previous?.createdAt,
+    );
   }
 
   Future<void> _openPage(Widget page) async {
     await Navigator.push(context, MaterialPageRoute(builder: (_) => page));
     if (!mounted) return;
-    _reloadProfile();
+    setState(() {
+      _profile = _profileFromSession(widget.session, previous: _profile);
+    });
   }
 
   Future<void> _openProfileEditor() async {
@@ -90,7 +100,12 @@ class _SettingsPageState extends State<SettingsPage> {
               onTap: actions[index].onTap,
             ),
             if (index != actions.length - 1)
-              const Divider(height: 1, indent: 58, endIndent: 18),
+              Divider(
+                height: 1,
+                indent: 58,
+                endIndent: 18,
+                color: Colors.black.withValues(alpha: 0.06),
+              ),
           ],
         ],
       ),
@@ -99,207 +114,176 @@ class _SettingsPageState extends State<SettingsPage> {
 
   @override
   Widget build(BuildContext context) {
+    final about = _profile.about?.trim();
+    final statusText = (about != null && about.isNotEmpty)
+        ? about
+        : 'Şu anki ruh halim';
+    final displayName = _profile.displayName;
+    final avatarUrl = _profile.avatarUrl ?? widget.session.avatarUrl;
+
     return Scaffold(
       backgroundColor: TurnaColors.backgroundSoft,
       body: SafeArea(
-        child: FutureBuilder<TurnaUserProfile>(
-          future: _profileFuture,
-          builder: (context, snapshot) {
-            final profile = snapshot.data;
-            final about = profile?.about?.trim();
-            final statusText = (about != null && about.isNotEmpty)
-                ? about
-                : 'Şu anki ruh halim';
-            final displayName =
-                profile?.displayName ?? widget.session.displayName;
-            final avatarUrl = profile?.avatarUrl ?? widget.session.avatarUrl;
-
-            return ListView(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
+          children: [
+            Row(
               children: [
-                Row(
-                  children: [
-                    IconButton(
-                      onPressed: () {},
-                      visualDensity: VisualDensity.compact,
-                      icon: const Icon(Icons.search_rounded, size: 23),
-                    ),
-                    const Spacer(),
-                    IconButton(
-                      onPressed: () {},
-                      visualDensity: VisualDensity.compact,
-                      icon: const Icon(Icons.qr_code_scanner_rounded, size: 22),
-                    ),
-                  ],
+                IconButton(
+                  onPressed: () {},
+                  visualDensity: VisualDensity.compact,
+                  icon: const Icon(Icons.search_rounded, size: 23),
                 ),
-                const SizedBox(height: 8),
-                Center(
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 10,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(999),
-                      boxShadow: const [TurnaColors.shadowSoft],
-                    ),
-                    child: Text(
-                      statusText,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: TurnaColors.textMuted,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
+                const Spacer(),
+                IconButton(
+                  onPressed: () {},
+                  visualDensity: VisualDensity.compact,
+                  icon: const Icon(Icons.qr_code_scanner_rounded, size: 22),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Center(
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 10,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(999),
+                  boxShadow: const [TurnaColors.shadowSoft],
+                ),
+                child: Text(
+                  statusText,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: TurnaColors.textMuted,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
-                const SizedBox(height: 12),
-                InkWell(
-                  onTap: _openProfileEditor,
-                  borderRadius: BorderRadius.circular(32),
-                  child: Column(
-                    children: [
-                      _ProfileAvatar(
-                        label: displayName,
-                        avatarUrl: avatarUrl,
-                        authToken: widget.session.token,
-                        radius: 44,
-                      ),
-                      const SizedBox(height: 10),
-                      Text(
-                        displayName,
-                        style: const TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.w700,
-                          color: TurnaColors.text,
-                        ),
-                      ),
-                    ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            InkWell(
+              onTap: _openProfileEditor,
+              borderRadius: BorderRadius.circular(32),
+              child: Column(
+                children: [
+                  _ProfileAvatar(
+                    label: displayName,
+                    avatarUrl: avatarUrl,
+                    authToken: widget.session.token,
+                    radius: 44,
                   ),
-                ),
-                if (snapshot.hasError) ...[
                   const SizedBox(height: 10),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 14,
-                      vertical: 12,
-                    ),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFFF1F0),
-                      borderRadius: BorderRadius.circular(18),
-                    ),
-                    child: Text(
-                      snapshot.error.toString(),
-                      style: const TextStyle(
-                        color: Color(0xFFC0392B),
-                        fontSize: 13,
-                      ),
+                  Text(
+                    displayName,
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w700,
+                      color: TurnaColors.text,
                     ),
                   ),
                 ],
-                const SizedBox(height: 22),
-                const Padding(
-                  padding: EdgeInsets.only(left: 2, bottom: 8),
-                  child: Text(
-                    'Ayarlar',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: TurnaColors.textMuted,
-                    ),
-                  ),
+              ),
+            ),
+            const SizedBox(height: 22),
+            const Padding(
+              padding: EdgeInsets.only(left: 2, bottom: 8),
+              child: Text(
+                'Ayarlar',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: TurnaColors.textMuted,
                 ),
-                _buildSectionPanel([
-                  _SettingsMenuAction(
-                    icon: Icons.campaign_outlined,
-                    label: 'Toplu mesajlar',
-                    onTap: () => _openPage(
-                      const PlaceholderPage(title: 'Toplu mesajlar'),
-                    ),
-                  ),
-                  _SettingsMenuAction(
-                    icon: Icons.star_border_rounded,
-                    label: 'Yıldızlı',
-                    onTap: () =>
-                        _openPage(const PlaceholderPage(title: 'Yıldızlı')),
-                  ),
-                  _SettingsMenuAction(
-                    icon: Icons.devices_outlined,
-                    label: 'Bağlı cihazlar',
-                    onTap: () => _openPage(
-                      const PlaceholderPage(title: 'Bağlı cihazlar'),
-                    ),
-                  ),
-                ]),
-                const SizedBox(height: 18),
-                _buildSectionPanel([
-                  _SettingsMenuAction(
-                    icon: Icons.key_outlined,
-                    label: 'Hesap',
-                    onTap: () => _openPage(const AccountPage()),
-                  ),
-                  _SettingsMenuAction(
-                    icon: Icons.lock_outline_rounded,
-                    label: 'Gizlilik',
-                    onTap: () =>
-                        _openPage(const PlaceholderPage(title: 'Gizlilik')),
-                  ),
-                  _SettingsMenuAction(
-                    icon: Icons.chat_bubble_outline_rounded,
-                    label: 'Sohbetler',
-                    onTap: () =>
-                        _openPage(const PlaceholderPage(title: 'Sohbetler')),
-                  ),
-                  _SettingsMenuAction(
-                    icon: Icons.notifications_none_rounded,
-                    label: 'Bildirimler',
-                    onTap: () =>
-                        _openPage(const PlaceholderPage(title: 'Bildirimler')),
-                  ),
-                  _SettingsMenuAction(
-                    icon: Icons.swap_vert_rounded,
-                    label: 'Depolama ve veriler',
-                    onTap: () => _openPage(
-                      const PlaceholderPage(title: 'Depolama ve veriler'),
-                    ),
-                  ),
-                ]),
-                const SizedBox(height: 18),
-                _buildSectionPanel([
-                  _SettingsMenuAction(
-                    icon: Icons.help_outline_rounded,
-                    label: 'Yardım ve geri bildirim',
-                    onTap: () => _openPage(
-                      const PlaceholderPage(title: 'Yardım ve geri bildirim'),
-                    ),
-                  ),
-                  _SettingsMenuAction(
-                    icon: Icons.person_add_alt_1_outlined,
-                    label: 'Arkadaşlarınızı davet edin',
-                    onTap: () => _openPage(
-                      const PlaceholderPage(
-                        title: 'Arkadaşlarınızı davet edin',
-                      ),
-                    ),
-                  ),
-                ]),
-                const SizedBox(height: 20),
-                TextButton.icon(
-                  onPressed: widget.onLogout,
-                  icon: const Icon(Icons.logout_rounded),
-                  label: const Text('Cikis yap'),
-                  style: TextButton.styleFrom(
-                    foregroundColor: const Color(0xFFE25241),
-                    alignment: Alignment.centerLeft,
-                    padding: const EdgeInsets.symmetric(horizontal: 6),
-                  ),
+              ),
+            ),
+            _buildSectionPanel([
+              _SettingsMenuAction(
+                icon: Icons.campaign_outlined,
+                label: 'Toplu mesajlar',
+                onTap: () =>
+                    _openPage(const PlaceholderPage(title: 'Toplu mesajlar')),
+              ),
+              _SettingsMenuAction(
+                icon: Icons.star_border_rounded,
+                label: 'Yıldızlı',
+                onTap: () =>
+                    _openPage(const PlaceholderPage(title: 'Yıldızlı')),
+              ),
+              _SettingsMenuAction(
+                icon: Icons.devices_outlined,
+                label: 'Bağlı cihazlar',
+                onTap: () =>
+                    _openPage(const PlaceholderPage(title: 'Bağlı cihazlar')),
+              ),
+            ]),
+            const SizedBox(height: 18),
+            _buildSectionPanel([
+              _SettingsMenuAction(
+                icon: Icons.key_outlined,
+                label: 'Hesap',
+                onTap: () => _openPage(const AccountPage()),
+              ),
+              _SettingsMenuAction(
+                icon: Icons.lock_outline_rounded,
+                label: 'Gizlilik',
+                onTap: () =>
+                    _openPage(const PlaceholderPage(title: 'Gizlilik')),
+              ),
+              _SettingsMenuAction(
+                icon: Icons.chat_bubble_outline_rounded,
+                label: 'Sohbetler',
+                onTap: () =>
+                    _openPage(const PlaceholderPage(title: 'Sohbetler')),
+              ),
+              _SettingsMenuAction(
+                icon: Icons.notifications_none_rounded,
+                label: 'Bildirimler',
+                onTap: () =>
+                    _openPage(const PlaceholderPage(title: 'Bildirimler')),
+              ),
+              _SettingsMenuAction(
+                icon: Icons.swap_vert_rounded,
+                label: 'Depolama ve veriler',
+                onTap: () => _openPage(
+                  const PlaceholderPage(title: 'Depolama ve veriler'),
                 ),
-              ],
-            );
-          },
+              ),
+            ]),
+            const SizedBox(height: 18),
+            _buildSectionPanel([
+              _SettingsMenuAction(
+                icon: Icons.help_outline_rounded,
+                label: 'Yardım ve geri bildirim',
+                onTap: () => _openPage(
+                  const PlaceholderPage(title: 'Yardım ve geri bildirim'),
+                ),
+              ),
+              _SettingsMenuAction(
+                icon: Icons.person_add_alt_1_outlined,
+                label: 'Arkadaşlarınızı davet edin',
+                onTap: () => _openPage(
+                  const PlaceholderPage(title: 'Arkadaşlarınızı davet edin'),
+                ),
+              ),
+            ]),
+            const SizedBox(height: 20),
+            TextButton.icon(
+              onPressed: widget.onLogout,
+              icon: const Icon(Icons.logout_rounded),
+              label: const Text('Cikis yap'),
+              style: TextButton.styleFrom(
+                foregroundColor: const Color(0xFFE25241),
+                alignment: Alignment.centerLeft,
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+              ),
+            ),
+          ],
         ),
       ),
     );
