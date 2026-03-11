@@ -10,8 +10,8 @@ const List<Color> _kStatusTextBackgrounds = <Color>[
 ];
 const double _kStatusCaptureBottomInset = 132;
 const double _kStatusGalleryPanelHeight = 328;
-const int _kStatusGalleryPageSize = 60;
-const Size _kStatusGalleryThumbSize = Size(240, 240);
+const int _kStatusGalleryPageSize = 24;
+const Size _kStatusGalleryThumbSize = Size(160, 160);
 const Size _kStatusCollageOutputSize = Size(1080, 1920);
 
 List<cam.CameraDescription>? _kStatusCameraCache;
@@ -769,6 +769,12 @@ class _StatusCapturePageState extends State<StatusCapturePage>
       preferredLensDirection: cam.CameraLensDirection.back,
     );
     if (!mounted) return;
+    unawaited(_loadGalleryAfterWarmup());
+  }
+
+  Future<void> _loadGalleryAfterWarmup() async {
+    await Future<void>.delayed(const Duration(milliseconds: 220));
+    if (!mounted) return;
     await _loadGallery();
   }
 
@@ -823,12 +829,18 @@ class _StatusCapturePageState extends State<StatusCapturePage>
         throw TurnaApiException('Kamera bulunamadi.');
       }
       final selected = _pickCamera(cameras, preferredLensDirection);
+      final isVideoMode = _mode == _StatusCaptureMode.video;
+      final resolutionPreset = Platform.isIOS
+          ? (isVideoMode
+                ? cam.ResolutionPreset.medium
+                : cam.ResolutionPreset.high)
+          : (isVideoMode
+                ? cam.ResolutionPreset.high
+                : cam.ResolutionPreset.veryHigh);
       final controller = cam.CameraController(
         selected,
-        _mode == _StatusCaptureMode.video
-            ? cam.ResolutionPreset.high
-            : cam.ResolutionPreset.veryHigh,
-        enableAudio: _mode == _StatusCaptureMode.video,
+        resolutionPreset,
+        enableAudio: isVideoMode,
       );
       _cameras = cameras;
       _selectedCamera = selected;
@@ -837,6 +849,13 @@ class _StatusCapturePageState extends State<StatusCapturePage>
         try {
           await controller.setFlashMode(cam.FlashMode.off);
         } catch (_) {}
+        if (!Platform.isIOS) {
+          try {
+            await controller.lockCaptureOrientation(
+              DeviceOrientation.portraitUp,
+            );
+          } catch (_) {}
+        }
       });
       await _cameraInitFuture;
       await previous?.dispose();
@@ -851,6 +870,7 @@ class _StatusCapturePageState extends State<StatusCapturePage>
       turnaLog('status camera init success', {
         'lensDirection': selected.lensDirection.name,
         'aspectRatio': controller.value.aspectRatio,
+        'resolutionPreset': resolutionPreset.name,
       });
     } catch (error) {
       await previous?.dispose();
@@ -869,6 +889,7 @@ class _StatusCapturePageState extends State<StatusCapturePage>
 
   Future<void> _loadGallery() async {
     if (!mounted) return;
+    turnaLog('status gallery load start');
     setState(() {
       _galleryLoading = true;
       _galleryError = null;
@@ -901,7 +922,9 @@ class _StatusCapturePageState extends State<StatusCapturePage>
         _galleryLoading = false;
         _galleryError = null;
       });
+      turnaLog('status gallery load success', {'count': assets.length});
     } catch (error) {
+      turnaLog('status gallery load failed', {'error': '$error'});
       if (!mounted) return;
       setState(() {
         _galleryLoading = false;
@@ -1278,13 +1301,16 @@ class _StatusCapturePageState extends State<StatusCapturePage>
     if (previewSize == null) {
       return const SizedBox.expand(child: ColoredBox(color: Colors.black));
     }
-    return SizedBox.expand(
-      child: Center(
-        child: AspectRatio(
-          aspectRatio: controller.value.aspectRatio == 0
-              ? (previewSize.height / previewSize.width)
-              : controller.value.aspectRatio,
-          child: cam.CameraPreview(controller),
+    return ClipRect(
+      child: OverflowBox(
+        alignment: Alignment.center,
+        child: FittedBox(
+          fit: BoxFit.cover,
+          child: SizedBox(
+            width: previewSize.height,
+            height: previewSize.width,
+            child: cam.CameraPreview(controller),
+          ),
         ),
       ),
     );
