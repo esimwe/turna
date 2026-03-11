@@ -3367,6 +3367,7 @@ class CallsPage extends StatefulWidget {
 
 class _CallsPageState extends State<CallsPage> {
   int _refreshTick = 0;
+  String? _startingCallHistoryId;
 
   @override
   void initState() {
@@ -3383,6 +3384,83 @@ class _CallsPageState extends State<CallsPage> {
   void _onCallUpdate() {
     if (!mounted) return;
     setState(() => _refreshTick++);
+  }
+
+  Future<void> _openPeerProfile(TurnaCallHistoryItem item) async {
+    final peerId = item.peer.id.trim();
+    if (peerId.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Kişi bilgisi açılamadı.')));
+      return;
+    }
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => UserProfilePage(
+          session: widget.session,
+          userId: peerId,
+          fallbackName: item.peer.displayName,
+          fallbackAvatarUrl: item.peer.avatarUrl,
+          callCoordinator: widget.callCoordinator,
+          onSessionExpired: widget.onSessionExpired,
+        ),
+      ),
+    );
+
+    if (!mounted) return;
+    setState(() => _refreshTick++);
+  }
+
+  Future<void> _startCall(TurnaCallHistoryItem item) async {
+    final peerId = item.peer.id.trim();
+    if (peerId.isEmpty || _startingCallHistoryId == item.id) {
+      if (peerId.isEmpty) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Arama başlatılamadı.')));
+      }
+      return;
+    }
+
+    setState(() => _startingCallHistoryId = item.id);
+
+    try {
+      final started = await CallApi.startCall(
+        widget.session,
+        calleeId: peerId,
+        type: item.type,
+      );
+      if (!mounted) return;
+
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => OutgoingCallPage(
+            session: widget.session,
+            coordinator: widget.callCoordinator,
+            initialCall: started,
+            onSessionExpired: widget.onSessionExpired,
+          ),
+        ),
+      );
+
+      if (!mounted) return;
+      setState(() => _refreshTick++);
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    } finally {
+      if (mounted && _startingCallHistoryId == item.id) {
+        setState(() => _startingCallHistoryId = null);
+      }
+    }
   }
 
   String _formatTime(String? iso) {
@@ -3414,7 +3492,7 @@ class _CallsPageState extends State<CallsPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Calls')),
+      appBar: AppBar(title: const Text('Aramalar')),
       body: FutureBuilder<List<TurnaCallHistoryItem>>(
         future: CallApi.fetchCalls(widget.session, refreshTick: _refreshTick),
         builder: (context, snapshot) {
@@ -3453,10 +3531,12 @@ class _CallsPageState extends State<CallsPage> {
               itemCount: calls.length,
               itemBuilder: (context, index) {
                 final item = calls[index];
+                final isStartingCall = _startingCallHistoryId == item.id;
                 final isMissed =
                     item.status == TurnaCallStatus.missed ||
                     item.status == TurnaCallStatus.declined;
                 return ListTile(
+                  onTap: () => _openPeerProfile(item),
                   leading: _ProfileAvatar(
                     label: item.peer.displayName,
                     avatarUrl: item.peer.avatarUrl,
@@ -3488,25 +3568,43 @@ class _CallsPageState extends State<CallsPage> {
                       ),
                     ],
                   ),
-                  trailing: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Text(
-                        _formatTime(item.createdAt),
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Color(0xFF777C79),
+                  trailing: SizedBox(
+                    width: 58,
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          _formatTime(item.createdAt),
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Color(0xFF777C79),
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 6),
-                      Icon(
-                        item.type == TurnaCallType.video
-                            ? Icons.videocam_outlined
-                            : Icons.call_outlined,
-                        color: const Color(0xFF777C79),
-                      ),
-                    ],
+                        const SizedBox(height: 2),
+                        IconButton(
+                          onPressed: isStartingCall
+                              ? null
+                              : () => _startCall(item),
+                          visualDensity: VisualDensity.compact,
+                          splashRadius: 18,
+                          icon: isStartingCall
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : Icon(
+                                  item.type == TurnaCallType.video
+                                      ? Icons.videocam_outlined
+                                      : Icons.call_outlined,
+                                  color: const Color(0xFF777C79),
+                                ),
+                        ),
+                      ],
+                    ),
                   ),
                 );
               },
@@ -4782,13 +4880,19 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
   }
 
   Offset _previewAnchorOffset(Size size, _CallPreviewCorner corner) {
-    final maxLeft = math.max(_previewMargin, size.width - _previewMargin - _previewWidth);
+    final maxLeft = math.max(
+      _previewMargin,
+      size.width - _previewMargin - _previewWidth,
+    );
     final bottomTop = math.max(
       _previewMargin,
       size.height - _previewBottomReserved - _previewHeight,
     );
     return switch (corner) {
-      _CallPreviewCorner.topLeft => const Offset(_previewMargin, _previewMargin),
+      _CallPreviewCorner.topLeft => const Offset(
+        _previewMargin,
+        _previewMargin,
+      ),
       _CallPreviewCorner.topRight => Offset(maxLeft, _previewMargin),
       _CallPreviewCorner.bottomLeft => Offset(_previewMargin, bottomTop),
       _CallPreviewCorner.bottomRight => Offset(maxLeft, bottomTop),
@@ -4796,7 +4900,10 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
   }
 
   Offset _clampPreviewOffset(Size size, Offset value) {
-    final maxLeft = math.max(_previewMargin, size.width - _previewMargin - _previewWidth);
+    final maxLeft = math.max(
+      _previewMargin,
+      size.width - _previewMargin - _previewWidth,
+    );
     final maxTop = math.max(
       _previewMargin,
       size.height - _previewBottomReserved - _previewHeight,
@@ -4812,7 +4919,8 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
   }
 
   void _updatePreviewDrag(Size size, DragUpdateDetails details) {
-    final base = _previewDragTopLeft ?? _previewAnchorOffset(size, _previewCorner);
+    final base =
+        _previewDragTopLeft ?? _previewAnchorOffset(size, _previewCorner);
     setState(() {
       _previewDragTopLeft = _clampPreviewOffset(size, base + details.delta);
     });
@@ -4822,13 +4930,14 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
     final dragTopLeft = _previewDragTopLeft;
     if (dragTopLeft == null) return;
 
-    final targetCenter = dragTopLeft +
-        const Offset(_previewWidth / 2, _previewHeight / 2);
+    final targetCenter =
+        dragTopLeft + const Offset(_previewWidth / 2, _previewHeight / 2);
     _CallPreviewCorner? snappedCorner;
     var snappedDistance = double.infinity;
 
     for (final corner in _CallPreviewCorner.values) {
-      final cornerCenter = _previewAnchorOffset(size, corner) +
+      final cornerCenter =
+          _previewAnchorOffset(size, corner) +
           const Offset(_previewWidth / 2, _previewHeight / 2);
       final distance = (cornerCenter - targetCenter).distance;
       if (distance < snappedDistance) {
@@ -4916,10 +5025,7 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
     );
   }
 
-  Widget _buildVideoPreviewCard({
-    required Widget child,
-    Widget? overlay,
-  }) {
+  Widget _buildVideoPreviewCard({required Widget child, Widget? overlay}) {
     return Material(
       color: Colors.black,
       borderRadius: BorderRadius.circular(18),
@@ -5027,7 +5133,8 @@ class _ActiveCallPageState extends State<ActiveCallPage> {
           builder: (context, constraints) {
             final viewport = Size(constraints.maxWidth, constraints.maxHeight);
             final previewOffset =
-                _previewDragTopLeft ?? _previewAnchorOffset(viewport, _previewCorner);
+                _previewDragTopLeft ??
+                _previewAnchorOffset(viewport, _previewCorner);
             return Positioned(
               left: previewOffset.dx,
               top: previewOffset.dy,
