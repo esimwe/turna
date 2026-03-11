@@ -4247,7 +4247,10 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
     for (final participant in currentRoom.remoteParticipants.values) {
       for (final publication in participant.videoTrackPublications) {
         final track = publication.track;
-        if (track is lk.VideoTrack && publication.subscribed) {
+        if (track is lk.VideoTrack &&
+            publication.subscribed &&
+            !publication.muted &&
+            publication.streamState == lk.StreamState.active) {
           return track;
         }
       }
@@ -4484,6 +4487,9 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
         ..on<lk.ParticipantDisconnectedEvent>((_) => notifyListeners())
         ..on<lk.TrackSubscribedEvent>((_) => notifyListeners())
         ..on<lk.TrackUnsubscribedEvent>((_) => notifyListeners())
+        ..on<lk.TrackMutedEvent>((_) => notifyListeners())
+        ..on<lk.TrackUnmutedEvent>((_) => notifyListeners())
+        ..on<lk.TrackStreamStateUpdatedEvent>((_) => notifyListeners())
         ..on<lk.LocalTrackPublishedEvent>((_) => notifyListeners())
         ..on<lk.LocalTrackUnpublishedEvent>((_) => notifyListeners())
         ..on<lk.ParticipantConnectionQualityUpdatedEvent>(
