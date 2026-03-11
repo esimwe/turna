@@ -456,12 +456,12 @@ class TurnaPaymentToolsPage extends StatelessWidget {
 
   Widget _buildSectionLabel(String label) {
     return Padding(
-      padding: const EdgeInsets.only(left: 2, bottom: 10),
+      padding: const EdgeInsets.only(left: 2, bottom: 6),
       child: Text(
         label,
         style: const TextStyle(
           color: TurnaColors.textMuted,
-          fontSize: 13,
+          fontSize: 12,
           fontWeight: FontWeight.w700,
           letterSpacing: 0.2,
         ),
@@ -471,7 +471,7 @@ class TurnaPaymentToolsPage extends StatelessWidget {
 
   Widget _buildToolCard(BuildContext context, _TurnaPaymentToolItem item) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.only(bottom: 8),
       child: Material(
         color: Colors.transparent,
         child: InkWell(
@@ -484,20 +484,20 @@ class TurnaPaymentToolsPage extends StatelessWidget {
               boxShadow: const [TurnaColors.shadowSoft],
             ),
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
               child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   Container(
-                    width: 52,
-                    height: 52,
+                    width: 46,
+                    height: 46,
                     decoration: BoxDecoration(
                       color: item.color.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(18),
+                      borderRadius: BorderRadius.circular(16),
                     ),
-                    child: Icon(item.icon, color: item.color, size: 28),
+                    child: Icon(item.icon, color: item.color, size: 24),
                   ),
-                  const SizedBox(width: 14),
+                  const SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -506,31 +506,34 @@ class TurnaPaymentToolsPage extends StatelessWidget {
                           item.title,
                           style: const TextStyle(
                             color: TurnaColors.text,
-                            fontSize: 17,
+                            fontSize: 16,
                             fontWeight: FontWeight.w800,
                           ),
                         ),
-                        const SizedBox(height: 6),
+                        const SizedBox(height: 4),
                         Text(
                           item.shortDescription,
                           style: const TextStyle(
                             color: TurnaColors.textMuted,
-                            fontSize: 14,
-                            height: 1.35,
+                            fontSize: 13,
+                            height: 1.22,
                           ),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ],
                     ),
                   ),
-                  const SizedBox(width: 10),
+                  const SizedBox(width: 8),
                   Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
                       _TurnaPaymentStatusChip(
                         label: item.status,
                         color: item.color,
                       ),
-                      const SizedBox(height: 14),
+                      const SizedBox(height: 10),
                       Icon(
                         Icons.chevron_right_rounded,
                         color: Colors.black.withValues(alpha: 0.34),
@@ -552,15 +555,15 @@ class TurnaPaymentToolsPage extends StatelessWidget {
       backgroundColor: TurnaColors.backgroundSoft,
       body: SafeArea(
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
           children: [
             const TurnaOdemeHeaderMock(),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
             _buildSectionLabel('Araçlar'),
             for (final item in _tools) _buildToolCard(context, item),
-            const SizedBox(height: 8),
+            const SizedBox(height: 2),
             Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8),
+              padding: const EdgeInsets.symmetric(vertical: 4),
               child: Row(
                 children: [
                   Expanded(
@@ -589,7 +592,7 @@ class TurnaPaymentToolsPage extends StatelessWidget {
                 ],
               ),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 2),
             _buildToolCard(context, _supportItem),
           ],
         ),
@@ -610,17 +613,17 @@ class _TurnaOdemeHeaderMockState extends State<TurnaOdemeHeaderMock> {
   Widget build(BuildContext context) {
     return Container(
       color: const Color(0xFFF7F9FC),
-      padding: const EdgeInsets.fromLTRB(0, 0, 0, 12),
+      padding: const EdgeInsets.fromLTRB(0, 0, 0, 8),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Expanded(
             child: Padding(
-              padding: EdgeInsets.only(top: 6),
+              padding: EdgeInsets.only(top: 4),
               child: Text(
                 'Turna Ödeme',
                 style: TextStyle(
-                  fontSize: 30,
+                  fontSize: 28,
                   fontWeight: FontWeight.w700,
                   color: Color(0xFF0F172A),
                   letterSpacing: -0.4,
@@ -639,7 +642,7 @@ class _TurnaOdemeHeaderMockState extends State<TurnaOdemeHeaderMock> {
       borderRadius: BorderRadius.circular(18),
       onTap: () => _showWalletModal(context),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(18),
@@ -657,17 +660,17 @@ class _TurnaOdemeHeaderMockState extends State<TurnaOdemeHeaderMock> {
           children: [
             Icon(
               Icons.account_balance_wallet_rounded,
-              size: 18,
+              size: 17,
               color: Color(0xFF2F80ED),
             ),
-            SizedBox(width: 8),
+            SizedBox(width: 6),
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
                   'Turna Cüzdan',
                   style: TextStyle(
-                    fontSize: 11,
+                    fontSize: 10,
                     fontWeight: FontWeight.w600,
                     color: Color(0xFF64748B),
                   ),
@@ -676,15 +679,15 @@ class _TurnaOdemeHeaderMockState extends State<TurnaOdemeHeaderMock> {
                 Text(
                   '0,00 ₺',
                   style: TextStyle(
-                    fontSize: 15,
+                    fontSize: 14,
                     fontWeight: FontWeight.w700,
                     color: Color(0xFF0F172A),
                   ),
                 ),
               ],
             ),
-            SizedBox(width: 10),
-            Icon(Icons.add_circle_rounded, size: 20, color: Color(0xFF00C2FF)),
+            SizedBox(width: 8),
+            Icon(Icons.add_circle_rounded, size: 18, color: Color(0xFF00C2FF)),
           ],
         ),
       ),
