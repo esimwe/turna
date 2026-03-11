@@ -2857,9 +2857,39 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     final mine = msg.senderId == widget.session.userId;
     return TurnaReplyPayload(
       messageId: msg.id,
-      senderLabel: mine ? 'Sen' : _chatDisplayName,
+      senderLabel: mine ? 'Siz' : _chatDisplayName,
       previewText: _previewSnippetForMessage(msg),
     );
+  }
+
+  ChatMessage? _findReplyTargetMessage(String messageId) {
+    for (final message in _client.messages) {
+      if (message.id == messageId && !_deletedMessageIds.contains(message.id)) {
+        return message;
+      }
+    }
+    return null;
+  }
+
+  ChatAttachment? _replyVisualAttachmentForMessage(ChatMessage? message) {
+    if (message == null) return null;
+    for (final attachment in message.attachments) {
+      if (_isImageAttachment(attachment) || _isVideoAttachment(attachment)) {
+        return attachment;
+      }
+    }
+    return null;
+  }
+
+  String _replySenderLabel(
+    TurnaReplyPayload reply, {
+    ChatMessage? targetMessage,
+  }) {
+    if (targetMessage != null) {
+      return targetMessage.senderId == widget.session.userId ? 'Siz' : _chatDisplayName;
+    }
+    final label = reply.senderLabel.trim();
+    return label == 'Sen' ? 'Siz' : label;
   }
 
   bool _canEditMessage(ChatMessage msg, {ParsedTurnaMessageText? parsed}) {
@@ -4089,10 +4119,29 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                   ),
                 ),
               if (parsed.reply != null && !isDeletedPlaceholder) ...[
-                _ReplySnippetCard(
-                  reply: parsed.reply!,
-                  mine: mine,
-                  onTap: () => _scrollToReplyTarget(parsed.reply!.messageId),
+                Builder(
+                  builder: (context) {
+                    final replyTarget = _findReplyTargetMessage(
+                      parsed.reply!.messageId,
+                    );
+                    return _ReplySnippetCard(
+                      reply: parsed.reply!,
+                      mine: mine,
+                      senderLabel: _replySenderLabel(
+                        parsed.reply!,
+                        targetMessage: replyTarget,
+                      ),
+                      repliedToCurrentUser: replyTarget != null
+                          ? replyTarget.senderId == widget.session.userId
+                          : parsed.reply!.senderLabel.trim() == 'Sen' ||
+                                parsed.reply!.senderLabel.trim() == 'Siz',
+                      previewAttachment: _replyVisualAttachmentForMessage(
+                        replyTarget,
+                      ),
+                      authToken: widget.session.token,
+                      onTap: () => _scrollToReplyTarget(parsed.reply!.messageId),
+                    );
+                  },
                 ),
                 if (hasText ||
                     hasLocation ||
@@ -5701,24 +5750,33 @@ class _ReplySnippetCard extends StatelessWidget {
   const _ReplySnippetCard({
     required this.reply,
     required this.mine,
+    required this.senderLabel,
+    required this.repliedToCurrentUser,
+    required this.authToken,
+    this.previewAttachment,
     this.onTap,
   });
 
   final TurnaReplyPayload reply;
   final bool mine;
+  final String senderLabel;
+  final bool repliedToCurrentUser;
+  final String authToken;
+  final ChatAttachment? previewAttachment;
   final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    final accent = mine
-        ? Colors.white.withValues(alpha: 0.85)
-        : TurnaColors.primary;
+    final accent = repliedToCurrentUser
+        ? const Color(0xFF1976D2)
+        : const Color(0xFFD35F49);
     final background = mine
-        ? Colors.white.withValues(alpha: 0.14)
-        : TurnaColors.primary50;
-    final textColor = mine
-        ? Colors.white.withValues(alpha: 0.95)
-        : TurnaColors.text;
+        ? const Color(0xFFD8EDC7)
+        : const Color(0xFFF4F5F7);
+    final textColor = TurnaColors.text;
+    final attachment = previewAttachment;
+    final hasThumbnail = attachment != null;
+    final mediaLabel = reply.previewText.trim().isEmpty ? 'Medya' : reply.previewText;
 
     return Material(
       color: Colors.transparent,
@@ -5749,30 +5807,114 @@ class _ReplySnippetCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      reply.senderLabel,
+                      senderLabel,
                       style: TextStyle(
                         color: accent,
-                        fontSize: 12,
+                        fontSize: 12.5,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
                     const SizedBox(height: 2),
-                    Text(
-                      reply.previewText,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: textColor.withValues(alpha: 0.92),
-                        fontSize: 12.5,
-                        height: 1.25,
-                      ),
+                    Row(
+                      children: [
+                        Icon(
+                          reply.previewText == 'Video'
+                              ? Icons.videocam_rounded
+                              : reply.previewText == 'Fotoğraf'
+                              ? Icons.photo_camera_rounded
+                              : Icons.subtitles_rounded,
+                          size: 18,
+                          color: textColor.withValues(alpha: 0.76),
+                        ),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Text(
+                            mediaLabel,
+                            maxLines: hasThumbnail ? 1 : 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: textColor.withValues(alpha: 0.92),
+                              fontSize: 12.5,
+                              height: 1.25,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
               ),
+              if (hasThumbnail) ...[
+                const SizedBox(width: 8),
+                _ReplySnippetThumbnail(
+                  attachment: attachment,
+                  authToken: authToken,
+                ),
+              ],
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _ReplySnippetThumbnail extends StatelessWidget {
+  const _ReplySnippetThumbnail({
+    required this.attachment,
+    required this.authToken,
+  });
+
+  final ChatAttachment attachment;
+  final String authToken;
+
+  @override
+  Widget build(BuildContext context) {
+    final cacheKey = 'attachment:${attachment.objectKey}';
+    final url = attachment.url?.trim() ?? '';
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: SizedBox(
+        width: 52,
+        height: 52,
+        child: _isVideoAttachment(attachment)
+            ? Stack(
+                fit: StackFit.expand,
+                children: [
+                  _TurnaVideoThumbnail(
+                    cacheKey: cacheKey,
+                    url: url,
+                    authToken: authToken,
+                    contentType: attachment.contentType,
+                    fileName: attachment.fileName,
+                    fit: BoxFit.cover,
+                    loading: const DecoratedBox(
+                      decoration: BoxDecoration(color: Color(0xFFBEC5C8)),
+                    ),
+                    error: const DecoratedBox(
+                      decoration: BoxDecoration(color: Color(0xFFBEC5C8)),
+                    ),
+                  ),
+                  Container(
+                    color: Colors.black.withValues(alpha: 0.16),
+                  ),
+                  const Center(
+                    child: Icon(
+                      Icons.play_circle_fill_rounded,
+                      color: Colors.white,
+                      size: 20,
+                    ),
+                  ),
+                ],
+              )
+            : _TurnaCachedImage(
+                cacheKey: cacheKey,
+                imageUrl: url,
+                authToken: authToken,
+                fit: BoxFit.cover,
+                loading: const ColoredBox(color: Color(0xFFBEC5C8)),
+                error: const ColoredBox(color: Color(0xFFBEC5C8)),
+              ),
       ),
     );
   }
@@ -5893,6 +6035,9 @@ class _ComposerReplyBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final senderLabel = reply.senderLabel.trim() == 'Sen'
+        ? 'Siz'
+        : reply.senderLabel;
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
       decoration: BoxDecoration(
@@ -5916,7 +6061,7 @@ class _ComposerReplyBanner extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Yanıtlanıyor: ${reply.senderLabel}',
+                  'Yanıtlanıyor: $senderLabel',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
