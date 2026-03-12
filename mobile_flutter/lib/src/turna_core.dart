@@ -322,6 +322,7 @@ class TurnaStatusItem {
     required this.createdAt,
     required this.expiresAt,
     this.text,
+    this.textLayout,
     this.backgroundColor,
     this.textColor,
     this.objectKey,
@@ -342,6 +343,7 @@ class TurnaStatusItem {
   final String createdAt;
   final String expiresAt;
   final String? text;
+  final TurnaStatusTextLayout? textLayout;
   final String? backgroundColor;
   final String? textColor;
   final String? objectKey;
@@ -369,6 +371,11 @@ class TurnaStatusItem {
       createdAt: (map['createdAt'] ?? '').toString(),
       expiresAt: (map['expiresAt'] ?? '').toString(),
       text: TurnaUserProfile._nullableString(map['text']),
+      textLayout: map['textLayout'] is Map
+          ? TurnaStatusTextLayout.fromMap(
+              Map<String, dynamic>.from(map['textLayout'] as Map),
+            )
+          : null,
       backgroundColor: TurnaUserProfile._nullableString(map['backgroundColor']),
       textColor: TurnaUserProfile._nullableString(map['textColor']),
       objectKey: TurnaUserProfile._nullableString(map['objectKey']),
@@ -383,6 +390,36 @@ class TurnaStatusItem {
       viewedCount: (map['viewedCount'] as num?)?.toInt() ?? 0,
     );
   }
+}
+
+class TurnaStatusTextLayout {
+  TurnaStatusTextLayout({
+    required this.x,
+    required this.y,
+    required this.scale,
+    this.fontFamily,
+  });
+
+  final double x;
+  final double y;
+  final double scale;
+  final String? fontFamily;
+
+  factory TurnaStatusTextLayout.fromMap(Map<String, dynamic> map) {
+    return TurnaStatusTextLayout(
+      x: ((map['x'] as num?)?.toDouble() ?? 0.5).clamp(0.0, 1.0),
+      y: ((map['y'] as num?)?.toDouble() ?? 0.5).clamp(0.0, 1.0),
+      scale: ((map['scale'] as num?)?.toDouble() ?? 1).clamp(0.6, 3.0),
+      fontFamily: TurnaUserProfile._nullableString(map['fontFamily']),
+    );
+  }
+
+  Map<String, dynamic> toMap() => {
+    'x': x,
+    'y': y,
+    'scale': scale,
+    if (fontFamily?.trim().isNotEmpty == true) 'fontFamily': fontFamily!.trim(),
+  };
 }
 
 class TurnaStatusViewer {
@@ -3569,6 +3606,7 @@ class TurnaStatusApi {
     required String text,
     required String backgroundColor,
     required String textColor,
+    TurnaStatusTextLayout? textLayout,
   }) async {
     try {
       final res = await http.post(
@@ -3580,6 +3618,7 @@ class TurnaStatusApi {
         body: jsonEncode({
           'type': 'text',
           'text': text.trim(),
+          if (textLayout != null) 'textLayout': textLayout.toMap(),
           'backgroundColor': backgroundColor,
           'textColor': textColor,
         }),

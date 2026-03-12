@@ -8,15 +8,31 @@ const List<Color> _kStatusTextBackgrounds = <Color>[
   Color(0xFFBE123C),
   Color(0xFF374151),
 ];
-const double _kStatusCaptureBottomInset = 132;
-const double _kStatusGalleryPanelHeight = 328;
 const int _kStatusGalleryPageSize = 24;
 const Size _kStatusGalleryThumbSize = Size(160, 160);
 const Size _kStatusCollageOutputSize = Size(1080, 1920);
 
 List<cam.CameraDescription>? _kStatusCameraCache;
 
-enum _StatusCaptureMode { photo, video }
+enum TurnaStatusCaptureMode { photo, video }
+
+enum _StatusEntryTab { photos, albums }
+
+class _StatusStoryFont {
+  const _StatusStoryFont({required this.label, this.fontFamily});
+
+  final String label;
+  final String? fontFamily;
+}
+
+const List<_StatusStoryFont> _kStatusStoryFonts = <_StatusStoryFont>[
+  _StatusStoryFont(label: 'Modern', fontFamily: 'SF Pro Display'),
+  _StatusStoryFont(label: 'Klasik', fontFamily: 'Helvetica Neue'),
+  _StatusStoryFont(label: 'Avenir', fontFamily: 'Avenir Next'),
+  _StatusStoryFont(label: 'Serif', fontFamily: 'Georgia'),
+  _StatusStoryFont(label: 'Daktilo', fontFamily: 'Courier'),
+  _StatusStoryFont(label: 'Not', fontFamily: 'Noteworthy'),
+];
 
 class _StatusCollageLayout {
   const _StatusCollageLayout({
@@ -167,7 +183,7 @@ class _StatusesPageState extends State<StatusesPage> {
     final posted = await Navigator.push<bool>(
       context,
       MaterialPageRoute(
-        builder: (_) => StatusCapturePage(
+        builder: (_) => StatusCreationEntryPage(
           session: widget.session,
           privacy: privacy,
           onSessionExpired: widget.onSessionExpired,
@@ -683,8 +699,8 @@ class _StatusErrorView extends StatelessWidget {
   }
 }
 
-class StatusCapturePage extends StatefulWidget {
-  const StatusCapturePage({
+class StatusCreationEntryPage extends StatefulWidget {
+  const StatusCreationEntryPage({
     super.key,
     required this.session,
     required this.privacy,
@@ -696,6 +712,435 @@ class StatusCapturePage extends StatefulWidget {
   final VoidCallback onSessionExpired;
 
   @override
+  State<StatusCreationEntryPage> createState() =>
+      _StatusCreationEntryPageState();
+}
+
+class _StatusCreationEntryPageState extends State<StatusCreationEntryPage> {
+  _StatusEntryTab _tab = _StatusEntryTab.photos;
+  bool _loading = true;
+  String? _error;
+  List<pm.AssetPathEntity> _albums = const <pm.AssetPathEntity>[];
+  pm.AssetPathEntity? _selectedAlbum;
+  List<pm.AssetEntity> _assets = const <pm.AssetEntity>[];
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_loadGallery());
+  }
+
+  Future<void> _loadGallery({pm.AssetPathEntity? selectedAlbum}) async {
+    if (!mounted) return;
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+
+    try {
+      final permission = await pm.PhotoManager.requestPermissionExtend();
+      if (!permission.isAuth) {
+        throw TurnaApiException('Galeri erisimi verilmedi.');
+      }
+      final albums = await pm.PhotoManager.getAssetPathList(
+        onlyAll: false,
+        type: pm.RequestType.common,
+        filterOption: pm.FilterOptionGroup(
+          orders: const <pm.OrderOption>[
+            pm.OrderOption(type: pm.OrderOptionType.createDate, asc: false),
+          ],
+        ),
+      );
+      final effectiveAlbum =
+          selectedAlbum ??
+          _selectedAlbum ??
+          (albums.isEmpty ? null : albums.first);
+      final assets = effectiveAlbum == null
+          ? const <pm.AssetEntity>[]
+          : await effectiveAlbum.getAssetListPaged(
+              page: 0,
+              size: _kStatusGalleryPageSize,
+            );
+      if (!mounted) return;
+      setState(() {
+        _albums = albums;
+        _selectedAlbum = effectiveAlbum;
+        _assets = assets;
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = error is TurnaApiException
+            ? error.message
+            : 'Galeri yuklenemedi.';
+      });
+    }
+  }
+
+  Future<void> _openCamera() async {
+    final posted = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => StatusCapturePage(
+          session: widget.session,
+          privacy: widget.privacy,
+          onSessionExpired: widget.onSessionExpired,
+        ),
+      ),
+    );
+    if (posted == true && mounted) {
+      Navigator.pop(context, true);
+    }
+  }
+
+  Future<void> _openTextComposer() async {
+    final posted = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => TextStatusComposerPage(
+          session: widget.session,
+          onSessionExpired: widget.onSessionExpired,
+        ),
+      ),
+    );
+    if (posted == true && mounted) {
+      Navigator.pop(context, true);
+    }
+  }
+
+  Future<void> _openAsset(pm.AssetEntity asset) async {
+    final file = await asset.file;
+    if (file == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Medya dosyasi acilamadi.')));
+      return;
+    }
+    final fileName = file.uri.pathSegments.isEmpty
+        ? 'durum-${DateTime.now().millisecondsSinceEpoch}'
+        : file.uri.pathSegments.last;
+    final type = asset.type == pm.AssetType.video
+        ? TurnaStatusType.video
+        : TurnaStatusType.image;
+    if (!mounted) return;
+    final posted = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => StatusMediaComposerPage(
+          session: widget.session,
+          file: XFile(
+            file.path,
+            name: fileName,
+            mimeType: guessContentTypeForFileName(fileName),
+          ),
+          type: type,
+          onSessionExpired: widget.onSessionExpired,
+        ),
+      ),
+    );
+    if (posted == true && mounted) {
+      Navigator.pop(context, true);
+    }
+  }
+
+  Widget _buildTabButton({
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          decoration: BoxDecoration(
+            color: selected ? Colors.white : Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Text(
+            label,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: selected ? TurnaColors.text : TurnaColors.textMuted,
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildQuickAction({
+    required IconData icon,
+    required String label,
+    required VoidCallback? onTap,
+  }) {
+    final enabled = onTap != null;
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        child: Opacity(
+          opacity: enabled ? 1 : 0.42,
+          child: Column(
+            children: [
+              Container(
+                height: 74,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(18),
+                ),
+                child: Icon(icon, color: TurnaColors.primary, size: 26),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                label,
+                style: const TextStyle(
+                  color: TurnaColors.text,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPhotosGrid() {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_error != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(
+            _error!,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: TurnaColors.textMuted),
+          ),
+        ),
+      );
+    }
+
+    return GridView.builder(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 4,
+        crossAxisSpacing: 6,
+        mainAxisSpacing: 6,
+      ),
+      itemCount: _assets.length + 1,
+      itemBuilder: (context, index) {
+        if (index == 0) {
+          return GestureDetector(
+            onTap: _openCamera,
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: const Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.photo_camera_rounded,
+                    color: TurnaColors.text,
+                    size: 30,
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    'Kamera',
+                    style: TextStyle(
+                      color: TurnaColors.text,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+        final asset = _assets[index - 1];
+        return _StatusGalleryAssetTile(
+          asset: asset,
+          onTap: () => _openAsset(asset),
+        );
+      },
+    );
+  }
+
+  Widget _buildAlbumsList() {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_albums.isEmpty) {
+      return const Center(
+        child: Text(
+          'Album bulunamadi.',
+          style: TextStyle(color: TurnaColors.textMuted),
+        ),
+      );
+    }
+    return ListView.separated(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+      itemCount: _albums.length,
+      separatorBuilder: (_, _) => const SizedBox(height: 8),
+      itemBuilder: (context, index) {
+        final album = _albums[index];
+        final selected = album.id == _selectedAlbum?.id;
+        return Material(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(18),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(18),
+            onTap: () async {
+              setState(() => _tab = _StatusEntryTab.photos);
+              await _loadGallery(selectedAlbum: album);
+            },
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.photo_album_outlined,
+                    color: selected
+                        ? TurnaColors.primary
+                        : TurnaColors.textMuted,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      album.name,
+                      style: const TextStyle(
+                        color: TurnaColors.text,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  if (selected)
+                    const Icon(
+                      Icons.check_circle_rounded,
+                      color: TurnaColors.primary,
+                    ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: TurnaColors.backgroundSoft,
+      body: SafeArea(
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+              child: Row(
+                children: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('İptal'),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE9EDF2),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Row(
+                        children: [
+                          _buildTabButton(
+                            label: 'Fotoğraflar',
+                            selected: _tab == _StatusEntryTab.photos,
+                            onTap: () =>
+                                setState(() => _tab = _StatusEntryTab.photos),
+                          ),
+                          _buildTabButton(
+                            label: 'Albümler',
+                            selected: _tab == _StatusEntryTab.albums,
+                            onTap: () =>
+                                setState(() => _tab = _StatusEntryTab.albums),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 6, 16, 14),
+              child: Row(
+                children: [
+                  _buildQuickAction(
+                    icon: Icons.text_fields_rounded,
+                    label: 'Metin',
+                    onTap: _openTextComposer,
+                  ),
+                  const SizedBox(width: 8),
+                  _buildQuickAction(
+                    icon: Icons.music_note_rounded,
+                    label: 'Müzik',
+                    onTap: null,
+                  ),
+                  const SizedBox(width: 8),
+                  _buildQuickAction(
+                    icon: Icons.grid_view_rounded,
+                    label: 'Yerleşim',
+                    onTap: null,
+                  ),
+                  const SizedBox(width: 8),
+                  _buildQuickAction(
+                    icon: Icons.mic_none_rounded,
+                    label: 'Ses',
+                    onTap: null,
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: _tab == _StatusEntryTab.photos
+                  ? _buildPhotosGrid()
+                  : _buildAlbumsList(),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class StatusCapturePage extends StatefulWidget {
+  const StatusCapturePage({
+    super.key,
+    required this.session,
+    required this.privacy,
+    required this.onSessionExpired,
+    this.initialMode = TurnaStatusCaptureMode.photo,
+  });
+
+  final AuthSession session;
+  final TurnaStatusPrivacySettings privacy;
+  final VoidCallback onSessionExpired;
+  final TurnaStatusCaptureMode initialMode;
+
+  @override
   State<StatusCapturePage> createState() => _StatusCapturePageState();
 }
 
@@ -705,11 +1150,10 @@ class _StatusCapturePageState extends State<StatusCapturePage>
   Future<void>? _cameraInitFuture;
   List<cam.CameraDescription> _cameras = const [];
   cam.CameraDescription? _selectedCamera;
-  _StatusCaptureMode _mode = _StatusCaptureMode.photo;
+  TurnaStatusCaptureMode _mode = TurnaStatusCaptureMode.photo;
   bool _cameraInitializing = true;
   bool _cameraBusy = false;
   String? _cameraError;
-  bool _galleryOpen = true;
   bool _galleryLoading = true;
   String? _galleryError;
   List<pm.AssetEntity> _recentAssets = const [];
@@ -719,6 +1163,7 @@ class _StatusCapturePageState extends State<StatusCapturePage>
   bool _recording = false;
   Duration _recordingDuration = Duration.zero;
   Timer? _recordingTimer;
+  cam.FlashMode _flashMode = cam.FlashMode.off;
 
   bool get _cameraReady {
     final controller = _cameraController;
@@ -731,6 +1176,7 @@ class _StatusCapturePageState extends State<StatusCapturePage>
   @override
   void initState() {
     super.initState();
+    _mode = widget.initialMode;
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -829,7 +1275,7 @@ class _StatusCapturePageState extends State<StatusCapturePage>
         throw TurnaApiException('Kamera bulunamadi.');
       }
       final selected = _pickCamera(cameras, preferredLensDirection);
-      final isVideoMode = _mode == _StatusCaptureMode.video;
+      final isVideoMode = _mode == TurnaStatusCaptureMode.video;
       final resolutionPreset = Platform.isIOS
           ? (isVideoMode
                 ? cam.ResolutionPreset.medium
@@ -847,7 +1293,7 @@ class _StatusCapturePageState extends State<StatusCapturePage>
       _cameraController = controller;
       _cameraInitFuture = controller.initialize().then((_) async {
         try {
-          await controller.setFlashMode(cam.FlashMode.off);
+          await controller.setFlashMode(_flashMode);
         } catch (_) {}
         if (!Platform.isIOS) {
           try {
@@ -935,11 +1381,11 @@ class _StatusCapturePageState extends State<StatusCapturePage>
     }
   }
 
-  Future<void> _setMode(_StatusCaptureMode mode) async {
+  Future<void> _setMode(TurnaStatusCaptureMode mode) async {
     if (_mode == mode || _cameraBusy || _recording) return;
     setState(() {
       _mode = mode;
-      if (mode != _StatusCaptureMode.photo) {
+      if (mode != TurnaStatusCaptureMode.photo) {
         _collagePickerVisible = false;
         _collageLayout = null;
         _collageFrames.clear();
@@ -954,10 +1400,10 @@ class _StatusCapturePageState extends State<StatusCapturePage>
   void _handlePreviewSwipe(DragEndDetails details) {
     final velocity = details.primaryVelocity ?? 0;
     if (velocity.abs() < 220) return;
-    if (velocity < 0 && _mode == _StatusCaptureMode.photo) {
-      _setMode(_StatusCaptureMode.video);
-    } else if (velocity > 0 && _mode == _StatusCaptureMode.video) {
-      _setMode(_StatusCaptureMode.photo);
+    if (velocity < 0 && _mode == TurnaStatusCaptureMode.photo) {
+      _setMode(TurnaStatusCaptureMode.video);
+    } else if (velocity > 0 && _mode == TurnaStatusCaptureMode.video) {
+      _setMode(TurnaStatusCaptureMode.photo);
     }
   }
 
@@ -969,22 +1415,6 @@ class _StatusCapturePageState extends State<StatusCapturePage>
         ? cam.CameraLensDirection.back
         : cam.CameraLensDirection.front;
     await _initializeCamera(preferredLensDirection: next);
-  }
-
-  Future<void> _openTextComposer() async {
-    if (_cameraBusy || _recording) return;
-    final posted = await Navigator.push<bool>(
-      context,
-      MaterialPageRoute(
-        builder: (_) => TextStatusComposerPage(
-          session: widget.session,
-          onSessionExpired: widget.onSessionExpired,
-        ),
-      ),
-    );
-    if (posted == true && mounted) {
-      Navigator.pop(context, true);
-    }
   }
 
   Future<bool?> _openMediaComposer(XFile file, TurnaStatusType type) {
@@ -1002,11 +1432,7 @@ class _StatusCapturePageState extends State<StatusCapturePage>
   }
 
   Future<void> _handleCapturePressed() async {
-    if (_galleryOpen) {
-      setState(() => _galleryOpen = false);
-      return;
-    }
-    if (_mode == _StatusCaptureMode.video) {
+    if (_mode == TurnaStatusCaptureMode.video) {
       if (_recording) {
         await _stopVideoRecording();
       } else {
@@ -1054,7 +1480,6 @@ class _StatusCapturePageState extends State<StatusCapturePage>
     if (controller == null) return;
     setState(() {
       _cameraBusy = true;
-      _galleryOpen = false;
     });
     try {
       if (_cameraInitFuture != null) {
@@ -1242,8 +1667,145 @@ class _StatusCapturePageState extends State<StatusCapturePage>
     }
   }
 
+  Future<void> _openGallerySheet() async {
+    if (_cameraBusy || _recording) return;
+    if (_recentAssets.isEmpty && !_galleryLoading) {
+      await _loadGallery();
+    }
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.black,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      builder: (sheetContext) {
+        return SafeArea(
+          top: false,
+          child: SizedBox(
+            height: MediaQuery.of(sheetContext).size.height * 0.72,
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+                  child: Row(
+                    children: [
+                      const Text(
+                        'Son zamanlarda',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const Spacer(),
+                      IconButton(
+                        onPressed: () => Navigator.pop(sheetContext),
+                        icon: const Icon(
+                          Icons.close_rounded,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: Builder(
+                    builder: (context) {
+                      if (_galleryLoading) {
+                        return const Center(
+                          child: CircularProgressIndicator(color: Colors.white),
+                        );
+                      }
+                      if (_galleryError != null) {
+                        return Center(
+                          child: Padding(
+                            padding: const EdgeInsets.all(24),
+                            child: Text(
+                              _galleryError!,
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(color: Colors.white70),
+                            ),
+                          ),
+                        );
+                      }
+                      if (_recentAssets.isEmpty) {
+                        return const Center(
+                          child: Text(
+                            'Galeride gosterilecek medya bulunamadi.',
+                            style: TextStyle(color: Colors.white70),
+                          ),
+                        );
+                      }
+                      return GridView.builder(
+                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                        gridDelegate:
+                            const SliverGridDelegateWithFixedCrossAxisCount(
+                              crossAxisCount: 3,
+                              crossAxisSpacing: 6,
+                              mainAxisSpacing: 6,
+                            ),
+                        itemCount: _recentAssets.length,
+                        itemBuilder: (context, index) {
+                          final asset = _recentAssets[index];
+                          return _StatusGalleryAssetTile(
+                            asset: asset,
+                            onTap: () async {
+                              Navigator.pop(sheetContext);
+                              await _handleGalleryAssetTap(asset);
+                            },
+                          );
+                        },
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _toggleFlash() async {
+    final controller = _cameraController;
+    if (controller == null || !_cameraReady || _cameraBusy || _recording) {
+      return;
+    }
+    final next = _flashMode == cam.FlashMode.off
+        ? cam.FlashMode.always
+        : cam.FlashMode.off;
+    try {
+      await controller.setFlashMode(next);
+      if (!mounted) return;
+      setState(() => _flashMode = next);
+    } catch (_) {
+      _showMessage('Flash ayarlanamadi.');
+    }
+  }
+
+  Future<void> _switchToTextComposer() async {
+    if (_cameraBusy || _recording) return;
+    final posted = await Navigator.pushReplacement<bool, bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => TextStatusComposerPage(
+          session: widget.session,
+          onSessionExpired: widget.onSessionExpired,
+        ),
+      ),
+    );
+    if (posted == true && mounted) {
+      Navigator.pop(context, true);
+    }
+  }
+
   void _toggleCollagePicker() {
-    if (_mode != _StatusCaptureMode.photo || _cameraBusy || _recording) return;
+    if (_mode != TurnaStatusCaptureMode.photo || _cameraBusy || _recording) {
+      return;
+    }
     setState(() {
       _collagePickerVisible = !_collagePickerVisible;
     });
@@ -1382,13 +1944,13 @@ class _StatusCapturePageState extends State<StatusCapturePage>
           children: [
             Row(
               children: [
-                if (_mode == _StatusCaptureMode.photo)
+                if (_mode == TurnaStatusCaptureMode.photo)
                   _StatusCaptureTopButton(
                     icon: Icons.grid_view_rounded,
                     selected: _collagePickerVisible || _collageLayout != null,
                     onTap: _toggleCollagePicker,
                   ),
-                if (_mode == _StatusCaptureMode.photo)
+                if (_mode == TurnaStatusCaptureMode.photo)
                   const SizedBox(width: 10),
                 if (collageProgress != null)
                   Container(
@@ -1414,8 +1976,10 @@ class _StatusCapturePageState extends State<StatusCapturePage>
                   ),
                 const Spacer(),
                 _StatusCaptureTopButton(
-                  icon: Icons.text_fields_rounded,
-                  onTap: _openTextComposer,
+                  icon: _flashMode == cam.FlashMode.off
+                      ? Icons.flash_off_rounded
+                      : Icons.flash_on_rounded,
+                  onTap: _toggleFlash,
                 ),
                 const SizedBox(width: 10),
                 _StatusCaptureTopButton(
@@ -1424,7 +1988,8 @@ class _StatusCapturePageState extends State<StatusCapturePage>
                 ),
               ],
             ),
-            if (_mode == _StatusCaptureMode.photo && _collagePickerVisible) ...[
+            if (_mode == TurnaStatusCaptureMode.photo &&
+                _collagePickerVisible) ...[
               const SizedBox(height: 14),
               SizedBox(
                 height: 72,
@@ -1453,118 +2018,6 @@ class _StatusCapturePageState extends State<StatusCapturePage>
               ),
             ],
           ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildGalleryPanel() {
-    return AnimatedPositioned(
-      duration: const Duration(milliseconds: 220),
-      curve: Curves.easeOutCubic,
-      left: 0,
-      right: 0,
-      bottom: _galleryOpen
-          ? _kStatusCaptureBottomInset
-          : -_kStatusGalleryPanelHeight,
-      height: _kStatusGalleryPanelHeight,
-      child: IgnorePointer(
-        ignoring: !_galleryOpen,
-        child: Container(
-          decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.78),
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
-          ),
-          child: Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
-                child: Row(
-                  children: [
-                    _StatusCaptureTopButton(
-                      icon: Icons.close_rounded,
-                      compact: true,
-                      onTap: () => setState(() => _galleryOpen = false),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Text(
-                            'Son zamanlarda',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 16,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            _privacyModeLabel(widget.privacy.mode),
-                            style: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.68),
-                              fontSize: 11,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 44),
-                  ],
-                ),
-              ),
-              Expanded(
-                child: Builder(
-                  builder: (context) {
-                    if (_galleryLoading) {
-                      return const Center(
-                        child: CircularProgressIndicator(color: Colors.white),
-                      );
-                    }
-                    if (_galleryError != null) {
-                      return Center(
-                        child: Padding(
-                          padding: const EdgeInsets.all(24),
-                          child: Text(
-                            _galleryError!,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(color: Colors.white70),
-                          ),
-                        ),
-                      );
-                    }
-                    if (_recentAssets.isEmpty) {
-                      return const Center(
-                        child: Text(
-                          'Galeride gosterilecek medya bulunamadi.',
-                          style: TextStyle(color: Colors.white70),
-                        ),
-                      );
-                    }
-                    return GridView.builder(
-                      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                      gridDelegate:
-                          const SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: 3,
-                            crossAxisSpacing: 6,
-                            mainAxisSpacing: 6,
-                          ),
-                      itemCount: _recentAssets.length,
-                      itemBuilder: (context, index) {
-                        final asset = _recentAssets[index];
-                        return _StatusGalleryAssetTile(
-                          asset: asset,
-                          onTap: () => _handleGalleryAssetTap(asset),
-                        );
-                      },
-                    );
-                  },
-                ),
-              ),
-            ],
-          ),
         ),
       ),
     );
@@ -1602,9 +2055,7 @@ class _StatusCapturePageState extends State<StatusCapturePage>
               children: [
                 _StatusGalleryLauncherButton(
                   asset: _recentAssets.isEmpty ? null : _recentAssets.first,
-                  onTap: () {
-                    setState(() => _galleryOpen = !_galleryOpen);
-                  },
+                  onTap: _openGallerySheet,
                 ),
                 _StatusCaptureShutterButton(
                   mode: _mode,
@@ -1612,10 +2063,33 @@ class _StatusCapturePageState extends State<StatusCapturePage>
                   busy: _cameraBusy,
                   onTap: _handleCapturePressed,
                 ),
-                _StatusCaptureTopButton(
-                  icon: Icons.cameraswitch_rounded,
-                  compact: true,
-                  onTap: _switchCamera,
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.34),
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: const Text(
+                        '1x',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    _StatusCaptureTopButton(
+                      icon: Icons.cameraswitch_rounded,
+                      compact: true,
+                      onTap: _switchCamera,
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -1629,20 +2103,25 @@ class _StatusCapturePageState extends State<StatusCapturePage>
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const _StatusModeChip(
-                    label: 'CANLI',
-                    selected: false,
-                    enabled: false,
-                  ),
                   _StatusModeChip(
                     label: 'VIDEO',
-                    selected: _mode == _StatusCaptureMode.video,
-                    onTap: () => _setMode(_StatusCaptureMode.video),
+                    selected: _mode == TurnaStatusCaptureMode.video,
+                    onTap: () => _setMode(TurnaStatusCaptureMode.video),
                   ),
                   _StatusModeChip(
                     label: 'FOTOGRAF',
-                    selected: _mode == _StatusCaptureMode.photo,
-                    onTap: () => _setMode(_StatusCaptureMode.photo),
+                    selected: _mode == TurnaStatusCaptureMode.photo,
+                    onTap: () => _setMode(TurnaStatusCaptureMode.photo),
+                  ),
+                  _StatusModeChip(
+                    label: 'METIN',
+                    selected: false,
+                    onTap: _switchToTextComposer,
+                  ),
+                  const _StatusModeChip(
+                    label: 'SES',
+                    selected: false,
+                    enabled: false,
                   ),
                 ],
               ),
@@ -1662,17 +2141,8 @@ class _StatusCapturePageState extends State<StatusCapturePage>
         child: Stack(
           children: [
             Positioned.fill(child: _buildPreviewLayer()),
-            if (_galleryOpen)
-              Positioned.fill(
-                child: IgnorePointer(
-                  child: ColoredBox(
-                    color: Colors.black.withValues(alpha: 0.18),
-                  ),
-                ),
-              ),
             _buildCollageOverlay(),
             Positioned(left: 0, right: 0, top: 0, child: _buildTopBar()),
-            _buildGalleryPanel(),
             Positioned(
               left: 0,
               right: 0,
@@ -1765,14 +2235,14 @@ class _StatusCaptureShutterButton extends StatelessWidget {
     required this.onTap,
   });
 
-  final _StatusCaptureMode mode;
+  final TurnaStatusCaptureMode mode;
   final bool recording;
   final bool busy;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final isVideo = mode == _StatusCaptureMode.video;
+    final isVideo = mode == TurnaStatusCaptureMode.video;
     return GestureDetector(
       onTap: busy ? null : onTap,
       child: AnimatedContainer(
@@ -2035,12 +2505,27 @@ class TextStatusComposerPage extends StatefulWidget {
 
 class _TextStatusComposerPageState extends State<TextStatusComposerPage> {
   final TextEditingController _controller = TextEditingController();
+  final FocusNode _focusNode = FocusNode();
   int _selectedColorIndex = 0;
+  int _selectedFontIndex = 0;
   bool _saving = false;
+  Offset _textPosition = const Offset(0.5, 0.5);
+  double _textScale = 1;
+  double _textScaleBase = 1;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _focusNode.requestFocus();
+    });
+  }
 
   @override
   void dispose() {
     _controller.dispose();
+    _focusNode.dispose();
     super.dispose();
   }
 
@@ -2058,6 +2543,12 @@ class _TextStatusComposerPageState extends State<TextStatusComposerPage> {
         text: text,
         backgroundColor: _colorToHex(background),
         textColor: _colorToHex(textColor),
+        textLayout: TurnaStatusTextLayout(
+          x: _textPosition.dx,
+          y: _textPosition.dy,
+          scale: _textScale,
+          fontFamily: _kStatusStoryFonts[_selectedFontIndex].fontFamily,
+        ),
       );
       if (!mounted) return;
       Navigator.pop(context, true);
@@ -2074,94 +2565,322 @@ class _TextStatusComposerPageState extends State<TextStatusComposerPage> {
     }
   }
 
+  Offset _clampTextPosition(Offset value) {
+    return Offset(value.dx.clamp(0.18, 0.82), value.dy.clamp(0.18, 0.82));
+  }
+
+  void _handleScaleStart() {
+    _textScaleBase = _textScale;
+  }
+
+  void _handleScaleUpdate(ScaleUpdateDetails details, Size canvasSize) {
+    setState(() {
+      _textScale = (_textScaleBase * details.scale).clamp(0.8, 2.8);
+      _textPosition = _clampTextPosition(
+        Offset(
+          _textPosition.dx + (details.focalPointDelta.dx / canvasSize.width),
+          _textPosition.dy + (details.focalPointDelta.dy / canvasSize.height),
+        ),
+      );
+    });
+  }
+
+  Future<void> _openFontPicker() async {
+    final nextIndex = await showModalBottomSheet<int>(
+      context: context,
+      backgroundColor: const Color(0xFF1C2730),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) {
+        return SafeArea(
+          top: false,
+          child: ListView.separated(
+            shrinkWrap: true,
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
+            itemBuilder: (context, index) {
+              final preset = _kStatusStoryFonts[index];
+              final selected = index == _selectedFontIndex;
+              return ListTile(
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                tileColor: selected
+                    ? TurnaColors.primary.withValues(alpha: 0.18)
+                    : Colors.white.withValues(alpha: 0.04),
+                title: Text(
+                  preset.label,
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                    fontFamily: preset.fontFamily,
+                  ),
+                ),
+                trailing: selected
+                    ? const Icon(
+                        Icons.check_circle_rounded,
+                        color: TurnaColors.accent,
+                      )
+                    : null,
+                onTap: () => Navigator.pop(context, index),
+              );
+            },
+            separatorBuilder: (_, _) => const SizedBox(height: 8),
+            itemCount: _kStatusStoryFonts.length,
+          ),
+        );
+      },
+    );
+    if (nextIndex == null || !mounted) return;
+    setState(() => _selectedFontIndex = nextIndex);
+  }
+
+  Future<void> _openPalettePicker() async {
+    final nextIndex = await showModalBottomSheet<int>(
+      context: context,
+      backgroundColor: const Color(0xFF1C2730),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) {
+        return SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 24),
+            child: Wrap(
+              spacing: 14,
+              runSpacing: 14,
+              children: List<Widget>.generate(_kStatusTextBackgrounds.length, (
+                index,
+              ) {
+                final color = _kStatusTextBackgrounds[index];
+                final selected = index == _selectedColorIndex;
+                return GestureDetector(
+                  onTap: () => Navigator.pop(context, index),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 160),
+                    width: selected ? 50 : 42,
+                    height: selected ? 50 : 42,
+                    decoration: BoxDecoration(
+                      color: color,
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: Colors.white.withValues(
+                          alpha: selected ? 0.95 : 0.5,
+                        ),
+                        width: selected ? 3 : 1.4,
+                      ),
+                    ),
+                  ),
+                );
+              }),
+            ),
+          ),
+        );
+      },
+    );
+    if (nextIndex == null || !mounted) return;
+    setState(() => _selectedColorIndex = nextIndex);
+  }
+
+  Future<void> _switchToCamera(TurnaStatusCaptureMode mode) async {
+    if (_saving) return;
+    final posted = await Navigator.pushReplacement<bool, bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => StatusCapturePage(
+          session: widget.session,
+          privacy: TurnaStatusPrivacySettings(
+            mode: TurnaStatusPrivacyMode.myContacts,
+          ),
+          onSessionExpired: widget.onSessionExpired,
+          initialMode: mode,
+        ),
+      ),
+    );
+    if (posted == true && mounted) {
+      Navigator.pop(context, true);
+    }
+  }
+
+  Widget _buildActionButton({
+    required Widget child,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color: Colors.black.withValues(alpha: 0.26),
+      shape: const CircleBorder(),
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: onTap,
+        child: SizedBox(width: 44, height: 44, child: Center(child: child)),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final background = _kStatusTextBackgrounds[_selectedColorIndex];
     final textColor = _statusTextForegroundFor(background);
+    final fontPreset = _kStatusStoryFonts[_selectedFontIndex];
 
     return Scaffold(
       backgroundColor: background,
-      appBar: AppBar(
-        backgroundColor: background,
-        foregroundColor: textColor,
-        actions: [
-          TextButton(
-            onPressed: _saving ? null : _submit,
-            child: Text(
-              _saving ? 'Gönderiliyor...' : 'Paylaş',
-              style: TextStyle(color: textColor, fontWeight: FontWeight.w700),
-            ),
-          ),
-        ],
-      ),
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
-          child: Column(
-            children: [
-              Expanded(
-                child: Center(
-                  child: TextField(
-                    controller: _controller,
-                    autofocus: true,
-                    maxLength: 700,
-                    maxLines: null,
-                    minLines: 4,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: textColor,
-                      fontSize: 30,
-                      height: 1.25,
-                      fontWeight: FontWeight.w700,
-                    ),
-                    decoration: InputDecoration(
-                      hintText: 'Bir durum yaz...',
-                      hintStyle: TextStyle(
-                        color: textColor.withValues(alpha: 0.65),
-                        fontWeight: FontWeight.w600,
-                      ),
-                      border: InputBorder.none,
-                      counterStyle: TextStyle(
-                        color: textColor.withValues(alpha: 0.8),
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+              child: Row(
+                children: [
+                  _buildActionButton(
+                    onTap: () => Navigator.pop(context),
+                    child: const Icon(Icons.close_rounded, color: Colors.white),
+                  ),
+                  const Spacer(),
+                  _buildActionButton(
+                    onTap: _openFontPicker,
+                    child: const Text(
+                      'Aa',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w800,
                       ),
                     ),
                   ),
-                ),
-              ),
-              Wrap(
-                spacing: 12,
-                runSpacing: 12,
-                alignment: WrapAlignment.center,
-                children: List<Widget>.generate(
-                  _kStatusTextBackgrounds.length,
-                  (index) {
-                    final color = _kStatusTextBackgrounds[index];
-                    final selected = index == _selectedColorIndex;
-                    return GestureDetector(
-                      onTap: _saving
-                          ? null
-                          : () => setState(() => _selectedColorIndex = index),
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 160),
-                        width: selected ? 42 : 36,
-                        height: selected ? 42 : 36,
-                        decoration: BoxDecoration(
-                          color: color,
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: Colors.white.withValues(
-                              alpha: selected ? 0.9 : 0.5,
+                  const SizedBox(width: 10),
+                  _buildActionButton(
+                    onTap: _openPalettePicker,
+                    child: const Icon(
+                      Icons.palette_outlined,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  _buildActionButton(
+                    onTap: _saving ? () {} : _submit,
+                    child: _saving
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
                             ),
-                            width: selected ? 3 : 1.5,
+                          )
+                        : const Icon(
+                            Icons.arrow_upward_rounded,
+                            color: Colors.white,
+                          ),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final offset = Offset(
+                    (_textPosition.dx - 0.5) * constraints.maxWidth,
+                    (_textPosition.dy - 0.5) * constraints.maxHeight,
+                  );
+                  return Center(
+                    child: Transform.translate(
+                      offset: offset,
+                      child: Transform.scale(
+                        scale: _textScale,
+                        child: GestureDetector(
+                          onTap: () => _focusNode.requestFocus(),
+                          onScaleStart: (_) => _handleScaleStart(),
+                          onScaleUpdate: (details) =>
+                              _handleScaleUpdate(details, constraints.biggest),
+                          child: ConstrainedBox(
+                            constraints: BoxConstraints(
+                              maxWidth: constraints.maxWidth * 0.84,
+                            ),
+                            child: TextField(
+                              controller: _controller,
+                              focusNode: _focusNode,
+                              autofocus: true,
+                              maxLength: 700,
+                              maxLines: null,
+                              minLines: 1,
+                              textAlign: TextAlign.center,
+                              cursorColor: textColor,
+                              style: TextStyle(
+                                color: textColor,
+                                fontSize: 34,
+                                height: 1.16,
+                                fontWeight: FontWeight.w800,
+                                fontFamily: fontPreset.fontFamily,
+                                shadows: const [
+                                  Shadow(
+                                    color: Colors.black26,
+                                    blurRadius: 10,
+                                    offset: Offset(0, 2),
+                                  ),
+                                ],
+                              ),
+                              decoration: InputDecoration(
+                                hintText: 'Durum güncellemesi yazı',
+                                hintStyle: TextStyle(
+                                  color: textColor.withValues(alpha: 0.42),
+                                  fontWeight: FontWeight.w700,
+                                  fontFamily: fontPreset.fontFamily,
+                                ),
+                                border: InputBorder.none,
+                                counterStyle: TextStyle(
+                                  color: textColor.withValues(alpha: 0.78),
+                                ),
+                              ),
+                            ),
                           ),
                         ),
                       ),
-                    );
-                  },
+                    ),
+                  );
+                },
+              ),
+            ),
+            SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.28),
+                    borderRadius: BorderRadius.circular(22),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _StatusModeChip(
+                        label: 'VIDEO',
+                        selected: false,
+                        onTap: () =>
+                            _switchToCamera(TurnaStatusCaptureMode.video),
+                      ),
+                      _StatusModeChip(
+                        label: 'FOTOGRAF',
+                        selected: false,
+                        onTap: () =>
+                            _switchToCamera(TurnaStatusCaptureMode.photo),
+                      ),
+                      const _StatusModeChip(label: 'METIN', selected: true),
+                      const _StatusModeChip(
+                        label: 'SES',
+                        selected: false,
+                        enabled: false,
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
@@ -2737,19 +3456,51 @@ class _StatusViewerPageState extends State<StatusViewerPage> {
     if (item.isText) {
       final bg = _colorFromHex(item.backgroundColor, const Color(0xFF1F6FEB));
       final fg = _colorFromHex(item.textColor, Colors.white);
-      return Container(
+      final layout =
+          item.textLayout ??
+          TurnaStatusTextLayout(x: 0.5, y: 0.5, scale: 1, fontFamily: null);
+      return ColoredBox(
         color: bg,
-        alignment: Alignment.center,
-        padding: const EdgeInsets.symmetric(horizontal: 28),
-        child: Text(
-          item.text?.trim().isNotEmpty == true ? item.text!.trim() : 'Durum',
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            color: fg,
-            fontSize: 30,
-            height: 1.3,
-            fontWeight: FontWeight.w700,
-          ),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final offset = Offset(
+              (layout.x - 0.5) * constraints.maxWidth,
+              (layout.y - 0.5) * constraints.maxHeight,
+            );
+            return Center(
+              child: Transform.translate(
+                offset: offset,
+                child: Transform.scale(
+                  scale: layout.scale,
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxWidth: constraints.maxWidth * 0.82,
+                    ),
+                    child: Text(
+                      item.text?.trim().isNotEmpty == true
+                          ? item.text!.trim()
+                          : 'Durum',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: fg,
+                        fontSize: 32,
+                        height: 1.2,
+                        fontWeight: FontWeight.w800,
+                        fontFamily: layout.fontFamily,
+                        shadows: const [
+                          Shadow(
+                            color: Colors.black26,
+                            blurRadius: 10,
+                            offset: Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            );
+          },
         ),
       );
     }
@@ -3095,17 +3846,6 @@ class _StatusPrivacyOptionTile extends StatelessWidget {
         ),
       ),
     );
-  }
-}
-
-String _privacyModeLabel(TurnaStatusPrivacyMode mode) {
-  switch (mode) {
-    case TurnaStatusPrivacyMode.excludedContacts:
-      return 'Gizlilik: Hariç tutulanlar';
-    case TurnaStatusPrivacyMode.onlySharedWith:
-      return 'Gizlilik: Sadece paylaştıklarım';
-    case TurnaStatusPrivacyMode.myContacts:
-      return 'Gizlilik: Kişilerim';
   }
 }
 
