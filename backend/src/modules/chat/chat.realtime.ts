@@ -1,8 +1,10 @@
 import type { Server } from "socket.io";
+import { redis } from "../../lib/redis.js";
 import { logInfo } from "../../lib/logger.js";
 import type { ChatMessage } from "./chat.types.js";
 
 let chatIo: Server | null = null;
+const PRESENCE_TTL_SECONDS = 60 * 60 * 12;
 
 export interface UserPresencePayload {
   userId: string;
@@ -14,6 +16,39 @@ export function attachChatRealtime(io: Server): void {
   chatIo = io;
 }
 
+function presenceKey(userId: string): string {
+  return `turna:presence:user:${userId}:sockets`;
+}
+
+function canUseRedisPresence(): boolean {
+  return redis.status === "ready";
+}
+
+async function getPresenceCount(userId: string): Promise<number | null> {
+  if (!canUseRedisPresence()) return null;
+  try {
+    return await redis.scard(presenceKey(userId));
+  } catch {
+    return null;
+  }
+}
+
+async function syncPresenceCount(userId: string): Promise<number> {
+  if (!chatIo) return 0;
+  const sockets = await chatIo.in(userRoom(userId)).allSockets();
+  if (!canUseRedisPresence()) {
+    return sockets.size;
+  }
+
+  const key = presenceKey(userId);
+  const multi = redis.multi().del(key);
+  if (sockets.size > 0) {
+    multi.sadd(key, [...sockets]).expire(key, PRESENCE_TTL_SECONDS);
+  }
+  await multi.exec();
+  return sockets.size;
+}
+
 export function sessionRoom(sessionId: string): string {
   return `session:${sessionId}`;
 }
@@ -22,23 +57,29 @@ export async function registerUserSocket(
   userId: string,
   sessionId?: string | null
 ): Promise<boolean> {
-  if (!chatIo) return true;
-  const sockets = await chatIo.in(userRoom(userId)).allSockets();
   void sessionId;
-  return sockets.size === 1;
+  if (!chatIo) return true;
+  const previousCount = await getPresenceCount(userId);
+  const nextCount = await syncPresenceCount(userId);
+  return (previousCount ?? 0) == 0 && nextCount > 0;
 }
 
 export async function unregisterUserSocket(
   userId: string,
   sessionId?: string | null
 ): Promise<boolean> {
-  if (!chatIo) return false;
-  const sockets = await chatIo.in(userRoom(userId)).allSockets();
   void sessionId;
-  return sockets.size === 0;
+  if (!chatIo) return false;
+  const previousCount = await getPresenceCount(userId);
+  const nextCount = await syncPresenceCount(userId);
+  return (previousCount ?? 1) > 0 && nextCount == 0;
 }
 
 export async function isUserOnline(userId: string): Promise<boolean> {
+  const cachedCount = await getPresenceCount(userId);
+  if (cachedCount != null) {
+    return cachedCount > 0;
+  }
   if (!chatIo) return false;
   const sockets = await chatIo.in(userRoom(userId)).allSockets();
   return sockets.size > 0;
