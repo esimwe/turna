@@ -195,6 +195,7 @@ final class TurnaStatusCameraViewController: UIViewController,
 
       controlsContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 18),
       controlsContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -18),
+      controlsContainer.topAnchor.constraint(equalTo: view.topAnchor),
       controlsContainer.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -12),
 
       timerLabel.centerXAnchor.constraint(equalTo: controlsContainer.centerXAnchor),
