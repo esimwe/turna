@@ -18,6 +18,61 @@ enum TurnaStatusCaptureMode { photo, video }
 
 enum _StatusEntryTab { photos, albums }
 
+class _NativeStatusCameraCapture {
+  const _NativeStatusCameraCapture({required this.file, required this.type});
+
+  final XFile file;
+  final TurnaStatusType type;
+}
+
+class _TurnaNativeStatusCameraBridge {
+  static const MethodChannel _channel = MethodChannel('turna/status_camera');
+
+  static Future<_NativeStatusCameraCapture?> present({
+    required TurnaStatusCaptureMode mode,
+  }) async {
+    if (!Platform.isIOS) return null;
+    turnaLog('status native camera present', {'mode': mode.name});
+    final raw = await _channel.invokeMethod<Object?>('present', {
+      'mode': mode.name,
+    });
+    if (raw == null) {
+      turnaLog('status native camera dismissed', {'mode': mode.name});
+      return null;
+    }
+    if (raw is! Map) {
+      throw TurnaApiException('Kamera sonucu okunamadi.');
+    }
+    final data = Map<String, dynamic>.from(raw.cast<String, dynamic>());
+    final path = (data['path'] ?? '').toString().trim();
+    if (path.isEmpty) {
+      throw TurnaApiException('Kamera dosyasi bulunamadi.');
+    }
+    final typeValue = (data['type'] ?? 'photo').toString().toLowerCase();
+    final fileName = (data['fileName'] ?? '').toString().trim();
+    final mimeType = (data['mimeType'] ?? '').toString().trim();
+    turnaLog('status native camera success', {
+      'mode': mode.name,
+      'type': typeValue,
+      'path': path,
+    });
+    return _NativeStatusCameraCapture(
+      file: XFile(
+        path,
+        name: fileName.isEmpty
+            ? path.split(Platform.pathSeparator).last
+            : fileName,
+        mimeType: mimeType.isEmpty
+            ? guessContentTypeForFileName(fileName)
+            : mimeType,
+      ),
+      type: typeValue == 'video'
+          ? TurnaStatusType.video
+          : TurnaStatusType.image,
+    );
+  }
+}
+
 class _StatusStoryFont {
   const _StatusStoryFont({required this.label, this.fontFamily});
 
@@ -780,6 +835,45 @@ class _StatusCreationEntryPageState extends State<StatusCreationEntryPage> {
   }
 
   Future<void> _openCamera() async {
+    if (Platform.isIOS) {
+      try {
+        final capture = await _TurnaNativeStatusCameraBridge.present(
+          mode: TurnaStatusCaptureMode.photo,
+        );
+        if (capture == null || !mounted) return;
+        final posted = await Navigator.push<bool>(
+          context,
+          MaterialPageRoute(
+            builder: (_) => StatusMediaComposerPage(
+              session: widget.session,
+              file: capture.file,
+              type: capture.type,
+              onSessionExpired: widget.onSessionExpired,
+            ),
+          ),
+        );
+        if (posted == true && mounted) {
+          Navigator.pop(context, true);
+        }
+      } on PlatformException catch (error) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              error.message?.trim().isNotEmpty == true
+                  ? error.message!.trim()
+                  : 'Kamera acilamadi.',
+            ),
+          ),
+        );
+      } catch (error) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.toString())));
+      }
+      return;
+    }
     final posted = await Navigator.push<bool>(
       context,
       MaterialPageRoute(
@@ -2685,6 +2779,45 @@ class _TextStatusComposerPageState extends State<TextStatusComposerPage> {
 
   Future<void> _switchToCamera(TurnaStatusCaptureMode mode) async {
     if (_saving) return;
+    if (Platform.isIOS) {
+      try {
+        final capture = await _TurnaNativeStatusCameraBridge.present(
+          mode: mode,
+        );
+        if (capture == null || !mounted) return;
+        final posted = await Navigator.push<bool>(
+          context,
+          MaterialPageRoute(
+            builder: (_) => StatusMediaComposerPage(
+              session: widget.session,
+              file: capture.file,
+              type: capture.type,
+              onSessionExpired: widget.onSessionExpired,
+            ),
+          ),
+        );
+        if (posted == true && mounted) {
+          Navigator.pop(context, true);
+        }
+      } on PlatformException catch (error) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              error.message?.trim().isNotEmpty == true
+                  ? error.message!.trim()
+                  : 'Kamera acilamadi.',
+            ),
+          ),
+        );
+      } catch (error) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.toString())));
+      }
+      return;
+    }
     final posted = await Navigator.pushReplacement<bool, bool>(
       context,
       MaterialPageRoute(
