@@ -2273,9 +2273,6 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         current.day != older.day;
   }
 
-  String? _guessContentType(String fileName) =>
-      guessContentTypeForFileName(fileName);
-
   String _formatFileSize(int bytes) => formatBytesLabel(bytes);
 
   Future<void> _loadPeerCallHistory() async {
@@ -4755,58 +4752,13 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   }
 
   Future<void> _openMediaComposerFromFiles(List<XFile> files) async {
-    final seeds = <MediaComposerSeed>[];
+    final seeds = await buildTurnaMediaComposerSeeds(context, files);
+    if (seeds.isEmpty || !mounted) return;
 
-    for (final file in files.take(kComposerMediaLimit)) {
-      final contentType = _guessContentType(file.name);
-      if (contentType == null) continue;
-
-      late final ChatAttachmentKind kind;
-      if (contentType.startsWith('image/')) {
-        kind = ChatAttachmentKind.image;
-      } else if (contentType.startsWith('video/')) {
-        kind = ChatAttachmentKind.video;
-      } else {
-        continue;
-      }
-
-      final sizeBytes = await file.length();
-      if (sizeBytes > kInlineAttachmentSoftLimitBytes) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              '${file.name} 64 MB üstü olduğu için inline medya olarak gönderilemiyor.',
-            ),
-          ),
-        );
-        continue;
-      }
-
-      seeds.add(
-        MediaComposerSeed(
-          kind: kind,
-          file: file,
-          fileName: file.name,
-          contentType: contentType,
-          sizeBytes: sizeBytes,
-        ),
-      );
-    }
-
-    if (seeds.isEmpty) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Gönderilebilir medya bulunamadı.')),
-      );
-      return;
-    }
-
-    if (!mounted) return;
     final message = await Navigator.push<ChatMessage>(
       context,
       MaterialPageRoute(
-        builder: (_) => _MediaComposerPage(
+        builder: (_) => _TurnaMediaComposerPage(
           session: widget.session,
           chat: widget.chat,
           items: seeds,
