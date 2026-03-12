@@ -3,8 +3,6 @@ import { logInfo } from "../../lib/logger.js";
 import type { ChatMessage } from "./chat.types.js";
 
 let chatIo: Server | null = null;
-const socketIdsByUserId = new Map<string, Set<string>>();
-const socketIdsBySessionId = new Map<string, Set<string>>();
 
 export interface UserPresencePayload {
   userId: string;
@@ -20,59 +18,39 @@ export function sessionRoom(sessionId: string): string {
   return `session:${sessionId}`;
 }
 
-export function registerUserSocket(
+export async function registerUserSocket(
   userId: string,
-  socketId: string,
   sessionId?: string | null
-): boolean {
-  const socketIds = socketIdsByUserId.get(userId) ?? new Set<string>();
-  const wasOnline = socketIds.size > 0;
-  socketIds.add(socketId);
-  socketIdsByUserId.set(userId, socketIds);
-  if (sessionId) {
-    const sessionSocketIds = socketIdsBySessionId.get(sessionId) ?? new Set<string>();
-    sessionSocketIds.add(socketId);
-    socketIdsBySessionId.set(sessionId, sessionSocketIds);
-  }
-  return !wasOnline;
+): Promise<boolean> {
+  if (!chatIo) return true;
+  const sockets = await chatIo.in(userRoom(userId)).allSockets();
+  void sessionId;
+  return sockets.size === 1;
 }
 
-export function unregisterUserSocket(
+export async function unregisterUserSocket(
   userId: string,
-  socketId: string,
   sessionId?: string | null
-): boolean {
-  const socketIds = socketIdsByUserId.get(userId);
-  if (!socketIds) return false;
-
-  const wasOnline = socketIds.size > 0;
-  socketIds.delete(socketId);
-  if (socketIds.size === 0) {
-    socketIdsByUserId.delete(userId);
-  }
-
-  if (sessionId) {
-    const sessionSocketIds = socketIdsBySessionId.get(sessionId);
-    sessionSocketIds?.delete(socketId);
-    if (sessionSocketIds && sessionSocketIds.size === 0) {
-      socketIdsBySessionId.delete(sessionId);
-    }
-  }
-
-  return wasOnline && !isUserOnline(userId);
+): Promise<boolean> {
+  if (!chatIo) return false;
+  const sockets = await chatIo.in(userRoom(userId)).allSockets();
+  void sessionId;
+  return sockets.size === 0;
 }
 
-export function isUserOnline(userId: string): boolean {
-  return (socketIdsByUserId.get(userId)?.size ?? 0) > 0;
+export async function isUserOnline(userId: string): Promise<boolean> {
+  if (!chatIo) return false;
+  const sockets = await chatIo.in(userRoom(userId)).allSockets();
+  return sockets.size > 0;
 }
 
-export function buildUserPresencePayload(
+export async function buildUserPresencePayload(
   userId: string,
   lastSeenAt: Date | string | null | undefined
-): UserPresencePayload {
+): Promise<UserPresencePayload> {
   return {
     userId,
-    online: isUserOnline(userId),
+    online: await isUserOnline(userId),
     lastSeenAt:
       lastSeenAt instanceof Date
         ? lastSeenAt.toISOString()

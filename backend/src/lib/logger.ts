@@ -9,3 +9,11 @@ export function logInfo(message: string, meta?: unknown): void {
 export function logError(message: string, err: unknown): void {
   console.error(`[turna] ${message}`, err);
 }
+
+export function logWarn(message: string, meta?: unknown): void {
+  if (meta) {
+    console.warn(`[turna] ${message}`, meta);
+    return;
+  }
+  console.warn(`[turna] ${message}`);
+}

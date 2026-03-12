@@ -59,6 +59,12 @@ const createTextStatusSchema = z.object({
     (value) => (typeof value === "string" ? value.trim() : value),
     z.string().min(1).max(700)
   ),
+  textLayout: z.object({
+    x: z.coerce.number().min(0).max(1),
+    y: z.coerce.number().min(0).max(1),
+    scale: z.coerce.number().min(0.6).max(3),
+    fontFamily: z.string().trim().min(1).max(120).optional().nullable()
+  }).optional(),
   backgroundColor: z.string().trim().max(32).optional(),
   textColor: z.string().trim().max(32).optional()
 });
@@ -126,6 +132,55 @@ function sanitizeHexColor(
     return trimmed.toUpperCase();
   }
   return fallback;
+}
+
+function sanitizeTextLayout(
+  value:
+    | {
+        x: number;
+        y: number;
+        scale: number;
+        fontFamily?: string | null;
+      }
+    | null
+    | undefined
+): { x: number; y: number; scale: number; fontFamily: string | null } | null {
+  if (!value) {
+    return null;
+  }
+
+  const fontFamily = value.fontFamily?.trim();
+  return {
+    x: Math.min(1, Math.max(0, Number(value.x) || 0.5)),
+    y: Math.min(1, Math.max(0, Number(value.y) || 0.5)),
+    scale: Math.min(3, Math.max(0.6, Number(value.scale) || 1)),
+    fontFamily: fontFamily ? fontFamily.slice(0, 120) : null
+  };
+}
+
+function parseTextLayout(
+  value: string | null | undefined
+): { x: number; y: number; scale: number; fontFamily: string | null } | null {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(value) as {
+      x?: unknown;
+      y?: unknown;
+      scale?: unknown;
+      fontFamily?: unknown;
+    };
+    return sanitizeTextLayout({
+      x: Number(parsed.x),
+      y: Number(parsed.y),
+      scale: Number(parsed.scale),
+      fontFamily: typeof parsed.fontFamily === "string" ? parsed.fontFamily : null
+    });
+  } catch {
+    return null;
+  }
 }
 
 function toApiPrivacyMode(value: typeof privacyModeValues[number] | null | undefined): "my_contacts" | "excluded_contacts" | "only_shared_with" {
@@ -421,6 +476,7 @@ async function serializeStatusItem(
     id: string;
     type: string;
     text: string | null;
+    textLayout: string | null;
     backgroundColor: string | null;
     textColor: string | null;
     objectKey: string | null;
@@ -456,6 +512,7 @@ async function serializeStatusItem(
     id: row.id,
     type: toApiStatusType(row.type),
     text: row.text,
+    textLayout: parseTextLayout(row.textLayout),
     backgroundColor:
       row.backgroundColor ?? (row.type === "TEXT" ? TEXT_STATUS_COLORS.background : null),
     textColor: row.textColor ?? (row.type === "TEXT" ? TEXT_STATUS_COLORS.text : null),
@@ -719,6 +776,9 @@ statusRouter.post("/", requireAuth, requireMessagingAccess, async (req, res) => 
           authorId: req.authUserId!,
           type: "TEXT",
           text: parsed.data.text,
+          textLayout: parsed.data.textLayout
+            ? JSON.stringify(sanitizeTextLayout(parsed.data.textLayout))
+            : null,
           backgroundColor: sanitizeHexColor(
             parsed.data.backgroundColor,
             TEXT_STATUS_COLORS.background
@@ -730,6 +790,7 @@ statusRouter.post("/", requireAuth, requireMessagingAccess, async (req, res) => 
           id: true,
           type: true,
           text: true,
+          textLayout: true,
           backgroundColor: true,
           textColor: true,
           objectKey: true,
@@ -800,6 +861,7 @@ statusRouter.post("/", requireAuth, requireMessagingAccess, async (req, res) => 
           id: true,
           type: true,
           text: true,
+          textLayout: true,
           backgroundColor: true,
           textColor: true,
           objectKey: true,
@@ -877,6 +939,7 @@ statusRouter.get("/users/:userId", requireAuth, async (req, res) => {
         id: true,
         type: true,
         text: true,
+        textLayout: true,
         backgroundColor: true,
         textColor: true,
         objectKey: true,

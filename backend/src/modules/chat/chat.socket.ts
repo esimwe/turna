@@ -45,7 +45,10 @@ async function notifyPresenceAudience(userId: string): Promise<void> {
   if (audienceUserIds.length === 0) return;
 
   const lastSeenAt = await chatService.getUserLastSeenAt(userId);
-  emitPresenceUpdate(audienceUserIds, buildUserPresencePayload(userId, lastSeenAt));
+  emitPresenceUpdate(
+    audienceUserIds,
+    await buildUserPresencePayload(userId, lastSeenAt)
+  );
 }
 
 async function sendDirectPeerPresenceSnapshot(socket: Socket, chatId: string, userId: string): Promise<void> {
@@ -53,7 +56,10 @@ async function sendDirectPeerPresenceSnapshot(socket: Socket, chatId: string, us
   if (!peerUserId) return;
 
   const lastSeenAt = await chatService.getUserLastSeenAt(peerUserId);
-  socket.emit("user:presence", buildUserPresencePayload(peerUserId, lastSeenAt));
+  socket.emit(
+    "user:presence",
+    await buildUserPresencePayload(peerUserId, lastSeenAt)
+  );
 }
 
 export function registerChatSocket(io: Server): void {
@@ -99,7 +105,7 @@ export function registerChatSocket(io: Server): void {
     if (sessionId) {
       socket.join(sessionRoom(sessionId));
     }
-    const becameOnline = registerUserSocket(userId, socket.id, sessionId);
+    const becameOnline = await registerUserSocket(userId, sessionId);
     logInfo("socket connected", { socketId: socket.id, userId, transport: socket.conn.transport.name });
 
     if (becameOnline) {
@@ -356,7 +362,7 @@ export function registerChatSocket(io: Server): void {
 
     socket.on("disconnect", async (reason) => {
       logInfo("socket disconnected", { socketId: socket.id, reason });
-      const becameOffline = unregisterUserSocket(userId, socket.id, sessionId);
+      const becameOffline = await unregisterUserSocket(userId, sessionId);
       if (!becameOffline) return;
 
       try {
@@ -364,7 +370,10 @@ export function registerChatSocket(io: Server): void {
         const audienceUserIds = await chatService.getPresenceAudienceUserIds(userId);
         if (audienceUserIds.length === 0) return;
 
-        emitPresenceUpdate(audienceUserIds, buildUserPresencePayload(userId, lastSeenAt));
+        emitPresenceUpdate(
+          audienceUserIds,
+          await buildUserPresencePayload(userId, lastSeenAt)
+        );
       } catch (error) {
         logError("presence announce on disconnect failed", error);
       }
