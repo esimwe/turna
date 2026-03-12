@@ -224,6 +224,7 @@ model StatusItem {
   authorId        String
   type            StatusType
   text            String?
+  textLayout      String?     @db.Text
   backgroundColor String?
   textColor       String?
   objectKey       String?     @unique
