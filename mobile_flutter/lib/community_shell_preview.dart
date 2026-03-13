@@ -48,25 +48,33 @@ class _CommunityShellPreviewPageState extends State<CommunityShellPreviewPage> {
     }
   }
 
+  void _handleTurnaTap() {
+    final navigator = Navigator.of(context, rootNavigator: true);
+    if (navigator.canPop()) {
+      navigator.popUntil((route) => route.isFirst);
+    }
+    widget.onTurnaTap?.call();
+  }
+
   @override
   Widget build(BuildContext context) {
     final pages = <Widget>[
       _CommunityHomePage(
         api: _api,
         currentUserId: widget.currentUserId,
-        onTurnaTap: widget.onTurnaTap,
+        onTurnaTap: _handleTurnaTap,
       ),
       _CommunityExplorePage(
         api: _api,
         currentUserId: widget.currentUserId,
-        onTurnaTap: widget.onTurnaTap,
+        onTurnaTap: _handleTurnaTap,
       ),
-      _CommunityTurnaReturnPage(onTap: widget.onTurnaTap),
+      _CommunityTurnaReturnPage(onTap: _handleTurnaTap),
       const _CommunityNotificationsPage(),
       _CommunityMyCommunitiesPage(
         api: _api,
         currentUserId: widget.currentUserId,
-        onTurnaTap: widget.onTurnaTap,
+        onTurnaTap: _handleTurnaTap,
       ),
     ];
 
@@ -84,8 +92,8 @@ class _CommunityShellPreviewPageState extends State<CommunityShellPreviewPage> {
       bottomNavigationBar: _CommunityBottomBar(
         selectedIndex: _selectedIndex,
         onSelect: (index) {
-          if (index == 2 && widget.onTurnaTap != null) {
-            widget.onTurnaTap!.call();
+          if (index == 2) {
+            _handleTurnaTap();
             return;
           }
           setState(() => _selectedIndex = index);
@@ -118,7 +126,7 @@ class _CommunityApiClient {
       _uri('/api/communities/explore'),
       headers: _headers,
     );
-    return _decodeCommunityList(res, fallbackError: 'Topluluklar yuklenemedi.');
+    return _decodeCommunityList(res, fallbackError: 'Topluluklar yüklenemedi.');
   }
 
   Future<List<_CommunitySummary>> fetchMine() async {
@@ -128,7 +136,7 @@ class _CommunityApiClient {
     );
     return _decodeCommunityList(
       res,
-      fallbackError: 'Topluluklarin yuklenemedi.',
+      fallbackError: 'Toplulukların yüklenemedi.',
     );
   }
 
@@ -144,7 +152,7 @@ class _CommunityApiClient {
     final res = await http.get(_uri('/api/profile/me'), headers: _headers);
     if (res.statusCode >= 400) {
       throw _CommunityApiException(
-        _decodeError(res, 'Community profili yuklenemedi.'),
+        _decodeError(res, 'Community profili yüklenemedi.'),
       );
     }
     final body = jsonDecode(res.body) as Map<String, dynamic>;
@@ -170,7 +178,7 @@ class _CommunityApiClient {
     );
     return _decodeCommunityItem(
       res,
-      fallbackError: 'Topluluk detayi yuklenemedi.',
+      fallbackError: 'Topluluk detayı yüklenemedi.',
     );
   }
 
@@ -195,7 +203,7 @@ class _CommunityApiClient {
     );
     if (res.statusCode >= 400) {
       throw _CommunityApiException(
-        _decodeError(res, 'Kanal mesajlari yuklenemedi.'),
+        _decodeError(res, 'Kanal mesajları yüklenemedi.'),
       );
     }
     final body = jsonDecode(res.body) as Map<String, dynamic>;
@@ -213,7 +221,7 @@ class _CommunityApiClient {
       headers: _headers,
       body: jsonEncode({'text': text}),
     );
-    return _decodeChannelMessage(res, fallbackError: 'Mesaj gonderilemedi.');
+    return _decodeChannelMessage(res, fallbackError: 'Mesaj gönderilemedi.');
   }
 
   Future<List<_CommunityTopicSummary>> fetchTopics({
@@ -226,7 +234,7 @@ class _CommunityApiClient {
     );
     if (res.statusCode >= 400) {
       throw _CommunityApiException(
-        _decodeError(res, 'Topluluk icerikleri yuklenemedi.'),
+        _decodeError(res, 'Topluluk içerikleri yüklenemedi.'),
       );
     }
     final body = jsonDecode(res.body) as Map<String, dynamic>;
@@ -248,7 +256,7 @@ class _CommunityApiClient {
       headers: _headers,
     );
     if (res.statusCode >= 400) {
-      throw _CommunityApiException(_decodeError(res, 'Uyeler yuklenemedi.'));
+      throw _CommunityApiException(_decodeError(res, 'Üyeler yüklenemedi.'));
     }
     final body = jsonDecode(res.body) as Map<String, dynamic>;
     final raw = body['data'] as List<dynamic>? ?? const [];
@@ -266,7 +274,7 @@ class _CommunityApiClient {
       _uri('/api/communities/$communityId/join'),
       headers: _headers,
     );
-    return _decodeCommunityItem(res, fallbackError: 'Topluluga katilinamadi.');
+    return _decodeCommunityItem(res, fallbackError: 'Topluluğa katılınamadı.');
   }
 
   Future<void> leave(String communityId) async {
@@ -276,7 +284,7 @@ class _CommunityApiClient {
     );
     if (res.statusCode >= 400) {
       throw _CommunityApiException(
-        _decodeError(res, 'Topluluktan ayrilinamadi.'),
+        _decodeError(res, 'Topluluktan ayrılamadı.'),
       );
     }
   }
@@ -400,11 +408,11 @@ class _CommunityProfileGate {
     final missingItems = <String>[];
     final checks = <String, bool>{
       'Ad': _hasContent(map['displayName']),
-      'Profil fotografi': _hasContent(map['avatarUrl']),
-      'Kisa bio': _hasContent(map['about']),
-      'Uzmanlik alani': _hasContent(map['expertise']),
-      'Sehir / ulke': _hasContent(map['city']) && _hasContent(map['country']),
-      'Ilgi alanlari': _hasList(map['interests']),
+      'Profil fotoğrafı': _hasContent(map['avatarUrl']),
+      'Kısa bio': _hasContent(map['about']),
+      'Uzmanlık alanı': _hasContent(map['expertise']),
+      'Şehir / ülke': _hasContent(map['city']) && _hasContent(map['country']),
+      'İlgi alanları': _hasList(map['interests']),
       'Sosyal linkler': _hasList(map['socialLinks']),
       'Topluluktaki rol': _hasContent(map['communityRole']),
     };
@@ -489,7 +497,7 @@ class _CommunityUserSummary {
     if (bits.isEmpty) {
       return about?.trim().isNotEmpty == true
           ? about!.trim()
-          : 'Topluluk uyesi';
+          : 'Topluluk üyesi';
     }
     return bits.join('  •  ');
   }
@@ -737,7 +745,7 @@ class _CommunitySummary {
 
   String get summaryText {
     final channelCount = channels.length;
-    final memberText = memberCount == 1 ? '1 uye' : '$memberCount uye';
+    final memberText = memberCount == 1 ? '1 üye' : '$memberCount üye';
     if (channelCount <= 0) return memberText;
     final channelText = channelCount == 1 ? '1 oda' : '$channelCount oda';
     return '$memberText  •  $channelText';
@@ -762,7 +770,7 @@ class _CommunitySummary {
       ? tagline!.trim()
       : (description?.trim().isNotEmpty == true
             ? description!.trim()
-            : 'Topluluk alani');
+            : 'Topluluk alanı');
 
   factory _CommunitySummary.fromMap(Map<String, dynamic> map) {
     return _CommunitySummary(
@@ -924,15 +932,15 @@ class _CommunityHomePageState extends State<_CommunityHomePage> {
                 const _CommunitySectionHeader(
                   emoji: '✨',
                   title: 'Sana uygun topluluklar',
-                  actionLabel: 'Kesfet',
+                  actionLabel: 'Keşfet',
                 ),
                 const SizedBox(height: 12),
                 if (featured.isEmpty)
                   const _CommunityEmptyState(
                     emoji: '🌿',
-                    title: 'Henuz listelenen topluluk yok',
+                    title: 'Henüz listelenen topluluk yok',
                     subtitle:
-                        'Seed script calistiginda burada onerilen topluluklar gorunecek.',
+                        'Seed script çalıştığında burada önerilen topluluklar görünecek.',
                   )
                 else
                   SizedBox(
@@ -956,7 +964,7 @@ class _CommunityHomePageState extends State<_CommunityHomePage> {
                 const SizedBox(height: _CommunityUiTokens.sectionGap),
                 const _CommunitySectionHeader(
                   emoji: '🌿',
-                  title: 'Topluluklarin',
+                  title: 'Toplulukların',
                 ),
                 const SizedBox(height: 12),
                 if (mine.isEmpty)
@@ -964,7 +972,7 @@ class _CommunityHomePageState extends State<_CommunityHomePage> {
                     emoji: '🫶',
                     title: 'Henüz bir topluluğa katılmadın',
                     subtitle:
-                        'Kesfet alanindan topluluklara katildiginda burada gormeye baslayacaksin.',
+                        'Keşfet alanından topluluklara katıldığında burada görmeye başlayacaksın.',
                   )
                 else
                   ...List<Widget>.generate(mine.length, (index) {
@@ -978,7 +986,7 @@ class _CommunityHomePageState extends State<_CommunityHomePage> {
                         title: community.name,
                         subtitle: community.cardSubtitle,
                         stats:
-                            'Rolun: ${community.roleLabel}  •  ${community.summaryText}',
+                            'Rolün: ${community.roleLabel}  •  ${community.summaryText}',
                         accent: _accentForCommunity(community, index + 3),
                         onTap: () => _openCommunity(community),
                       ),
@@ -987,29 +995,29 @@ class _CommunityHomePageState extends State<_CommunityHomePage> {
                 const SizedBox(height: _CommunityUiTokens.sectionGap),
                 const _CommunitySectionHeader(
                   emoji: '📅',
-                  title: 'Yaklasan etkinlikler',
+                  title: 'Yaklaşan etkinlikler',
                 ),
                 const SizedBox(height: 12),
                 const _CommunityEventCard(),
                 const SizedBox(height: _CommunityUiTokens.sectionGap),
                 const _CommunitySectionHeader(
                   emoji: '🤝',
-                  title: 'Yeni kisiler',
+                  title: 'Yeni kişiler',
                   actionLabel: 'Dizine git',
                 ),
                 const SizedBox(height: 12),
                 const _CommunityMemberTile(
                   emoji: '🪄',
                   name: 'Selin T.',
-                  role: 'Urun tasarimcisi',
-                  subtitle: 'Istanbul  •  Tasarim, AI, growth',
+                  role: 'Ürün tasarımcısı',
+                  subtitle: 'İstanbul  •  Tasarım, AI, growth',
                 ),
                 const SizedBox(height: 10),
                 const _CommunityMemberTile(
                   emoji: '🚀',
                   name: 'Emir K.',
                   role: 'Startup kurucusu',
-                  subtitle: 'Ankara  •  SaaS, satis, ekip kurma',
+                  subtitle: 'Ankara  •  SaaS, satış, ekip kurma',
                 ),
               ],
             ),
@@ -1090,7 +1098,7 @@ class _CommunityExplorePageState extends State<_CommunityExplorePage> {
       await _reload();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${community.name} topluluguna katildin.')),
+        SnackBar(content: Text('${community.name} topluluğuna katıldın.')),
       );
     } catch (error) {
       if (!mounted) return;
@@ -1133,8 +1141,8 @@ class _CommunityExplorePageState extends State<_CommunityExplorePage> {
               ),
               children: [
                 const _CommunityPageTitle(
-                  title: 'Kesfet',
-                  subtitle: 'Ilgi alanina gore topluluk bul',
+                  title: 'Keşfet',
+                  subtitle: 'İlgi alanına göre topluluk bul',
                 ),
                 const SizedBox(height: 18),
                 const _CommunitySearchField(),
@@ -1143,26 +1151,26 @@ class _CommunityExplorePageState extends State<_CommunityExplorePage> {
                   spacing: 10,
                   runSpacing: 10,
                   children: [
-                    _CommunityChip(label: '🚀 Girisim'),
-                    _CommunityChip(label: '🎨 Tasarim'),
+                    _CommunityChip(label: '🚀 Girişim'),
+                    _CommunityChip(label: '🎨 Tasarım'),
                     _CommunityChip(label: '🧠 AI'),
                     _CommunityChip(label: '💼 Kariyer'),
                     _CommunityChip(label: '🌍 Networking'),
-                    _CommunityChip(label: '📚 Egitim'),
+                    _CommunityChip(label: '📚 Eğitim'),
                   ],
                 ),
                 const SizedBox(height: _CommunityUiTokens.sectionGap),
                 const _CommunitySectionHeader(
                   emoji: '🌟',
-                  title: 'One cikan topluluklar',
+                  title: 'Öne çıkan topluluklar',
                 ),
                 const SizedBox(height: 12),
                 if (communities.isEmpty)
                   const _CommunityEmptyState(
                     emoji: '🌱',
-                    title: 'Topluluk bulunamadi',
+                    title: 'Topluluk bulunamadı',
                     subtitle:
-                        'Seed script calistiginda burada listelenen topluluklar gorunecek.',
+                        'Seed script çalıştığında burada listelenen topluluklar görünecek.',
                   )
                 else
                   ...List<Widget>.generate(communities.length, (index) {
@@ -1180,8 +1188,8 @@ class _CommunityExplorePageState extends State<_CommunityExplorePage> {
                         accent: _accentForCommunity(community, index),
                         onTap: () => _openCommunity(community),
                         actionLabel: community.isMember
-                            ? 'Katildin'
-                            : (busy ? 'Bekle...' : 'Katil'),
+                            ? 'Katıldın'
+                            : (busy ? 'Bekle...' : 'Katıl'),
                         onAction: community.isMember || busy
                             ? null
                             : () => _join(community),
@@ -1220,25 +1228,25 @@ class _CommunityNotificationsPage extends StatelessWidget {
           _NotificationTile(
             emoji: '🔥',
             title: 'Threadine 8 yeni cevap geldi',
-            subtitle: 'AI Circle  •  5 dk once',
+            subtitle: 'AI Circle  •  5 dk önce',
           ),
           SizedBox(height: 12),
           _NotificationTile(
             emoji: '🤝',
-            title: 'Yeni mesaj istegi',
-            subtitle: 'Girisim Kulubu icinden Selin sana ulasti',
+            title: 'Yeni mesaj isteği',
+            subtitle: 'Girişim Kulübü içinden Selin sana ulaştı',
           ),
           SizedBox(height: 12),
           _NotificationTile(
             emoji: '📅',
-            title: 'Etkinlik yarin basliyor',
-            subtitle: 'Creator Lounge  •  Canli yayin oturumu',
+            title: 'Etkinlik yarın başlıyor',
+            subtitle: 'Creator Lounge  •  Canlı yayın oturumu',
           ),
           SizedBox(height: 12),
           _NotificationTile(
             emoji: '📌',
-            title: 'Yeni yonetici duyurusu',
-            subtitle: 'Tasarim Evi  •  Haftalik ozet paylasildi',
+            title: 'Yeni yönetici duyurusu',
+            subtitle: 'Tasarım Evi  •  Haftalık özet paylaşıldı',
           ),
         ],
       ),
@@ -1347,16 +1355,16 @@ class _CommunityMyCommunitiesPageState
               ),
               children: [
                 const _CommunityPageTitle(
-                  title: 'Topluluklarim',
-                  subtitle: 'Dahil oldugun alanlar',
+                  title: 'Topluluklarım',
+                  subtitle: 'Dahil olduğun alanlar',
                 ),
                 const SizedBox(height: 18),
                 if (communities.isEmpty)
                   const _CommunityEmptyState(
                     emoji: '🫶',
-                    title: 'Henüz bir topluluga katilmadin',
+                    title: 'Henüz bir topluluğa katılmadın',
                     subtitle:
-                        'Kesfet ekranindan topluluklara katildiginda burada gormeye baslayacaksin.',
+                        'Keşfet ekranından topluluklara katıldığında burada görmeye başlayacaksın.',
                   )
                 else
                   ...List<Widget>.generate(communities.length, (index) {
@@ -1371,10 +1379,10 @@ class _CommunityMyCommunitiesPageState
                         title: community.name,
                         subtitle: community.cardSubtitle,
                         stats:
-                            'Rolun: ${community.roleLabel}  •  ${community.summaryText}',
+                            'Rolün: ${community.roleLabel}  •  ${community.summaryText}',
                         accent: _accentForCommunity(community, index),
                         onTap: () => _openCommunity(community),
-                        actionLabel: busy ? 'Bekle...' : 'Ayril',
+                        actionLabel: busy ? 'Bekle...' : 'Ayrıl',
                         onAction: busy ? null : () => _leave(community),
                       ),
                     );
@@ -1417,7 +1425,7 @@ class _CommunityTurnaReturnPage extends StatelessWidget {
                 ),
                 const SizedBox(height: 18),
                 const Text(
-                  'Turna moduna don',
+                  'Turna moduna dön',
                   style: TextStyle(
                     fontSize: 24,
                     fontWeight: FontWeight.w700,
@@ -1426,7 +1434,7 @@ class _CommunityTurnaReturnPage extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 const Text(
-                  'Community icindeki baglantilar kabul olunca birebir sohbetler burada devam eder.',
+                  'Community içindeki bağlantılar kabul olunca birebir sohbetler burada devam eder.',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     fontSize: 14,
@@ -1448,7 +1456,7 @@ class _CommunityTurnaReturnPage extends StatelessWidget {
                       borderRadius: BorderRadius.circular(18),
                     ),
                   ),
-                  child: const Text('Turna moduna gec'),
+                  child: const Text('Turna moduna geç'),
                 ),
               ],
             ),
@@ -1511,7 +1519,7 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
       await _reload();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${data.community.name} topluluguna katildin.')),
+        SnackBar(content: Text('${data.community.name} topluluğuna katıldın.')),
       );
     } catch (error) {
       if (!mounted) return;
@@ -1687,10 +1695,10 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _CommunitySectionHeader(emoji: '🤝', title: 'Networking mantigi'),
+              _CommunitySectionHeader(emoji: '🤝', title: 'Networking mantığı'),
               SizedBox(height: 10),
               Text(
-                'Birebir baglanti kurmak isteyen uyeler once istek gonderir. Kabul edilen baglantilar Turna birebir sohbetine duser.',
+                'Birebir bağlantı kurmak isteyen üyeler önce istek gönderir. Kabul edilen bağlantılar Turna birebir sohbetine düşer.',
                 style: TextStyle(
                   fontSize: 13,
                   height: 1.45,
@@ -1766,7 +1774,7 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const _CommunitySectionHeader(emoji: '❓', title: 'Soru akisi'),
+              const _CommunitySectionHeader(emoji: '❓', title: 'Soru akışı'),
               const SizedBox(height: 12),
               if (topics.isEmpty)
                 const _CommunityEmptyState(
@@ -1875,16 +1883,16 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
                 children: [
                   const _CommunitySectionHeader(
                     emoji: '👥',
-                    title: 'Uye katmani',
+                    title: 'Üye katmanı',
                   ),
                   const SizedBox(height: 12),
                   Wrap(
                     spacing: 10,
                     runSpacing: 10,
                     children: [
-                      _CommunityChip(label: '👥 ${community.memberCount} uye'),
-                      const _CommunityChip(label: '🪪 Rol bazli gorunum'),
-                      const _CommunityChip(label: '🤝 DM istegi mantigi'),
+                      _CommunityChip(label: '👥 ${community.memberCount} üye'),
+                      const _CommunityChip(label: '🪪 Rol bazlı görünüm'),
+                      const _CommunityChip(label: '🤝 DM isteği mantığı'),
                     ],
                   ),
                 ],
@@ -1898,15 +1906,15 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
                 children: [
                   const _CommunitySectionHeader(
                     emoji: '🌱',
-                    title: 'Uye dizini',
+                    title: 'Üye dizini',
                   ),
                   const SizedBox(height: 12),
                   if (members.isEmpty)
                     const _CommunityEmptyState(
                       emoji: '🫥',
-                      title: 'Uye bulunmadi',
+                      title: 'Üye bulunamadı',
                       subtitle:
-                          'Topluluga uyeler geldikce bu alan profil bilgileriyle dolacak.',
+                          'Topluluğa üyeler geldikçe bu alan profil bilgileriyle dolacak.',
                     )
                   else
                     ...List<Widget>.generate(members.length, (index) {
@@ -1956,16 +1964,16 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
             final accent = _accentForCommunity(community, 0);
             final ruleItems = community.rules.isEmpty
                 ? const <String>[
-                    'Saygili kal ve baglamsiz promosyon yapma.',
-                    'Once kanalda etkileşim kur, sonra DM istegi gonder.',
-                    'Kaynak veya iddia paylasirken net baglam ver.',
+                    'Saygılı kal ve bağlamsız promosyon yapma.',
+                    'Önce kanalda etkileşim kur, sonra DM isteği gönder.',
+                    'Kaynak veya iddia paylaşırken net bağlam ver.',
                   ]
                 : community.rules;
             final entryItems = community.entryChecklist.isEmpty
                 ? const <String>[
-                    'Kendini tanit.',
-                    'Ilgili odayi takip et.',
-                    'Bir sohbete katilarak gorunur olmaya basla.',
+                    'Kendini tanıt.',
+                    'İlgili odayı takip et.',
+                    'Bir sohbete katılarak görünür olmaya başla.',
                   ]
                 : community.entryChecklist;
 
@@ -1995,7 +2003,7 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: const [
                             Text(
-                              'Topluluk detayi',
+                              'Topluluk detayı',
                               style: TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w700,
@@ -2084,7 +2092,7 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
                             runSpacing: 8,
                             children: [
                               _CommunityMetricPill(
-                                label: '👥 ${community.memberCount} uye',
+                                label: '👥 ${community.memberCount} üye',
                               ),
                               _CommunityMetricPill(
                                 label: '🗂️ ${community.channels.length} oda',
@@ -2092,7 +2100,7 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
                               _CommunityMetricPill(
                                 label: community.isMember
                                     ? '✅ Uyesin'
-                                    : '🔓 Acik katilim',
+                                    : '🔓 Açık katılım',
                               ),
                             ],
                           ),
@@ -2116,7 +2124,7 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
                                       ),
                                     ),
                                     child: Text(
-                                      _busy ? 'Bekle...' : 'Topluluktan ayril',
+                                      _busy ? 'Bekle...' : 'Topluluktan ayrıl',
                                     ),
                                   ),
                                 ),
@@ -2144,7 +2152,7 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
                                       _busy
                                           ? 'Bekle...'
                                           : (data.profileGate.isComplete
-                                                ? 'Topluluga katil'
+                                                ? 'Topluluğa katıl'
                                                 : 'Profili tamamla'),
                                     ),
                                   ),
@@ -2307,7 +2315,7 @@ class _CommunityChannelPageState extends State<_CommunityChannelPage> {
                       emoji: '💬',
                       title: 'Bu kanalda henuz mesaj yok',
                       subtitle:
-                          'Ilk mesaji gondererek topluluk akisini burada baslatabilirsin.',
+                          'İlk mesajı göndererek topluluk akışını burada başlatabilirsin.',
                     ),
                   );
                 }
@@ -2522,7 +2530,7 @@ class _CommunityTopicDetailPage extends StatelessWidget {
                   if (topic.replies.isEmpty)
                     const _CommunityEmptyState(
                       emoji: '🫥',
-                      title: 'Henuz yanit yok',
+                      title: 'Henüz yanıt yok',
                       subtitle:
                           'Bu icerik ilk cevap geldikce topluluk bilgisini zenginlestirecek.',
                     )
@@ -2550,11 +2558,11 @@ enum _CommunityDetailTab { home, chat, questions, resources, members }
 
 extension _CommunityDetailTabX on _CommunityDetailTab {
   String get label => switch (this) {
-    _CommunityDetailTab.home => 'Ana Sayfa',
+    _CommunityDetailTab.home => 'Anasayfa',
     _CommunityDetailTab.chat => 'Sohbet',
     _CommunityDetailTab.questions => 'Sorular',
     _CommunityDetailTab.resources => 'Kaynaklar',
-    _CommunityDetailTab.members => 'Uyeler',
+    _CommunityDetailTab.members => 'Üyeler',
   };
 
   String get emoji => switch (this) {
@@ -2643,7 +2651,7 @@ class _CommunityLockedTabCard extends StatelessWidget {
           Text(tab.emoji, style: const TextStyle(fontSize: 24)),
           const SizedBox(height: 10),
           Text(
-            '${tab.label} alani uye olunca acilir',
+            '${tab.label} alanı üye olunca açılır',
             style: const TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.w700,
@@ -2652,7 +2660,7 @@ class _CommunityLockedTabCard extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           const Text(
-            'Topluluga katildiginda bu sekmede kanal akisi, sorular, kaynaklar ve uye dizini gorunur olacak.',
+            'Topluluğa katıldığında bu sekmede kanal akışı, sorular, kaynaklar ve üye dizini görünür olacak.',
             style: TextStyle(
               fontSize: 13,
               height: 1.45,
@@ -2675,7 +2683,7 @@ class _CommunityLockedTabCard extends StatelessWidget {
                 ),
               ),
               child: const Text(
-                'Profili tamamlamak icin Turna bolumune don',
+                'Profili tamamlamak için Turna bölümüne dön',
                 style: TextStyle(fontWeight: FontWeight.w700),
               ),
             ),
@@ -2721,7 +2729,7 @@ class _CommunityHeroCard extends StatelessWidget {
             ),
             const SizedBox(height: 14),
             const Text(
-              'Bugun hangi toplulukta gorunmek istiyorsun?',
+              'Bugün hangi toplulukta görünmek istiyorsun?',
               style: TextStyle(
                 fontSize: 29,
                 height: 1.05,
@@ -2731,7 +2739,7 @@ class _CommunityHeroCard extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             const Text(
-              'Canli sohbet, sorular, kaynaklar ve guvenli networking ayni akista.',
+              'Canlı sohbet, sorular, kaynaklar ve güvenli networking aynı akışta.',
               style: TextStyle(
                 fontSize: 14,
                 height: 1.5,
@@ -2745,7 +2753,7 @@ class _CommunityHeroCard extends StatelessWidget {
               children: const [
                 _CommunityMetricPill(label: '🌿 Curated topluluklar'),
                 _CommunityMetricPill(label: '📅 Etkinlikler'),
-                _CommunityMetricPill(label: '🤝 Guvenli baglanti'),
+                _CommunityMetricPill(label: '🤝 Güvenli bağlantı'),
               ],
             ),
           ],
@@ -2779,7 +2787,7 @@ class _CommunityProfileCompletionCard extends StatelessWidget {
               SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  'Community profiline son dokunus',
+                  'Community profiline son dokunuş',
                   style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.w700,
@@ -2812,8 +2820,8 @@ class _CommunityProfileCompletionCard extends StatelessWidget {
           const SizedBox(height: 12),
           Text(
             gate.isComplete
-                ? 'Mevcut profilin community katilimi icin yeterli. Artik topluluklara katilip mesaj istekleri gonderebilirsin.'
-                : 'Topluluk katilimi icin su alanlari tamamla: ${gate.missingItems.join(', ')}.',
+                ? 'Mevcut profilin community katılımı için yeterli. Artık topluluklara katılıp mesaj istekleri gönderebilirsin.'
+                : 'Topluluk katılımı için şu alanları tamamla: ${gate.missingItems.join(', ')}.',
             style: const TextStyle(
               fontSize: 13,
               height: 1.45,
@@ -2838,7 +2846,7 @@ class _CommunityProfileCompletionCard extends StatelessWidget {
                   ),
                 ),
                 child: Text(
-                  compact ? 'Siz bolumune don' : 'Profili tamamlamak icin don',
+                  compact ? 'Siz bölümüne dön' : 'Profili tamamlamak için dön',
                   style: const TextStyle(fontWeight: FontWeight.w700),
                 ),
               ),
@@ -3108,7 +3116,7 @@ class _CommunityEventCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: const [
             Text(
-              '🎙️ Canli oturum',
+              '🎙️ Canlı oturum',
               style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w700,
@@ -3117,7 +3125,7 @@ class _CommunityEventCard extends StatelessWidget {
             ),
             SizedBox(height: 10),
             Text(
-              'Topluluk onboarding deneyimi nasil tasarlanir?',
+              'Topluluk onboarding deneyimi nasıl tasarlanır?',
               style: TextStyle(
                 fontSize: 18,
                 height: 1.2,
@@ -3127,7 +3135,7 @@ class _CommunityEventCard extends StatelessWidget {
             ),
             SizedBox(height: 8),
             Text(
-              'Yarin 20:30  •  148 kisi katiliyor',
+              'Yarın 20:30  •  148 kişi katılıyor',
               style: TextStyle(
                 fontSize: 13,
                 color: _CommunityUiTokens.textMuted,
@@ -3378,7 +3386,7 @@ class _ResourcePreviewTile extends StatelessWidget {
       badge: isEvent
           ? (topic.eventStartsAt?.trim().isNotEmpty == true
                 ? 'Etkinlik'
-                : 'Canli')
+                : 'Canlı')
           : 'Kaynak',
       onTap: onTap,
     );
@@ -3778,7 +3786,7 @@ class _CommunitySearchField extends StatelessWidget {
             Icon(Icons.search_rounded, color: _CommunityUiTokens.textMuted),
             SizedBox(width: 10),
             Text(
-              'Topluluk, konu veya kisi ara',
+              'Topluluk, konu veya kişi ara',
               style: TextStyle(
                 fontSize: 14,
                 color: _CommunityUiTokens.textMuted,
@@ -3928,7 +3936,7 @@ class _CommunityErrorState extends StatelessWidget {
               const Text('⚠️', style: TextStyle(fontSize: 28)),
               const SizedBox(height: 10),
               const Text(
-                'Community verisi yuklenemedi',
+                'Community verisi yüklenemedi',
                 style: TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.w700,
@@ -3973,11 +3981,11 @@ class _CommunityBottomBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const items = <({String emoji, String label})>[
-      (emoji: '🏡', label: 'Ana Sayfa'),
-      (emoji: '🧭', label: 'Kesfet'),
+      (emoji: '🏡', label: 'Anasayfa'),
+      (emoji: '🧭', label: 'Keşfet'),
       (emoji: '💬', label: 'Turna'),
       (emoji: '🔔', label: 'Bildirimler'),
-      (emoji: '🌿', label: 'Topluluklarim'),
+      (emoji: '🌿', label: 'Topluluklarım'),
     ];
 
     return SafeArea(
@@ -4022,16 +4030,19 @@ class _CommunityBottomBar extends StatelessWidget {
                             style: const TextStyle(fontSize: 18),
                           ),
                           const SizedBox(height: 6),
-                          Text(
-                            item.label,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: selected
-                                  ? FontWeight.w700
-                                  : FontWeight.w600,
-                              color: _CommunityUiTokens.text,
+                          FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              item.label,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 10.5,
+                                fontWeight: selected
+                                    ? FontWeight.w700
+                                    : FontWeight.w600,
+                                color: _CommunityUiTokens.text,
+                              ),
                             ),
                           ),
                         ],
@@ -4076,7 +4087,7 @@ Future<void> _showCommunityProfileGateSheet(
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Topluluklara katilmak ve mesaj istegi gonderebilmek icin su alanlar eksik: ${gate.missingItems.join(', ')}.',
+                  'Topluluklara katılmak ve mesaj isteği gönderebilmek için şu alanlar eksik: ${gate.missingItems.join(', ')}.',
                   style: const TextStyle(
                     fontSize: 13,
                     height: 1.45,
@@ -4108,7 +4119,7 @@ Future<void> _showCommunityProfileGateSheet(
                             borderRadius: BorderRadius.circular(18),
                           ),
                         ),
-                        child: const Text('Siz bolumune don'),
+                        child: const Text('Siz bölümüne dön'),
                       ),
                     ),
                   ],
@@ -4125,15 +4136,15 @@ Future<void> _showCommunityProfileGateSheet(
 ({String emoji, String label}) _communityChannelDescriptor(String type) {
   switch (type.toLowerCase()) {
     case 'announcement':
-      return (emoji: '📣', label: 'Duyuru kanali');
+      return (emoji: '📣', label: 'Duyuru kanalı');
     case 'question':
-      return (emoji: '❓', label: 'Soru-cevap alani');
+      return (emoji: '❓', label: 'Soru-cevap alanı');
     case 'resource':
-      return (emoji: '📚', label: 'Kaynak kutuphanesi');
+      return (emoji: '📚', label: 'Kaynak kütüphanesi');
     case 'event':
-      return (emoji: '📅', label: 'Etkinlik alani');
+      return (emoji: '📅', label: 'Etkinlik alanı');
     default:
-      return (emoji: '💬', label: 'Canli sohbet odasi');
+      return (emoji: '💬', label: 'Canlı sohbet odası');
   }
 }
 
