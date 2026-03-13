@@ -33,6 +33,8 @@ import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart' as vp;
 
+import 'community_shell_preview.dart';
+
 part 'src/turna_chats.dart';
 part 'src/turna_auth_flow.dart';
 part 'src/turna_profile_shell.dart';
@@ -1703,7 +1705,7 @@ class _TurnaAppState extends State<TurnaApp> with WidgetsBindingObserver {
                 _updateSession(session);
               },
             )
-          : MainTabs(
+          : TurnaShellHost(
               session: _session!,
               onSessionUpdated: (session) {
                 _updateSession(session);

@@ -1331,8 +1331,8 @@ class _BottomProfileTabIcon extends StatelessWidget {
   }
 }
 
-class _BottomWalletTabIcon extends StatelessWidget {
-  const _BottomWalletTabIcon({this.selected = false});
+class _BottomCommunityTabIcon extends StatelessWidget {
+  const _BottomCommunityTabIcon({this.selected = false});
 
   final bool selected;
 
@@ -1342,17 +1342,28 @@ class _BottomWalletTabIcon extends StatelessWidget {
       duration: const Duration(milliseconds: 160),
       width: 40,
       height: 40,
-      padding: const EdgeInsets.all(1),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: selected ? TurnaColors.primary : Colors.transparent,
-          width: 1.6,
+        borderRadius: BorderRadius.circular(14),
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFF8BE0B3), Color(0xFF7EC8F8)],
         ),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(
+              0xFF7EC8F8,
+            ).withValues(alpha: selected ? 0.28 : 0.18),
+            blurRadius: selected ? 18 : 12,
+            offset: const Offset(0, 6),
+          ),
+        ],
+        border: selected
+            ? Border.all(color: TurnaColors.primary, width: 1.4)
+            : null,
       ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(8),
-        child: Image.asset('assets/turna-icon.png', fit: BoxFit.cover),
+      child: const Center(
+        child: Icon(Icons.groups_rounded, size: 22, color: Colors.white),
       ),
     );
   }
@@ -1423,10 +1434,10 @@ class _TurnaBottomBar extends StatelessWidget {
             ),
             Expanded(
               child: _TurnaBottomBarItem(
-                label: 'Cüzdan',
+                label: 'Community',
                 selected: selectedIndex == 2,
                 iconBuilder: (selected) =>
-                    _BottomWalletTabIcon(selected: selected),
+                    _BottomCommunityTabIcon(selected: selected),
                 onTap: () => onSelect(2),
               ),
             ),

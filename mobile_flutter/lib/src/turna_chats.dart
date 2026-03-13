@@ -1,7 +1,9 @@
 part of '../main.dart';
 
-class MainTabs extends StatefulWidget {
-  const MainTabs({
+enum TurnaShellMode { turna, community }
+
+class TurnaShellHost extends StatefulWidget {
+  const TurnaShellHost({
     super.key,
     required this.session,
     required this.onSessionUpdated,
@@ -11,6 +13,87 @@ class MainTabs extends StatefulWidget {
   final AuthSession session;
   final void Function(AuthSession session) onSessionUpdated;
   final VoidCallback onLogout;
+
+  @override
+  State<TurnaShellHost> createState() => _TurnaShellHostState();
+}
+
+class _TurnaShellHostState extends State<TurnaShellHost> {
+  TurnaShellMode _mode = TurnaShellMode.turna;
+
+  void _openCommunity() {
+    if (_mode == TurnaShellMode.community) return;
+    setState(() => _mode = TurnaShellMode.community);
+  }
+
+  void _openTurna() {
+    if (_mode == TurnaShellMode.turna) return;
+    setState(() => _mode = TurnaShellMode.turna);
+  }
+
+  Future<bool> _handleWillPop() async {
+    if (_mode == TurnaShellMode.community) {
+      _openTurna();
+      return false;
+    }
+    return true;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return WillPopScope(
+      onWillPop: _handleWillPop,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          IgnorePointer(
+            ignoring: _mode != TurnaShellMode.turna,
+            child: TickerMode(
+              enabled: _mode == TurnaShellMode.turna,
+              child: AnimatedOpacity(
+                duration: const Duration(milliseconds: 220),
+                curve: Curves.easeOutCubic,
+                opacity: _mode == TurnaShellMode.turna ? 1 : 0,
+                child: MainTabs(
+                  session: widget.session,
+                  onSessionUpdated: widget.onSessionUpdated,
+                  onLogout: widget.onLogout,
+                  onCommunitySelected: _openCommunity,
+                ),
+              ),
+            ),
+          ),
+          IgnorePointer(
+            ignoring: _mode != TurnaShellMode.community,
+            child: TickerMode(
+              enabled: _mode == TurnaShellMode.community,
+              child: AnimatedOpacity(
+                duration: const Duration(milliseconds: 220),
+                curve: Curves.easeOutCubic,
+                opacity: _mode == TurnaShellMode.community ? 1 : 0,
+                child: CommunityShellPreviewPage(onTurnaTap: _openTurna),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class MainTabs extends StatefulWidget {
+  const MainTabs({
+    super.key,
+    required this.session,
+    required this.onSessionUpdated,
+    required this.onLogout,
+    required this.onCommunitySelected,
+  });
+
+  final AuthSession session;
+  final void Function(AuthSession session) onSessionUpdated;
+  final VoidCallback onLogout;
+  final VoidCallback onCommunitySelected;
 
   @override
   State<MainTabs> createState() => _MainTabsState();
@@ -153,7 +236,7 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
         callCoordinator: _callCoordinator,
         onSessionExpired: _handleSessionExpired,
       ),
-      2 => const TurnaPaymentToolsPage(),
+      2 => const SizedBox.shrink(),
       3 => ChatsPage(
         session: widget.session,
         inboxUpdateNotifier: _inboxUpdateNotifier,
@@ -174,6 +257,10 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
   }
 
   void _selectTab(int index) {
+    if (index == 2) {
+      widget.onCommunitySelected();
+      return;
+    }
     if (_index == index && _visitedTabs.contains(index)) return;
     setState(() {
       _index = index;
