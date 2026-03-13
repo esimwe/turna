@@ -8,11 +8,13 @@ class CommunityShellPreviewPage extends StatefulWidget {
     super.key,
     required this.authToken,
     required this.backendBaseUrl,
+    required this.currentUserId,
     this.onTurnaTap,
   });
 
   final String authToken;
   final String backendBaseUrl;
+  final String currentUserId;
   final VoidCallback? onTurnaTap;
 
   @override
@@ -49,11 +51,23 @@ class _CommunityShellPreviewPageState extends State<CommunityShellPreviewPage> {
   @override
   Widget build(BuildContext context) {
     final pages = <Widget>[
-      _CommunityHomePage(api: _api, onTurnaTap: widget.onTurnaTap),
-      _CommunityExplorePage(api: _api, onTurnaTap: widget.onTurnaTap),
+      _CommunityHomePage(
+        api: _api,
+        currentUserId: widget.currentUserId,
+        onTurnaTap: widget.onTurnaTap,
+      ),
+      _CommunityExplorePage(
+        api: _api,
+        currentUserId: widget.currentUserId,
+        onTurnaTap: widget.onTurnaTap,
+      ),
       _CommunityTurnaReturnPage(onTap: widget.onTurnaTap),
       const _CommunityNotificationsPage(),
-      _CommunityMyCommunitiesPage(api: _api, onTurnaTap: widget.onTurnaTap),
+      _CommunityMyCommunitiesPage(
+        api: _api,
+        currentUserId: widget.currentUserId,
+        onTurnaTap: widget.onTurnaTap,
+      ),
     ];
 
     return Scaffold(
@@ -171,6 +185,82 @@ class _CommunityApiClient {
     );
   }
 
+  Future<_CommunityChannelFeed> fetchChannelMessages({
+    required String communityId,
+    required String channelId,
+  }) async {
+    final res = await http.get(
+      _uri('/api/communities/$communityId/channels/$channelId/messages'),
+      headers: _headers,
+    );
+    if (res.statusCode >= 400) {
+      throw _CommunityApiException(
+        _decodeError(res, 'Kanal mesajlari yuklenemedi.'),
+      );
+    }
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    final data = Map<String, dynamic>.from(body['data'] as Map? ?? const {});
+    return _CommunityChannelFeed.fromMap(data);
+  }
+
+  Future<_CommunityMessageSummary> sendChannelMessage({
+    required String communityId,
+    required String channelId,
+    required String text,
+  }) async {
+    final res = await http.post(
+      _uri('/api/communities/$communityId/channels/$channelId/messages'),
+      headers: _headers,
+      body: jsonEncode({'text': text}),
+    );
+    return _decodeChannelMessage(res, fallbackError: 'Mesaj gonderilemedi.');
+  }
+
+  Future<List<_CommunityTopicSummary>> fetchTopics({
+    required String communityId,
+    required String type,
+  }) async {
+    final res = await http.get(
+      _uri('/api/communities/$communityId/topics', {'type': type}),
+      headers: _headers,
+    );
+    if (res.statusCode >= 400) {
+      throw _CommunityApiException(
+        _decodeError(res, 'Topluluk icerikleri yuklenemedi.'),
+      );
+    }
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    final raw = body['data'] as List<dynamic>? ?? const [];
+    return raw
+        .whereType<Map>()
+        .map(
+          (item) =>
+              _CommunityTopicSummary.fromMap(Map<String, dynamic>.from(item)),
+        )
+        .toList();
+  }
+
+  Future<List<_CommunityMemberSummary>> fetchMembers({
+    required String communityId,
+  }) async {
+    final res = await http.get(
+      _uri('/api/communities/$communityId/members'),
+      headers: _headers,
+    );
+    if (res.statusCode >= 400) {
+      throw _CommunityApiException(_decodeError(res, 'Uyeler yuklenemedi.'));
+    }
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    final raw = body['data'] as List<dynamic>? ?? const [];
+    return raw
+        .whereType<Map>()
+        .map(
+          (item) =>
+              _CommunityMemberSummary.fromMap(Map<String, dynamic>.from(item)),
+        )
+        .toList();
+  }
+
   Future<_CommunitySummary> join(String communityId) async {
     final res = await http.post(
       _uri('/api/communities/$communityId/join'),
@@ -218,6 +308,18 @@ class _CommunityApiClient {
     final body = jsonDecode(res.body) as Map<String, dynamic>;
     final data = Map<String, dynamic>.from(body['data'] as Map);
     return _CommunitySummary.fromMap(data);
+  }
+
+  _CommunityMessageSummary _decodeChannelMessage(
+    http.Response res, {
+    required String fallbackError,
+  }) {
+    if (res.statusCode >= 400) {
+      throw _CommunityApiException(_decodeError(res, fallbackError));
+    }
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    final data = Map<String, dynamic>.from(body['data'] as Map);
+    return _CommunityMessageSummary.fromMap(data);
   }
 
   String _decodeError(http.Response res, String fallbackError) {
@@ -334,6 +436,7 @@ class _CommunityChannelSummary {
     required this.name,
     required this.type,
     required this.isDefault,
+    this.description,
   });
 
   final String id;
@@ -341,6 +444,7 @@ class _CommunityChannelSummary {
   final String name;
   final String type;
   final bool isDefault;
+  final String? description;
 
   factory _CommunityChannelSummary.fromMap(Map<String, dynamic> map) {
     return _CommunityChannelSummary(
@@ -349,6 +453,243 @@ class _CommunityChannelSummary {
       name: (map['name'] ?? '').toString(),
       type: (map['type'] ?? 'chat').toString(),
       isDefault: map['isDefault'] == true,
+      description: _CommunitySummary._nullableString(map['description']),
+    );
+  }
+}
+
+class _CommunityUserSummary {
+  const _CommunityUserSummary({
+    required this.id,
+    required this.displayName,
+    this.username,
+    this.avatarUrl,
+    this.about,
+    this.city,
+    this.country,
+    this.expertise,
+    this.communityRole,
+  });
+
+  final String id;
+  final String displayName;
+  final String? username;
+  final String? avatarUrl;
+  final String? about;
+  final String? city;
+  final String? country;
+  final String? expertise;
+  final String? communityRole;
+
+  String get subtitle {
+    final bits = <String>[];
+    if ((city ?? '').trim().isNotEmpty) bits.add(city!.trim());
+    if ((country ?? '').trim().isNotEmpty) bits.add(country!.trim());
+    if ((expertise ?? '').trim().isNotEmpty) bits.add(expertise!.trim());
+    if (bits.isEmpty) {
+      return about?.trim().isNotEmpty == true
+          ? about!.trim()
+          : 'Topluluk uyesi';
+    }
+    return bits.join('  •  ');
+  }
+
+  factory _CommunityUserSummary.fromMap(Map<String, dynamic> map) {
+    return _CommunityUserSummary(
+      id: (map['id'] ?? '').toString(),
+      displayName: (map['displayName'] ?? '').toString(),
+      username: _CommunitySummary._nullableString(map['username']),
+      avatarUrl: _CommunitySummary._nullableString(map['avatarUrl']),
+      about: _CommunitySummary._nullableString(map['about']),
+      city: _CommunitySummary._nullableString(map['city']),
+      country: _CommunitySummary._nullableString(map['country']),
+      expertise: _CommunitySummary._nullableString(map['expertise']),
+      communityRole: _CommunitySummary._nullableString(map['communityRole']),
+    );
+  }
+}
+
+class _CommunityMessageSummary {
+  const _CommunityMessageSummary({
+    required this.id,
+    required this.author,
+    required this.createdAt,
+    this.text,
+    this.replyPreview,
+  });
+
+  final String id;
+  final _CommunityUserSummary author;
+  final String createdAt;
+  final String? text;
+  final String? replyPreview;
+
+  factory _CommunityMessageSummary.fromMap(Map<String, dynamic> map) {
+    final replyTo = map['replyToMessage'] as Map<String, dynamic>?;
+    final replyText = replyTo == null
+        ? null
+        : _CommunitySummary._nullableString(replyTo['text']);
+    return _CommunityMessageSummary(
+      id: (map['id'] ?? '').toString(),
+      author: _CommunityUserSummary.fromMap(
+        Map<String, dynamic>.from(map['author'] as Map? ?? const {}),
+      ),
+      createdAt: (map['createdAt'] ?? '').toString(),
+      text: _CommunitySummary._nullableString(map['text']),
+      replyPreview: replyText,
+    );
+  }
+}
+
+class _CommunityChannelFeed {
+  const _CommunityChannelFeed({required this.channel, required this.items});
+
+  final _CommunityChannelSummary channel;
+  final List<_CommunityMessageSummary> items;
+
+  factory _CommunityChannelFeed.fromMap(Map<String, dynamic> map) {
+    return _CommunityChannelFeed(
+      channel: _CommunityChannelSummary.fromMap(
+        Map<String, dynamic>.from(map['channel'] as Map? ?? const {}),
+      ),
+      items: (map['items'] as List<dynamic>? ?? const [])
+          .whereType<Map>()
+          .map(
+            (item) => _CommunityMessageSummary.fromMap(
+              Map<String, dynamic>.from(item),
+            ),
+          )
+          .toList(),
+    );
+  }
+}
+
+class _CommunityTopicSummary {
+  const _CommunityTopicSummary({
+    required this.id,
+    required this.title,
+    required this.type,
+    required this.author,
+    required this.replyCount,
+    required this.createdAt,
+    this.body,
+    this.channel,
+    this.eventStartsAt,
+    this.isPinned = false,
+    this.isSolved = false,
+    this.tags = const <String>[],
+    this.replies = const <_CommunityTopicReplySummary>[],
+  });
+
+  final String id;
+  final String title;
+  final String type;
+  final _CommunityUserSummary author;
+  final int replyCount;
+  final String createdAt;
+  final String? body;
+  final _CommunityChannelSummary? channel;
+  final String? eventStartsAt;
+  final bool isPinned;
+  final bool isSolved;
+  final List<String> tags;
+  final List<_CommunityTopicReplySummary> replies;
+
+  factory _CommunityTopicSummary.fromMap(Map<String, dynamic> map) {
+    return _CommunityTopicSummary(
+      id: (map['id'] ?? '').toString(),
+      title: (map['title'] ?? '').toString(),
+      type: (map['type'] ?? 'question').toString(),
+      author: _CommunityUserSummary.fromMap(
+        Map<String, dynamic>.from(map['author'] as Map? ?? const {}),
+      ),
+      replyCount: (map['replyCount'] as num?)?.toInt() ?? 0,
+      createdAt: (map['createdAt'] ?? '').toString(),
+      body: _CommunitySummary._nullableString(map['body']),
+      channel: (map['channel'] as Map?) == null
+          ? null
+          : _CommunityChannelSummary.fromMap(
+              Map<String, dynamic>.from(map['channel'] as Map),
+            ),
+      eventStartsAt: _CommunitySummary._nullableString(map['eventStartsAt']),
+      isPinned: map['isPinned'] == true,
+      isSolved: map['isSolved'] == true,
+      tags: _CommunitySummary._stringList(map['tags']),
+      replies: (map['replies'] as List<dynamic>? ?? const [])
+          .whereType<Map>()
+          .map(
+            (item) => _CommunityTopicReplySummary.fromMap(
+              Map<String, dynamic>.from(item),
+            ),
+          )
+          .toList(),
+    );
+  }
+}
+
+class _CommunityTopicReplySummary {
+  const _CommunityTopicReplySummary({
+    required this.id,
+    required this.body,
+    required this.author,
+    required this.createdAt,
+    required this.isAccepted,
+  });
+
+  final String id;
+  final String body;
+  final _CommunityUserSummary author;
+  final String createdAt;
+  final bool isAccepted;
+
+  factory _CommunityTopicReplySummary.fromMap(Map<String, dynamic> map) {
+    return _CommunityTopicReplySummary(
+      id: (map['id'] ?? '').toString(),
+      body: (map['body'] ?? '').toString(),
+      author: _CommunityUserSummary.fromMap(
+        Map<String, dynamic>.from(map['author'] as Map? ?? const {}),
+      ),
+      createdAt: (map['createdAt'] ?? '').toString(),
+      isAccepted: map['isAccepted'] == true,
+    );
+  }
+}
+
+class _CommunityMemberSummary {
+  const _CommunityMemberSummary({
+    required this.role,
+    required this.joinedAt,
+    required this.user,
+  });
+
+  final String? role;
+  final String joinedAt;
+  final _CommunityUserSummary user;
+
+  String get roleLabel {
+    switch ((role ?? '').toLowerCase()) {
+      case 'owner':
+        return 'Kurucu';
+      case 'admin':
+        return 'Admin';
+      case 'moderator':
+        return 'Mod';
+      case 'mentor':
+        return 'Mentor';
+      default:
+        return user.communityRole?.trim().isNotEmpty == true
+            ? user.communityRole!.trim()
+            : 'Uye';
+    }
+  }
+
+  factory _CommunityMemberSummary.fromMap(Map<String, dynamic> map) {
+    return _CommunityMemberSummary(
+      role: _CommunitySummary._nullableString(map['role']),
+      joinedAt: (map['joinedAt'] ?? '').toString(),
+      user: _CommunityUserSummary.fromMap(
+        Map<String, dynamic>.from(map['user'] as Map? ?? const {}),
+      ),
     );
   }
 }
@@ -495,9 +836,14 @@ class _CommunityUiTokens {
 }
 
 class _CommunityHomePage extends StatefulWidget {
-  const _CommunityHomePage({required this.api, this.onTurnaTap});
+  const _CommunityHomePage({
+    required this.api,
+    required this.currentUserId,
+    this.onTurnaTap,
+  });
 
   final _CommunityApiClient api;
+  final String currentUserId;
   final VoidCallback? onTurnaTap;
 
   @override
@@ -526,6 +872,7 @@ class _CommunityHomePageState extends State<_CommunityHomePage> {
         builder: (_) => _CommunityDetailPage(
           api: widget.api,
           initialCommunity: community,
+          currentUserId: widget.currentUserId,
           onTurnaTap: widget.onTurnaTap,
         ),
       ),
@@ -674,9 +1021,14 @@ class _CommunityHomePageState extends State<_CommunityHomePage> {
 }
 
 class _CommunityExplorePage extends StatefulWidget {
-  const _CommunityExplorePage({required this.api, this.onTurnaTap});
+  const _CommunityExplorePage({
+    required this.api,
+    required this.currentUserId,
+    this.onTurnaTap,
+  });
 
   final _CommunityApiClient api;
+  final String currentUserId;
   final VoidCallback? onTurnaTap;
 
   @override
@@ -706,6 +1058,7 @@ class _CommunityExplorePageState extends State<_CommunityExplorePage> {
         builder: (_) => _CommunityDetailPage(
           api: widget.api,
           initialCommunity: community,
+          currentUserId: widget.currentUserId,
           onTurnaTap: widget.onTurnaTap,
         ),
       ),
@@ -894,9 +1247,14 @@ class _CommunityNotificationsPage extends StatelessWidget {
 }
 
 class _CommunityMyCommunitiesPage extends StatefulWidget {
-  const _CommunityMyCommunitiesPage({required this.api, this.onTurnaTap});
+  const _CommunityMyCommunitiesPage({
+    required this.api,
+    required this.currentUserId,
+    this.onTurnaTap,
+  });
 
   final _CommunityApiClient api;
+  final String currentUserId;
   final VoidCallback? onTurnaTap;
 
   @override
@@ -928,6 +1286,7 @@ class _CommunityMyCommunitiesPageState
         builder: (_) => _CommunityDetailPage(
           api: widget.api,
           initialCommunity: community,
+          currentUserId: widget.currentUserId,
           onTurnaTap: widget.onTurnaTap,
         ),
       ),
@@ -1104,11 +1463,13 @@ class _CommunityDetailPage extends StatefulWidget {
   const _CommunityDetailPage({
     required this.api,
     required this.initialCommunity,
+    required this.currentUserId,
     this.onTurnaTap,
   });
 
   final _CommunityApiClient api;
   final _CommunitySummary initialCommunity;
+  final String currentUserId;
   final VoidCallback? onTurnaTap;
 
   @override
@@ -1187,6 +1548,32 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
         setState(() => _busy = false);
       }
     }
+  }
+
+  Future<void> _openChannel(
+    _CommunitySummary community,
+    _CommunityChannelSummary channel,
+  ) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => _CommunityChannelPage(
+          api: widget.api,
+          community: community,
+          channel: channel,
+          currentUserId: widget.currentUserId,
+        ),
+      ),
+    );
+    if (!mounted) return;
+    await _reload();
+  }
+
+  Future<void> _openTopic(_CommunityTopicSummary topic) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => _CommunityTopicDetailPage(topic: topic),
+      ),
+    );
   }
 
   Widget _buildTabContent(
@@ -1323,310 +1710,225 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
           (channel) => channel.type == 'chat' || channel.type == 'announcement',
         )
         .toList();
-    return Column(
-      children: [
-        _SurfaceCard(
-          padding: const EdgeInsets.all(18),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const _CommunitySectionHeader(
-                emoji: '💬',
-                title: 'Sohbet odalari',
-              ),
-              const SizedBox(height: 12),
-              ...List<Widget>.generate(channels.length, (index) {
-                final channel = channels[index];
-                return Padding(
-                  padding: EdgeInsets.only(
-                    bottom: index == channels.length - 1 ? 0 : 10,
-                  ),
-                  child: _ChannelTile(channel: channel),
-                );
-              }),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        _SurfaceCard(
-          padding: const EdgeInsets.all(18),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const _CommunitySectionHeader(
-                emoji: '🔥',
-                title: 'Bugunun akisi',
-              ),
-              const SizedBox(height: 12),
-              ...List<Widget>.generate(channels.length.clamp(1, 3), (index) {
-                final channel = channels.isEmpty
-                    ? _CommunityChannelSummary(
-                        id: 'general-preview',
-                        slug: 'genel',
-                        name: 'Genel',
-                        type: 'chat',
-                        isDefault: true,
-                      )
-                    : channels[index];
-                return Padding(
-                  padding: EdgeInsets.only(
-                    bottom: index == channels.length.clamp(1, 3) - 1 ? 0 : 10,
-                  ),
-                  child: _ConversationPreviewTile(
-                    emoji: index == 0 ? '💬' : (index == 1 ? '📌' : '✨'),
-                    title: channel.name,
-                    subtitle:
-                        '${community.name} icinde bugun hareket var. Bu alan gercek mesaj akisina hazirlandi.',
-                    stats: index == 0
-                        ? '18 yeni mesaj'
-                        : (index == 1 ? '3 sabit duyuru' : '7 yeni cevap'),
-                  ),
-                );
-              }),
-            ],
-          ),
-        ),
-      ],
+    return _SurfaceCard(
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const _CommunitySectionHeader(emoji: '💬', title: 'Sohbet odalari'),
+          const SizedBox(height: 12),
+          if (channels.isEmpty)
+            const _CommunityEmptyState(
+              emoji: '💤',
+              title: 'Sohbet odasi bulunmadi',
+              subtitle:
+                  'Chat veya announcement tipindeki kanallar burada listelenecek.',
+            )
+          else
+            ...List<Widget>.generate(channels.length, (index) {
+              final channel = channels[index];
+              return Padding(
+                padding: EdgeInsets.only(
+                  bottom: index == channels.length - 1 ? 0 : 10,
+                ),
+                child: _ChannelTile(
+                  channel: channel,
+                  onTap: () => _openChannel(community, channel),
+                ),
+              );
+            }),
+        ],
+      ),
     );
   }
 
   Widget _buildQuestionsTab(_CommunitySummary community) {
-    final channels = community.channels
-        .where((channel) => channel.type == 'question')
-        .toList();
-    final prompts = <String>[
-      '${community.name} icinde en cok tekrar eden soru ne?',
-      'Bu toplulukta yeni birinin ilk hangi basliktan baslamasi gerekir?',
-      'Hangi konuda toplu bir soru-cevap oturumu acilmali?',
-    ];
-    return Column(
-      children: [
-        _SurfaceCard(
+    return FutureBuilder<List<_CommunityTopicSummary>>(
+      future: widget.api.fetchTopics(
+        communityId: community.id,
+        type: 'question',
+      ),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (snapshot.hasError) {
+          return _CommunityErrorState(
+            message: snapshot.error.toString(),
+            onRetry: () async {
+              setState(() {});
+            },
+          );
+        }
+        final topics = snapshot.data ?? const <_CommunityTopicSummary>[];
+        return _SurfaceCard(
           padding: const EdgeInsets.all(18),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const _CommunitySectionHeader(
-                emoji: '❓',
-                title: 'Soru-cevap odalari',
-              ),
+              const _CommunitySectionHeader(emoji: '❓', title: 'Soru akisi'),
               const SizedBox(height: 12),
-              if (channels.isEmpty)
+              if (topics.isEmpty)
                 const _CommunityEmptyState(
                   emoji: '🫥',
-                  title: 'Bu toplulukta ayrik soru odasi yok',
-                  subtitle:
-                      'Question kanal tipi eklenince sorular burada duzenli gorunecek.',
+                  title: 'Soru bulunmadi',
+                  subtitle: 'Question tipi topicler burada listelenecek.',
                 )
               else
-                ...List<Widget>.generate(channels.length, (index) {
-                  final channel = channels[index];
+                ...List<Widget>.generate(topics.length, (index) {
+                  final topic = topics[index];
                   return Padding(
                     padding: EdgeInsets.only(
-                      bottom: index == channels.length - 1 ? 0 : 10,
+                      bottom: index == topics.length - 1 ? 0 : 10,
                     ),
-                    child: _ChannelTile(channel: channel),
+                    child: _QuestionPreviewTile.fromTopic(
+                      topic,
+                      onTap: () => _openTopic(topic),
+                    ),
                   );
                 }),
             ],
           ),
-        ),
-        const SizedBox(height: 16),
-        _SurfaceCard(
-          padding: const EdgeInsets.all(18),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const _CommunitySectionHeader(
-                emoji: '🧠',
-                title: 'Ornek soru akisi',
-              ),
-              const SizedBox(height: 12),
-              ...List<Widget>.generate(prompts.length, (index) {
-                return Padding(
-                  padding: EdgeInsets.only(
-                    bottom: index == prompts.length - 1 ? 0 : 10,
-                  ),
-                  child: _QuestionPreviewTile(
-                    title: prompts[index],
-                    subtitle: index == 0
-                        ? 'En iyi cevap secilecek yapida planlandi.'
-                        : 'Tag, cozuldu ve en iyi cevap alanina hazir.',
-                    badge: index == 0 ? 'Cozulmedi' : 'En iyi cevap',
-                  ),
-                );
-              }),
-            ],
-          ),
-        ),
-      ],
+        );
+      },
     );
   }
 
   Widget _buildResourcesTab(_CommunitySummary community) {
-    final channels = community.channels
-        .where(
-          (channel) => channel.type == 'resource' || channel.type == 'event',
-        )
-        .toList();
-    final resources =
-        <({String emoji, String title, String subtitle, String badge})>[
-          (
-            emoji: '📚',
-            title: 'Baslangic rehberi',
-            subtitle: '${community.name} icin sabit onboarding kaynagi.',
-            badge: 'Sabit',
-          ),
-          (
-            emoji: '🗂️',
-            title: 'Topluluk icinde kaybolmayan icerikler',
-            subtitle:
-                'Kaynak, link ve tekrar acilan konular icin kutuphane alani.',
-            badge: 'Kaynak',
-          ),
-          (
-            emoji: '📅',
-            title: 'Yaklasan etkinlikler',
-            subtitle: 'Canli oturum ve bulusma katmani bu sekmede toplanacak.',
-            badge: 'Etkinlik',
-          ),
-        ];
-    return Column(
-      children: [
-        _SurfaceCard(
+    return FutureBuilder<List<_CommunityTopicSummary>>(
+      future: Future.wait<List<_CommunityTopicSummary>>([
+        widget.api.fetchTopics(communityId: community.id, type: 'resource'),
+        widget.api.fetchTopics(communityId: community.id, type: 'event'),
+      ]).then((items) => [...items[0], ...items[1]]),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (snapshot.hasError) {
+          return _CommunityErrorState(
+            message: snapshot.error.toString(),
+            onRetry: () async {
+              setState(() {});
+            },
+          );
+        }
+        final topics = snapshot.data ?? const <_CommunityTopicSummary>[];
+        return _SurfaceCard(
           padding: const EdgeInsets.all(18),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const _CommunitySectionHeader(
                 emoji: '🗃️',
-                title: 'Kaynak ve etkinlik odalari',
+                title: 'Kaynaklar ve etkinlikler',
               ),
               const SizedBox(height: 12),
-              if (channels.isEmpty)
+              if (topics.isEmpty)
                 const _CommunityEmptyState(
                   emoji: '🪶',
-                  title: 'Kaynak sekmesi hazir',
+                  title: 'Kaynak bulunmadi',
                   subtitle:
-                      'Resource ve event kanal tipleri eklendikce bu alan otomatik dolacak.',
+                      'Resource ve event tipi icerikler burada listelenecek.',
                 )
               else
-                ...List<Widget>.generate(channels.length, (index) {
-                  final channel = channels[index];
+                ...List<Widget>.generate(topics.length, (index) {
+                  final topic = topics[index];
                   return Padding(
                     padding: EdgeInsets.only(
-                      bottom: index == channels.length - 1 ? 0 : 10,
+                      bottom: index == topics.length - 1 ? 0 : 10,
                     ),
-                    child: _ChannelTile(channel: channel),
+                    child: _ResourcePreviewTile.fromTopic(
+                      topic,
+                      onTap: () => _openTopic(topic),
+                    ),
                   );
                 }),
             ],
           ),
-        ),
-        const SizedBox(height: 16),
-        _SurfaceCard(
-          padding: const EdgeInsets.all(18),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const _CommunitySectionHeader(
-                emoji: '🧾',
-                title: 'Bu sekmede ne olacak?',
-              ),
-              const SizedBox(height: 12),
-              ...List<Widget>.generate(resources.length, (index) {
-                final item = resources[index];
-                return Padding(
-                  padding: EdgeInsets.only(
-                    bottom: index == resources.length - 1 ? 0 : 10,
-                  ),
-                  child: _ResourcePreviewTile(
-                    emoji: item.emoji,
-                    title: item.title,
-                    subtitle: item.subtitle,
-                    badge: item.badge,
-                  ),
-                );
-              }),
-            ],
-          ),
-        ),
-      ],
+        );
+      },
     );
   }
 
   Widget _buildMembersTab(_CommunitySummary community) {
-    final members =
-        <({String emoji, String name, String role, String subtitle})>[
-          (
-            emoji: '🚀',
-            name: 'Doğukan A.',
-            role: community.roleLabel,
-            subtitle: 'Istanbul  •  Aktif topluluk katilimcisi',
-          ),
-          (
-            emoji: '🎯',
-            name: 'Selin T.',
-            role: 'Mentor',
-            subtitle: 'Ankara  •  Uye dizini ve eslesme akisina hazir',
-          ),
-          (
-            emoji: '🧩',
-            name: 'Emir K.',
-            role: 'Aktif uye',
-            subtitle: 'Izmir  •  Soru-cevap ve networking odakli',
-          ),
-        ];
-    return Column(
-      children: [
-        _SurfaceCard(
-          padding: const EdgeInsets.all(18),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const _CommunitySectionHeader(emoji: '👥', title: 'Uye katmani'),
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 10,
-                runSpacing: 10,
+    return FutureBuilder<List<_CommunityMemberSummary>>(
+      future: widget.api.fetchMembers(communityId: community.id),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (snapshot.hasError) {
+          return _CommunityErrorState(
+            message: snapshot.error.toString(),
+            onRetry: () async {
+              setState(() {});
+            },
+          );
+        }
+        final members = snapshot.data ?? const <_CommunityMemberSummary>[];
+        return Column(
+          children: [
+            _SurfaceCard(
+              padding: const EdgeInsets.all(18),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _CommunityChip(label: '👥 ${community.memberCount} uye'),
-                  _CommunityChip(label: '🪪 Rol bazli gorunum'),
-                  _CommunityChip(label: '🤝 DM istegi mantigi'),
+                  const _CommunitySectionHeader(
+                    emoji: '👥',
+                    title: 'Uye katmani',
+                  ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: [
+                      _CommunityChip(label: '👥 ${community.memberCount} uye'),
+                      const _CommunityChip(label: '🪪 Rol bazli gorunum'),
+                      const _CommunityChip(label: '🤝 DM istegi mantigi'),
+                    ],
+                  ),
                 ],
               ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        _SurfaceCard(
-          padding: const EdgeInsets.all(18),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const _CommunitySectionHeader(
-                emoji: '🌱',
-                title: 'Ornek uye dizini',
+            ),
+            const SizedBox(height: 16),
+            _SurfaceCard(
+              padding: const EdgeInsets.all(18),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const _CommunitySectionHeader(
+                    emoji: '🌱',
+                    title: 'Uye dizini',
+                  ),
+                  const SizedBox(height: 12),
+                  if (members.isEmpty)
+                    const _CommunityEmptyState(
+                      emoji: '🫥',
+                      title: 'Uye bulunmadi',
+                      subtitle:
+                          'Topluluga uyeler geldikce bu alan profil bilgileriyle dolacak.',
+                    )
+                  else
+                    ...List<Widget>.generate(members.length, (index) {
+                      final member = members[index];
+                      return Padding(
+                        padding: EdgeInsets.only(
+                          bottom: index == members.length - 1 ? 0 : 10,
+                        ),
+                        child: _CommunityMemberTile(
+                          emoji: _emojiForIndex(index),
+                          name: member.user.displayName,
+                          role: member.roleLabel,
+                          subtitle: member.user.subtitle,
+                        ),
+                      );
+                    }),
+                ],
               ),
-              const SizedBox(height: 12),
-              ...List<Widget>.generate(members.length, (index) {
-                final member = members[index];
-                return Padding(
-                  padding: EdgeInsets.only(
-                    bottom: index == members.length - 1 ? 0 : 10,
-                  ),
-                  child: _CommunityMemberTile(
-                    emoji: member.emoji,
-                    name: member.name,
-                    role: member.role,
-                    subtitle: member.subtitle,
-                  ),
-                );
-              }),
-            ],
-          ),
-        ),
-      ],
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -1880,6 +2182,364 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
               ),
             );
           },
+        ),
+      ),
+    );
+  }
+}
+
+class _CommunityChannelPage extends StatefulWidget {
+  const _CommunityChannelPage({
+    required this.api,
+    required this.community,
+    required this.channel,
+    required this.currentUserId,
+  });
+
+  final _CommunityApiClient api;
+  final _CommunitySummary community;
+  final _CommunityChannelSummary channel;
+  final String currentUserId;
+
+  @override
+  State<_CommunityChannelPage> createState() => _CommunityChannelPageState();
+}
+
+class _CommunityChannelPageState extends State<_CommunityChannelPage> {
+  late Future<_CommunityChannelFeed> _future;
+  final _composerController = TextEditingController();
+  bool _sending = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = widget.api.fetchChannelMessages(
+      communityId: widget.community.id,
+      channelId: widget.channel.id,
+    );
+  }
+
+  @override
+  void dispose() {
+    _composerController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _reload() async {
+    setState(() {
+      _future = widget.api.fetchChannelMessages(
+        communityId: widget.community.id,
+        channelId: widget.channel.id,
+      );
+    });
+    await _future;
+  }
+
+  Future<void> _send() async {
+    final text = _composerController.text.trim();
+    if (text.isEmpty || _sending) return;
+    setState(() => _sending = true);
+    try {
+      await widget.api.sendChannelMessage(
+        communityId: widget.community.id,
+        channelId: widget.channel.id,
+        text: text,
+      );
+      _composerController.clear();
+      if (!mounted) return;
+      await _reload();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    } finally {
+      if (mounted) {
+        setState(() => _sending = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final descriptor = _communityChannelDescriptor(widget.channel.type);
+    return Scaffold(
+      backgroundColor: _CommunityUiTokens.background,
+      appBar: AppBar(
+        backgroundColor: _CommunityUiTokens.background,
+        surfaceTintColor: Colors.transparent,
+        titleSpacing: 0,
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(widget.channel.name),
+            Text(
+              descriptor.label,
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: _CommunityUiTokens.textMuted,
+              ),
+            ),
+          ],
+        ),
+      ),
+      body: Column(
+        children: [
+          Expanded(
+            child: FutureBuilder<_CommunityChannelFeed>(
+              future: _future,
+              builder: (context, snapshot) {
+                if (snapshot.connectionState != ConnectionState.done) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                if (snapshot.hasError) {
+                  return _CommunityErrorState(
+                    message: snapshot.error.toString(),
+                    onRetry: _reload,
+                  );
+                }
+                final feed = snapshot.data!;
+                if (feed.items.isEmpty) {
+                  return const Padding(
+                    padding: EdgeInsets.all(20),
+                    child: _CommunityEmptyState(
+                      emoji: '💬',
+                      title: 'Bu kanalda henuz mesaj yok',
+                      subtitle:
+                          'Ilk mesaji gondererek topluluk akisini burada baslatabilirsin.',
+                    ),
+                  );
+                }
+                return RefreshIndicator(
+                  onRefresh: _reload,
+                  child: ListView.separated(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                    itemCount: feed.items.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 10),
+                    itemBuilder: (context, index) {
+                      final item = feed.items[index];
+                      return _CommunityMessageBubble(
+                        message: item,
+                        mine: item.author.id == widget.currentUserId,
+                      );
+                    },
+                  ),
+                );
+              },
+            ),
+          ),
+          SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(22),
+                  border: Border.all(color: _CommunityUiTokens.border),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _composerController,
+                          minLines: 1,
+                          maxLines: 5,
+                          decoration: const InputDecoration(
+                            hintText: 'Mesaj yaz',
+                            border: InputBorder.none,
+                            isCollapsed: true,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      FilledButton(
+                        onPressed: _sending ? null : _send,
+                        style: FilledButton.styleFrom(
+                          backgroundColor: _CommunityUiTokens.text,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 12,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                        ),
+                        child: Text(_sending ? '...' : 'Gonder'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CommunityTopicDetailPage extends StatelessWidget {
+  const _CommunityTopicDetailPage({required this.topic});
+
+  final _CommunityTopicSummary topic;
+
+  @override
+  Widget build(BuildContext context) {
+    final descriptor = switch (topic.type) {
+      'event' => (emoji: '📅', label: 'Etkinlik'),
+      'resource' => (emoji: '📚', label: 'Kaynak'),
+      _ => (emoji: '❓', label: 'Soru'),
+    };
+
+    return Scaffold(
+      backgroundColor: _CommunityUiTokens.background,
+      appBar: AppBar(
+        backgroundColor: _CommunityUiTokens.background,
+        surfaceTintColor: Colors.transparent,
+        titleSpacing: 0,
+        title: Text(descriptor.label),
+      ),
+      body: SafeArea(
+        top: false,
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
+          children: [
+            _SurfaceCard(
+              padding: const EdgeInsets.all(18),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      _CommunityChip(
+                        label: '${descriptor.emoji} ${descriptor.label}',
+                      ),
+                      if (topic.channel != null)
+                        _CommunityChip(label: '#${topic.channel!.name}'),
+                      if (topic.isPinned)
+                        const _CommunityChip(label: '📌 Sabit'),
+                      if (topic.isSolved)
+                        const _CommunityChip(label: '✅ Cozuldu'),
+                      if ((topic.eventStartsAt ?? '').trim().isNotEmpty)
+                        _CommunityChip(
+                          label:
+                              '🗓️ ${_formatCommunityDate(topic.eventStartsAt!)}',
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  Text(
+                    topic.title,
+                    style: const TextStyle(
+                      fontSize: 23,
+                      height: 1.1,
+                      fontWeight: FontWeight.w700,
+                      color: _CommunityUiTokens.text,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      CircleAvatar(
+                        radius: 18,
+                        backgroundColor: _CommunityUiTokens.surfaceSoft,
+                        child: Text(
+                          topic.author.displayName.trim().isNotEmpty
+                              ? topic.author.displayName.trim()[0]
+                              : '👤',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                            color: _CommunityUiTokens.text,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              topic.author.displayName,
+                              style: const TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w700,
+                                color: _CommunityUiTokens.text,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              _formatCommunityDate(topic.createdAt),
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: _CommunityUiTokens.textMuted,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      _CommunityChip(label: '💬 ${topic.replyCount} cevap'),
+                    ],
+                  ),
+                  if ((topic.body ?? '').trim().isNotEmpty) ...[
+                    const SizedBox(height: 16),
+                    Text(
+                      topic.body!.trim(),
+                      style: const TextStyle(
+                        fontSize: 14,
+                        height: 1.55,
+                        color: _CommunityUiTokens.text,
+                      ),
+                    ),
+                  ],
+                  if (topic.tags.isNotEmpty) ...[
+                    const SizedBox(height: 16),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: topic.tags
+                          .map((tag) => _CommunityChip(label: '🏷️ $tag'))
+                          .toList(),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            _SurfaceCard(
+              padding: const EdgeInsets.all(18),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const _CommunitySectionHeader(emoji: '🧵', title: 'Yanitlar'),
+                  const SizedBox(height: 12),
+                  if (topic.replies.isEmpty)
+                    const _CommunityEmptyState(
+                      emoji: '🫥',
+                      title: 'Henuz yanit yok',
+                      subtitle:
+                          'Bu icerik ilk cevap geldikce topluluk bilgisini zenginlestirecek.',
+                    )
+                  else
+                    ...List<Widget>.generate(topic.replies.length, (index) {
+                      final reply = topic.replies[index];
+                      return Padding(
+                        padding: EdgeInsets.only(
+                          bottom: index == topic.replies.length - 1 ? 0 : 10,
+                        ),
+                        child: _CommunityTopicReplyTile(reply: reply),
+                      );
+                    }),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -2610,92 +3270,194 @@ class _NotificationTile extends StatelessWidget {
   }
 }
 
-class _ConversationPreviewTile extends StatelessWidget {
-  const _ConversationPreviewTile({
-    required this.emoji,
+class _QuestionPreviewTile extends StatelessWidget {
+  const _QuestionPreviewTile({
     required this.title,
     required this.subtitle,
-    required this.stats,
+    required this.badge,
+    this.onTap,
   });
 
-  final String emoji;
+  factory _QuestionPreviewTile.fromTopic(
+    _CommunityTopicSummary topic, {
+    VoidCallback? onTap,
+  }) {
+    final badge = topic.isSolved
+        ? 'Cozuldu'
+        : (topic.replyCount > 0 ? '${topic.replyCount} cevap' : 'Yeni soru');
+    final subtitle = (topic.body ?? '').trim().isNotEmpty
+        ? topic.body!.trim()
+        : topic.author.subtitle;
+    return _QuestionPreviewTile(
+      title: topic.title,
+      subtitle: subtitle,
+      badge: badge,
+      onTap: onTap,
+    );
+  }
+
   final String title;
   final String subtitle;
-  final String stats;
+  final String badge;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: _CommunityUiTokens.surfaceSoft,
-        borderRadius: BorderRadius.circular(18),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(14),
+    return InkWell(
+      borderRadius: BorderRadius.circular(18),
+      onTap: onTap,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: _CommunityUiTokens.surfaceSoft,
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  color: _CommunityUiTokens.text,
+                ),
               ),
-              alignment: Alignment.center,
-              child: Text(emoji, style: const TextStyle(fontSize: 18)),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              const SizedBox(height: 6),
+              Text(
+                subtitle,
+                style: const TextStyle(
+                  fontSize: 12,
+                  height: 1.4,
+                  color: _CommunityUiTokens.textMuted,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Row(
                 children: [
-                  Text(
-                    title,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w700,
-                      color: _CommunityUiTokens.text,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    subtitle,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      height: 1.4,
+                  _CommunityChip(label: '❖ $badge'),
+                  if (onTap != null) ...[
+                    const Spacer(),
+                    const Icon(
+                      Icons.arrow_forward_ios_rounded,
+                      size: 14,
                       color: _CommunityUiTokens.textMuted,
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    stats,
-                    style: const TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                      color: _CommunityUiTokens.text,
-                    ),
-                  ),
+                  ],
                 ],
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
   }
 }
 
-class _QuestionPreviewTile extends StatelessWidget {
-  const _QuestionPreviewTile({
+class _ResourcePreviewTile extends StatelessWidget {
+  const _ResourcePreviewTile({
+    required this.emoji,
     required this.title,
     required this.subtitle,
     required this.badge,
+    this.onTap,
   });
 
+  factory _ResourcePreviewTile.fromTopic(
+    _CommunityTopicSummary topic, {
+    VoidCallback? onTap,
+  }) {
+    final isEvent = topic.type == 'event';
+    return _ResourcePreviewTile(
+      emoji: isEvent ? '📅' : '📚',
+      title: topic.title,
+      subtitle: (topic.body ?? '').trim().isNotEmpty
+          ? topic.body!.trim()
+          : topic.author.subtitle,
+      badge: isEvent
+          ? (topic.eventStartsAt?.trim().isNotEmpty == true
+                ? 'Etkinlik'
+                : 'Canli')
+          : 'Kaynak',
+      onTap: onTap,
+    );
+  }
+
+  final String emoji;
   final String title;
   final String subtitle;
   final String badge;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(18),
+      onTap: onTap,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: _CommunityUiTokens.surfaceSoft,
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(emoji, style: const TextStyle(fontSize: 20)),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: _CommunityUiTokens.text,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      subtitle,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        height: 1.4,
+                        color: _CommunityUiTokens.textMuted,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  _CommunityChip(label: badge),
+                  if (onTap != null) ...[
+                    const SizedBox(height: 10),
+                    const Icon(
+                      Icons.arrow_forward_ios_rounded,
+                      size: 14,
+                      color: _CommunityUiTokens.textMuted,
+                    ),
+                  ],
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CommunityTopicReplyTile extends StatelessWidget {
+  const _CommunityTopicReplyTile({required this.reply});
+
+  final _CommunityTopicReplySummary reply;
 
   @override
   Widget build(BuildContext context) {
@@ -2709,85 +3471,39 @@ class _QuestionPreviewTile extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              title,
-              style: const TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w700,
-                color: _CommunityUiTokens.text,
-              ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              subtitle,
-              style: const TextStyle(
-                fontSize: 12,
-                height: 1.4,
-                color: _CommunityUiTokens.textMuted,
-              ),
-            ),
-            const SizedBox(height: 10),
-            _CommunityChip(label: '❖ $badge'),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ResourcePreviewTile extends StatelessWidget {
-  const _ResourcePreviewTile({
-    required this.emoji,
-    required this.title,
-    required this.subtitle,
-    required this.badge,
-  });
-
-  final String emoji;
-  final String title;
-  final String subtitle;
-  final String badge;
-
-  @override
-  Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: _CommunityUiTokens.surfaceSoft,
-        borderRadius: BorderRadius.circular(18),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(emoji, style: const TextStyle(fontSize: 20)),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    reply.author.displayName,
                     style: const TextStyle(
-                      fontSize: 14,
+                      fontSize: 13,
                       fontWeight: FontWeight.w700,
                       color: _CommunityUiTokens.text,
                     ),
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    subtitle,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      height: 1.4,
-                      color: _CommunityUiTokens.textMuted,
-                    ),
-                  ),
-                ],
+                ),
+                if (reply.isAccepted)
+                  const _CommunityChip(label: '✅ En iyi cevap'),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              _formatCommunityDate(reply.createdAt),
+              style: const TextStyle(
+                fontSize: 12,
+                color: _CommunityUiTokens.textMuted,
               ),
             ),
-            const SizedBox(width: 10),
-            _CommunityChip(label: badge),
+            const SizedBox(height: 10),
+            Text(
+              reply.body,
+              style: const TextStyle(
+                fontSize: 13,
+                height: 1.45,
+                color: _CommunityUiTokens.text,
+              ),
+            ),
           ],
         ),
       ),
@@ -2843,82 +3559,164 @@ class _ChecklistTile extends StatelessWidget {
 }
 
 class _ChannelTile extends StatelessWidget {
-  const _ChannelTile({required this.channel});
+  const _ChannelTile({required this.channel, this.onTap});
 
   final _CommunityChannelSummary channel;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     final descriptor = _communityChannelDescriptor(channel.type);
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: _CommunityUiTokens.surfaceSoft,
-        borderRadius: BorderRadius.circular(18),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Row(
-          children: [
-            Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(14),
+    return InkWell(
+      borderRadius: BorderRadius.circular(18),
+      onTap: onTap,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: _CommunityUiTokens.surfaceSoft,
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                alignment: Alignment.center,
+                child: Text(
+                  descriptor.emoji,
+                  style: const TextStyle(fontSize: 18),
+                ),
               ),
-              alignment: Alignment.center,
-              child: Text(
-                descriptor.emoji,
-                style: const TextStyle(fontSize: 18),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      channel.name,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: _CommunityUiTokens.text,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      channel.description?.trim().isNotEmpty == true
+                          ? channel.description!.trim()
+                          : descriptor.label,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: _CommunityUiTokens.textMuted,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    channel.name,
-                    style: const TextStyle(
-                      fontSize: 14,
+              if (channel.isDefault)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 7,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: const Text(
+                    'Baslangic',
+                    style: TextStyle(
+                      fontSize: 11,
                       fontWeight: FontWeight.w700,
                       color: _CommunityUiTokens.text,
                     ),
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    descriptor.label,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: _CommunityUiTokens.textMuted,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            if (channel.isDefault)
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 7,
                 ),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(999),
+              if (!channel.isDefault && onTap != null) ...[
+                const SizedBox(width: 10),
+                const Icon(
+                  Icons.arrow_forward_ios_rounded,
+                  size: 14,
+                  color: _CommunityUiTokens.textMuted,
                 ),
-                child: const Text(
-                  'Baslangic',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    color: _CommunityUiTokens.text,
-                  ),
-                ),
-              ),
-          ],
+              ],
+            ],
+          ),
         ),
       ),
+    );
+  }
+}
+
+class _CommunityMessageBubble extends StatelessWidget {
+  const _CommunityMessageBubble({required this.message, required this.mine});
+
+  final _CommunityMessageSummary message;
+  final bool mine;
+
+  @override
+  Widget build(BuildContext context) {
+    final alignment = mine ? CrossAxisAlignment.end : CrossAxisAlignment.start;
+    final color = mine ? _CommunityUiTokens.text : Colors.white;
+    final textColor = mine ? Colors.white : _CommunityUiTokens.text;
+    return Column(
+      crossAxisAlignment: alignment,
+      children: [
+        Text(
+          message.author.displayName,
+          style: const TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            color: _CommunityUiTokens.textMuted,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Container(
+          constraints: const BoxConstraints(maxWidth: 320),
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: _CommunityUiTokens.border),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if ((message.replyPreview ?? '').trim().isNotEmpty)
+                Container(
+                  margin: const EdgeInsets.only(bottom: 10),
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: mine
+                        ? Colors.white.withValues(alpha: 0.12)
+                        : _CommunityUiTokens.surfaceSoft,
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Text(
+                    message.replyPreview!,
+                    style: TextStyle(
+                      fontSize: 12,
+                      height: 1.35,
+                      color: mine
+                          ? Colors.white70
+                          : _CommunityUiTokens.textMuted,
+                    ),
+                  ),
+                ),
+              Text(
+                message.text ?? '',
+                style: TextStyle(fontSize: 14, height: 1.42, color: textColor),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
@@ -3356,6 +4154,16 @@ Color _accentForCommunity(_CommunitySummary community, int index) {
 String _emojiForIndex(int index) {
   const emojis = <String>['🚀', '🎨', '🧠', '📚', '🌍', '💼'];
   return emojis[index % emojis.length];
+}
+
+String _formatCommunityDate(String iso) {
+  final parsed = DateTime.tryParse(iso)?.toLocal();
+  if (parsed == null) return iso;
+  final day = parsed.day.toString().padLeft(2, '0');
+  final month = parsed.month.toString().padLeft(2, '0');
+  final hour = parsed.hour.toString().padLeft(2, '0');
+  final minute = parsed.minute.toString().padLeft(2, '0');
+  return '$day.$month $hour:$minute';
 }
 
 Color? _parseHexColor(String? value) {

@@ -31,18 +31,21 @@ class _TurnaShellHostState extends State<TurnaShellHost> {
     setState(() => _mode = TurnaShellMode.turna);
   }
 
-  Future<bool> _handleWillPop() async {
+  void _handlePopAttempt() {
     if (_mode == TurnaShellMode.community) {
       _openTurna();
-      return false;
     }
-    return true;
   }
 
   @override
   Widget build(BuildContext context) {
-    return WillPopScope(
-      onWillPop: _handleWillPop,
+    return PopScope(
+      canPop: _mode == TurnaShellMode.turna,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) {
+          _handlePopAttempt();
+        }
+      },
       child: Stack(
         fit: StackFit.expand,
         children: [
@@ -74,6 +77,7 @@ class _TurnaShellHostState extends State<TurnaShellHost> {
                 child: CommunityShellPreviewPage(
                   authToken: widget.session.token,
                   backendBaseUrl: kBackendBaseUrl,
+                  currentUserId: widget.session.userId,
                   onTurnaTap: _openTurna,
                 ),
               ),
