@@ -10,7 +10,8 @@
     "check": "tsc --noEmit -p tsconfig.json",
     "prisma:generate": "prisma generate",
     "prisma:push": "prisma db push",
-    "reset:app-data": "tsx scripts/reset-app-data.ts"
+    "reset:app-data": "tsx scripts/reset-app-data.ts",
+    "seed:communities": "tsx scripts/seed-communities.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1003.0",

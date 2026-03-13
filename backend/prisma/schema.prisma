@@ -108,6 +108,28 @@ enum StatusPrivacyMode {
   ONLY_SHARED_WITH
 }
 
+enum CommunityVisibility {
+  PUBLIC
+  REQUEST_ONLY
+  INVITE_ONLY
+}
+
+enum CommunityMemberRole {
+  OWNER
+  ADMIN
+  MODERATOR
+  MENTOR
+  MEMBER
+}
+
+enum CommunityChannelType {
+  CHAT
+  ANNOUNCEMENT
+  QUESTION
+  RESOURCE
+  EVENT
+}
+
 model User {
   id                    String             @id @default(uuid())
   username              String?            @unique
@@ -143,6 +165,7 @@ model User {
   statusPreference      StatusPreference?
   submittedReports      ReportCase[]       @relation("SubmittedReports")
   reportsAgainst        ReportCase[]       @relation("ReportedUsers")
+  communityMemberships  CommunityMembership[]
 
   @@index([accountStatus])
 }
@@ -469,6 +492,63 @@ model CountryPolicy {
   updatedByAdminId     String?
 
   updatedByAdmin       AdminUser?  @relation("CountryPolicyUpdatedBy", fields: [updatedByAdminId], references: [id], onDelete: SetNull)
+}
+
+model Community {
+  id                String                @id @default(uuid())
+  slug              String                @unique
+  name              String
+  tagline           String?
+  description       String?
+  emoji             String?
+  coverGradientFrom String?
+  coverGradientTo   String?
+  welcomeTitle      String?
+  welcomeDescription String?
+  entryChecklist    Json?
+  rules             Json?
+  visibility        CommunityVisibility   @default(PUBLIC)
+  isListed          Boolean               @default(true)
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+
+  memberships       CommunityMembership[]
+  channels          CommunityChannel[]
+
+  @@index([isListed, createdAt(sort: Desc)])
+}
+
+model CommunityMembership {
+  communityId String
+  userId      String
+  role        CommunityMemberRole @default(MEMBER)
+  joinedAt    DateTime            @default(now())
+
+  community   Community           @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  user        User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([communityId, userId])
+  @@index([userId, joinedAt(sort: Desc)])
+  @@index([communityId, role])
+}
+
+model CommunityChannel {
+  id          String               @id @default(uuid())
+  communityId String
+  slug        String
+  name        String
+  description String?
+  type        CommunityChannelType @default(CHAT)
+  sortOrder   Int                  @default(0)
+  isDefault   Boolean              @default(false)
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+
+  community   Community            @relation(fields: [communityId], references: [id], onDelete: Cascade)
+
+  @@unique([communityId, slug])
+  @@index([communityId, sortOrder])
+  @@index([communityId, isDefault])
 }
 
 model ReportCase {

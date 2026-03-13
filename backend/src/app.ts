@@ -7,6 +7,7 @@ import { adminRouter } from "./modules/admin/routes.js";
 import { authRouter } from "./modules/auth/routes.js";
 import { chatRouter } from "./modules/chat/routes.js";
 import { callRouter } from "./modules/calls/routes.js";
+import { communityRouter } from "./modules/community/routes.js";
 import { healthRouter } from "./modules/health/routes.js";
 import { profileRouter } from "./modules/profile/routes.js";
 import { pushRouter } from "./modules/push/routes.js";
@@ -49,6 +50,7 @@ export function createApp() {
   app.use("/api/profile", profileRouter);
   app.use("/api/chats", chatRouter);
   app.use("/api/calls", callRouter);
+  app.use("/api/communities", communityRouter);
   app.use("/api/push", pushRouter);
   app.use("/api/statuses", statusRouter);
 
