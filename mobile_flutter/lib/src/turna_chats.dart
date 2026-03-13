@@ -69,6 +69,7 @@ class _TurnaShellHostState extends State<TurnaShellHost> {
 
   @override
   Widget build(BuildContext context) {
+    turnaLog('shell build', {'mode': _mode.name});
     return PopScope(
       canPop: _mode == TurnaShellMode.turna,
       onPopInvokedWithResult: (didPop, _) {
@@ -76,41 +77,25 @@ class _TurnaShellHostState extends State<TurnaShellHost> {
           _handlePopAttempt();
         }
       },
-      child: Stack(
-        fit: StackFit.expand,
+      child: IndexedStack(
+        index: _mode == TurnaShellMode.turna ? 0 : 1,
         children: [
-          IgnorePointer(
-            ignoring: _mode != TurnaShellMode.turna,
-            child: TickerMode(
-              enabled: _mode == TurnaShellMode.turna,
-              child: AnimatedOpacity(
-                duration: const Duration(milliseconds: 220),
-                curve: Curves.easeOutCubic,
-                opacity: _mode == TurnaShellMode.turna ? 1 : 0,
-                child: MainTabs(
-                  session: widget.session,
-                  onSessionUpdated: widget.onSessionUpdated,
-                  onLogout: widget.onLogout,
-                  onCommunitySelected: _openCommunity,
-                ),
-              ),
+          TickerMode(
+            enabled: _mode == TurnaShellMode.turna,
+            child: MainTabs(
+              session: widget.session,
+              onSessionUpdated: widget.onSessionUpdated,
+              onLogout: widget.onLogout,
+              onCommunitySelected: _openCommunity,
             ),
           ),
-          IgnorePointer(
-            ignoring: _mode != TurnaShellMode.community,
-            child: TickerMode(
-              enabled: _mode == TurnaShellMode.community,
-              child: AnimatedOpacity(
-                duration: const Duration(milliseconds: 220),
-                curve: Curves.easeOutCubic,
-                opacity: _mode == TurnaShellMode.community ? 1 : 0,
-                child: CommunityShellPreviewPage(
-                  authToken: widget.session.token,
-                  backendBaseUrl: kBackendBaseUrl,
-                  currentUserId: widget.session.userId,
-                  onTurnaTap: _openTurna,
-                ),
-              ),
+          TickerMode(
+            enabled: _mode == TurnaShellMode.community,
+            child: CommunityShellPreviewPage(
+              authToken: widget.session.token,
+              backendBaseUrl: kBackendBaseUrl,
+              currentUserId: widget.session.userId,
+              onTurnaTap: _openTurna,
             ),
           ),
         ],
