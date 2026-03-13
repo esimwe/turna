@@ -42,6 +42,14 @@ const nullableEmail = z.preprocess((value) => {
   return trimmed.length === 0 ? null : trimmed;
 }, z.string().email().max(255).nullable());
 
+const stringListSchema = (maxItems: number, maxLength: number) =>
+  z.preprocess((value) => {
+    if (!Array.isArray(value)) return [];
+    return value
+      .map((item) => (typeof item === "string" ? item.trim() : ""))
+      .filter((item) => item.length > 0);
+  }, z.array(z.string().min(1).max(maxLength)).max(maxItems));
+
 const normalizedUsernameSchema = z.preprocess((value) => {
   if (typeof value !== "string") return value;
   return normalizeUsername(value);
@@ -53,6 +61,12 @@ const updateProfileSchema = z.object({
   displayName: z.string().trim().min(2).max(80),
   username: normalizedUsernameSchema,
   about: nullableTrimmedString(160),
+  city: nullableTrimmedString(80),
+  country: nullableTrimmedString(80),
+  expertise: nullableTrimmedString(120),
+  communityRole: nullableTrimmedString(120),
+  interests: stringListSchema(12, 40),
+  socialLinks: stringListSchema(8, 255),
   phone: nullableTrimmedPhone,
   email: nullableEmail
 });
@@ -60,7 +74,13 @@ const updateProfileSchema = z.object({
 const completeOnboardingSchema = z.object({
   displayName: z.string().trim().min(3).max(80),
   username: normalizedUsernameSchema,
-  about: nullableTrimmedString(160)
+  about: nullableTrimmedString(160),
+  city: nullableTrimmedString(80).optional(),
+  country: nullableTrimmedString(80).optional(),
+  expertise: nullableTrimmedString(120).optional(),
+  communityRole: nullableTrimmedString(120).optional(),
+  interests: stringListSchema(12, 40).optional().default([]),
+  socialLinks: stringListSchema(8, 255).optional().default([])
 });
 
 const avatarUploadInitSchema = z.object({
@@ -111,6 +131,49 @@ const syncContactsSchema = z.object({
 const USERNAME_CHANGE_WINDOW_DAYS = 14;
 const USERNAME_CHANGE_LIMIT = 2;
 
+function normalizeStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .filter((item) => item.length > 0);
+}
+
+const profileSelect = {
+  id: true,
+  displayName: true,
+  username: true,
+  phone: true,
+  email: true,
+  about: true,
+  avatarUrl: true,
+  city: true,
+  country: true,
+  expertise: true,
+  communityRole: true,
+  interests: true,
+  socialLinks: true,
+  onboardingCompletedAt: true,
+  createdAt: true,
+  updatedAt: true
+} as const;
+
+const publicProfileSelect = {
+  id: true,
+  displayName: true,
+  username: true,
+  phone: true,
+  about: true,
+  avatarUrl: true,
+  city: true,
+  country: true,
+  expertise: true,
+  communityRole: true,
+  interests: true,
+  socialLinks: true,
+  createdAt: true,
+  updatedAt: true
+} as const;
+
 function toProfileDto(
   req: Request,
   user: {
@@ -121,6 +184,12 @@ function toProfileDto(
     email: string | null;
     about: string | null;
     avatarUrl: string | null;
+    city: string | null;
+    country: string | null;
+    expertise: string | null;
+    communityRole: string | null;
+    interests?: unknown;
+    socialLinks?: unknown;
     onboardingCompletedAt: Date | null;
     createdAt: Date;
     updatedAt: Date;
@@ -134,6 +203,12 @@ function toProfileDto(
     email: user.email,
     about: user.about,
     avatarUrl: user.avatarUrl ? buildAvatarUrl(req, user.id, user.updatedAt) : null,
+    city: user.city,
+    country: user.country,
+    expertise: user.expertise,
+    communityRole: user.communityRole,
+    interests: normalizeStringList(user.interests),
+    socialLinks: normalizeStringList(user.socialLinks),
     onboardingCompletedAt: user.onboardingCompletedAt
       ? user.onboardingCompletedAt.toISOString()
       : null,
@@ -151,6 +226,12 @@ function toPublicProfileDto(
     phone: string | null;
     about: string | null;
     avatarUrl: string | null;
+    city: string | null;
+    country: string | null;
+    expertise: string | null;
+    communityRole: string | null;
+    interests?: unknown;
+    socialLinks?: unknown;
     createdAt: Date;
     updatedAt: Date;
   }
@@ -162,6 +243,12 @@ function toPublicProfileDto(
     phone: user.phone,
     about: user.about,
     avatarUrl: user.avatarUrl ? buildAvatarUrl(req, user.id, user.updatedAt) : null,
+    city: user.city,
+    country: user.country,
+    expertise: user.expertise,
+    communityRole: user.communityRole,
+    interests: normalizeStringList(user.interests),
+    socialLinks: normalizeStringList(user.socialLinks),
     createdAt: user.createdAt.toISOString(),
     updatedAt: user.updatedAt.toISOString()
   };
@@ -226,18 +313,7 @@ function resolveUsernameChangeRateLimit(
 profileRouter.get("/me", requireAuth, async (req, res) => {
   const user = await prisma.user.findUnique({
     where: { id: req.authUserId! },
-    select: {
-      id: true,
-      displayName: true,
-      username: true,
-      phone: true,
-      email: true,
-      about: true,
-      avatarUrl: true,
-      onboardingCompletedAt: true,
-      createdAt: true,
-      updatedAt: true
-    }
+    select: profileSelect
   });
 
   if (!user) {
@@ -372,20 +448,15 @@ profileRouter.put("/onboarding", requireAuth, async (req, res) => {
       displayName: parsed.data.displayName,
       username: parsed.data.username,
       about: parsed.data.about,
+      city: parsed.data.city,
+      country: parsed.data.country,
+      expertise: parsed.data.expertise,
+      communityRole: parsed.data.communityRole,
+      interests: parsed.data.interests,
+      socialLinks: parsed.data.socialLinks,
       onboardingCompletedAt: new Date()
     },
-    select: {
-      id: true,
-      displayName: true,
-      username: true,
-      phone: true,
-      email: true,
-      about: true,
-      avatarUrl: true,
-      onboardingCompletedAt: true,
-      createdAt: true,
-      updatedAt: true
-    }
+    select: profileSelect
   });
 
   res.json({ data: toProfileDto(req, user) });
@@ -401,16 +472,7 @@ profileRouter.get("/users/:userId", requireAuth, async (req, res) => {
 
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: {
-      id: true,
-      displayName: true,
-      username: true,
-      phone: true,
-      about: true,
-      avatarUrl: true,
-      createdAt: true,
-      updatedAt: true
-    }
+    select: publicProfileSelect
   });
 
   if (!user) {
@@ -606,22 +668,17 @@ profileRouter.put("/me", requireAuth, async (req, res) => {
       displayName: parsed.data.displayName,
       username: parsed.data.username,
       about: parsed.data.about,
+      city: parsed.data.city,
+      country: parsed.data.country,
+      expertise: parsed.data.expertise,
+      communityRole: parsed.data.communityRole,
+      interests: parsed.data.interests,
+      socialLinks: parsed.data.socialLinks,
       phone: parsed.data.phone,
       email: parsed.data.email,
       ...(usernameChangeData ?? {})
     },
-    select: {
-      id: true,
-      displayName: true,
-      username: true,
-      phone: true,
-      email: true,
-      about: true,
-      avatarUrl: true,
-      onboardingCompletedAt: true,
-      createdAt: true,
-      updatedAt: true
-    }
+    select: profileSelect
   });
 
   res.json({ data: toProfileDto(req, user) });
@@ -727,18 +784,7 @@ profileRouter.post("/avatar/complete", requireAuth, async (req, res) => {
     data: {
       avatarUrl: parsed.data.objectKey
     },
-    select: {
-      id: true,
-      displayName: true,
-      username: true,
-      phone: true,
-      email: true,
-      about: true,
-      avatarUrl: true,
-      onboardingCompletedAt: true,
-      createdAt: true,
-      updatedAt: true
-    }
+    select: profileSelect
   });
 
   if (previousUser?.avatarUrl && previousUser.avatarUrl !== parsed.data.objectKey) {
@@ -760,18 +806,7 @@ profileRouter.delete("/avatar", requireAuth, async (req, res) => {
   const user = await prisma.user.update({
     where: { id: userId },
     data: { avatarUrl: null },
-    select: {
-      id: true,
-      displayName: true,
-      username: true,
-      phone: true,
-      email: true,
-      about: true,
-      avatarUrl: true,
-      onboardingCompletedAt: true,
-      createdAt: true,
-      updatedAt: true
-    }
+    select: profileSelect
   });
 
   if (previousUser?.avatarUrl && isStorageConfigured()) {

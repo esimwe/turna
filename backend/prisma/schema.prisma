@@ -139,6 +139,12 @@ model User {
   email                 String?            @unique
   avatarUrl             String?
   about                 String?
+  city                  String?
+  country               String?
+  expertise             String?
+  communityRole         String?
+  interests             Json?
+  socialLinks           Json?
   accountStatus         UserAccountStatus  @default(ACTIVE)
   accountStatusReason   String?
   otpBlocked            Boolean            @default(false)

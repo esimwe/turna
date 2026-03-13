@@ -512,6 +512,13 @@ export class OtpService {
         email: true,
         about: true,
         avatarUrl: true,
+        city: true,
+        country: true,
+        expertise: true,
+        communityRole: true,
+        interests: true,
+        socialLinks: true,
+        onboardingCompletedAt: true,
         createdAt: true,
         updatedAt: true
       }
