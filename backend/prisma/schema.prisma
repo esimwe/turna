@@ -130,6 +130,12 @@ enum CommunityChannelType {
   EVENT
 }
 
+enum CommunityTopicType {
+  QUESTION
+  RESOURCE
+  EVENT
+}
+
 model User {
   id                    String             @id @default(uuid())
   username              String?            @unique
@@ -172,6 +178,9 @@ model User {
   submittedReports      ReportCase[]       @relation("SubmittedReports")
   reportsAgainst        ReportCase[]       @relation("ReportedUsers")
   communityMemberships  CommunityMembership[]
+  communityMessages     CommunityMessage[]   @relation("CommunityMessageAuthor")
+  communityTopics       CommunityTopic[]     @relation("CommunityTopicAuthor")
+  communityTopicReplies CommunityTopicReply[] @relation("CommunityTopicReplyAuthor")
 
   @@index([accountStatus])
 }
@@ -520,6 +529,7 @@ model Community {
 
   memberships       CommunityMembership[]
   channels          CommunityChannel[]
+  topics            CommunityTopic[]
 
   @@index([isListed, createdAt(sort: Desc)])
 }
@@ -551,10 +561,74 @@ model CommunityChannel {
   updatedAt   DateTime             @updatedAt
 
   community   Community            @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  messages    CommunityMessage[]
+  topics      CommunityTopic[]
 
   @@unique([communityId, slug])
   @@index([communityId, sortOrder])
   @@index([communityId, isDefault])
+}
+
+model CommunityMessage {
+  id               String            @id @default(uuid())
+  channelId        String
+  authorUserId     String
+  text             String?
+  attachments      Json?
+  replyToMessageId String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  deletedAt        DateTime?
+
+  channel          CommunityChannel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  author           User              @relation("CommunityMessageAuthor", fields: [authorUserId], references: [id], onDelete: Cascade)
+  replyToMessage   CommunityMessage? @relation("CommunityMessageReplies", fields: [replyToMessageId], references: [id], onDelete: SetNull)
+  replies          CommunityMessage[] @relation("CommunityMessageReplies")
+
+  @@index([channelId, createdAt(sort: Desc)])
+  @@index([authorUserId, createdAt(sort: Desc)])
+  @@index([replyToMessageId])
+}
+
+model CommunityTopic {
+  id           String             @id @default(uuid())
+  communityId  String
+  channelId    String?
+  type         CommunityTopicType
+  title        String
+  body         String?
+  authorUserId String
+  tags         Json?
+  isPinned     Boolean            @default(false)
+  isSolved     Boolean            @default(false)
+  eventStartsAt DateTime?
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  community    Community          @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  channel      CommunityChannel?  @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  author       User               @relation("CommunityTopicAuthor", fields: [authorUserId], references: [id], onDelete: Cascade)
+  replies      CommunityTopicReply[]
+
+  @@index([communityId, type, createdAt(sort: Desc)])
+  @@index([channelId, createdAt(sort: Desc)])
+  @@index([authorUserId, createdAt(sort: Desc)])
+}
+
+model CommunityTopicReply {
+  id           String         @id @default(uuid())
+  topicId      String
+  authorUserId String
+  body         String
+  isAccepted   Boolean        @default(false)
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  topic        CommunityTopic @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  author       User           @relation("CommunityTopicReplyAuthor", fields: [authorUserId], references: [id], onDelete: Cascade)
+
+  @@index([topicId, createdAt(sort: Asc)])
+  @@index([authorUserId, createdAt(sort: Desc)])
 }
 
 model ReportCase {

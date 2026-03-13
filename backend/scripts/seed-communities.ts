@@ -4,6 +4,9 @@ import { prisma } from "../src/lib/prisma.js";
 const prismaCommunity = (prisma as unknown as { community: any }).community;
 const prismaCommunityChannel = (prisma as unknown as { communityChannel: any }).communityChannel;
 const prismaCommunityMembership = (prisma as unknown as { communityMembership: any }).communityMembership;
+const prismaCommunityMessage = (prisma as unknown as { communityMessage: any }).communityMessage;
+const prismaCommunityTopic = (prisma as unknown as { communityTopic: any }).communityTopic;
+const prismaCommunityTopicReply = (prisma as unknown as { communityTopicReply: any }).communityTopicReply;
 const prismaUser = (prisma as unknown as { user: any }).user;
 
 const args = process.argv.slice(2);
@@ -185,8 +188,20 @@ async function resolveTargetUser(): Promise<{ id: string } | null> {
   return null;
 }
 
+async function resolveSeedAuthor(targetUser: { id: string } | null): Promise<{ id: string } | null> {
+  if (targetUser) return targetUser;
+  return prismaUser.findFirst({
+    where: {
+      accountStatus: "ACTIVE"
+    },
+    select: { id: true },
+    orderBy: { createdAt: "asc" }
+  });
+}
+
 async function main() {
   const targetUser = await resolveTargetUser();
+  const seedAuthor = await resolveSeedAuthor(targetUser);
 
   for (const definition of communityDefinitions) {
     const community = await prismaCommunity.upsert({
@@ -239,6 +254,37 @@ async function main() {
       }))
     });
 
+    const channels = await prismaCommunityChannel.findMany({
+      where: { communityId: community.id },
+      orderBy: { sortOrder: "asc" },
+      select: {
+        id: true,
+        slug: true,
+        type: true,
+        name: true
+      }
+    });
+
+    await prismaCommunityMessage.deleteMany({
+      where: {
+        channel: {
+          communityId: community.id
+        }
+      }
+    });
+
+    await prismaCommunityTopicReply.deleteMany({
+      where: {
+        topic: {
+          communityId: community.id
+        }
+      }
+    });
+
+    await prismaCommunityTopic.deleteMany({
+      where: { communityId: community.id }
+    });
+
     if (targetUser) {
       await prismaCommunityMembership.upsert({
         where: {
@@ -254,6 +300,107 @@ async function main() {
           role: definition.slug === "girisim-kulubu" ? "MENTOR" : "MEMBER"
         }
       });
+    }
+
+    if (seedAuthor) {
+      const defaultChatChannel =
+        channels.find((channel) => channel.type === "CHAT" && channel.slug === "genel") ??
+        channels.find((channel) => channel.type === "CHAT") ??
+        null;
+
+      if (defaultChatChannel) {
+        const seededMessages = await prismaCommunityMessage.createMany({
+          data: [
+            {
+              channelId: defaultChatChannel.id,
+              authorUserId: seedAuthor.id,
+              text: `${definition.name} alanina hos geldin. Ilk mesaji burada birakabilirsin.`,
+              attachments: []
+            },
+            {
+              channelId: defaultChatChannel.id,
+              authorUserId: seedAuthor.id,
+              text: `Bugun ${definition.name} icinde hangi basligi one cikarmak istiyorsunuz?`,
+              attachments: []
+            }
+          ]
+        });
+        void seededMessages;
+      }
+
+      const questionChannel = channels.find((channel) => channel.type === "QUESTION") ?? null;
+      const resourceChannel = channels.find((channel) => channel.type === "RESOURCE") ?? null;
+      const eventChannel = channels.find((channel) => channel.type === "EVENT") ?? null;
+
+      const createdTopics: Array<{ id: string; type: string }> = [];
+
+      if (questionChannel) {
+        const topic = await prismaCommunityTopic.create({
+          data: {
+            communityId: community.id,
+            channelId: questionChannel.id,
+            type: "QUESTION",
+            title: `${definition.name} icinde yeni gelen biri ilk hangi kanaldan baslamali?`,
+            body: "Toplulugun onboarding akisini daha netlestirmek icin onerileri toplayalim.",
+            authorUserId: seedAuthor.id,
+            tags: ["onboarding", "baslangic"],
+            isPinned: true,
+            isSolved: false
+          },
+          select: { id: true, type: true }
+        });
+        createdTopics.push(topic);
+      }
+
+      if (resourceChannel) {
+        const topic = await prismaCommunityTopic.create({
+          data: {
+            communityId: community.id,
+            channelId: resourceChannel.id,
+            type: "RESOURCE",
+            title: `${definition.name} baslangic seti`,
+            body: "Bu baslik topluluk icindeki sabit kaynaklari, rehberleri ve tekrar donulen linkleri tutar.",
+            authorUserId: seedAuthor.id,
+            tags: ["rehber", "kaynak"],
+            isPinned: true,
+            isSolved: false
+          },
+          select: { id: true, type: true }
+        });
+        createdTopics.push(topic);
+      }
+
+      if (eventChannel) {
+        const topic = await prismaCommunityTopic.create({
+          data: {
+            communityId: community.id,
+            channelId: eventChannel.id,
+            type: "EVENT",
+            title: `${definition.name} haftalik topluluk oturumu`,
+            body: "Canli sohbet, soru-cevap ve networking icin tekrar eden bulusma alani.",
+            authorUserId: seedAuthor.id,
+            tags: ["etkinlik", "canli"],
+            isPinned: true,
+            isSolved: false,
+            eventStartsAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+          },
+          select: { id: true, type: true }
+        });
+        createdTopics.push(topic);
+      }
+
+      for (const topic of createdTopics) {
+        await prismaCommunityTopicReply.create({
+          data: {
+            topicId: topic.id,
+            authorUserId: seedAuthor.id,
+            body:
+              topic.type === "QUESTION"
+                ? "Bence ilk once tanisma ve genel kanal akisini gorup sonra soru-cevap alanina gecmek en dogrusu."
+                : "Bu alan topluluk icinde kaybolmayan degerli icerikleri toplamak icin acildi."
+          }
+        });
+      }
     }
 
     console.log(`seeded community: ${community.slug}`);
