@@ -71,7 +71,11 @@ class _TurnaShellHostState extends State<TurnaShellHost> {
                 duration: const Duration(milliseconds: 220),
                 curve: Curves.easeOutCubic,
                 opacity: _mode == TurnaShellMode.community ? 1 : 0,
-                child: CommunityShellPreviewPage(onTurnaTap: _openTurna),
+                child: CommunityShellPreviewPage(
+                  authToken: widget.session.token,
+                  backendBaseUrl: kBackendBaseUrl,
+                  onTurnaTap: _openTurna,
+                ),
               ),
             ),
           ),
