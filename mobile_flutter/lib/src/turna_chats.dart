@@ -19,20 +19,50 @@ class TurnaShellHost extends StatefulWidget {
 }
 
 class _TurnaShellHostState extends State<TurnaShellHost> {
+  static const Duration _communityReturnLock = Duration(milliseconds: 420);
+
   TurnaShellMode _mode = TurnaShellMode.turna;
+  DateTime? _communityTapLockedUntil;
 
   void _openCommunity() {
-    if (_mode == TurnaShellMode.community) return;
+    final now = DateTime.now();
+    final lockedUntil = _communityTapLockedUntil;
+    if (lockedUntil != null && now.isBefore(lockedUntil)) {
+      turnaLog('shell community blocked', {
+        'mode': _mode.name,
+        'lockedUntil': lockedUntil.toIso8601String(),
+        'remainingMs': lockedUntil.difference(now).inMilliseconds,
+      });
+      return;
+    }
+    if (_mode == TurnaShellMode.community) {
+      turnaLog('shell community ignored', {'reason': 'already_community'});
+      return;
+    }
+    turnaLog('shell open community', {'from': _mode.name});
     setState(() => _mode = TurnaShellMode.community);
   }
 
   void _openTurna() {
-    if (_mode == TurnaShellMode.turna) return;
-    setState(() => _mode = TurnaShellMode.turna);
+    final lockedUntil = DateTime.now().add(_communityReturnLock);
+    turnaLog('shell open turna', {
+      'from': _mode.name,
+      'lockMs': _communityReturnLock.inMilliseconds,
+      'lockedUntil': lockedUntil.toIso8601String(),
+    });
+    if (_mode == TurnaShellMode.turna) {
+      _communityTapLockedUntil = lockedUntil;
+      return;
+    }
+    setState(() {
+      _mode = TurnaShellMode.turna;
+      _communityTapLockedUntil = lockedUntil;
+    });
   }
 
   void _handlePopAttempt() {
     if (_mode == TurnaShellMode.community) {
+      turnaLog('shell pop returning to turna');
       _openTurna();
     }
   }
@@ -266,6 +296,10 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
 
   void _selectTab(int index) {
     if (index == 2) {
+      turnaLog('main tabs community tapped', {
+        'currentIndex': _index,
+        'visitedTabs': _visitedTabs.length,
+      });
       widget.onCommunitySelected();
       return;
     }

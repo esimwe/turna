@@ -3,6 +3,14 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
+void _communityLog(String message, [Object? data]) {
+  if (data != null) {
+    debugPrint('[turna-community] $message | $data');
+    return;
+  }
+  debugPrint('[turna-community] $message');
+}
+
 class CommunityShellPreviewPage extends StatefulWidget {
   const CommunityShellPreviewPage({
     super.key,
@@ -50,7 +58,13 @@ class _CommunityShellPreviewPageState extends State<CommunityShellPreviewPage> {
 
   void _handleTurnaTap() {
     final navigator = Navigator.of(context, rootNavigator: true);
+    _communityLog('community turna tapped', {
+      'selectedIndex': _selectedIndex,
+      'hasCallback': widget.onTurnaTap != null,
+      'rootCanPop': navigator.canPop(),
+    });
     if (navigator.canPop()) {
+      _communityLog('community turna popUntil first');
       navigator.popUntil((route) => route.isFirst);
     }
     widget.onTurnaTap?.call();
@@ -93,9 +107,16 @@ class _CommunityShellPreviewPageState extends State<CommunityShellPreviewPage> {
         selectedIndex: _selectedIndex,
         onSelect: (index) {
           if (index == 2) {
+            _communityLog('community bottom bar turna selected', {
+              'selectedIndex': _selectedIndex,
+            });
             _handleTurnaTap();
             return;
           }
+          _communityLog('community bottom bar tab selected', {
+            'from': _selectedIndex,
+            'to': index,
+          });
           setState(() => _selectedIndex = index);
         },
       ),
