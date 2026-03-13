@@ -1784,6 +1784,12 @@ class _ProfilePageState extends State<ProfilePage> {
   final _displayNameController = TextEditingController();
   final _usernameController = TextEditingController();
   final _aboutController = TextEditingController();
+  final _cityController = TextEditingController();
+  final _countryController = TextEditingController();
+  final _expertiseController = TextEditingController();
+  final _communityRoleController = TextEditingController();
+  final _interestsController = TextEditingController();
+  final _socialLinksController = TextEditingController();
   final _phoneController = TextEditingController();
   final _emailController = TextEditingController();
   final ImagePicker _imagePicker = ImagePicker();
@@ -1805,6 +1811,12 @@ class _ProfilePageState extends State<ProfilePage> {
     _displayNameController.dispose();
     _usernameController.dispose();
     _aboutController.dispose();
+    _cityController.dispose();
+    _countryController.dispose();
+    _expertiseController.dispose();
+    _communityRoleController.dispose();
+    _interestsController.dispose();
+    _socialLinksController.dispose();
     _phoneController.dispose();
     _emailController.dispose();
     super.dispose();
@@ -1857,8 +1869,71 @@ class _ProfilePageState extends State<ProfilePage> {
     _displayNameController.text = profile.displayName;
     _usernameController.text = profile.username ?? '';
     _aboutController.text = profile.about ?? '';
+    _cityController.text = profile.city ?? '';
+    _countryController.text = profile.country ?? '';
+    _expertiseController.text = profile.expertise ?? '';
+    _communityRoleController.text = profile.communityRole ?? '';
+    _interestsController.text = profile.interests.join('\n');
+    _socialLinksController.text = profile.socialLinks.join('\n');
     _phoneController.text = profile.phone ?? '';
     _emailController.text = profile.email ?? '';
+  }
+
+  List<String> _listValuesForField(_ProfileEditableField field, String value) {
+    final splitter = field == _ProfileEditableField.socialLinks
+        ? RegExp(r'\n+')
+        : RegExp(r'[\n,]+');
+    final seen = <String>{};
+    return value
+        .split(splitter)
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty && seen.add(item))
+        .toList();
+  }
+
+  String _displayValueForField(_ProfileEditableField field) {
+    final raw = _valueForField(field).trim();
+    switch (field) {
+      case _ProfileEditableField.interests:
+      case _ProfileEditableField.socialLinks:
+        final items = _listValuesForField(field, raw);
+        return items.join('  •  ');
+      default:
+        return raw;
+    }
+  }
+
+  List<String> _communityMissingFields() {
+    final missing = <String>[];
+    if (_displayNameController.text.trim().isEmpty) missing.add('Ad');
+    if (_aboutController.text.trim().isEmpty) missing.add('Kısa bio');
+    if ((_profile?.avatarUrl ?? widget.session.avatarUrl)?.trim().isEmpty !=
+        false) {
+      missing.add('Profil fotoğrafı');
+    }
+    if (_expertiseController.text.trim().isEmpty) {
+      missing.add('Uzmanlık alanı');
+    }
+    if (_cityController.text.trim().isEmpty ||
+        _countryController.text.trim().isEmpty) {
+      missing.add('Şehir / ülke');
+    }
+    if (_listValuesForField(
+      _ProfileEditableField.interests,
+      _interestsController.text,
+    ).isEmpty) {
+      missing.add('İlgi alanları');
+    }
+    if (_listValuesForField(
+      _ProfileEditableField.socialLinks,
+      _socialLinksController.text,
+    ).isEmpty) {
+      missing.add('Sosyal linkler');
+    }
+    if (_communityRoleController.text.trim().isEmpty) {
+      missing.add('Topluluktaki rol');
+    }
+    return missing;
   }
 
   Future<void> _commitProfile(
@@ -2038,9 +2113,14 @@ class _ProfilePageState extends State<ProfilePage> {
     _ProfileEditableField.username => _usernameController.text,
     _ProfileEditableField.about => _aboutController.text,
     _ProfileEditableField.displayName => _displayNameController.text,
+    _ProfileEditableField.city => _cityController.text,
+    _ProfileEditableField.country => _countryController.text,
+    _ProfileEditableField.expertise => _expertiseController.text,
+    _ProfileEditableField.communityRole => _communityRoleController.text,
+    _ProfileEditableField.interests => _interestsController.text,
+    _ProfileEditableField.socialLinks => _socialLinksController.text,
     _ProfileEditableField.email => _emailController.text,
     _ProfileEditableField.phone => _phoneController.text,
-    _ProfileEditableField.links => '',
   };
 
   String? _validateField(_ProfileEditableField field, String value) {
@@ -2068,8 +2148,13 @@ class _ProfilePageState extends State<ProfilePage> {
         if (trimmed.isEmpty) return 'Telefon numarası gerekli.';
         if (trimmed.length < 6) return 'Telefon numarası çok kısa.';
         return null;
+      case _ProfileEditableField.city:
+      case _ProfileEditableField.country:
+      case _ProfileEditableField.expertise:
+      case _ProfileEditableField.communityRole:
+      case _ProfileEditableField.interests:
+      case _ProfileEditableField.socialLinks:
       case _ProfileEditableField.about:
-      case _ProfileEditableField.links:
         return null;
     }
   }
@@ -2092,6 +2177,30 @@ class _ProfilePageState extends State<ProfilePage> {
     final about = field == _ProfileEditableField.about
         ? value
         : _aboutController.text.trim();
+    final city = field == _ProfileEditableField.city
+        ? value
+        : _cityController.text.trim();
+    final country = field == _ProfileEditableField.country
+        ? value
+        : _countryController.text.trim();
+    final expertise = field == _ProfileEditableField.expertise
+        ? value
+        : _expertiseController.text.trim();
+    final communityRole = field == _ProfileEditableField.communityRole
+        ? value
+        : _communityRoleController.text.trim();
+    final interests = field == _ProfileEditableField.interests
+        ? _listValuesForField(field, value)
+        : _listValuesForField(
+            _ProfileEditableField.interests,
+            _interestsController.text,
+          );
+    final socialLinks = field == _ProfileEditableField.socialLinks
+        ? _listValuesForField(field, value)
+        : _listValuesForField(
+            _ProfileEditableField.socialLinks,
+            _socialLinksController.text,
+          );
     final phone = field == _ProfileEditableField.phone
         ? value
         : _phoneController.text.trim();
@@ -2129,6 +2238,12 @@ class _ProfilePageState extends State<ProfilePage> {
         displayName: displayName,
         username: username,
         about: about,
+        city: city,
+        country: country,
+        expertise: expertise,
+        communityRole: communityRole,
+        interests: interests,
+        socialLinks: socialLinks,
         phone: phone,
         email: email,
       );
@@ -2250,6 +2365,7 @@ class _ProfilePageState extends State<ProfilePage> {
       overrideAvatarUrl: profile.avatarUrl,
     );
     final username = _normalizeUsername(_usernameController.text);
+    final communityMissing = _communityMissingFields();
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
@@ -2300,12 +2416,56 @@ class _ProfilePageState extends State<ProfilePage> {
         _buildFieldSection(_ProfileEditableField.displayName),
         _buildFieldSection(_ProfileEditableField.email),
         _buildFieldSection(_ProfileEditableField.phone),
-        _buildFieldSection(
-          _ProfileEditableField.links,
-          overridePlaceholder: 'Bağlantı ekle',
-          onTap: () => ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Bağlantılar yakında eklenecek.')),
+        const SizedBox(height: 6),
+        Container(
+          margin: const EdgeInsets.only(bottom: 18),
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(18),
           ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Community profili',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF202124),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                communityMissing.isEmpty
+                    ? 'Community katılımı için gereken alanlar tamam görünüyor.'
+                    : 'Community giriş kapısı için eksik alanlar: ${communityMissing.join(', ')}.',
+                style: TextStyle(
+                  fontSize: 13,
+                  height: 1.4,
+                  color: communityMissing.isEmpty
+                      ? TurnaColors.success
+                      : const Color(0xFF6E7472),
+                ),
+              ),
+            ],
+          ),
+        ),
+        _buildFieldSection(_ProfileEditableField.expertise),
+        _buildFieldSection(_ProfileEditableField.communityRole),
+        _buildFieldSection(_ProfileEditableField.city),
+        _buildFieldSection(_ProfileEditableField.country),
+        _buildFieldSection(
+          _ProfileEditableField.interests,
+          overrideValue: _displayValueForField(_ProfileEditableField.interests),
+          overridePlaceholder: 'İlgi alanlarını ekle',
+        ),
+        _buildFieldSection(
+          _ProfileEditableField.socialLinks,
+          overrideValue: _displayValueForField(
+            _ProfileEditableField.socialLinks,
+          ),
+          overridePlaceholder: 'Sosyal link ekle',
         ),
       ],
     );
@@ -2371,7 +2531,19 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 }
 
-enum _ProfileEditableField { username, about, displayName, email, phone, links }
+enum _ProfileEditableField {
+  username,
+  about,
+  displayName,
+  email,
+  phone,
+  expertise,
+  communityRole,
+  city,
+  country,
+  interests,
+  socialLinks,
+}
 
 extension _ProfileEditableFieldX on _ProfileEditableField {
   String get label => switch (this) {
@@ -2380,7 +2552,12 @@ extension _ProfileEditableFieldX on _ProfileEditableField {
     _ProfileEditableField.displayName => 'Ad',
     _ProfileEditableField.email => 'Email',
     _ProfileEditableField.phone => 'Telefon',
-    _ProfileEditableField.links => 'Bağlantılar',
+    _ProfileEditableField.expertise => 'Uzmanlık alanı',
+    _ProfileEditableField.communityRole => 'Topluluktaki rol',
+    _ProfileEditableField.city => 'Şehir',
+    _ProfileEditableField.country => 'Ülke',
+    _ProfileEditableField.interests => 'İlgi alanları',
+    _ProfileEditableField.socialLinks => 'Sosyal linkler',
   };
 
   String get sectionTitle => switch (this) {
@@ -2389,7 +2566,12 @@ extension _ProfileEditableFieldX on _ProfileEditableField {
     _ProfileEditableField.displayName => 'Ad',
     _ProfileEditableField.email => 'Email',
     _ProfileEditableField.phone => 'Telefon numarası',
-    _ProfileEditableField.links => 'Bağlantılar',
+    _ProfileEditableField.expertise => 'Uzmanlık alanı',
+    _ProfileEditableField.communityRole => 'Topluluktaki rol',
+    _ProfileEditableField.city => 'Şehir',
+    _ProfileEditableField.country => 'Ülke',
+    _ProfileEditableField.interests => 'İlgi alanları',
+    _ProfileEditableField.socialLinks => 'Sosyal linkler',
   };
 
   String get placeholder => switch (this) {
@@ -2398,7 +2580,12 @@ extension _ProfileEditableFieldX on _ProfileEditableField {
     _ProfileEditableField.displayName => 'Ad ekle',
     _ProfileEditableField.email => 'Email ekle',
     _ProfileEditableField.phone => 'Telefon numarası ekle',
-    _ProfileEditableField.links => 'Bağlantı ekle',
+    _ProfileEditableField.expertise => 'Uzmanlık alanını yaz',
+    _ProfileEditableField.communityRole => 'Topluluktaki rolünü yaz',
+    _ProfileEditableField.city => 'Şehir ekle',
+    _ProfileEditableField.country => 'Ülke ekle',
+    _ProfileEditableField.interests => 'Her satıra bir ilgi alanı yaz',
+    _ProfileEditableField.socialLinks => 'Her satıra bir link ekle',
   };
 
   String? get description => switch (this) {
@@ -2410,7 +2597,17 @@ extension _ProfileEditableFieldX on _ProfileEditableField {
     _ProfileEditableField.email =>
       'Hesap bildirimleri ve güvenlik işlemleri için kullanılabilir.',
     _ProfileEditableField.phone => 'Telefon numaranız hesabınızla ilişkilidir.',
-    _ProfileEditableField.links => null,
+    _ProfileEditableField.expertise =>
+      'Örnek: UI tasarım, growth, frontend, yatırım.',
+    _ProfileEditableField.communityRole =>
+      'Örnek: mentor, eğitmen, kurucu, aktif üye.',
+    _ProfileEditableField.city => 'Topluluk içinde bulunduğun şehri belirtir.',
+    _ProfileEditableField.country =>
+      'Topluluk keşfi ve filtreleme için kullanılır.',
+    _ProfileEditableField.interests =>
+      'Virgül veya alt alta yazarak birden fazla alan ekleyebilirsin.',
+    _ProfileEditableField.socialLinks =>
+      'LinkedIn, X, GitHub veya kişisel site linklerini her satıra bir tane yaz.',
   };
 
   TextInputType get keyboardType => switch (this) {
@@ -2421,12 +2618,19 @@ extension _ProfileEditableFieldX on _ProfileEditableField {
 
   int get maxLines => switch (this) {
     _ProfileEditableField.about => 4,
+    _ProfileEditableField.interests => 4,
+    _ProfileEditableField.socialLinks => 5,
     _ => 1,
   };
 
   TextCapitalization get textCapitalization => switch (this) {
     _ProfileEditableField.displayName => TextCapitalization.words,
     _ProfileEditableField.about => TextCapitalization.sentences,
+    _ProfileEditableField.city => TextCapitalization.words,
+    _ProfileEditableField.country => TextCapitalization.words,
+    _ProfileEditableField.expertise => TextCapitalization.sentences,
+    _ProfileEditableField.communityRole => TextCapitalization.sentences,
+    _ProfileEditableField.interests => TextCapitalization.sentences,
     _ => TextCapitalization.none,
   };
 
@@ -2543,8 +2747,13 @@ class _ProfileFieldEditorPageState extends State<_ProfileFieldEditorPage> {
         if (value.isEmpty) return 'Telefon numarası gerekli.';
         if (value.length < 6) return 'Telefon numarası çok kısa.';
         return null;
+      case _ProfileEditableField.city:
+      case _ProfileEditableField.country:
+      case _ProfileEditableField.expertise:
+      case _ProfileEditableField.communityRole:
+      case _ProfileEditableField.interests:
+      case _ProfileEditableField.socialLinks:
       case _ProfileEditableField.about:
-      case _ProfileEditableField.links:
         return null;
     }
   }

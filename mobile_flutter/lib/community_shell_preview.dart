@@ -298,9 +298,13 @@ class _CommunityProfileGate {
     final missingItems = <String>[];
     final checks = <String, bool>{
       'Ad': _hasContent(map['displayName']),
-      'Kullanici adi': _hasContent(map['username']),
-      'Kisa bio': _hasContent(map['about']),
       'Profil fotografi': _hasContent(map['avatarUrl']),
+      'Kisa bio': _hasContent(map['about']),
+      'Uzmanlik alani': _hasContent(map['expertise']),
+      'Sehir / ulke': _hasContent(map['city']) && _hasContent(map['country']),
+      'Ilgi alanlari': _hasList(map['interests']),
+      'Sosyal linkler': _hasList(map['socialLinks']),
+      'Topluluktaki rol': _hasContent(map['communityRole']),
     };
     checks.forEach((label, complete) {
       if (!complete) missingItems.add(label);
@@ -315,6 +319,11 @@ class _CommunityProfileGate {
   static bool _hasContent(Object? value) {
     final text = value?.toString().trim();
     return text != null && text.isNotEmpty;
+  }
+
+  static bool _hasList(Object? value) {
+    if (value is! List) return false;
+    return value.any((item) => item.toString().trim().isNotEmpty);
   }
 }
 

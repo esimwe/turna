@@ -118,6 +118,12 @@ class TurnaUserProfile {
     this.email,
     this.about,
     this.avatarUrl,
+    this.city,
+    this.country,
+    this.expertise,
+    this.communityRole,
+    this.interests = const <String>[],
+    this.socialLinks = const <String>[],
     this.onboardingCompletedAt,
     this.createdAt,
   });
@@ -129,6 +135,12 @@ class TurnaUserProfile {
   final String? email;
   final String? about;
   final String? avatarUrl;
+  final String? city;
+  final String? country;
+  final String? expertise;
+  final String? communityRole;
+  final List<String> interests;
+  final List<String> socialLinks;
   final String? onboardingCompletedAt;
   final String? createdAt;
 
@@ -141,6 +153,12 @@ class TurnaUserProfile {
       email: _nullableString(map['email']),
       about: _nullableString(map['about']),
       avatarUrl: _nullableString(map['avatarUrl']),
+      city: _nullableString(map['city']),
+      country: _nullableString(map['country']),
+      expertise: _nullableString(map['expertise']),
+      communityRole: _nullableString(map['communityRole']),
+      interests: _stringList(map['interests']),
+      socialLinks: _stringList(map['socialLinks']),
       onboardingCompletedAt: _nullableString(map['onboardingCompletedAt']),
       createdAt: _nullableString(map['createdAt']),
     );
@@ -150,6 +168,14 @@ class TurnaUserProfile {
     final text = value?.toString().trim();
     if (text == null || text.isEmpty) return null;
     return text;
+  }
+
+  static List<String> _stringList(Object? value) {
+    if (value is! List) return const <String>[];
+    return value
+        .map((item) => item.toString().trim())
+        .where((item) => item.isNotEmpty)
+        .toList();
   }
 }
 
@@ -1810,6 +1836,12 @@ class ProfileApi {
     required String displayName,
     required String username,
     required String about,
+    required String city,
+    required String country,
+    required String expertise,
+    required String communityRole,
+    required List<String> interests,
+    required List<String> socialLinks,
     required String phone,
     required String email,
   }) async {
@@ -1823,6 +1855,12 @@ class ProfileApi {
         'displayName': displayName,
         'username': username.trim(),
         'about': about.trim(),
+        'city': city.trim(),
+        'country': country.trim(),
+        'expertise': expertise.trim(),
+        'communityRole': communityRole.trim(),
+        'interests': interests,
+        'socialLinks': socialLinks,
         'phone': phone.trim(),
         'email': email.trim(),
       }),
