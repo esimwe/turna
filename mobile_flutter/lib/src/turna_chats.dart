@@ -21,6 +21,7 @@ class TurnaShellHost extends StatefulWidget {
 class _TurnaShellHostState extends State<TurnaShellHost> {
   static const Duration _communityReturnLock = Duration(milliseconds: 420);
 
+  final GlobalKey<_MainTabsState> _mainTabsKey = GlobalKey<_MainTabsState>();
   TurnaShellMode _mode = TurnaShellMode.turna;
   DateTime? _communityTapLockedUntil;
 
@@ -60,6 +61,14 @@ class _TurnaShellHostState extends State<TurnaShellHost> {
     });
   }
 
+  void _openTurnaProfile() {
+    turnaLog('shell open turna profile', {'from': _mode.name});
+    _openTurna();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _mainTabsKey.currentState?.openProfileEditorFromCommunity();
+    });
+  }
+
   void _handlePopAttempt() {
     if (_mode == TurnaShellMode.community) {
       turnaLog('shell pop returning to turna');
@@ -83,6 +92,7 @@ class _TurnaShellHostState extends State<TurnaShellHost> {
           TickerMode(
             enabled: _mode == TurnaShellMode.turna,
             child: MainTabs(
+              key: _mainTabsKey,
               session: widget.session,
               onSessionUpdated: widget.onSessionUpdated,
               onLogout: widget.onLogout,
@@ -96,6 +106,7 @@ class _TurnaShellHostState extends State<TurnaShellHost> {
               backendBaseUrl: kBackendBaseUrl,
               currentUserId: widget.session.userId,
               onTurnaTap: _openTurna,
+              onProfileTap: _openTurnaProfile,
             ),
           ),
         ],
@@ -131,6 +142,7 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
   final Set<int> _visitedTabs = <int>{3};
   String? _activeIncomingCallId;
   bool _endingSession = false;
+  bool _openingProfileFromCommunity = false;
 
   void _handleSessionExpired() {
     if (_endingSession) return;
@@ -293,6 +305,33 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
       _index = index;
       _visitedTabs.add(index);
     });
+  }
+
+  Future<void> openProfileEditorFromCommunity() async {
+    if (!mounted || _openingProfileFromCommunity) return;
+    turnaLog('main tabs open profile from community', {'currentIndex': _index});
+    if (_index != 4 || !_visitedTabs.contains(4)) {
+      setState(() {
+        _index = 4;
+        _visitedTabs.add(4);
+      });
+    }
+    _openingProfileFromCommunity = true;
+    try {
+      await Future<void>.delayed(Duration.zero);
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ProfilePage(
+            session: widget.session,
+            onProfileUpdated: widget.onSessionUpdated,
+            onSessionExpired: _handleSessionExpired,
+          ),
+        ),
+      );
+    } finally {
+      _openingProfileFromCommunity = false;
+    }
   }
 
   @override

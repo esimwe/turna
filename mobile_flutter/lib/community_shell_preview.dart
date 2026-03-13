@@ -18,12 +18,14 @@ class CommunityShellPreviewPage extends StatefulWidget {
     required this.backendBaseUrl,
     required this.currentUserId,
     this.onTurnaTap,
+    this.onProfileTap,
   });
 
   final String authToken;
   final String backendBaseUrl;
   final String currentUserId;
   final VoidCallback? onTurnaTap;
+  final VoidCallback? onProfileTap;
 
   @override
   State<CommunityShellPreviewPage> createState() =>
@@ -70,6 +72,20 @@ class _CommunityShellPreviewPageState extends State<CommunityShellPreviewPage> {
     widget.onTurnaTap?.call();
   }
 
+  void _handleProfileTap() {
+    final navigator = Navigator.of(context, rootNavigator: true);
+    _communityLog('community profile tapped', {
+      'selectedIndex': _selectedIndex,
+      'hasCallback': widget.onProfileTap != null,
+      'rootCanPop': navigator.canPop(),
+    });
+    if (navigator.canPop()) {
+      _communityLog('community profile popUntil first');
+      navigator.popUntil((route) => route.isFirst);
+    }
+    widget.onProfileTap?.call();
+  }
+
   @override
   Widget build(BuildContext context) {
     final pages = <Widget>[
@@ -77,11 +93,13 @@ class _CommunityShellPreviewPageState extends State<CommunityShellPreviewPage> {
         api: _api,
         currentUserId: widget.currentUserId,
         onTurnaTap: _handleTurnaTap,
+        onProfileTap: _handleProfileTap,
       ),
       _CommunityExplorePage(
         api: _api,
         currentUserId: widget.currentUserId,
         onTurnaTap: _handleTurnaTap,
+        onProfileTap: _handleProfileTap,
       ),
       _CommunityTurnaReturnPage(onTap: _handleTurnaTap),
       const _CommunityNotificationsPage(),
@@ -89,6 +107,7 @@ class _CommunityShellPreviewPageState extends State<CommunityShellPreviewPage> {
         api: _api,
         currentUserId: widget.currentUserId,
         onTurnaTap: _handleTurnaTap,
+        onProfileTap: _handleProfileTap,
       ),
     ];
 
@@ -869,11 +888,13 @@ class _CommunityHomePage extends StatefulWidget {
     required this.api,
     required this.currentUserId,
     this.onTurnaTap,
+    this.onProfileTap,
   });
 
   final _CommunityApiClient api;
   final String currentUserId;
   final VoidCallback? onTurnaTap;
+  final VoidCallback? onProfileTap;
 
   @override
   State<_CommunityHomePage> createState() => _CommunityHomePageState();
@@ -903,6 +924,7 @@ class _CommunityHomePageState extends State<_CommunityHomePage> {
           initialCommunity: community,
           currentUserId: widget.currentUserId,
           onTurnaTap: widget.onTurnaTap,
+          onProfileTap: widget.onProfileTap,
         ),
       ),
     );
@@ -947,7 +969,7 @@ class _CommunityHomePageState extends State<_CommunityHomePage> {
                 const SizedBox(height: 18),
                 _CommunityProfileCompletionCard(
                   gate: profileGate,
-                  onTurnaTap: widget.onTurnaTap,
+                  onProfileTap: widget.onProfileTap,
                 ),
                 const SizedBox(height: _CommunityUiTokens.sectionGap),
                 const _CommunitySectionHeader(
@@ -1054,11 +1076,13 @@ class _CommunityExplorePage extends StatefulWidget {
     required this.api,
     required this.currentUserId,
     this.onTurnaTap,
+    this.onProfileTap,
   });
 
   final _CommunityApiClient api;
   final String currentUserId;
   final VoidCallback? onTurnaTap;
+  final VoidCallback? onProfileTap;
 
   @override
   State<_CommunityExplorePage> createState() => _CommunityExplorePageState();
@@ -1089,6 +1113,7 @@ class _CommunityExplorePageState extends State<_CommunityExplorePage> {
           initialCommunity: community,
           currentUserId: widget.currentUserId,
           onTurnaTap: widget.onTurnaTap,
+          onProfileTap: widget.onProfileTap,
         ),
       ),
     );
@@ -1103,7 +1128,7 @@ class _CommunityExplorePageState extends State<_CommunityExplorePage> {
     await _showCommunityProfileGateSheet(
       context,
       gate: gate,
-      onTurnaTap: widget.onTurnaTap,
+      onProfileTap: widget.onProfileTap,
     );
     return false;
   }
@@ -1280,11 +1305,13 @@ class _CommunityMyCommunitiesPage extends StatefulWidget {
     required this.api,
     required this.currentUserId,
     this.onTurnaTap,
+    this.onProfileTap,
   });
 
   final _CommunityApiClient api;
   final String currentUserId;
   final VoidCallback? onTurnaTap;
+  final VoidCallback? onProfileTap;
 
   @override
   State<_CommunityMyCommunitiesPage> createState() =>
@@ -1317,6 +1344,7 @@ class _CommunityMyCommunitiesPageState
           initialCommunity: community,
           currentUserId: widget.currentUserId,
           onTurnaTap: widget.onTurnaTap,
+          onProfileTap: widget.onProfileTap,
         ),
       ),
     );
@@ -1494,12 +1522,14 @@ class _CommunityDetailPage extends StatefulWidget {
     required this.initialCommunity,
     required this.currentUserId,
     this.onTurnaTap,
+    this.onProfileTap,
   });
 
   final _CommunityApiClient api;
   final _CommunitySummary initialCommunity;
   final String currentUserId;
   final VoidCallback? onTurnaTap;
+  final VoidCallback? onProfileTap;
 
   @override
   State<_CommunityDetailPage> createState() => _CommunityDetailPageState();
@@ -1529,7 +1559,7 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
       await _showCommunityProfileGateSheet(
         context,
         gate: data.profileGate,
-        onTurnaTap: widget.onTurnaTap,
+        onProfileTap: widget.onProfileTap,
       );
       return;
     }
@@ -1613,7 +1643,7 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
     if (!data.community.isMember && _selectedTab != _CommunityDetailTab.home) {
       return _CommunityLockedTabCard(
         tab: _selectedTab,
-        onTurnaTap: widget.onTurnaTap,
+        onProfileTap: widget.onProfileTap,
       );
     }
 
@@ -2190,7 +2220,7 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
                       padding: const EdgeInsets.only(bottom: 16),
                       child: _CommunityProfileCompletionCard(
                         gate: data.profileGate,
-                        onTurnaTap: widget.onTurnaTap,
+                        onProfileTap: widget.onProfileTap,
                         compact: true,
                       ),
                     ),
@@ -2657,10 +2687,10 @@ class _CommunityDetailTabBar extends StatelessWidget {
 }
 
 class _CommunityLockedTabCard extends StatelessWidget {
-  const _CommunityLockedTabCard({required this.tab, this.onTurnaTap});
+  const _CommunityLockedTabCard({required this.tab, this.onProfileTap});
 
   final _CommunityDetailTab tab;
-  final VoidCallback? onTurnaTap;
+  final VoidCallback? onProfileTap;
 
   @override
   Widget build(BuildContext context) {
@@ -2688,10 +2718,10 @@ class _CommunityLockedTabCard extends StatelessWidget {
               color: _CommunityUiTokens.textMuted,
             ),
           ),
-          if (onTurnaTap != null) ...[
+          if (onProfileTap != null) ...[
             const SizedBox(height: 14),
             TextButton(
-              onPressed: onTurnaTap,
+              onPressed: onProfileTap,
               style: TextButton.styleFrom(
                 foregroundColor: _CommunityUiTokens.text,
                 backgroundColor: _CommunityUiTokens.surfaceSoft,
@@ -2787,12 +2817,12 @@ class _CommunityHeroCard extends StatelessWidget {
 class _CommunityProfileCompletionCard extends StatelessWidget {
   const _CommunityProfileCompletionCard({
     required this.gate,
-    this.onTurnaTap,
+    this.onProfileTap,
     this.compact = false,
   });
 
   final _CommunityProfileGate gate;
-  final VoidCallback? onTurnaTap;
+  final VoidCallback? onProfileTap;
   final bool compact;
 
   @override
@@ -2849,12 +2879,12 @@ class _CommunityProfileCompletionCard extends StatelessWidget {
               color: _CommunityUiTokens.textMuted,
             ),
           ),
-          if (!gate.isComplete && onTurnaTap != null) ...[
+          if (!gate.isComplete && onProfileTap != null) ...[
             const SizedBox(height: 14),
             Align(
               alignment: Alignment.centerLeft,
               child: TextButton(
-                onPressed: onTurnaTap,
+                onPressed: onProfileTap,
                 style: TextButton.styleFrom(
                   foregroundColor: _CommunityUiTokens.text,
                   backgroundColor: _CommunityUiTokens.surfaceSoft,
@@ -4083,7 +4113,7 @@ class _CommunityBottomBar extends StatelessWidget {
 Future<void> _showCommunityProfileGateSheet(
   BuildContext context, {
   required _CommunityProfileGate gate,
-  VoidCallback? onTurnaTap,
+  VoidCallback? onProfileTap,
 }) {
   return showModalBottomSheet<void>(
     context: context,
@@ -4130,7 +4160,7 @@ Future<void> _showCommunityProfileGateSheet(
                       child: FilledButton(
                         onPressed: () {
                           Navigator.of(sheetContext).pop();
-                          onTurnaTap?.call();
+                          onProfileTap?.call();
                         },
                         style: FilledButton.styleFrom(
                           backgroundColor: _CommunityUiTokens.text,
