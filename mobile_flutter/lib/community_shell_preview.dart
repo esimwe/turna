@@ -1117,6 +1117,7 @@ class _CommunityDetailPage extends StatefulWidget {
 
 class _CommunityDetailPageState extends State<_CommunityDetailPage> {
   late Future<_CommunityDetailData> _future;
+  _CommunityDetailTab _selectedTab = _CommunityDetailTab.home;
   bool _busy = false;
 
   @override
@@ -1186,6 +1187,447 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
         setState(() => _busy = false);
       }
     }
+  }
+
+  Widget _buildTabContent(
+    _CommunityDetailData data, {
+    required List<String> entryItems,
+    required List<String> ruleItems,
+  }) {
+    if (!data.community.isMember && _selectedTab != _CommunityDetailTab.home) {
+      return _CommunityLockedTabCard(
+        tab: _selectedTab,
+        onTurnaTap: widget.onTurnaTap,
+      );
+    }
+
+    switch (_selectedTab) {
+      case _CommunityDetailTab.home:
+        return _buildHomeTab(
+          data.community,
+          entryItems: entryItems,
+          ruleItems: ruleItems,
+        );
+      case _CommunityDetailTab.chat:
+        return _buildChatTab(data.community);
+      case _CommunityDetailTab.questions:
+        return _buildQuestionsTab(data.community);
+      case _CommunityDetailTab.resources:
+        return _buildResourcesTab(data.community);
+      case _CommunityDetailTab.members:
+        return _buildMembersTab(data.community);
+    }
+  }
+
+  Widget _buildHomeTab(
+    _CommunitySummary community, {
+    required List<String> entryItems,
+    required List<String> ruleItems,
+  }) {
+    return Column(
+      children: [
+        _SurfaceCard(
+          padding: const EdgeInsets.all(18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const _CommunitySectionHeader(
+                emoji: '🪄',
+                title: 'Nereden baslamali?',
+              ),
+              const SizedBox(height: 12),
+              if ((community.welcomeTitle ?? '').trim().isNotEmpty)
+                Text(
+                  community.welcomeTitle!,
+                  style: const TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w700,
+                    color: _CommunityUiTokens.text,
+                  ),
+                ),
+              if ((community.welcomeDescription ?? '').trim().isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    community.welcomeDescription!,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      height: 1.45,
+                      color: _CommunityUiTokens.textMuted,
+                    ),
+                  ),
+                ),
+              const SizedBox(height: 14),
+              ...List<Widget>.generate(entryItems.length, (index) {
+                return Padding(
+                  padding: EdgeInsets.only(
+                    bottom: index == entryItems.length - 1 ? 0 : 10,
+                  ),
+                  child: _ChecklistTile(
+                    index: index + 1,
+                    text: entryItems[index],
+                  ),
+                );
+              }),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        _SurfaceCard(
+          padding: const EdgeInsets.all(18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const _CommunitySectionHeader(
+                emoji: '🛡️',
+                title: 'Topluluk kurallari',
+              ),
+              const SizedBox(height: 12),
+              ...List<Widget>.generate(ruleItems.length, (index) {
+                return Padding(
+                  padding: EdgeInsets.only(
+                    bottom: index == ruleItems.length - 1 ? 0 : 10,
+                  ),
+                  child: _RuleTile(text: ruleItems[index]),
+                );
+              }),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        const _SurfaceCard(
+          padding: EdgeInsets.all(18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _CommunitySectionHeader(emoji: '🤝', title: 'Networking mantigi'),
+              SizedBox(height: 10),
+              Text(
+                'Birebir baglanti kurmak isteyen uyeler once istek gonderir. Kabul edilen baglantilar Turna birebir sohbetine duser.',
+                style: TextStyle(
+                  fontSize: 13,
+                  height: 1.45,
+                  color: _CommunityUiTokens.textMuted,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildChatTab(_CommunitySummary community) {
+    final channels = community.channels
+        .where(
+          (channel) => channel.type == 'chat' || channel.type == 'announcement',
+        )
+        .toList();
+    return Column(
+      children: [
+        _SurfaceCard(
+          padding: const EdgeInsets.all(18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const _CommunitySectionHeader(
+                emoji: '💬',
+                title: 'Sohbet odalari',
+              ),
+              const SizedBox(height: 12),
+              ...List<Widget>.generate(channels.length, (index) {
+                final channel = channels[index];
+                return Padding(
+                  padding: EdgeInsets.only(
+                    bottom: index == channels.length - 1 ? 0 : 10,
+                  ),
+                  child: _ChannelTile(channel: channel),
+                );
+              }),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        _SurfaceCard(
+          padding: const EdgeInsets.all(18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const _CommunitySectionHeader(
+                emoji: '🔥',
+                title: 'Bugunun akisi',
+              ),
+              const SizedBox(height: 12),
+              ...List<Widget>.generate(channels.length.clamp(1, 3), (index) {
+                final channel = channels.isEmpty
+                    ? _CommunityChannelSummary(
+                        id: 'general-preview',
+                        slug: 'genel',
+                        name: 'Genel',
+                        type: 'chat',
+                        isDefault: true,
+                      )
+                    : channels[index];
+                return Padding(
+                  padding: EdgeInsets.only(
+                    bottom: index == channels.length.clamp(1, 3) - 1 ? 0 : 10,
+                  ),
+                  child: _ConversationPreviewTile(
+                    emoji: index == 0 ? '💬' : (index == 1 ? '📌' : '✨'),
+                    title: channel.name,
+                    subtitle:
+                        '${community.name} icinde bugun hareket var. Bu alan gercek mesaj akisina hazirlandi.',
+                    stats: index == 0
+                        ? '18 yeni mesaj'
+                        : (index == 1 ? '3 sabit duyuru' : '7 yeni cevap'),
+                  ),
+                );
+              }),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildQuestionsTab(_CommunitySummary community) {
+    final channels = community.channels
+        .where((channel) => channel.type == 'question')
+        .toList();
+    final prompts = <String>[
+      '${community.name} icinde en cok tekrar eden soru ne?',
+      'Bu toplulukta yeni birinin ilk hangi basliktan baslamasi gerekir?',
+      'Hangi konuda toplu bir soru-cevap oturumu acilmali?',
+    ];
+    return Column(
+      children: [
+        _SurfaceCard(
+          padding: const EdgeInsets.all(18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const _CommunitySectionHeader(
+                emoji: '❓',
+                title: 'Soru-cevap odalari',
+              ),
+              const SizedBox(height: 12),
+              if (channels.isEmpty)
+                const _CommunityEmptyState(
+                  emoji: '🫥',
+                  title: 'Bu toplulukta ayrik soru odasi yok',
+                  subtitle:
+                      'Question kanal tipi eklenince sorular burada duzenli gorunecek.',
+                )
+              else
+                ...List<Widget>.generate(channels.length, (index) {
+                  final channel = channels[index];
+                  return Padding(
+                    padding: EdgeInsets.only(
+                      bottom: index == channels.length - 1 ? 0 : 10,
+                    ),
+                    child: _ChannelTile(channel: channel),
+                  );
+                }),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        _SurfaceCard(
+          padding: const EdgeInsets.all(18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const _CommunitySectionHeader(
+                emoji: '🧠',
+                title: 'Ornek soru akisi',
+              ),
+              const SizedBox(height: 12),
+              ...List<Widget>.generate(prompts.length, (index) {
+                return Padding(
+                  padding: EdgeInsets.only(
+                    bottom: index == prompts.length - 1 ? 0 : 10,
+                  ),
+                  child: _QuestionPreviewTile(
+                    title: prompts[index],
+                    subtitle: index == 0
+                        ? 'En iyi cevap secilecek yapida planlandi.'
+                        : 'Tag, cozuldu ve en iyi cevap alanina hazir.',
+                    badge: index == 0 ? 'Cozulmedi' : 'En iyi cevap',
+                  ),
+                );
+              }),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildResourcesTab(_CommunitySummary community) {
+    final channels = community.channels
+        .where(
+          (channel) => channel.type == 'resource' || channel.type == 'event',
+        )
+        .toList();
+    final resources =
+        <({String emoji, String title, String subtitle, String badge})>[
+          (
+            emoji: '📚',
+            title: 'Baslangic rehberi',
+            subtitle: '${community.name} icin sabit onboarding kaynagi.',
+            badge: 'Sabit',
+          ),
+          (
+            emoji: '🗂️',
+            title: 'Topluluk icinde kaybolmayan icerikler',
+            subtitle:
+                'Kaynak, link ve tekrar acilan konular icin kutuphane alani.',
+            badge: 'Kaynak',
+          ),
+          (
+            emoji: '📅',
+            title: 'Yaklasan etkinlikler',
+            subtitle: 'Canli oturum ve bulusma katmani bu sekmede toplanacak.',
+            badge: 'Etkinlik',
+          ),
+        ];
+    return Column(
+      children: [
+        _SurfaceCard(
+          padding: const EdgeInsets.all(18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const _CommunitySectionHeader(
+                emoji: '🗃️',
+                title: 'Kaynak ve etkinlik odalari',
+              ),
+              const SizedBox(height: 12),
+              if (channels.isEmpty)
+                const _CommunityEmptyState(
+                  emoji: '🪶',
+                  title: 'Kaynak sekmesi hazir',
+                  subtitle:
+                      'Resource ve event kanal tipleri eklendikce bu alan otomatik dolacak.',
+                )
+              else
+                ...List<Widget>.generate(channels.length, (index) {
+                  final channel = channels[index];
+                  return Padding(
+                    padding: EdgeInsets.only(
+                      bottom: index == channels.length - 1 ? 0 : 10,
+                    ),
+                    child: _ChannelTile(channel: channel),
+                  );
+                }),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        _SurfaceCard(
+          padding: const EdgeInsets.all(18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const _CommunitySectionHeader(
+                emoji: '🧾',
+                title: 'Bu sekmede ne olacak?',
+              ),
+              const SizedBox(height: 12),
+              ...List<Widget>.generate(resources.length, (index) {
+                final item = resources[index];
+                return Padding(
+                  padding: EdgeInsets.only(
+                    bottom: index == resources.length - 1 ? 0 : 10,
+                  ),
+                  child: _ResourcePreviewTile(
+                    emoji: item.emoji,
+                    title: item.title,
+                    subtitle: item.subtitle,
+                    badge: item.badge,
+                  ),
+                );
+              }),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMembersTab(_CommunitySummary community) {
+    final members =
+        <({String emoji, String name, String role, String subtitle})>[
+          (
+            emoji: '🚀',
+            name: 'Doğukan A.',
+            role: community.roleLabel,
+            subtitle: 'Istanbul  •  Aktif topluluk katilimcisi',
+          ),
+          (
+            emoji: '🎯',
+            name: 'Selin T.',
+            role: 'Mentor',
+            subtitle: 'Ankara  •  Uye dizini ve eslesme akisina hazir',
+          ),
+          (
+            emoji: '🧩',
+            name: 'Emir K.',
+            role: 'Aktif uye',
+            subtitle: 'Izmir  •  Soru-cevap ve networking odakli',
+          ),
+        ];
+    return Column(
+      children: [
+        _SurfaceCard(
+          padding: const EdgeInsets.all(18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const _CommunitySectionHeader(emoji: '👥', title: 'Uye katmani'),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  _CommunityChip(label: '👥 ${community.memberCount} uye'),
+                  _CommunityChip(label: '🪪 Rol bazli gorunum'),
+                  _CommunityChip(label: '🤝 DM istegi mantigi'),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        _SurfaceCard(
+          padding: const EdgeInsets.all(18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const _CommunitySectionHeader(
+                emoji: '🌱',
+                title: 'Ornek uye dizini',
+              ),
+              const SizedBox(height: 12),
+              ...List<Widget>.generate(members.length, (index) {
+                final member = members[index];
+                return Padding(
+                  padding: EdgeInsets.only(
+                    bottom: index == members.length - 1 ? 0 : 10,
+                  ),
+                  child: _CommunityMemberTile(
+                    emoji: member.emoji,
+                    name: member.name,
+                    role: member.role,
+                    subtitle: member.subtitle,
+                  ),
+                );
+              }),
+            ],
+          ),
+        ),
+      ],
+    );
   }
 
   @override
@@ -1421,130 +1863,164 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
                         compact: true,
                       ),
                     ),
-                  _SurfaceCard(
-                    padding: const EdgeInsets.all(18),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const _CommunitySectionHeader(
-                          emoji: '🪄',
-                          title: 'Nereden baslamali?',
-                        ),
-                        const SizedBox(height: 12),
-                        if ((community.welcomeTitle ?? '').trim().isNotEmpty)
-                          Text(
-                            community.welcomeTitle!,
-                            style: const TextStyle(
-                              fontSize: 17,
-                              fontWeight: FontWeight.w700,
-                              color: _CommunityUiTokens.text,
-                            ),
-                          ),
-                        if ((community.welcomeDescription ?? '')
-                            .trim()
-                            .isNotEmpty)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 8),
-                            child: Text(
-                              community.welcomeDescription!,
-                              style: const TextStyle(
-                                fontSize: 13,
-                                height: 1.45,
-                                color: _CommunityUiTokens.textMuted,
-                              ),
-                            ),
-                          ),
-                        const SizedBox(height: 14),
-                        ...List<Widget>.generate(entryItems.length, (index) {
-                          return Padding(
-                            padding: EdgeInsets.only(
-                              bottom: index == entryItems.length - 1 ? 0 : 10,
-                            ),
-                            child: _ChecklistTile(
-                              index: index + 1,
-                              text: entryItems[index],
-                            ),
-                          );
-                        }),
-                      ],
-                    ),
+                  const SizedBox(height: 16),
+                  _CommunityDetailTabBar(
+                    selectedTab: _selectedTab,
+                    onSelected: (tab) {
+                      setState(() => _selectedTab = tab);
+                    },
                   ),
                   const SizedBox(height: 16),
-                  _SurfaceCard(
-                    padding: const EdgeInsets.all(18),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const _CommunitySectionHeader(
-                          emoji: '💬',
-                          title: 'Odalar',
-                        ),
-                        const SizedBox(height: 12),
-                        ...List<Widget>.generate(community.channels.length, (
-                          index,
-                        ) {
-                          final channel = community.channels[index];
-                          return Padding(
-                            padding: EdgeInsets.only(
-                              bottom: index == community.channels.length - 1
-                                  ? 0
-                                  : 10,
-                            ),
-                            child: _ChannelTile(channel: channel),
-                          );
-                        }),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  _SurfaceCard(
-                    padding: const EdgeInsets.all(18),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const _CommunitySectionHeader(
-                          emoji: '🛡️',
-                          title: 'Topluluk kurallari',
-                        ),
-                        const SizedBox(height: 12),
-                        ...List<Widget>.generate(ruleItems.length, (index) {
-                          return Padding(
-                            padding: EdgeInsets.only(
-                              bottom: index == ruleItems.length - 1 ? 0 : 10,
-                            ),
-                            child: _RuleTile(text: ruleItems[index]),
-                          );
-                        }),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  const _SurfaceCard(
-                    padding: EdgeInsets.all(18),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        _CommunitySectionHeader(
-                          emoji: '🤝',
-                          title: 'Networking mantigi',
-                        ),
-                        SizedBox(height: 10),
-                        Text(
-                          'Birebir baglanti kurmak isteyen uyeler once istek gonderir. Kabul edilen baglantilar Turna birebir sohbetine duser.',
-                          style: TextStyle(
-                            fontSize: 13,
-                            height: 1.45,
-                            color: _CommunityUiTokens.textMuted,
-                          ),
-                        ),
-                      ],
-                    ),
+                  _buildTabContent(
+                    data,
+                    entryItems: entryItems,
+                    ruleItems: ruleItems,
                   ),
                 ],
               ),
             );
           },
         ),
+      ),
+    );
+  }
+}
+
+enum _CommunityDetailTab { home, chat, questions, resources, members }
+
+extension _CommunityDetailTabX on _CommunityDetailTab {
+  String get label => switch (this) {
+    _CommunityDetailTab.home => 'Ana Sayfa',
+    _CommunityDetailTab.chat => 'Sohbet',
+    _CommunityDetailTab.questions => 'Sorular',
+    _CommunityDetailTab.resources => 'Kaynaklar',
+    _CommunityDetailTab.members => 'Uyeler',
+  };
+
+  String get emoji => switch (this) {
+    _CommunityDetailTab.home => '🏡',
+    _CommunityDetailTab.chat => '💬',
+    _CommunityDetailTab.questions => '❓',
+    _CommunityDetailTab.resources => '📚',
+    _CommunityDetailTab.members => '👥',
+  };
+}
+
+class _CommunityDetailTabBar extends StatelessWidget {
+  const _CommunityDetailTabBar({
+    required this.selectedTab,
+    required this.onSelected,
+  });
+
+  final _CommunityDetailTab selectedTab;
+  final ValueChanged<_CommunityDetailTab> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: _CommunityDetailTab.values.map((tab) {
+          final selected = tab == selectedTab;
+          return Padding(
+            padding: const EdgeInsets.only(right: 10),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(999),
+              onTap: () => onSelected(tab),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                curve: Curves.easeOutCubic,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 10,
+                ),
+                decoration: BoxDecoration(
+                  color: selected
+                      ? _CommunityUiTokens.text
+                      : _CommunityUiTokens.surface,
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(color: _CommunityUiTokens.border),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(tab.emoji, style: const TextStyle(fontSize: 15)),
+                    const SizedBox(width: 8),
+                    Text(
+                      tab.label,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: selected
+                            ? Colors.white
+                            : _CommunityUiTokens.text,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+}
+
+class _CommunityLockedTabCard extends StatelessWidget {
+  const _CommunityLockedTabCard({required this.tab, this.onTurnaTap});
+
+  final _CommunityDetailTab tab;
+  final VoidCallback? onTurnaTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return _SurfaceCard(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(tab.emoji, style: const TextStyle(fontSize: 24)),
+          const SizedBox(height: 10),
+          Text(
+            '${tab.label} alani uye olunca acilir',
+            style: const TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+              color: _CommunityUiTokens.text,
+            ),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Topluluga katildiginda bu sekmede kanal akisi, sorular, kaynaklar ve uye dizini gorunur olacak.',
+            style: TextStyle(
+              fontSize: 13,
+              height: 1.45,
+              color: _CommunityUiTokens.textMuted,
+            ),
+          ),
+          if (onTurnaTap != null) ...[
+            const SizedBox(height: 14),
+            TextButton(
+              onPressed: onTurnaTap,
+              style: TextButton.styleFrom(
+                foregroundColor: _CommunityUiTokens.text,
+                backgroundColor: _CommunityUiTokens.surfaceSoft,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 11,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+              ),
+              child: const Text(
+                'Profili tamamlamak icin Turna bolumune don',
+                style: TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -2129,6 +2605,191 @@ class _NotificationTile extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _ConversationPreviewTile extends StatelessWidget {
+  const _ConversationPreviewTile({
+    required this.emoji,
+    required this.title,
+    required this.subtitle,
+    required this.stats,
+  });
+
+  final String emoji;
+  final String title;
+  final String subtitle;
+  final String stats;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: _CommunityUiTokens.surfaceSoft,
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(14),
+              ),
+              alignment: Alignment.center,
+              child: Text(emoji, style: const TextStyle(fontSize: 18)),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: _CommunityUiTokens.text,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      height: 1.4,
+                      color: _CommunityUiTokens.textMuted,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    stats,
+                    style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: _CommunityUiTokens.text,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _QuestionPreviewTile extends StatelessWidget {
+  const _QuestionPreviewTile({
+    required this.title,
+    required this.subtitle,
+    required this.badge,
+  });
+
+  final String title;
+  final String subtitle;
+  final String badge;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: _CommunityUiTokens.surfaceSoft,
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: _CommunityUiTokens.text,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              subtitle,
+              style: const TextStyle(
+                fontSize: 12,
+                height: 1.4,
+                color: _CommunityUiTokens.textMuted,
+              ),
+            ),
+            const SizedBox(height: 10),
+            _CommunityChip(label: '❖ $badge'),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ResourcePreviewTile extends StatelessWidget {
+  const _ResourcePreviewTile({
+    required this.emoji,
+    required this.title,
+    required this.subtitle,
+    required this.badge,
+  });
+
+  final String emoji;
+  final String title;
+  final String subtitle;
+  final String badge;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: _CommunityUiTokens.surfaceSoft,
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(emoji, style: const TextStyle(fontSize: 20)),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: _CommunityUiTokens.text,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      height: 1.4,
+                      color: _CommunityUiTokens.textMuted,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 10),
+            _CommunityChip(label: badge),
+          ],
+        ),
       ),
     );
   }
