@@ -277,6 +277,27 @@ class _CommunityApiClient {
     return _decodeChannelMessage(res, fallbackError: 'Mesaj gönderilemedi.');
   }
 
+  Future<_CommunityThreadFeed> fetchThread({
+    required String communityId,
+    required String channelId,
+    required String messageId,
+  }) async {
+    final res = await http.get(
+      _uri(
+        '/api/communities/$communityId/channels/$channelId/messages/$messageId/thread',
+      ),
+      headers: _headers,
+    );
+    if (res.statusCode >= 400) {
+      throw _CommunityApiException(
+        _decodeError(res, 'Mesaj threadi yüklenemedi.'),
+      );
+    }
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    final data = Map<String, dynamic>.from(body['data'] as Map? ?? const {});
+    return _CommunityThreadFeed.fromMap(data);
+  }
+
   Future<List<_CommunityNotificationSummary>> fetchNotifications({
     int limit = 40,
   }) async {
@@ -680,6 +701,7 @@ class _CommunityMessageSummary {
     required this.author,
     required this.createdAt,
     this.text,
+    this.replyCount = 0,
     this.replyToMessageId,
     this.replyAuthorName,
     this.replyPreview,
@@ -689,6 +711,7 @@ class _CommunityMessageSummary {
   final _CommunityUserSummary author;
   final String createdAt;
   final String? text;
+  final int replyCount;
   final String? replyToMessageId;
   final String? replyAuthorName;
   final String? replyPreview;
@@ -708,6 +731,7 @@ class _CommunityMessageSummary {
       ),
       createdAt: (map['createdAt'] ?? '').toString(),
       text: _CommunitySummary._nullableString(map['text']),
+      replyCount: (map['replyCount'] as num?)?.toInt() ?? 0,
       replyToMessageId: _CommunitySummary._nullableString(
         map['replyToMessageId'],
       ),
@@ -715,6 +739,29 @@ class _CommunityMessageSummary {
         replyAuthor?['displayName'],
       ),
       replyPreview: replyText,
+    );
+  }
+}
+
+class _CommunityThreadFeed {
+  const _CommunityThreadFeed({required this.root, required this.replies});
+
+  final _CommunityMessageSummary root;
+  final List<_CommunityMessageSummary> replies;
+
+  factory _CommunityThreadFeed.fromMap(Map<String, dynamic> map) {
+    return _CommunityThreadFeed(
+      root: _CommunityMessageSummary.fromMap(
+        Map<String, dynamic>.from(map['root'] as Map? ?? const {}),
+      ),
+      replies: (map['replies'] as List<dynamic>? ?? const [])
+          .whereType<Map>()
+          .map(
+            (item) => _CommunityMessageSummary.fromMap(
+              Map<String, dynamic>.from(item),
+            ),
+          )
+          .toList(),
     );
   }
 }
@@ -2465,7 +2512,6 @@ class _CommunityChannelPageState extends State<_CommunityChannelPage> {
   bool _loading = true;
   bool _sending = false;
   String? _errorMessage;
-  _CommunityMessageSummary? _replyingTo;
 
   @override
   void initState() {
@@ -2520,6 +2566,31 @@ class _CommunityChannelPageState extends State<_CommunityChannelPage> {
       });
     });
 
+    socket.on('community:thread:update', (payload) {
+      if (payload is! Map) return;
+      final data = Map<String, dynamic>.from(payload);
+      if ((data['channelId'] ?? '').toString() != widget.channel.id) {
+        return;
+      }
+      final rootMessageId = (data['rootMessageId'] ?? '').toString();
+      final replyCount = (data['replyCount'] as num?)?.toInt() ?? 0;
+      final index = _items.indexWhere((item) => item.id == rootMessageId);
+      if (index < 0 || !mounted) return;
+      final current = _items[index];
+      setState(() {
+        _items[index] = _CommunityMessageSummary(
+          id: current.id,
+          author: current.author,
+          createdAt: current.createdAt,
+          text: current.text,
+          replyCount: replyCount,
+          replyToMessageId: current.replyToMessageId,
+          replyAuthorName: current.replyAuthorName,
+          replyPreview: current.replyPreview,
+        );
+      });
+    });
+
     socket.on('community:error', (payload) {
       if (!mounted || payload is! Map) return;
       final code = (payload['code'] ?? 'community_error').toString();
@@ -2568,6 +2639,9 @@ class _CommunityChannelPageState extends State<_CommunityChannelPage> {
   }
 
   void _upsertMessage(_CommunityMessageSummary message) {
+    if ((message.replyToMessageId ?? '').trim().isNotEmpty) {
+      return;
+    }
     final existingIndex = _items.indexWhere((item) => item.id == message.id);
     if (existingIndex >= 0) {
       _items[existingIndex] = message;
@@ -2577,7 +2651,23 @@ class _CommunityChannelPageState extends State<_CommunityChannelPage> {
     _items.sort((left, right) => left.createdAt.compareTo(right.createdAt));
   }
 
-  Future<void> _send() async {
+  Future<void> _openThread(_CommunityMessageSummary message) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => _CommunityThreadPage(
+          api: widget.api,
+          community: widget.community,
+          channel: widget.channel,
+          rootMessage: message,
+          currentUserId: widget.currentUserId,
+        ),
+      ),
+    );
+    if (!mounted) return;
+    await _reload();
+  }
+
+  Future<void> _sendRootMessage() async {
     final text = _composerController.text.trim();
     if (text.isEmpty || _sending) return;
     setState(() => _sending = true);
@@ -2586,13 +2676,11 @@ class _CommunityChannelPageState extends State<_CommunityChannelPage> {
         communityId: widget.community.id,
         channelId: widget.channel.id,
         text: text,
-        replyToMessageId: _replyingTo?.id,
       );
       _composerController.clear();
       if (!mounted) return;
       setState(() {
         _upsertMessage(created);
-        _replyingTo = null;
       });
     } catch (error) {
       if (!mounted) return;
@@ -2669,9 +2757,8 @@ class _CommunityChannelPageState extends State<_CommunityChannelPage> {
                                       mine:
                                           item.author.id ==
                                           widget.currentUserId,
-                                      onReply: () {
-                                        setState(() => _replyingTo = item);
-                                      },
+                                      onReply: () => _openThread(item),
+                                      onTap: () => _openThread(item),
                                     );
                                   },
                                 ),
@@ -2680,7 +2767,7 @@ class _CommunityChannelPageState extends State<_CommunityChannelPage> {
           SafeArea(
             top: false,
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
               child: DecoratedBox(
                 decoration: BoxDecoration(
                   color: Colors.white,
@@ -2689,88 +2776,31 @@ class _CommunityChannelPageState extends State<_CommunityChannelPage> {
                 ),
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
+                  child: Row(
                     children: [
-                      if (_replyingTo != null)
-                        Container(
-                          width: double.infinity,
-                          margin: const EdgeInsets.only(bottom: 10),
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: _CommunityUiTokens.surfaceSoft,
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      'Yanıtlanıyor · ${_replyingTo!.author.displayName}',
-                                      style: const TextStyle(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w700,
-                                        color: _CommunityUiTokens.text,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      (_replyingTo!.text ?? '').trim().isEmpty
-                                          ? 'Mesaj'
-                                          : (_replyingTo!.text!.trim()),
-                                      maxLines: 2,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                        fontSize: 12,
-                                        color: _CommunityUiTokens.textMuted,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              IconButton(
-                                onPressed: () {
-                                  setState(() => _replyingTo = null);
-                                },
-                                icon: const Icon(Icons.close_rounded),
-                                color: _CommunityUiTokens.textMuted,
-                              ),
-                            ],
+                      Expanded(
+                        child: TextField(
+                          controller: _composerController,
+                          minLines: 1,
+                          maxLines: 5,
+                          decoration: const InputDecoration(
+                            hintText: 'Kanal mesajı yaz',
+                            border: InputBorder.none,
+                            isCollapsed: true,
                           ),
                         ),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: TextField(
-                              controller: _composerController,
-                              minLines: 1,
-                              maxLines: 5,
-                              decoration: const InputDecoration(
-                                hintText: 'Mesaj yaz',
-                                border: InputBorder.none,
-                                isCollapsed: true,
-                              ),
-                            ),
+                      ),
+                      const SizedBox(width: 10),
+                      FilledButton(
+                        onPressed: _sending ? null : _sendRootMessage,
+                        style: FilledButton.styleFrom(
+                          backgroundColor: _CommunityUiTokens.text,
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
                           ),
-                          const SizedBox(width: 10),
-                          FilledButton(
-                            onPressed: _sending ? null : _send,
-                            style: FilledButton.styleFrom(
-                              backgroundColor: _CommunityUiTokens.text,
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 14,
-                                vertical: 12,
-                              ),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(16),
-                              ),
-                            ),
-                            child: Text(_sending ? '...' : 'Gonder'),
-                          ),
-                        ],
+                        ),
+                        child: Text(_sending ? '...' : 'Gonder'),
                       ),
                     ],
                   ),
@@ -2780,6 +2810,324 @@ class _CommunityChannelPageState extends State<_CommunityChannelPage> {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _CommunityThreadPage extends StatefulWidget {
+  const _CommunityThreadPage({
+    required this.api,
+    required this.community,
+    required this.channel,
+    required this.rootMessage,
+    required this.currentUserId,
+  });
+
+  final _CommunityApiClient api;
+  final _CommunitySummary community;
+  final _CommunityChannelSummary channel;
+  final _CommunityMessageSummary rootMessage;
+  final String currentUserId;
+
+  @override
+  State<_CommunityThreadPage> createState() => _CommunityThreadPageState();
+}
+
+class _CommunityThreadPageState extends State<_CommunityThreadPage> {
+  final _composerController = TextEditingController();
+  final List<_CommunityMessageSummary> _replies = <_CommunityMessageSummary>[];
+  io.Socket? _socket;
+  _CommunityMessageSummary? _root;
+  bool _loading = true;
+  bool _sending = false;
+  String? _errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _root = widget.rootMessage;
+    _loadInitial();
+    _connectRealtime();
+  }
+
+  @override
+  void dispose() {
+    _socket?.emit('community:thread:leave', {
+      'communityId': widget.community.id,
+      'channelId': widget.channel.id,
+      'messageId': widget.rootMessage.id,
+    });
+    _socket?.dispose();
+    _composerController.dispose();
+    super.dispose();
+  }
+
+  void _connectRealtime() {
+    final socket = io.io(widget.api.backendBaseUrl, <String, dynamic>{
+      'transports': ['websocket'],
+      'forceNew': true,
+      'autoConnect': false,
+      'auth': {'token': widget.api.authToken},
+    });
+
+    socket.onConnect((_) {
+      socket.emit('community:thread:join', {
+        'communityId': widget.community.id,
+        'channelId': widget.channel.id,
+        'messageId': widget.rootMessage.id,
+      });
+    });
+
+    socket.on('community:thread:message', (payload) {
+      if (payload is! Map) return;
+      final data = Map<String, dynamic>.from(payload);
+      if ((data['rootMessageId'] ?? '').toString() != widget.rootMessage.id) {
+        return;
+      }
+      final rawMessage = Map<String, dynamic>.from(
+        data['message'] as Map? ?? const {},
+      );
+      final message = _CommunityMessageSummary.fromMap(rawMessage);
+      if (!mounted) return;
+      setState(() {
+        final index = _replies.indexWhere((item) => item.id == message.id);
+        if (index >= 0) {
+          _replies[index] = message;
+        } else {
+          _replies.add(message);
+          _replies.sort(
+            (left, right) => left.createdAt.compareTo(right.createdAt),
+          );
+        }
+        _root = _copyCommunityMessage(_root!, replyCount: _replies.length);
+      });
+    });
+
+    socket.onDisconnect((reason) {
+      _communityLog('community thread socket disconnected', {'reason': reason});
+    });
+
+    socket.connect();
+    _socket = socket;
+  }
+
+  Future<void> _loadInitial() async {
+    try {
+      final thread = await widget.api.fetchThread(
+        communityId: widget.community.id,
+        channelId: widget.channel.id,
+        messageId: widget.rootMessage.id,
+      );
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _errorMessage = null;
+        _root = thread.root;
+        _replies
+          ..clear()
+          ..addAll(thread.replies);
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _errorMessage = error.toString();
+      });
+    }
+  }
+
+  Future<void> _reload() async {
+    setState(() {
+      _loading = true;
+      _errorMessage = null;
+    });
+    await _loadInitial();
+  }
+
+  Future<void> _send() async {
+    final text = _composerController.text.trim();
+    if (text.isEmpty || _sending) return;
+    setState(() => _sending = true);
+    try {
+      final created = await widget.api.sendChannelMessage(
+        communityId: widget.community.id,
+        channelId: widget.channel.id,
+        text: text,
+        replyToMessageId: widget.rootMessage.id,
+      );
+      _composerController.clear();
+      if (!mounted) return;
+      setState(() {
+        final index = _replies.indexWhere((item) => item.id == created.id);
+        if (index >= 0) {
+          _replies[index] = created;
+        } else {
+          _replies.add(created);
+          _replies.sort(
+            (left, right) => left.createdAt.compareTo(right.createdAt),
+          );
+        }
+        _root = _copyCommunityMessage(_root!, replyCount: _replies.length);
+      });
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    } finally {
+      if (mounted) {
+        setState(() => _sending = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final root = _root;
+    return Scaffold(
+      backgroundColor: _CommunityUiTokens.background,
+      appBar: AppBar(
+        backgroundColor: _CommunityUiTokens.background,
+        surfaceTintColor: Colors.transparent,
+        titleSpacing: 0,
+        title: const Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Yanıtlar'),
+            Text(
+              'Ana mesaj üstte, yanıtlar altta',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: _CommunityUiTokens.textMuted,
+              ),
+            ),
+          ],
+        ),
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : (_errorMessage != null || root == null
+                ? _CommunityErrorState(
+                    message: _errorMessage ?? 'Thread yüklenemedi.',
+                    onRetry: _reload,
+                  )
+                : Column(
+                    children: [
+                      Expanded(
+                        child: RefreshIndicator(
+                          onRefresh: _reload,
+                          child: ListView(
+                            padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                            children: [
+                              const _CommunitySectionHeader(
+                                emoji: '🧵',
+                                title: 'Ana mesaj',
+                              ),
+                              const SizedBox(height: 10),
+                              _SurfaceCard(
+                                padding: const EdgeInsets.all(16),
+                                child: _CommunityMessageBubble(
+                                  message: root,
+                                  mine: root.author.id == widget.currentUserId,
+                                ),
+                              ),
+                              const SizedBox(height: 18),
+                              _CommunitySectionHeader(
+                                emoji: '💬',
+                                title: '${_replies.length} yanıt',
+                              ),
+                              const SizedBox(height: 10),
+                              if (_replies.isEmpty)
+                                const _CommunityEmptyState(
+                                  emoji: '🫥',
+                                  title: 'Henüz yanıt yok',
+                                  subtitle:
+                                      'İlk yanıtı göndererek bu mesajın threadini başlat.',
+                                )
+                              else
+                                ...List<Widget>.generate(_replies.length, (
+                                  index,
+                                ) {
+                                  final item = _replies[index];
+                                  return Padding(
+                                    padding: EdgeInsets.only(
+                                      bottom: index == _replies.length - 1
+                                          ? 0
+                                          : 10,
+                                    ),
+                                    child: _SurfaceCard(
+                                      padding: const EdgeInsets.all(16),
+                                      child: _CommunityMessageBubble(
+                                        message: item,
+                                        mine:
+                                            item.author.id ==
+                                            widget.currentUserId,
+                                      ),
+                                    ),
+                                  );
+                                }),
+                            ],
+                          ),
+                        ),
+                      ),
+                      SafeArea(
+                        top: false,
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(22),
+                              border: Border.all(
+                                color: _CommunityUiTokens.border,
+                              ),
+                            ),
+                            child: Padding(
+                              padding: const EdgeInsets.fromLTRB(
+                                14,
+                                10,
+                                10,
+                                10,
+                              ),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: TextField(
+                                      controller: _composerController,
+                                      minLines: 1,
+                                      maxLines: 5,
+                                      decoration: const InputDecoration(
+                                        hintText: 'Bu mesaja yanıt yaz',
+                                        border: InputBorder.none,
+                                        isCollapsed: true,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  FilledButton(
+                                    onPressed: _sending ? null : _send,
+                                    style: FilledButton.styleFrom(
+                                      backgroundColor: _CommunityUiTokens.text,
+                                      foregroundColor: Colors.white,
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 14,
+                                        vertical: 12,
+                                      ),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(16),
+                                      ),
+                                    ),
+                                    child: Text(_sending ? '...' : 'Gonder'),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  )),
     );
   }
 }
@@ -4071,11 +4419,13 @@ class _CommunityMessageBubble extends StatelessWidget {
     required this.message,
     required this.mine,
     this.onReply,
+    this.onTap,
   });
 
   final _CommunityMessageSummary message;
   final bool mine;
   final VoidCallback? onReply;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -4094,65 +4444,105 @@ class _CommunityMessageBubble extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 6),
-        Container(
-          constraints: const BoxConstraints(maxWidth: 320),
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: color,
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: _CommunityUiTokens.border),
+        GestureDetector(
+          onTap: onTap,
+          child: Container(
+            constraints: const BoxConstraints(maxWidth: 320),
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: _CommunityUiTokens.border),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if ((message.replyPreview ?? '').trim().isNotEmpty)
+                  Container(
+                    margin: const EdgeInsets.only(bottom: 10),
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: mine
+                          ? Colors.white.withValues(alpha: 0.12)
+                          : _CommunityUiTokens.surfaceSoft,
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Text(
+                      [
+                        if ((message.replyAuthorName ?? '').trim().isNotEmpty)
+                          message.replyAuthorName!.trim(),
+                        if ((message.replyPreview ?? '').trim().isNotEmpty)
+                          message.replyPreview!.trim(),
+                      ].join('\n'),
+                      style: TextStyle(
+                        fontSize: 12,
+                        height: 1.35,
+                        color: mine
+                            ? Colors.white70
+                            : _CommunityUiTokens.textMuted,
+                      ),
+                    ),
+                  ),
+                Text(
+                  message.text ?? '',
+                  style: TextStyle(
+                    fontSize: 14,
+                    height: 1.42,
+                    color: textColor,
+                  ),
+                ),
+              ],
+            ),
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+        ),
+        if (onReply != null || (message.replyCount > 0 && onTap != null)) ...[
+          const SizedBox(height: 6),
+          Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              if ((message.replyPreview ?? '').trim().isNotEmpty)
-                Container(
-                  margin: const EdgeInsets.only(bottom: 10),
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: mine
-                        ? Colors.white.withValues(alpha: 0.12)
-                        : _CommunityUiTokens.surfaceSoft,
-                    borderRadius: BorderRadius.circular(14),
+              if (onReply != null)
+                TextButton.icon(
+                  onPressed: onReply,
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    foregroundColor: _CommunityUiTokens.textMuted,
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  icon: const Icon(Icons.reply_rounded, size: 16),
+                  label: const Text(
+                    'Yanıtla',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+                  ),
+                ),
+              if (message.replyCount > 0 && onTap != null) ...[
+                if (onReply != null) const SizedBox(width: 6),
+                TextButton(
+                  onPressed: onTap,
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    foregroundColor: _CommunityUiTokens.textMuted,
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
                   child: Text(
-                    [
-                      if ((message.replyAuthorName ?? '').trim().isNotEmpty)
-                        message.replyAuthorName!.trim(),
-                      if ((message.replyPreview ?? '').trim().isNotEmpty)
-                        message.replyPreview!.trim(),
-                    ].join('\n'),
-                    style: TextStyle(
+                    '${message.replyCount} yanıt',
+                    style: const TextStyle(
                       fontSize: 12,
-                      height: 1.35,
-                      color: mine
-                          ? Colors.white70
-                          : _CommunityUiTokens.textMuted,
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
                 ),
-              Text(
-                message.text ?? '',
-                style: TextStyle(fontSize: 14, height: 1.42, color: textColor),
-              ),
+              ],
             ],
           ),
-        ),
-        const SizedBox(height: 6),
-        TextButton.icon(
-          onPressed: onReply,
-          style: TextButton.styleFrom(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            foregroundColor: _CommunityUiTokens.textMuted,
-            minimumSize: Size.zero,
-            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          ),
-          icon: const Icon(Icons.reply_rounded, size: 16),
-          label: const Text(
-            'Yanıtla',
-            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
-          ),
-        ),
+        ],
       ],
     );
   }
@@ -4594,6 +4984,22 @@ Color _accentForCommunity(_CommunitySummary community, int index) {
 String _emojiForIndex(int index) {
   const emojis = <String>['🚀', '🎨', '🧠', '📚', '🌍', '💼'];
   return emojis[index % emojis.length];
+}
+
+_CommunityMessageSummary _copyCommunityMessage(
+  _CommunityMessageSummary message, {
+  int? replyCount,
+}) {
+  return _CommunityMessageSummary(
+    id: message.id,
+    author: message.author,
+    createdAt: message.createdAt,
+    text: message.text,
+    replyCount: replyCount ?? message.replyCount,
+    replyToMessageId: message.replyToMessageId,
+    replyAuthorName: message.replyAuthorName,
+    replyPreview: message.replyPreview,
+  );
 }
 
 String _emojiForNotificationType(String type) {
