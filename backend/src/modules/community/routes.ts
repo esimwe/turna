@@ -4,6 +4,16 @@ import { prisma } from "../../lib/prisma.js";
 import { logError } from "../../lib/logger.js";
 import { requireAuth } from "../../middleware/auth.js";
 import { buildAvatarUrl } from "../profile/avatar-url.js";
+import {
+  createCommunityNotifications,
+  extractMentionedUsernames,
+  listCommunityNotifications,
+  type CreateCommunityNotificationInput
+} from "./community.notifications.js";
+import {
+  emitCommunityChannelMessage,
+  emitCommunityNotification
+} from "./community.realtime.js";
 
 export const communityRouter = Router();
 
@@ -474,6 +484,54 @@ function toCommunityTopicDto(
   };
 }
 
+function toCommunityNotificationType(
+  value: string | null | undefined
+): "reply" | "mention" | "announcement" | "dm_request" {
+  switch ((value ?? "").toUpperCase()) {
+    case "MENTION":
+      return "mention";
+    case "ANNOUNCEMENT":
+      return "announcement";
+    case "DM_REQUEST":
+      return "dm_request";
+    default:
+      return "reply";
+  }
+}
+
+function toCommunityNotificationDto(row: {
+  id: string;
+  type: string;
+  communityId: string | null;
+  channelId: string | null;
+  messageId: string | null;
+  topicId: string | null;
+  title: string;
+  body: string | null;
+  readAt: Date | null;
+  createdAt: Date;
+}) {
+  return {
+    id: row.id,
+    type: toCommunityNotificationType(row.type),
+    communityId: row.communityId,
+    channelId: row.channelId,
+    messageId: row.messageId,
+    topicId: row.topicId,
+    title: row.title,
+    body: row.body,
+    readAt: row.readAt ? row.readAt.toISOString() : null,
+    createdAt: row.createdAt.toISOString()
+  };
+}
+
+function truncateCommunityText(text: string | null | undefined, maxLength = 140): string {
+  const normalized = (text ?? "").trim().replace(/\s+/g, " ");
+  if (!normalized) return "";
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+}
+
 communityRouter.get("/explore", requireAuth, async (req, res) => {
   const parsed = communityListQuerySchema.safeParse(req.query);
   if (!parsed.success) {
@@ -526,6 +584,177 @@ communityRouter.get("/mine", requireAuth, async (req, res) => {
   } catch (error) {
     logError("community mine failed", error);
     res.status(500).json({ error: "community_mine_failed" });
+  }
+});
+
+communityRouter.get("/home", requireAuth, async (req, res) => {
+  try {
+    const [explore, mine] = await Promise.all([
+      prismaCommunity.findMany({
+        where: {
+          isListed: true
+        },
+        take: 8,
+        orderBy: [{ createdAt: "desc" }],
+        select: communitySelectForUser(req.authUserId!)
+      }),
+      prismaCommunity.findMany({
+        where: {
+          memberships: {
+            some: { userId: req.authUserId! }
+          }
+        },
+        take: 8,
+        orderBy: [{ updatedAt: "desc" }],
+        select: communitySelectForUser(req.authUserId!)
+      })
+    ]);
+
+    const mineIds = (mine as Array<{ id: string }>).map((community) => community.id);
+    let upcomingEvent: CommunityTopicRow | null = null;
+    let suggestedMembers: CommunityMembershipRow[] = [];
+
+    if (mineIds.length > 0) {
+      const [eventRow, memberRows] = await Promise.all([
+        prismaCommunityTopic.findFirst({
+          where: {
+            communityId: { in: mineIds },
+            type: "EVENT",
+            eventStartsAt: { gte: new Date() }
+          },
+          orderBy: [{ eventStartsAt: "asc" }, { createdAt: "asc" }],
+          select: {
+            id: true,
+            title: true,
+            body: true,
+            type: true,
+            tags: true,
+            isPinned: true,
+            isSolved: true,
+            eventStartsAt: true,
+            createdAt: true,
+            updatedAt: true,
+            channel: {
+              select: {
+                id: true,
+                slug: true,
+                name: true,
+                type: true
+              }
+            },
+            author: {
+              select: {
+                id: true,
+                displayName: true,
+                username: true,
+                avatarUrl: true,
+                about: true,
+                city: true,
+                country: true,
+                expertise: true,
+                communityRole: true,
+                updatedAt: true
+              }
+            },
+            replies: {
+              take: 0,
+              select: {
+                id: true,
+                body: true,
+                isAccepted: true,
+                createdAt: true,
+                author: {
+                  select: {
+                    id: true,
+                    displayName: true,
+                    username: true,
+                    avatarUrl: true,
+                    updatedAt: true
+                  }
+                }
+              }
+            },
+            _count: {
+              select: {
+                replies: true
+              }
+            }
+          }
+        }),
+        prismaCommunityMembership.findMany({
+          where: {
+            communityId: { in: mineIds },
+            userId: { not: req.authUserId! }
+          },
+          take: 12,
+          orderBy: [{ joinedAt: "desc" }],
+          select: {
+            role: true,
+            joinedAt: true,
+            user: {
+              select: {
+                id: true,
+                displayName: true,
+                username: true,
+                avatarUrl: true,
+                about: true,
+                city: true,
+                country: true,
+                expertise: true,
+                communityRole: true,
+                updatedAt: true
+              }
+            }
+          }
+        })
+      ]);
+
+      upcomingEvent = eventRow;
+      const uniqueMembers = new Map<string, CommunityMembershipRow>();
+      for (const member of memberRows as CommunityMembershipRow[]) {
+        if (!uniqueMembers.has(member.user.id)) {
+          uniqueMembers.set(member.user.id, member);
+        }
+      }
+      suggestedMembers = [...uniqueMembers.values()].slice(0, 6);
+    }
+
+    res.json({
+      data: {
+        explore: explore.map(toCommunityDto),
+        mine: mine.map(toCommunityDto),
+        upcomingEvent: upcomingEvent ? toCommunityTopicDto(req, upcomingEvent) : null,
+        suggestedMembers: suggestedMembers.map((item) => ({
+          role: toApiRole(item.role),
+          joinedAt: item.joinedAt.toISOString(),
+          user: toCommunityUserDto(req, item.user)
+        }))
+      }
+    });
+  } catch (error) {
+    logError("community home failed", error);
+    res.status(500).json({ error: "community_home_failed" });
+  }
+});
+
+communityRouter.get("/notifications", requireAuth, async (req, res) => {
+  const parsed = communityListLimitSchema.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
+    return;
+  }
+
+  try {
+    const notifications = await listCommunityNotifications({
+      userId: req.authUserId!,
+      limit: parsed.data.limit
+    });
+    res.json({
+      data: notifications.map(toCommunityNotificationDto)
+    });
+  } catch (error) {
+    logError("community notifications failed", error);
+    res.status(500).json({ error: "community_notifications_failed" });
   }
 });
 
@@ -963,14 +1192,25 @@ communityRouter.post("/:communityId/channels/:channelId/messages", requireAuth, 
     }
 
     let replyToMessageId: string | null = null;
+    let replyTarget:
+      | {
+          id: string;
+          authorUserId: string;
+          text: string | null;
+        }
+      | null = null;
     if (parsedBody.data.replyToMessageId) {
-      const replyTarget = await prismaCommunityMessage.findFirst({
+      replyTarget = await prismaCommunityMessage.findFirst({
         where: {
           id: parsedBody.data.replyToMessageId,
           channelId: access.channel.id,
           deletedAt: null
         },
-        select: { id: true }
+        select: {
+          id: true,
+          authorUserId: true,
+          text: true
+        }
       });
       if (!replyTarget) {
         res.status(404).json({ error: "community_reply_target_not_found" });
@@ -1027,7 +1267,118 @@ communityRouter.post("/:communityId/channels/:channelId/messages", requireAuth, 
       }
     });
 
-    res.status(201).json({ data: toCommunityMessageDto(req, created) });
+    const senderDisplayName = created.author.displayName.trim() || "Bir uye";
+    const notificationInputs: CreateCommunityNotificationInput[] = [];
+    const notifiedUserIds = new Set<string>();
+
+    if (replyTarget && replyTarget.authorUserId !== req.authUserId!) {
+      notificationInputs.push({
+        userId: replyTarget.authorUserId,
+        type: "REPLY",
+        communityId: access.community.id,
+        channelId: access.channel.id,
+        messageId: created.id,
+        title: `${senderDisplayName} mesajina yanit verdi`,
+        body: truncateCommunityText(parsedBody.data.text, 120),
+        metadata: {
+          channelName: access.channel.name,
+          communityName: access.community.name
+        }
+      });
+      notifiedUserIds.add(replyTarget.authorUserId);
+    }
+
+    const mentionedUsernames = extractMentionedUsernames(parsedBody.data.text);
+    if (mentionedUsernames.length > 0) {
+      const mentionedMemberships = await prismaCommunityMembership.findMany({
+        where: {
+          communityId: access.community.id,
+          userId: { not: req.authUserId! },
+          user: {
+            username: {
+              in: mentionedUsernames
+            }
+          }
+        },
+        select: {
+          userId: true,
+          user: {
+            select: {
+              username: true
+            }
+          }
+        }
+      });
+
+      for (const membership of mentionedMemberships) {
+        if (notifiedUserIds.has(membership.userId)) continue;
+        notificationInputs.push({
+          userId: membership.userId,
+          type: "MENTION",
+          communityId: access.community.id,
+          channelId: access.channel.id,
+          messageId: created.id,
+          title: `${senderDisplayName} seni andi`,
+          body: truncateCommunityText(parsedBody.data.text, 120),
+          metadata: {
+            channelName: access.channel.name,
+            communityName: access.community.name,
+            username: membership.user.username ?? null
+          }
+        });
+        notifiedUserIds.add(membership.userId);
+      }
+    }
+
+    if ((access.channel.type ?? "").toUpperCase() === "ANNOUNCEMENT") {
+      const memberships = await prismaCommunityMembership.findMany({
+        where: {
+          communityId: access.community.id,
+          userId: { not: req.authUserId! }
+        },
+        select: {
+          userId: true
+        }
+      });
+
+      for (const membership of memberships) {
+        notificationInputs.push({
+          userId: membership.userId,
+          type: "ANNOUNCEMENT",
+          communityId: access.community.id,
+          channelId: access.channel.id,
+          messageId: created.id,
+          title: `${access.community.name} toplulugunda yeni duyuru`,
+          body: truncateCommunityText(parsedBody.data.text, 120),
+          metadata: {
+            channelName: access.channel.name,
+            communityName: access.community.name
+          }
+        });
+      }
+    }
+
+    await createCommunityNotifications(notificationInputs);
+
+    const createdDto = toCommunityMessageDto(req, created);
+    emitCommunityChannelMessage({
+      communityId: access.community.id,
+      channelId: access.channel.id,
+      message: createdDto
+    });
+    for (const notificationInput of notificationInputs) {
+      emitCommunityNotification([notificationInput.userId], {
+        type: notificationInput.type.toLowerCase(),
+        communityId: notificationInput.communityId ?? null,
+        channelId: notificationInput.channelId ?? null,
+        messageId: notificationInput.messageId ?? null,
+        title: notificationInput.title,
+        body: notificationInput.body ?? null,
+        createdAt: created.createdAt.toISOString()
+      });
+    }
+
+    res.status(201).json({ data: createdDto });
   } catch (error) {
     logError("community send message failed", error);
     res.status(500).json({ error: "community_send_message_failed" });

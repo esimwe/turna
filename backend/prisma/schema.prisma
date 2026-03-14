@@ -136,6 +136,13 @@ enum CommunityTopicType {
   EVENT
 }
 
+enum CommunityNotificationType {
+  REPLY
+  MENTION
+  ANNOUNCEMENT
+  DM_REQUEST
+}
+
 model User {
   id                    String             @id @default(uuid())
   username              String?            @unique
@@ -181,6 +188,7 @@ model User {
   communityMessages     CommunityMessage[]   @relation("CommunityMessageAuthor")
   communityTopics       CommunityTopic[]     @relation("CommunityTopicAuthor")
   communityTopicReplies CommunityTopicReply[] @relation("CommunityTopicReplyAuthor")
+  communityNotifications CommunityNotification[]
 
   @@index([accountStatus])
 }
@@ -629,6 +637,28 @@ model CommunityTopicReply {
 
   @@index([topicId, createdAt(sort: Asc)])
   @@index([authorUserId, createdAt(sort: Desc)])
+}
+
+model CommunityNotification {
+  id          String                    @id @default(uuid())
+  userId      String
+  type        CommunityNotificationType
+  communityId String?
+  channelId   String?
+  messageId   String?
+  topicId     String?
+  title       String
+  body        String?
+  metadata    Json?
+  readAt      DateTime?
+  createdAt   DateTime                  @default(now())
+
+  user        User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([communityId, createdAt(sort: Desc)])
+  @@index([channelId, createdAt(sort: Desc)])
+  @@index([messageId])
 }
 
 model ReportCase {

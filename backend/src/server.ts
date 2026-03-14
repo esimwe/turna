@@ -7,6 +7,8 @@ import { logError, logInfo, logWarn } from "./lib/logger.js";
 import { createRedisConnection, redis } from "./lib/redis.js";
 import { attachChatRealtime } from "./modules/chat/chat.realtime.js";
 import { registerChatSocket } from "./modules/chat/chat.socket.js";
+import { attachCommunityRealtime } from "./modules/community/community.realtime.js";
+import { registerCommunitySocket } from "./modules/community/community.socket.js";
 
 const app = createApp();
 const httpServer = createServer(app);
@@ -19,7 +21,9 @@ const io = new Server(httpServer, {
 });
 
 attachChatRealtime(io);
+attachCommunityRealtime(io);
 registerChatSocket(io);
+registerCommunitySocket(io);
 
 async function configureRedisBackedRealtime(): Promise<void> {
   try {
