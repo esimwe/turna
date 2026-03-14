@@ -27,37 +27,79 @@ const VIDEO_EXTENSION_BY_CONTENT_TYPE: Record<string, string> = {
 };
 
 export type ChatUploadKind = "image" | "video" | "file";
+export type CommunityUploadKind = ChatUploadKind;
 export type StatusUploadKind = "image" | "video";
 
-let storageClient: S3Client | null = null;
+export type StorageScope = "turna" | "community";
 
-function hasStorageConfig(): boolean {
+type StorageConfig = {
+  bucket: string | undefined;
+  endpoint: string | undefined;
+  accessKeyId: string | undefined;
+  secretAccessKey: string | undefined;
+};
+
+const storageClients: Partial<Record<StorageScope, S3Client>> = {};
+
+function getStorageConfig(scope: StorageScope): StorageConfig {
+  if (scope === "community") {
+    return {
+      bucket: env.COMMUNITY_R2_BUCKET,
+      endpoint: env.COMMUNITY_R2_ENDPOINT,
+      accessKeyId: env.COMMUNITY_R2_ACCESS_KEY_ID,
+      secretAccessKey: env.COMMUNITY_R2_SECRET_ACCESS_KEY
+    };
+  }
+
+  return {
+    bucket: env.R2_BUCKET,
+    endpoint: env.R2_ENDPOINT,
+    accessKeyId: env.R2_ACCESS_KEY_ID,
+    secretAccessKey: env.R2_SECRET_ACCESS_KEY
+  };
+}
+
+function storageNotConfiguredError(scope: StorageScope): string {
+  return scope === "community" ? "community_storage_not_configured" : "storage_not_configured";
+}
+
+function getStorageBucket(scope: StorageScope): string {
+  const config = getStorageConfig(scope);
+  if (!config.bucket) {
+    throw new Error(storageNotConfiguredError(scope));
+  }
+  return config.bucket;
+}
+
+function hasStorageConfig(scope: StorageScope = "turna"): boolean {
+  const config = getStorageConfig(scope);
   return Boolean(
-    env.R2_BUCKET &&
-      env.R2_ENDPOINT &&
-      env.R2_ACCESS_KEY_ID &&
-      env.R2_SECRET_ACCESS_KEY
+    config.bucket &&
+      config.endpoint &&
+      config.accessKeyId &&
+      config.secretAccessKey
   );
 }
 
-function getStorageClient(): S3Client {
-  if (!hasStorageConfig()) {
-    throw new Error("storage_not_configured");
+function getStorageClient(scope: StorageScope = "turna"): S3Client {
+  const config = getStorageConfig(scope);
+  if (!hasStorageConfig(scope)) {
+    throw new Error(storageNotConfiguredError(scope));
   }
 
-  if (!storageClient) {
-    storageClient = new S3Client({
+  if (!storageClients[scope]) {
+    storageClients[scope] = new S3Client({
       region: "auto",
-      endpoint: env.R2_ENDPOINT,
+      endpoint: config.endpoint!,
       forcePathStyle: true,
       credentials: {
-        accessKeyId: env.R2_ACCESS_KEY_ID!,
-        secretAccessKey: env.R2_SECRET_ACCESS_KEY!
+        accessKeyId: config.accessKeyId!,
+        secretAccessKey: config.secretAccessKey!
       }
     });
   }
 
-  return storageClient;
+  return storageClients[scope]!;
 }
 
 function sanitizeExtension(rawExtension: string | null | undefined): string {
@@ -85,8 +127,12 @@ function inferExtension(contentType: string, fileName?: string | null): string {
   );
 }
 
-export function isStorageConfigured(): boolean {
-  return hasStorageConfig();
+export function isStorageConfigured(scope: StorageScope = "turna"): boolean {
+  return hasStorageConfig(scope);
+}
+
+export function isCommunityStorageConfigured(): boolean {
+  return hasStorageConfig("community");
 }
 
 export function buildAvatarObjectKey(
@@ -138,6 +184,25 @@ export function isStatusAttachmentKeyOwnedByUser(params: {
   return params.objectKey.startsWith(`statuses/${params.userId}/`);
 }
 
+export function buildCommunityAttachmentObjectKey(params: {
+  communityId: string;
+  userId: string;
+  kind: CommunityUploadKind;
+  contentType: string;
+  fileName?: string | null;
+}): string {
+  const extension = inferExtension(params.contentType, params.fileName);
+  return `community-media/${params.communityId}/${params.userId}/${params.kind}/${Date.now()}-${randomUUID()}.${extension}`;
+}
+
+export function isCommunityAttachmentKeyOwnedByUser(params: {
+  communityId: string;
+  userId: string;
+  objectKey: string;
+}): boolean {
+  return params.objectKey.startsWith(`community-media/${params.communityId}/${params.userId}/`);
+}
+
 export async function createAvatarUploadUrl(params: {
   userId: string;
   contentType: string;
@@ -147,10 +212,11 @@ export async function createAvatarUploadUrl(params: {
   uploadUrl: string;
   headers: Record<string, string>;
 }> {
-  const client = getStorageClient();
+  const scope: StorageScope = "turna";
+  const client = getStorageClient(scope);
   const objectKey = buildAvatarObjectKey(params.userId, params.contentType, params.fileName);
   const command = new PutObjectCommand({
-    Bucket: env.R2_BUCKET!,
+    Bucket: getStorageBucket(scope),
     Key: objectKey,
     ContentType: params.contentType,
     CacheControl: "private, max-age=31536000"
@@ -178,10 +244,11 @@ export async function createChatAttachmentUploadUrl(params: {
   uploadUrl: string;
   headers: Record<string, string>;
 }> {
-  const client = getStorageClient();
+  const scope: StorageScope = "turna";
+  const client = getStorageClient(scope);
   const objectKey = buildChatAttachmentObjectKey(params);
   const command = new PutObjectCommand({
-    Bucket: env.R2_BUCKET!,
+    Bucket: getStorageBucket(scope),
     Key: objectKey,
     ContentType: params.contentType,
     CacheControl: "private, max-age=31536000"
@@ -208,10 +275,11 @@ export async function createStatusAttachmentUploadUrl(params: {
   uploadUrl: string;
   headers: Record<string, string>;
 }> {
-  const client = getStorageClient();
+  const scope: StorageScope = "turna";
+  const client = getStorageClient(scope);
   const objectKey = buildStatusAttachmentObjectKey(params);
   const command = new PutObjectCommand({
-    Bucket: env.R2_BUCKET!,
+    Bucket: getStorageBucket(scope),
     Key: objectKey,
     ContentType: params.contentType,
     CacheControl: "private, max-age=31536000"
@@ -228,24 +296,62 @@ export async function createStatusAttachmentUploadUrl(params: {
   };
 }
 
-export async function assertObjectExists(objectKey: string): Promise<void> {
-  const client = getStorageClient();
+export async function createCommunityAttachmentUploadUrl(params: {
+  communityId: string;
+  userId: string;
+  kind: CommunityUploadKind;
+  contentType: string;
+  fileName?: string | null;
+}): Promise<{
+  objectKey: string;
+  uploadUrl: string;
+  headers: Record<string, string>;
+}> {
+  const scope: StorageScope = "community";
+  const client = getStorageClient(scope);
+  const objectKey = buildCommunityAttachmentObjectKey(params);
+  const command = new PutObjectCommand({
+    Bucket: getStorageBucket(scope),
+    Key: objectKey,
+    ContentType: params.contentType,
+    CacheControl: "private, max-age=31536000"
+  });
+
+  const uploadUrl = await getSignedUrl(client, command, { expiresIn: 60 * 5 });
+
+  return {
+    objectKey,
+    uploadUrl,
+    headers: {
+      "Content-Type": params.contentType
+    }
+  };
+}
+
+export async function assertObjectExists(
+  objectKey: string,
+  scope: StorageScope = "turna"
+): Promise<void> {
+  const client = getStorageClient(scope);
   await client.send(
     new HeadObjectCommand({
-      Bucket: env.R2_BUCKET!,
+      Bucket: getStorageBucket(scope),
       Key: objectKey
     })
   );
 }
 
-export async function getObjectHead(objectKey: string): Promise<{
+export async function getObjectHead(
+  objectKey: string,
+  scope: StorageScope = "turna"
+): Promise<{
   contentType: string | null;
   contentLength: number | null;
 }> {
-  const client = getStorageClient();
+  const client = getStorageClient(scope);
   const response = await client.send(
     new HeadObjectCommand({
-      Bucket: env.R2_BUCKET!,
+      Bucket: getStorageBucket(scope),
       Key: objectKey
     })
   );
@@ -256,15 +362,18 @@ export async function getObjectHead(objectKey: string): Promise<{
   };
 }
 
-export async function getObjectBytes(objectKey: string): Promise<{
+export async function getObjectBytes(
+  objectKey: string,
+  scope: StorageScope = "turna"
+): Promise<{
   bytes: Uint8Array;
   contentType: string;
   contentLength: number | null;
 }> {
-  const client = getStorageClient();
+  const client = getStorageClient(scope);
   const response = await client.send(
     new GetObjectCommand({
-      Bucket: env.R2_BUCKET!,
+      Bucket: getStorageBucket(scope),
       Key: objectKey
     })
   );
@@ -278,24 +387,57 @@ export async function getObjectBytes(objectKey: string): Promise<{
   };
 }
 
-export async function deleteObject(objectKey: string): Promise<void> {
-  const client = getStorageClient();
+export async function deleteObject(
+  objectKey: string,
+  scope: StorageScope = "turna"
+): Promise<void> {
+  const client = getStorageClient(scope);
   await client.send(
     new DeleteObjectCommand({
-      Bucket: env.R2_BUCKET!,
+      Bucket: getStorageBucket(scope),
       Key: objectKey
     })
   );
 }
 
-export async function createObjectReadUrl(objectKey: string): Promise<string> {
-  const client = getStorageClient();
+export async function createObjectReadUrl(
+  objectKey: string,
+  scope: StorageScope = "turna"
+): Promise<string> {
+  const client = getStorageClient(scope);
   return getSignedUrl(
     client,
     new GetObjectCommand({
-      Bucket: env.R2_BUCKET!,
+      Bucket: getStorageBucket(scope),
       Key: objectKey
     }),
     { expiresIn: 60 * 60 * 12 }
   );
+}
+
+export async function assertCommunityObjectExists(objectKey: string): Promise<void> {
+  await assertObjectExists(objectKey, "community");
+}
+
+export async function getCommunityObjectHead(objectKey: string): Promise<{
+  contentType: string | null;
+  contentLength: number | null;
+}> {
+  return getObjectHead(objectKey, "community");
+}
+
+export async function getCommunityObjectBytes(objectKey: string): Promise<{
+  bytes: Uint8Array;
+  contentType: string;
+  contentLength: number | null;
+}> {
+  return getObjectBytes(objectKey, "community");
+}
+
+export async function deleteCommunityObject(objectKey: string): Promise<void> {
+  await deleteObject(objectKey, "community");
+}
+
+export async function createCommunityObjectReadUrl(objectKey: string): Promise<string> {
+  return createObjectReadUrl(objectKey, "community");
 }
