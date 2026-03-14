@@ -2990,13 +2990,13 @@ class _CommunityThreadPageState extends State<_CommunityThreadPage> {
         backgroundColor: _CommunityUiTokens.background,
         surfaceTintColor: Colors.transparent,
         titleSpacing: 0,
-        title: const Column(
+        title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Yanıtlar'),
+            const Text('Yanıtlar'),
             Text(
-              'Ana mesaj üstte, yanıtlar altta',
-              style: TextStyle(
+              widget.channel.name,
+              style: const TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
                 color: _CommunityUiTokens.textMuted,
@@ -3018,33 +3018,21 @@ class _CommunityThreadPageState extends State<_CommunityThreadPage> {
                         child: RefreshIndicator(
                           onRefresh: _reload,
                           child: ListView(
-                            padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                            padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
                             children: [
-                              const _CommunitySectionHeader(
-                                emoji: '🧵',
-                                title: 'Ana mesaj',
-                              ),
-                              const SizedBox(height: 10),
-                              _SurfaceCard(
-                                padding: const EdgeInsets.all(16),
-                                child: _CommunityMessageBubble(
-                                  message: root,
-                                  mine: root.author.id == widget.currentUserId,
-                                ),
+                              _CommunityThreadRootCard(
+                                message: root,
+                                mine: root.author.id == widget.currentUserId,
+                                channelName: widget.channel.name,
+                                replyCount: _replies.length,
                               ),
                               const SizedBox(height: 18),
-                              _CommunitySectionHeader(
-                                emoji: '💬',
-                                title: '${_replies.length} yanıt',
+                              _CommunityThreadRepliesHeader(
+                                replyCount: _replies.length,
                               ),
-                              const SizedBox(height: 10),
+                              const SizedBox(height: 12),
                               if (_replies.isEmpty)
-                                const _CommunityEmptyState(
-                                  emoji: '🫥',
-                                  title: 'Henüz yanıt yok',
-                                  subtitle:
-                                      'İlk yanıtı göndererek bu mesajın threadini başlat.',
-                                )
+                                const _CommunityThreadEmptyState()
                               else
                                 ...List<Widget>.generate(_replies.length, (
                                   index,
@@ -3054,16 +3042,14 @@ class _CommunityThreadPageState extends State<_CommunityThreadPage> {
                                     padding: EdgeInsets.only(
                                       bottom: index == _replies.length - 1
                                           ? 0
-                                          : 10,
+                                          : 12,
                                     ),
-                                    child: _SurfaceCard(
-                                      padding: const EdgeInsets.all(16),
-                                      child: _CommunityMessageBubble(
-                                        message: item,
-                                        mine:
-                                            item.author.id ==
-                                            widget.currentUserId,
-                                      ),
+                                    child: _CommunityThreadReplyTile(
+                                      message: item,
+                                      mine:
+                                          item.author.id ==
+                                          widget.currentUserId,
+                                      isLast: index == _replies.length - 1,
                                     ),
                                   );
                                 }),
@@ -3077,18 +3063,19 @@ class _CommunityThreadPageState extends State<_CommunityThreadPage> {
                           padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
                           child: DecoratedBox(
                             decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(22),
+                              color: Colors.white.withValues(alpha: 0.96),
+                              borderRadius: BorderRadius.circular(20),
                               border: Border.all(
                                 color: _CommunityUiTokens.border,
                               ),
+                              boxShadow: _CommunityUiTokens.softShadow,
                             ),
                             child: Padding(
                               padding: const EdgeInsets.fromLTRB(
                                 14,
+                                12,
                                 10,
-                                10,
-                                10,
+                                12,
                               ),
                               child: Row(
                                 children: [
@@ -3098,7 +3085,7 @@ class _CommunityThreadPageState extends State<_CommunityThreadPage> {
                                       minLines: 1,
                                       maxLines: 5,
                                       decoration: const InputDecoration(
-                                        hintText: 'Bu mesaja yanıt yaz',
+                                        hintText: 'Thread yanıtı yaz',
                                         border: InputBorder.none,
                                         isCollapsed: true,
                                       ),
@@ -3128,6 +3115,242 @@ class _CommunityThreadPageState extends State<_CommunityThreadPage> {
                       ),
                     ],
                   )),
+    );
+  }
+}
+
+class _CommunityThreadRootCard extends StatelessWidget {
+  const _CommunityThreadRootCard({
+    required this.message,
+    required this.mine,
+    required this.channelName,
+    required this.replyCount,
+  });
+
+  final _CommunityMessageSummary message;
+  final bool mine;
+  final String channelName;
+  final int replyCount;
+
+  @override
+  Widget build(BuildContext context) {
+    final replyLabel = replyCount == 0
+        ? 'Thread yeni acildi'
+        : '$replyCount yanıt';
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: _CommunityUiTokens.border),
+        boxShadow: _CommunityUiTokens.softShadow,
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: _CommunityUiTokens.surfaceSoft,
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    child: Text(
+                      'Ana mesaj',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: _CommunityUiTokens.text,
+                      ),
+                    ),
+                  ),
+                ),
+                Text(
+                  '# $channelName',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: _CommunityUiTokens.textMuted,
+                  ),
+                ),
+                Text(
+                  '• ${_formatCommunityDate(message.createdAt)}',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: _CommunityUiTokens.textMuted,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            _CommunityMessageBubble(
+              message: message,
+              mine: mine,
+              dense: true,
+              showReplyPreview: false,
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                const Icon(
+                  Icons.forum_outlined,
+                  size: 16,
+                  color: _CommunityUiTokens.textMuted,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    replyLabel,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: _CommunityUiTokens.textMuted,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CommunityThreadRepliesHeader extends StatelessWidget {
+  const _CommunityThreadRepliesHeader({required this.replyCount});
+
+  final int replyCount;
+
+  @override
+  Widget build(BuildContext context) {
+    final trailing = replyCount == 0
+        ? 'Ilk yanıt senin olabilir'
+        : '$replyCount mesaj';
+    return Row(
+      children: [
+        const Icon(
+          Icons.subdirectory_arrow_right_rounded,
+          size: 18,
+          color: _CommunityUiTokens.textMuted,
+        ),
+        const SizedBox(width: 8),
+        const Expanded(
+          child: Text(
+            'Yanıtlar',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+              color: _CommunityUiTokens.text,
+            ),
+          ),
+        ),
+        Text(
+          trailing,
+          style: const TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            color: _CommunityUiTokens.textMuted,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _CommunityThreadEmptyState extends StatelessWidget {
+  const _CommunityThreadEmptyState();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 26),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: _CommunityUiTokens.surfaceSoft,
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: const Padding(
+          padding: EdgeInsets.all(14),
+          child: Text(
+            'İlk yanıtı göndererek konuşmayı burada toparla.',
+            style: TextStyle(
+              fontSize: 13,
+              height: 1.45,
+              color: _CommunityUiTokens.textMuted,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CommunityThreadReplyTile extends StatelessWidget {
+  const _CommunityThreadReplyTile({
+    required this.message,
+    required this.mine,
+    required this.isLast,
+  });
+
+  final _CommunityMessageSummary message;
+  final bool mine;
+  final bool isLast;
+
+  @override
+  Widget build(BuildContext context) {
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SizedBox(
+            width: 20,
+            child: Column(
+              children: [
+                const SizedBox(height: 18),
+                Container(
+                  width: 10,
+                  height: 10,
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: _CommunityUiTokens.border),
+                  ),
+                ),
+                if (!isLast)
+                  Expanded(
+                    child: Center(
+                      child: Container(
+                        width: 2,
+                        margin: const EdgeInsets.symmetric(vertical: 6),
+                        decoration: BoxDecoration(
+                          color: _CommunityUiTokens.border,
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: _CommunityMessageBubble(
+              message: message,
+              mine: mine,
+              dense: true,
+              showReplyPreview: false,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -4420,18 +4643,25 @@ class _CommunityMessageBubble extends StatelessWidget {
     required this.mine,
     this.onReply,
     this.onTap,
+    this.dense = false,
+    this.showReplyPreview = true,
   });
 
   final _CommunityMessageSummary message;
   final bool mine;
   final VoidCallback? onReply;
   final VoidCallback? onTap;
+  final bool dense;
+  final bool showReplyPreview;
 
   @override
   Widget build(BuildContext context) {
     final alignment = mine ? CrossAxisAlignment.end : CrossAxisAlignment.start;
     final color = mine ? _CommunityUiTokens.text : Colors.white;
     final textColor = mine ? Colors.white : _CommunityUiTokens.text;
+    final bubblePadding = dense ? 12.0 : 14.0;
+    final authorSpacing = dense ? 4.0 : 6.0;
+    final bodyFontSize = dense ? 13.5 : 14.0;
     return Column(
       crossAxisAlignment: alignment,
       children: [
@@ -4443,12 +4673,12 @@ class _CommunityMessageBubble extends StatelessWidget {
             color: _CommunityUiTokens.textMuted,
           ),
         ),
-        const SizedBox(height: 6),
+        SizedBox(height: authorSpacing),
         GestureDetector(
           onTap: onTap,
           child: Container(
-            constraints: const BoxConstraints(maxWidth: 320),
-            padding: const EdgeInsets.all(14),
+            constraints: BoxConstraints(maxWidth: dense ? 340 : 320),
+            padding: EdgeInsets.all(bubblePadding),
             decoration: BoxDecoration(
               color: color,
               borderRadius: BorderRadius.circular(20),
@@ -4457,10 +4687,11 @@ class _CommunityMessageBubble extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if ((message.replyPreview ?? '').trim().isNotEmpty)
+                if (showReplyPreview &&
+                    (message.replyPreview ?? '').trim().isNotEmpty)
                   Container(
-                    margin: const EdgeInsets.only(bottom: 10),
-                    padding: const EdgeInsets.all(10),
+                    margin: EdgeInsets.only(bottom: dense ? 8 : 10),
+                    padding: EdgeInsets.all(dense ? 8 : 10),
                     decoration: BoxDecoration(
                       color: mine
                           ? Colors.white.withValues(alpha: 0.12)
@@ -4486,7 +4717,7 @@ class _CommunityMessageBubble extends StatelessWidget {
                 Text(
                   message.text ?? '',
                   style: TextStyle(
-                    fontSize: 14,
+                    fontSize: bodyFontSize,
                     height: 1.42,
                     color: textColor,
                   ),
