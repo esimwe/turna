@@ -880,7 +880,9 @@ class _CommunityApiClient {
     String? body,
     String? channelId,
     List<String> tags = const <String>[],
+    String? resourceCategory,
     String? eventStartsAt,
+    String? eventLocation,
     bool isPinned = false,
   }) async {
     final res = await http.post(
@@ -892,8 +894,12 @@ class _CommunityApiClient {
         if ((body ?? '').trim().isNotEmpty) 'body': body!.trim(),
         if ((channelId ?? '').trim().isNotEmpty) 'channelId': channelId!.trim(),
         if (tags.isNotEmpty) 'tags': tags,
+        if ((resourceCategory ?? '').trim().isNotEmpty)
+          'resourceCategory': resourceCategory!.trim(),
         if ((eventStartsAt ?? '').trim().isNotEmpty)
           'eventStartsAt': eventStartsAt!.trim(),
+        if ((eventLocation ?? '').trim().isNotEmpty)
+          'eventLocation': eventLocation!.trim(),
         if (isPinned) 'isPinned': true,
       }),
     );
@@ -954,6 +960,38 @@ class _CommunityApiClient {
       body: jsonEncode({'pinned': pinned}),
     );
     return _decodeTopicItem(res, fallbackError: 'Sabit durumu güncellenemedi.');
+  }
+
+  Future<_CommunityTopicSummary> setEventRsvp({
+    required String communityId,
+    required String topicId,
+    required String status,
+  }) async {
+    final res = await http.post(
+      _uri('/api/communities/$communityId/topics/$topicId/rsvp'),
+      headers: _headers,
+      body: jsonEncode({'status': status}),
+    );
+    return _decodeTopicItem(
+      res,
+      fallbackError: 'Etkinlik katılımı güncellenemedi.',
+    );
+  }
+
+  Future<_CommunityTopicSummary> setEventReminder({
+    required String communityId,
+    required String topicId,
+    required bool enabled,
+  }) async {
+    final res = await http.post(
+      _uri('/api/communities/$communityId/topics/$topicId/reminder'),
+      headers: _headers,
+      body: jsonEncode({'enabled': enabled}),
+    );
+    return _decodeTopicItem(
+      res,
+      fallbackError: 'Etkinlik hatırlatma ayarı güncellenemedi.',
+    );
   }
 
   Future<void> leave(String communityId) async {
@@ -1221,6 +1259,36 @@ class _CommunityTopicPermissions {
       canAcceptAnswer: map['canAcceptAnswer'] == true,
       canChangeSolvedState: map['canChangeSolvedState'] == true,
       canPin: map['canPin'] == true,
+    );
+  }
+}
+
+class _CommunityTopicEventSummary {
+  const _CommunityTopicEventSummary({
+    this.goingCount = 0,
+    this.maybeCount = 0,
+    this.notGoingCount = 0,
+    this.totalCount = 0,
+    this.viewerStatus,
+    this.reminderEnabled = false,
+  });
+
+  final int goingCount;
+  final int maybeCount;
+  final int notGoingCount;
+  final int totalCount;
+  final String? viewerStatus;
+  final bool reminderEnabled;
+
+  factory _CommunityTopicEventSummary.fromMap(Map<String, dynamic> map) {
+    final counts = Map<String, dynamic>.from(map['counts'] as Map? ?? const {});
+    return _CommunityTopicEventSummary(
+      goingCount: (counts['going'] as num?)?.toInt() ?? 0,
+      maybeCount: (counts['maybe'] as num?)?.toInt() ?? 0,
+      notGoingCount: (counts['notGoing'] as num?)?.toInt() ?? 0,
+      totalCount: (counts['total'] as num?)?.toInt() ?? 0,
+      viewerStatus: _CommunitySummary._nullableString(map['viewerStatus']),
+      reminderEnabled: map['reminderEnabled'] == true,
     );
   }
 }
@@ -1722,6 +1790,9 @@ class _CommunityTopicSummary {
     this.body,
     this.channel,
     this.eventStartsAt,
+    this.resourceCategory,
+    this.eventLocation,
+    this.event,
     this.isPinned = false,
     this.isSolved = false,
     this.tags = const <String>[],
@@ -1738,6 +1809,9 @@ class _CommunityTopicSummary {
   final String? body;
   final _CommunityChannelSummary? channel;
   final String? eventStartsAt;
+  final String? resourceCategory;
+  final String? eventLocation;
+  final _CommunityTopicEventSummary? event;
   final bool isPinned;
   final bool isSolved;
   final List<String> tags;
@@ -1761,6 +1835,15 @@ class _CommunityTopicSummary {
               Map<String, dynamic>.from(map['channel'] as Map),
             ),
       eventStartsAt: _CommunitySummary._nullableString(map['eventStartsAt']),
+      resourceCategory: _CommunitySummary._nullableString(
+        map['resourceCategory'],
+      ),
+      eventLocation: _CommunitySummary._nullableString(map['eventLocation']),
+      event: (map['event'] as Map?) == null
+          ? null
+          : _CommunityTopicEventSummary.fromMap(
+              Map<String, dynamic>.from(map['event'] as Map),
+            ),
       isPinned: map['isPinned'] == true,
       isSolved: map['isSolved'] == true,
       tags: _CommunitySummary._stringList(map['tags']),
@@ -3049,6 +3132,7 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
   bool _busy = false;
   String _questionQuery = '';
   String _resourceQuery = '';
+  String _resourceCategory = 'all';
   String _memberQuery = '';
   String _memberRole = 'all';
 
@@ -3536,7 +3620,7 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
   }
 
   Widget _buildResourcesTab(_CommunitySummary community) {
-    return FutureBuilder<List<_CommunityTopicSummary>>(
+    return FutureBuilder<List<List<_CommunityTopicSummary>>>(
       future: Future.wait<List<_CommunityTopicSummary>>([
         widget.api.fetchTopics(
           communityId: community.id,
@@ -3548,7 +3632,7 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
           type: 'event',
           query: _resourceQuery,
         ),
-      ]).then((items) => [...items[0], ...items[1]]),
+      ]),
       builder: (context, snapshot) {
         if (snapshot.connectionState != ConnectionState.done) {
           return const Center(child: CircularProgressIndicator());
@@ -3561,7 +3645,37 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
             },
           );
         }
-        final topics = snapshot.data ?? const <_CommunityTopicSummary>[];
+        final resourceTopics =
+            snapshot.data?[0] ?? const <_CommunityTopicSummary>[];
+        final eventTopics =
+            snapshot.data?[1] ?? const <_CommunityTopicSummary>[];
+        final categoryEntries = {
+          for (final topic in resourceTopics)
+            _communityResourceCategoryKey(topic):
+                _communityResourceCategoryLabel(topic),
+        };
+        final selectedCategory = categoryEntries.containsKey(_resourceCategory)
+            ? _resourceCategory
+            : 'all';
+        final featuredResources = resourceTopics
+            .where((topic) => topic.isPinned)
+            .toList();
+        final filteredResources = selectedCategory == 'all'
+            ? resourceTopics
+            : resourceTopics
+                  .where(
+                    (topic) =>
+                        _communityResourceCategoryKey(topic) ==
+                        selectedCategory,
+                  )
+                  .toList();
+        final groupedResources = <String, List<_CommunityTopicSummary>>{};
+        for (final topic in filteredResources) {
+          final label = _communityResourceCategoryLabel(topic);
+          groupedResources
+              .putIfAbsent(label, () => <_CommunityTopicSummary>[])
+              .add(topic);
+        }
         return _SurfaceCard(
           padding: const EdgeInsets.all(18),
           child: Column(
@@ -3598,22 +3712,119 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
                 onChanged: (value) => setState(() => _resourceQuery = value),
               ),
               const SizedBox(height: 12),
-              if (topics.isEmpty)
+              if (categoryEntries.isNotEmpty) ...[
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    _CommunityFilterChip(
+                      label: 'Tümü',
+                      selected: selectedCategory == 'all',
+                      onTap: () => setState(() => _resourceCategory = 'all'),
+                    ),
+                    ...categoryEntries.entries.map(
+                      (entry) => _CommunityFilterChip(
+                        label: entry.value,
+                        selected: selectedCategory == entry.key,
+                        onTap: () =>
+                            setState(() => _resourceCategory = entry.key),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+              ],
+              if (featuredResources.isNotEmpty) ...[
+                const _CommunitySectionHeader(
+                  emoji: '🧭',
+                  title: 'Öne çıkan rehberler',
+                ),
+                const SizedBox(height: 10),
+                ...List<Widget>.generate(featuredResources.take(3).length, (
+                  index,
+                ) {
+                  final topic = featuredResources[index];
+                  return Padding(
+                    padding: EdgeInsets.only(
+                      bottom: index == featuredResources.take(3).length - 1
+                          ? 0
+                          : 10,
+                    ),
+                    child: _ResourcePreviewTile.fromTopic(
+                      topic,
+                      onTap: () => _openTopic(topic),
+                    ),
+                  );
+                }),
+                const SizedBox(height: 18),
+              ],
+              const _CommunitySectionHeader(
+                emoji: '📚',
+                title: 'Kaynak kütüphanesi',
+              ),
+              const SizedBox(height: 10),
+              if (filteredResources.isEmpty)
                 const _CommunityEmptyState(
                   emoji: '🪶',
                   title: 'Kaynak bulunmadi',
                   subtitle:
-                      'Resource ve event tipi icerikler burada listelenecek.',
+                      'Bu toplulukta aranacak veya kategorilenecek kaynak görünmüyor.',
                 )
               else
-                ...List<Widget>.generate(topics.length, (index) {
-                  final topic = topics[index];
+                ...groupedResources.entries.map((entry) {
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          entry.key,
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            color: _CommunityUiTokens.textMuted,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        ...List<Widget>.generate(entry.value.length, (index) {
+                          final topic = entry.value[index];
+                          return Padding(
+                            padding: EdgeInsets.only(
+                              bottom: index == entry.value.length - 1 ? 0 : 10,
+                            ),
+                            child: _ResourcePreviewTile.fromTopic(
+                              topic,
+                              onTap: () => _openTopic(topic),
+                            ),
+                          );
+                        }),
+                      ],
+                    ),
+                  );
+                }),
+              const SizedBox(height: 8),
+              const _CommunitySectionHeader(
+                emoji: '📅',
+                title: 'Yaklaşan etkinlikler',
+              ),
+              const SizedBox(height: 10),
+              if (eventTopics.isEmpty)
+                const _CommunityEmptyState(
+                  emoji: '🗓️',
+                  title: 'Yaklaşan etkinlik yok',
+                  subtitle:
+                      'Yeni event tipi konular burada toplu bir takvim akışı gibi görünür.',
+                )
+              else
+                ...List<Widget>.generate(eventTopics.length, (index) {
+                  final topic = eventTopics[index];
                   return Padding(
                     padding: EdgeInsets.only(
-                      bottom: index == topics.length - 1 ? 0 : 10,
+                      bottom: index == eventTopics.length - 1 ? 0 : 12,
                     ),
-                    child: _ResourcePreviewTile.fromTopic(
-                      topic,
+                    child: _CommunityEventCard(
+                      topic: topic,
+                      compact: true,
                       onTap: () => _openTopic(topic),
                     ),
                   );
@@ -6587,6 +6798,80 @@ class _CommunityTopicDetailPageState extends State<_CommunityTopicDetailPage> {
     }
   }
 
+  Future<void> _setEventRsvp(String status) async {
+    final topic = _topic;
+    if (topic == null || topic.type != 'event' || _updating) return;
+    setState(() => _updating = true);
+    try {
+      final updated = await widget.api.setEventRsvp(
+        communityId: widget.community.id,
+        topicId: topic.id,
+        status: status,
+      );
+      if (!mounted) return;
+      setState(() => _topic = updated);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    } finally {
+      if (mounted) {
+        setState(() => _updating = false);
+      }
+    }
+  }
+
+  Future<void> _toggleEventReminder() async {
+    final topic = _topic;
+    if (topic == null || topic.type != 'event' || _updating) return;
+    setState(() => _updating = true);
+    try {
+      final updated = await widget.api.setEventReminder(
+        communityId: widget.community.id,
+        topicId: topic.id,
+        enabled: !(topic.event?.reminderEnabled ?? false),
+      );
+      if (!mounted) return;
+      setState(() => _topic = updated);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    } finally {
+      if (mounted) {
+        setState(() => _updating = false);
+      }
+    }
+  }
+
+  Future<void> _addToCalendar() async {
+    final topic = _topic;
+    if (topic == null || topic.type != 'event') return;
+    final url = _buildCommunityCalendarUrl(
+      topic,
+      communityName: widget.community.name,
+    );
+    if (url == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Etkinlik tarihi olmadigi icin takvime eklenemedi.'),
+        ),
+      );
+      return;
+    }
+    final launched = await launchUrl(
+      Uri.parse(url),
+      mode: LaunchMode.externalApplication,
+    );
+    if (!launched && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Takvim baglantisi acilamadi.')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final topic = _topic;
@@ -6636,9 +6921,18 @@ class _CommunityTopicDetailPageState extends State<_CommunityTopicDetailPage> {
                                           _CommunityChip(
                                             label: '#${topic.channel!.name}',
                                           ),
+                                        if ((topic.resourceCategory ?? '')
+                                            .trim()
+                                            .isNotEmpty)
+                                          _CommunityChip(
+                                            label:
+                                                '🗂️ ${topic.resourceCategory!.trim()}',
+                                          ),
                                         if (topic.isPinned)
-                                          const _CommunityChip(
-                                            label: '📌 Sabit',
+                                          _CommunityChip(
+                                            label: topic.type == 'resource'
+                                                ? '📌 Sabit rehber'
+                                                : '📌 Sabit',
                                           ),
                                         if (topic.isSolved)
                                           const _CommunityChip(
@@ -6731,6 +7025,142 @@ class _CommunityTopicDetailPageState extends State<_CommunityTopicDetailPage> {
                                         mentionBackgroundColor:
                                             _CommunityUiTokens.success
                                                 .withValues(alpha: 0.12),
+                                      ),
+                                    ],
+                                    if (topic.type == 'event') ...[
+                                      const SizedBox(height: 16),
+                                      _SurfaceCard(
+                                        padding: const EdgeInsets.all(14),
+                                        color: _CommunityUiTokens.surfaceSoft,
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            const _CommunitySectionHeader(
+                                              emoji: '📅',
+                                              title: 'Etkinlik katilimi',
+                                            ),
+                                            const SizedBox(height: 10),
+                                            Wrap(
+                                              spacing: 8,
+                                              runSpacing: 8,
+                                              children: [
+                                                if ((topic.eventStartsAt ?? '')
+                                                    .trim()
+                                                    .isNotEmpty)
+                                                  _CommunityChip(
+                                                    label:
+                                                        '🗓️ ${_formatCommunityDate(topic.eventStartsAt!)}',
+                                                  ),
+                                                if ((topic.eventLocation ?? '')
+                                                    .trim()
+                                                    .isNotEmpty)
+                                                  _CommunityChip(
+                                                    label:
+                                                        '📍 ${topic.eventLocation!.trim()}',
+                                                  ),
+                                                _CommunityChip(
+                                                  label:
+                                                      '🙋 ${topic.event?.totalCount ?? 0} yanit',
+                                                ),
+                                                _CommunityChip(
+                                                  label:
+                                                      '✅ ${topic.event?.goingCount ?? 0}',
+                                                ),
+                                                _CommunityChip(
+                                                  label:
+                                                      '🤔 ${topic.event?.maybeCount ?? 0}',
+                                                ),
+                                                _CommunityChip(
+                                                  label:
+                                                      '🚫 ${topic.event?.notGoingCount ?? 0}',
+                                                ),
+                                                if ((topic
+                                                            .event
+                                                            ?.viewerStatus ??
+                                                        '')
+                                                    .trim()
+                                                    .isNotEmpty)
+                                                  _CommunityChip(
+                                                    label:
+                                                        'Sen: ${_communityEventRsvpLabel(topic.event!.viewerStatus!)}',
+                                                  ),
+                                                if (topic
+                                                        .event
+                                                        ?.reminderEnabled ==
+                                                    true)
+                                                  const _CommunityChip(
+                                                    label: '🔔 Hatirlatma acik',
+                                                  ),
+                                              ],
+                                            ),
+                                            const SizedBox(height: 12),
+                                            AbsorbPointer(
+                                              absorbing: _updating,
+                                              child: Wrap(
+                                                spacing: 8,
+                                                runSpacing: 8,
+                                                children: [
+                                                  _CommunityFilterChip(
+                                                    label: 'Katilacagim',
+                                                    selected:
+                                                        topic
+                                                            .event
+                                                            ?.viewerStatus ==
+                                                        'going',
+                                                    onTap: () =>
+                                                        _setEventRsvp('going'),
+                                                  ),
+                                                  _CommunityFilterChip(
+                                                    label: 'Belki',
+                                                    selected:
+                                                        topic
+                                                            .event
+                                                            ?.viewerStatus ==
+                                                        'maybe',
+                                                    onTap: () =>
+                                                        _setEventRsvp('maybe'),
+                                                  ),
+                                                  _CommunityFilterChip(
+                                                    label: 'Katilmayacagim',
+                                                    selected:
+                                                        topic
+                                                            .event
+                                                            ?.viewerStatus ==
+                                                        'not_going',
+                                                    onTap: () => _setEventRsvp(
+                                                      'not_going',
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                            const SizedBox(height: 12),
+                                            Wrap(
+                                              spacing: 8,
+                                              runSpacing: 8,
+                                              children: [
+                                                FilledButton.tonal(
+                                                  onPressed: _updating
+                                                      ? null
+                                                      : _toggleEventReminder,
+                                                  child: Text(
+                                                    topic.event?.reminderEnabled ==
+                                                            true
+                                                        ? 'Hatirlatmayi kapat'
+                                                        : 'Hatirlat',
+                                                  ),
+                                                ),
+                                                FilledButton.tonal(
+                                                  onPressed: _addToCalendar,
+                                                  child: const Text(
+                                                    'Takvime ekle',
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ],
+                                        ),
                                       ),
                                     ],
                                     if (topic.tags.isNotEmpty) ...[
@@ -7174,7 +7604,9 @@ class _CommunityTopicComposerPageState
   final _titleController = TextEditingController();
   final _bodyController = TextEditingController();
   final _tagsController = TextEditingController();
+  final _resourceCategoryController = TextEditingController();
   final _eventDateController = TextEditingController();
+  final _eventLocationController = TextEditingController();
   late String _type;
   bool _saving = false;
 
@@ -7189,7 +7621,9 @@ class _CommunityTopicComposerPageState
     _titleController.dispose();
     _bodyController.dispose();
     _tagsController.dispose();
+    _resourceCategoryController.dispose();
     _eventDateController.dispose();
+    _eventLocationController.dispose();
     super.dispose();
   }
 
@@ -7215,8 +7649,14 @@ class _CommunityTopicComposerPageState
             .map((item) => item.trim())
             .where((item) => item.isNotEmpty)
             .toList(),
+        resourceCategory: _type == 'resource'
+            ? _resourceCategoryController.text.trim()
+            : null,
         eventStartsAt: _type == 'event'
             ? _eventDateController.text.trim()
+            : null,
+        eventLocation: _type == 'event'
+            ? _eventLocationController.text.trim()
             : null,
       );
       if (!mounted) return;
@@ -7300,6 +7740,17 @@ class _CommunityTopicComposerPageState
                       border: OutlineInputBorder(),
                     ),
                   ),
+                  if (_type == 'resource') ...[
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _resourceCategoryController,
+                      decoration: const InputDecoration(
+                        labelText: 'Kategori',
+                        hintText: 'örn: Rehber, FAQ, Kaynak, Araç',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ],
                   if (_type == 'event') ...[
                     const SizedBox(height: 12),
                     TextField(
@@ -7307,6 +7758,15 @@ class _CommunityTopicComposerPageState
                       decoration: const InputDecoration(
                         labelText: 'Etkinlik tarihi',
                         hintText: '2026-03-20T19:30:00.000Z',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _eventLocationController,
+                      decoration: const InputDecoration(
+                        labelText: 'Konum',
+                        hintText: 'örn: Zoom / Kadikoy / Google Meet',
                         border: OutlineInputBorder(),
                       ),
                     ),
@@ -8559,65 +9019,99 @@ class _WideCommunityCard extends StatelessWidget {
 }
 
 class _CommunityEventCard extends StatelessWidget {
-  const _CommunityEventCard({required this.topic});
+  const _CommunityEventCard({
+    required this.topic,
+    this.compact = false,
+    this.onTap,
+  });
 
   final _CommunityTopicSummary topic;
+  final bool compact;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     final meta = [
       if ((topic.eventStartsAt ?? '').trim().isNotEmpty)
         _formatCommunityDate(topic.eventStartsAt!),
+      if ((topic.eventLocation ?? '').trim().isNotEmpty)
+        topic.eventLocation!.trim(),
       if (topic.channel != null) '#${topic.channel!.name}',
     ].join('  •  ');
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFFF6EFD9), Color(0xFFF4F8EA)],
+    final badges = <String>[
+      '🙋 ${topic.event?.totalCount ?? 0} yanit',
+      if ((topic.event?.viewerStatus ?? '').trim().isNotEmpty)
+        'Sen: ${_communityEventRsvpLabel(topic.event!.viewerStatus!)}',
+      if (topic.event?.reminderEnabled == true) 'Hatirlatma acik',
+    ];
+
+    final content = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          compact ? '📅 Yaklaşan etkinlik' : '🎙️ Canlı oturum',
+          style: const TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+            color: _CommunityUiTokens.textMuted,
+          ),
         ),
-        borderRadius: BorderRadius.circular(_CommunityUiTokens.cardRadius),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              '🎙️ Canlı oturum',
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
-                color: _CommunityUiTokens.textMuted,
-              ),
-            ),
-            const SizedBox(height: 10),
-            Text(
-              topic.title.trim().isEmpty
-                  ? 'Yaklaşan community etkinliği'
-                  : topic.title.trim(),
-              style: const TextStyle(
-                fontSize: 18,
-                height: 1.2,
-                fontWeight: FontWeight.w700,
-                color: _CommunityUiTokens.text,
-              ),
-            ),
-            if (meta.trim().isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Text(
-                meta,
-                style: const TextStyle(
-                  fontSize: 13,
-                  color: _CommunityUiTokens.textMuted,
-                ),
-              ),
-            ],
-          ],
+        const SizedBox(height: 10),
+        Text(
+          topic.title.trim().isEmpty
+              ? 'Yaklaşan community etkinliği'
+              : topic.title.trim(),
+          style: TextStyle(
+            fontSize: compact ? 16 : 18,
+            height: 1.2,
+            fontWeight: FontWeight.w700,
+            color: _CommunityUiTokens.text,
+          ),
         ),
-      ),
+        if (meta.trim().isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Text(
+            meta,
+            style: const TextStyle(
+              fontSize: 13,
+              color: _CommunityUiTokens.textMuted,
+            ),
+          ),
+        ],
+        if (badges.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: badges
+                .map((badge) => _CommunityChip(label: badge))
+                .toList(),
+          ),
+        ],
+      ],
     );
+
+    final child = compact
+        ? _SurfaceCard(
+            padding: const EdgeInsets.all(18),
+            color: _CommunityUiTokens.surfaceSoft,
+            child: content,
+          )
+        : DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFFF6EFD9), Color(0xFFF4F8EA)],
+              ),
+              borderRadius: BorderRadius.circular(
+                _CommunityUiTokens.cardRadius,
+              ),
+            ),
+            child: Padding(padding: const EdgeInsets.all(18), child: content),
+          );
+    if (onTap == null) return child;
+    return GestureDetector(onTap: onTap, child: child);
   }
 }
 
@@ -9352,7 +9846,8 @@ class _ResourcePreviewTile extends StatelessWidget {
     required this.emoji,
     required this.title,
     required this.subtitle,
-    required this.badge,
+    this.meta,
+    this.badges = const <String>[],
     this.onTap,
   });
 
@@ -9361,17 +9856,47 @@ class _ResourcePreviewTile extends StatelessWidget {
     VoidCallback? onTap,
   }) {
     final isEvent = topic.type == 'event';
+    final badges = <String>[];
+    final metaParts = <String>[];
+    if (isEvent) {
+      badges.add(
+        topic.eventStartsAt?.trim().isNotEmpty == true ? 'Etkinlik' : 'Canlı',
+      );
+      if ((topic.event?.viewerStatus ?? '').trim().isNotEmpty) {
+        badges.add(_communityEventRsvpLabel(topic.event!.viewerStatus!));
+      }
+      if ((topic.eventLocation ?? '').trim().isNotEmpty) {
+        metaParts.add(topic.eventLocation!.trim());
+      }
+      if ((topic.eventStartsAt ?? '').trim().isNotEmpty) {
+        metaParts.insert(0, _formatCommunityDate(topic.eventStartsAt!));
+      }
+      if ((topic.event?.totalCount ?? 0) > 0) {
+        badges.add('${topic.event!.totalCount} yanıt');
+      }
+    } else {
+      badges.add(
+        (topic.resourceCategory ?? '').trim().isNotEmpty
+            ? topic.resourceCategory!.trim()
+            : 'Kaynak',
+      );
+      if (topic.isPinned) {
+        badges.add('Öne çıkan');
+      } else if (topic.tags.isNotEmpty) {
+        badges.add(topic.tags.first);
+      }
+      if (topic.channel != null) {
+        metaParts.add('#${topic.channel!.name}');
+      }
+    }
     return _ResourcePreviewTile(
       emoji: isEvent ? '📅' : '📚',
       title: topic.title,
       subtitle: (topic.body ?? '').trim().isNotEmpty
           ? topic.body!.trim()
           : topic.author.subtitle,
-      badge: isEvent
-          ? (topic.eventStartsAt?.trim().isNotEmpty == true
-                ? 'Etkinlik'
-                : 'Canlı')
-          : 'Kaynak',
+      meta: metaParts.isEmpty ? null : metaParts.join('  •  '),
+      badges: badges,
       onTap: onTap,
     );
   }
@@ -9379,7 +9904,8 @@ class _ResourcePreviewTile extends StatelessWidget {
   final String emoji;
   final String title;
   final String subtitle;
-  final String badge;
+  final String? meta;
+  final List<String> badges;
   final VoidCallback? onTap;
 
   @override
@@ -9420,6 +9946,16 @@ class _ResourcePreviewTile extends StatelessWidget {
                         color: _CommunityUiTokens.textMuted,
                       ),
                     ),
+                    if ((meta ?? '').trim().isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        meta!,
+                        style: const TextStyle(
+                          fontSize: 11.5,
+                          color: _CommunityUiTokens.textMuted,
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -9427,7 +9963,14 @@ class _ResourcePreviewTile extends StatelessWidget {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  _CommunityChip(label: badge),
+                  ...List<Widget>.generate(badges.length, (index) {
+                    return Padding(
+                      padding: EdgeInsets.only(
+                        bottom: index == badges.length - 1 ? 0 : 8,
+                      ),
+                      child: _CommunityChip(label: badges[index]),
+                    );
+                  }),
                   if (onTap != null) ...[
                     const SizedBox(height: 10),
                     const Icon(
@@ -10924,6 +11467,30 @@ String _labelForVisibility(String value) {
   }
 }
 
+String _communityEventRsvpLabel(String value) {
+  switch (value) {
+    case 'going':
+      return 'Katılacağım';
+    case 'maybe':
+      return 'Belki';
+    case 'not_going':
+      return 'Katılmayacağım';
+    default:
+      return 'Yanıt yok';
+  }
+}
+
+String _communityResourceCategoryKey(_CommunityTopicSummary topic) {
+  final raw = (topic.resourceCategory ?? '').trim();
+  if (raw.isEmpty) return 'genel';
+  return raw.toLowerCase();
+}
+
+String _communityResourceCategoryLabel(_CommunityTopicSummary topic) {
+  final raw = (topic.resourceCategory ?? '').trim();
+  return raw.isEmpty ? 'Genel bilgi' : raw;
+}
+
 String _emojiForVisibility(String value) {
   switch (value) {
     case 'request_only':
@@ -10933,6 +11500,40 @@ String _emojiForVisibility(String value) {
     default:
       return '🔓';
   }
+}
+
+String? _buildCommunityCalendarUrl(
+  _CommunityTopicSummary topic, {
+  required String communityName,
+}) {
+  final rawStart = (topic.eventStartsAt ?? '').trim();
+  if (rawStart.isEmpty) return null;
+  final start = DateTime.tryParse(rawStart)?.toUtc();
+  if (start == null) return null;
+  final end = start.add(const Duration(hours: 1));
+
+  String formatDate(DateTime value) {
+    final year = value.year.toString().padLeft(4, '0');
+    final month = value.month.toString().padLeft(2, '0');
+    final day = value.day.toString().padLeft(2, '0');
+    final hour = value.hour.toString().padLeft(2, '0');
+    final minute = value.minute.toString().padLeft(2, '0');
+    final second = value.second.toString().padLeft(2, '0');
+    return '$year$month${day}T$hour$minute${second}Z';
+  }
+
+  final details = <String>[
+    if ((topic.body ?? '').trim().isNotEmpty) topic.body!.trim(),
+    'Topluluk: $communityName',
+  ].join('\n\n');
+  final location = (topic.eventLocation ?? '').trim();
+  return Uri.https('calendar.google.com', '/calendar/render', {
+    'action': 'TEMPLATE',
+    'text': topic.title.trim().isEmpty ? 'Turna Etkinliği' : topic.title.trim(),
+    'details': details,
+    if (location.isNotEmpty) 'location': location,
+    'dates': '${formatDate(start)}/${formatDate(end)}',
+  }).toString();
 }
 
 String _communityReportStatusLabel(String value) {
