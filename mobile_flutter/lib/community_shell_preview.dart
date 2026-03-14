@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -722,6 +723,73 @@ class _CommunityApiClient {
     }
   }
 
+  Future<List<_CommunityInviteSummary>> fetchInvites({
+    required String communityId,
+    String? status,
+    int limit = 20,
+  }) async {
+    final params = <String, String>{'limit': '$limit'};
+    if ((status ?? '').trim().isNotEmpty) {
+      params['status'] = status!.trim();
+    }
+    final res = await http.get(
+      _uri('/api/communities/$communityId/invites', params),
+      headers: _headers,
+    );
+    if (res.statusCode >= 400) {
+      throw _CommunityApiException(_decodeError(res, 'Davetler yüklenemedi.'));
+    }
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    final raw = body['data'] as List<dynamic>? ?? const [];
+    return raw
+        .whereType<Map>()
+        .map(
+          (item) =>
+              _CommunityInviteSummary.fromMap(Map<String, dynamic>.from(item)),
+        )
+        .toList();
+  }
+
+  Future<List<_CommunityBanSummary>> fetchBans({
+    required String communityId,
+    int limit = 30,
+  }) async {
+    final res = await http.get(
+      _uri('/api/communities/$communityId/bans', {'limit': '$limit'}),
+      headers: _headers,
+    );
+    if (res.statusCode >= 400) {
+      throw _CommunityApiException(
+        _decodeError(res, 'Ban listesi yüklenemedi.'),
+      );
+    }
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    final raw = body['data'] as List<dynamic>? ?? const [];
+    return raw
+        .whereType<Map>()
+        .map(
+          (item) =>
+              _CommunityBanSummary.fromMap(Map<String, dynamic>.from(item)),
+        )
+        .toList();
+  }
+
+  Future<void> unbanMember({
+    required String communityId,
+    required String userId,
+  }) async {
+    final res = await http.post(
+      _uri('/api/communities/$communityId/members/$userId/unban'),
+      headers: _headers,
+      body: jsonEncode(const <String, dynamic>{}),
+    );
+    if (res.statusCode >= 400) {
+      throw _CommunityApiException(
+        _decodeError(res, 'Ban kaldırma işlemi başarısız oldu.'),
+      );
+    }
+  }
+
   Future<List<_CommunityJoinRequestSummary>> fetchJoinRequests({
     required String communityId,
   }) async {
@@ -991,6 +1059,14 @@ class _CommunityApiClient {
             return 'Davet gönderilecek kullanıcı bulunamadı.';
           case 'community_invite_target_already_member':
             return 'Bu kullanıcı zaten topluluk üyesi.';
+          case 'community_invites_failed':
+            return 'Community davetleri su anda yuklenemedi.';
+          case 'community_bans_failed':
+            return 'Aktif ban listesi yuklenemedi.';
+          case 'community_ban_not_found':
+            return 'Aktif ban kaydi bulunamadi.';
+          case 'community_member_unban_failed':
+            return 'Ban kaldirma islemi basarisiz oldu.';
           case 'community_report_review_forbidden':
             return 'Community raporlarini inceleme yetkin yok.';
           case 'community_report_not_found':
@@ -1916,14 +1992,85 @@ class _CommunityReportSummary {
   }
 }
 
+class _CommunityInviteSummary {
+  const _CommunityInviteSummary({
+    required this.id,
+    required this.status,
+    required this.createdAt,
+    required this.invitedUser,
+    required this.createdBy,
+    this.note,
+    this.respondedAt,
+  });
+
+  final String id;
+  final String status;
+  final String createdAt;
+  final String? note;
+  final String? respondedAt;
+  final _CommunityUserSummary invitedUser;
+  final _CommunityUserSummary createdBy;
+
+  factory _CommunityInviteSummary.fromMap(Map<String, dynamic> map) {
+    return _CommunityInviteSummary(
+      id: (map['id'] ?? '').toString(),
+      status: (map['status'] ?? 'pending').toString(),
+      createdAt: (map['createdAt'] ?? '').toString(),
+      note: _CommunitySummary._nullableString(map['note']),
+      respondedAt: _CommunitySummary._nullableString(map['respondedAt']),
+      invitedUser: _CommunityUserSummary.fromMap(
+        Map<String, dynamic>.from(map['invitedUser'] as Map? ?? const {}),
+      ),
+      createdBy: _CommunityUserSummary.fromMap(
+        Map<String, dynamic>.from(map['createdBy'] as Map? ?? const {}),
+      ),
+    );
+  }
+}
+
+class _CommunityBanSummary {
+  const _CommunityBanSummary({
+    required this.id,
+    required this.createdAt,
+    required this.updatedAt,
+    required this.user,
+    this.reason,
+    this.bannedByUserId,
+  });
+
+  final String id;
+  final String createdAt;
+  final String updatedAt;
+  final String? reason;
+  final String? bannedByUserId;
+  final _CommunityUserSummary user;
+
+  factory _CommunityBanSummary.fromMap(Map<String, dynamic> map) {
+    return _CommunityBanSummary(
+      id: (map['id'] ?? '').toString(),
+      createdAt: (map['createdAt'] ?? '').toString(),
+      updatedAt: (map['updatedAt'] ?? '').toString(),
+      reason: _CommunitySummary._nullableString(map['reason']),
+      bannedByUserId: _CommunitySummary._nullableString(map['bannedByUserId']),
+      user: _CommunityUserSummary.fromMap(
+        Map<String, dynamic>.from(map['user'] as Map? ?? const {}),
+      ),
+    );
+  }
+}
+
 class _CommunityMembersTabData {
   const _CommunityMembersTabData({
     required this.members,
     required this.dmRequests,
+    this.invites = const <_CommunityInviteSummary>[],
+    this.bans = const <_CommunityBanSummary>[],
   });
 
   final List<_CommunityMemberSummary> members;
   final _CommunityDmRequestFeed dmRequests;
+  final List<_CommunityInviteSummary> invites;
+  final List<_CommunityBanSummary> bans;
 }
 
 class _CommunitySummary {
@@ -2648,6 +2795,7 @@ class _CommunityNotificationsPageState
                             notification.body!.trim(),
                           _formatCommunityDate(notification.createdAt),
                         ].join('  •  '),
+                        highlightMentions: notification.type == 'mention',
                       ),
                     );
                   }),
@@ -3001,19 +3149,11 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
     await _reload();
   }
 
-  Future<void> _openReportTarget(
+  Future<void> _openMessageTarget(
     _CommunitySummary community,
-    _CommunityReportSummary report,
+    _CommunityChannelSummary channel,
+    _CommunityMessageSummary message,
   ) async {
-    final channel = report.channel;
-    final message = report.message;
-    if (channel == null || message == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Raporun bagli oldugu mesaj bulunamadi.')),
-      );
-      return;
-    }
-
     final rootMessageId = (message.replyToMessageId ?? '').trim();
     if (rootMessageId.isEmpty) {
       await _openChannel(
@@ -3052,6 +3192,21 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
         context,
       ).showSnackBar(SnackBar(content: Text(error.toString())));
     }
+  }
+
+  Future<void> _openReportTarget(
+    _CommunitySummary community,
+    _CommunityReportSummary report,
+  ) async {
+    final channel = report.channel;
+    final message = report.message;
+    if (channel == null || message == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Raporun bagli oldugu mesaj bulunamadi.')),
+      );
+      return;
+    }
+    await _openMessageTarget(community, channel, message);
   }
 
   Future<void> _openTopic(_CommunityTopicSummary topic) async {
@@ -3258,12 +3413,7 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
               return _CommunityPinnedMessagesCard(
                 items: pinned,
                 onOpenMessage: (_CommunityPinnedMessageSummary item) =>
-                    _openChannel(
-                      community,
-                      item.channel,
-                      initialMessage: item.message,
-                      focusMessageId: item.message.id,
-                    ),
+                    _openMessageTarget(community, item.channel, item.message),
               );
             },
           ),
@@ -3510,9 +3660,19 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
                 incoming: <_CommunityDmRequestSummary>[],
                 sent: <_CommunityDmRequestSummary>[],
               ),
+              invites: <_CommunityInviteSummary>[],
+              bans: <_CommunityBanSummary>[],
             );
         final members = tabData.members;
         final dmRequests = tabData.dmRequests;
+        final invites = tabData.invites;
+        final bans = tabData.bans;
+        final pendingInvites = invites
+            .where((item) => item.status == 'pending')
+            .toList();
+        final inviteHistory = invites
+            .where((item) => item.status != 'pending')
+            .toList();
         final sentByUser = <String, _CommunityDmRequestSummary>{
           for (final item in dmRequests.sent) item.target.id: item,
         };
@@ -3546,7 +3706,22 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
                           const _CommunityChip(label: 'Join review acik'),
                         if (community.permissions.canInviteMembers)
                           const _CommunityChip(label: 'Davet acik'),
+                        if (community.permissions.canInviteMembers)
+                          _CommunityChip(
+                            label: 'Bekleyen davet ${pendingInvites.length}',
+                          ),
+                        if (community.permissions.canManageCommunity)
+                          _CommunityChip(label: 'Aktif ban ${bans.length}'),
                       ],
+                    ),
+                    const SizedBox(height: 12),
+                    const Text(
+                      'Moderasyon, davet ve rapor akislarini buradan takip edebilirsin.',
+                      style: TextStyle(
+                        fontSize: 13,
+                        height: 1.45,
+                        color: _CommunityUiTokens.textMuted,
+                      ),
                     ),
                     if (community.permissions.canInviteMembers) ...[
                       const SizedBox(height: 14),
@@ -3565,11 +3740,25 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
               ),
               const SizedBox(height: 16),
             ],
+            if (community.permissions.canInviteMembers) ...[
+              _CommunityInviteHistoryCard(
+                invites: invites,
+                pendingInvites: pendingInvites,
+                historyInvites: inviteHistory,
+              ),
+              const SizedBox(height: 16),
+            ],
             if (community.permissions.canManageCommunity) ...[
               _CommunityJoinRequestsCard(
                 api: widget.api,
                 community: community,
                 onChanged: _reload,
+              ),
+              const SizedBox(height: 16),
+              _CommunityBannedMembersCard(
+                items: bans,
+                onUnban: (_CommunityBanSummary ban) =>
+                    _unbanMember(community, ban),
               ),
               const SizedBox(height: 16),
               _CommunityReportsInboxCard(
@@ -3738,10 +3927,22 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
         role: _memberRole,
       ),
       widget.api.fetchDmRequests(communityId: community.id),
+      community.permissions.canInviteMembers
+          ? widget.api.fetchInvites(communityId: community.id)
+          : Future<List<_CommunityInviteSummary>>.value(
+              const <_CommunityInviteSummary>[],
+            ),
+      community.permissions.canManageCommunity
+          ? widget.api.fetchBans(communityId: community.id)
+          : Future<List<_CommunityBanSummary>>.value(
+              const <_CommunityBanSummary>[],
+            ),
     ]);
     return _CommunityMembersTabData(
       members: results[0] as List<_CommunityMemberSummary>,
       dmRequests: results[1] as _CommunityDmRequestFeed,
+      invites: results[2] as List<_CommunityInviteSummary>,
+      bans: results[3] as List<_CommunityBanSummary>,
     );
   }
 
@@ -3784,6 +3985,7 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
         userId: selected.id,
       );
       if (!mounted) return;
+      setState(() {});
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('${selected.displayName} icin davet gonderildi.'),
@@ -3991,6 +4193,53 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
             '${member.user.displayName} icin moderation guncellendi.',
           ),
         ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
+  Future<void> _unbanMember(
+    _CommunitySummary community,
+    _CommunityBanSummary ban,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Ban kaldir'),
+          content: Text(
+            '${ban.user.displayName} icin community ban kaydi kaldirilsin mi?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Vazgec'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              style: FilledButton.styleFrom(
+                backgroundColor: _CommunityUiTokens.text,
+              ),
+              child: const Text('Ban kaldir'),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true) return;
+    try {
+      await widget.api.unbanMember(
+        communityId: community.id,
+        userId: ban.user.id,
+      );
+      if (!mounted) return;
+      setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${ban.user.displayName} icin ban kaldirildi.')),
       );
     } catch (error) {
       if (!mounted) return;
@@ -4296,17 +4545,24 @@ class _CommunityChannelPageState extends State<_CommunityChannelPage> {
   final ScrollController _scrollController = ScrollController();
   final Map<String, GlobalKey> _messageKeys = <String, GlobalKey>{};
   io.Socket? _socket;
+  Timer? _mentionDebounce;
   bool _loading = true;
   bool _sending = false;
   bool _attachmentBusy = false;
+  bool _mentionLoading = false;
   bool _initialFocusHandled = false;
   String? _highlightMessageId;
   String? _errorMessage;
+  String _mentionLookupKey = '';
+  _CommunityMentionQuery? _activeMentionQuery;
+  List<_CommunityMemberSummary> _mentionSuggestions =
+      const <_CommunityMemberSummary>[];
 
   @override
   void initState() {
     super.initState();
     _highlightMessageId = widget.initialFocusMessageId;
+    _composerController.addListener(_handleComposerChanged);
     _loadInitial();
     _connectRealtime();
   }
@@ -4318,9 +4574,103 @@ class _CommunityChannelPageState extends State<_CommunityChannelPage> {
       'channelId': widget.channel.id,
     });
     _socket?.dispose();
+    _mentionDebounce?.cancel();
+    _composerController.removeListener(_handleComposerChanged);
     _scrollController.dispose();
     _composerController.dispose();
     super.dispose();
+  }
+
+  void _clearMentionSuggestions() {
+    _mentionDebounce?.cancel();
+    if (!mounted) return;
+    setState(() {
+      _mentionLoading = false;
+      _mentionLookupKey = '';
+      _activeMentionQuery = null;
+      _mentionSuggestions = const <_CommunityMemberSummary>[];
+    });
+  }
+
+  void _handleComposerChanged() {
+    final mention = _extractCommunityMentionQuery(_composerController.value);
+    if (mention == null) {
+      if (_activeMentionQuery != null ||
+          _mentionSuggestions.isNotEmpty ||
+          _mentionLoading) {
+        _clearMentionSuggestions();
+      }
+      return;
+    }
+
+    final lookupKey = mention.query;
+    if (mounted) {
+      setState(() => _activeMentionQuery = mention);
+    }
+    if (_mentionLookupKey == lookupKey && _mentionSuggestions.isNotEmpty) {
+      return;
+    }
+
+    _mentionDebounce?.cancel();
+    setState(() {
+      _mentionLookupKey = lookupKey;
+      _mentionLoading = true;
+    });
+    _mentionDebounce = Timer(const Duration(milliseconds: 180), () async {
+      try {
+        final results = await widget.api.fetchMembers(
+          communityId: widget.community.id,
+          query: lookupKey.isEmpty ? null : lookupKey,
+        );
+        if (!mounted) return;
+        final currentMention = _extractCommunityMentionQuery(
+          _composerController.value,
+        );
+        if (currentMention == null || currentMention.query != lookupKey) {
+          return;
+        }
+        setState(() {
+          _activeMentionQuery = currentMention;
+          _mentionLoading = false;
+          _mentionSuggestions = results
+              .where(
+                (item) =>
+                    item.user.id != widget.currentUserId &&
+                    (item.user.username ?? '').trim().isNotEmpty,
+              )
+              .take(5)
+              .toList();
+        });
+      } catch (_) {
+        if (!mounted) return;
+        final currentMention = _extractCommunityMentionQuery(
+          _composerController.value,
+        );
+        if (currentMention == null || currentMention.query != lookupKey) {
+          return;
+        }
+        setState(() {
+          _mentionLoading = false;
+          _mentionSuggestions = const <_CommunityMemberSummary>[];
+        });
+      }
+    });
+  }
+
+  void _applyMention(_CommunityMemberSummary member) {
+    final username = member.user.username?.trim();
+    final mention = _extractCommunityMentionQuery(_composerController.value);
+    if (username == null || username.isEmpty || mention == null) return;
+    final value = _composerController.value;
+    final nextText =
+        '${value.text.substring(0, mention.start)}@$username ${value.text.substring(mention.end)}';
+    final nextOffset = mention.start + username.length + 2;
+    _composerController.value = value.copyWith(
+      text: nextText,
+      selection: TextSelection.collapsed(offset: nextOffset),
+      composing: TextRange.empty,
+    );
+    _clearMentionSuggestions();
   }
 
   void _connectRealtime() {
@@ -4915,61 +5265,75 @@ class _CommunityChannelPageState extends State<_CommunityChannelPage> {
             top: false,
             child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(22),
-                  border: Border.all(color: _CommunityUiTokens.border),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
-                  child: Row(
-                    children: [
-                      IconButton(
-                        onPressed: (_sending || _attachmentBusy)
-                            ? null
-                            : _showAttachmentSheet,
-                        visualDensity: VisualDensity.compact,
-                        icon: _attachmentBusy
-                            ? const SizedBox(
-                                width: 18,
-                                height: 18,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : const Icon(Icons.add_circle_outline_rounded),
-                        color: _CommunityUiTokens.textMuted,
-                      ),
-                      Expanded(
-                        child: TextField(
-                          controller: _composerController,
-                          minLines: 1,
-                          maxLines: 5,
-                          decoration: const InputDecoration(
-                            hintText: 'Kanal mesajı yaz',
-                            border: InputBorder.none,
-                            isCollapsed: true,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (_activeMentionQuery != null &&
+                      (_mentionLoading || _mentionSuggestions.isNotEmpty)) ...[
+                    _CommunityMentionSuggestionsCard(
+                      items: _mentionSuggestions,
+                      loading: _mentionLoading,
+                      onSelect: _applyMention,
+                    ),
+                    const SizedBox(height: 10),
+                  ],
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(22),
+                      border: Border.all(color: _CommunityUiTokens.border),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
+                      child: Row(
+                        children: [
+                          IconButton(
+                            onPressed: (_sending || _attachmentBusy)
+                                ? null
+                                : _showAttachmentSheet,
+                            visualDensity: VisualDensity.compact,
+                            icon: _attachmentBusy
+                                ? const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Icon(Icons.add_circle_outline_rounded),
+                            color: _CommunityUiTokens.textMuted,
                           ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      FilledButton(
-                        onPressed: (_sending || _attachmentBusy)
-                            ? null
-                            : _sendRootMessage,
-                        style: FilledButton.styleFrom(
-                          backgroundColor: _CommunityUiTokens.text,
-                          foregroundColor: Colors.white,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(16),
+                          Expanded(
+                            child: TextField(
+                              controller: _composerController,
+                              minLines: 1,
+                              maxLines: 5,
+                              decoration: const InputDecoration(
+                                hintText: 'Kanal mesajı yaz',
+                                border: InputBorder.none,
+                                isCollapsed: true,
+                              ),
+                            ),
                           ),
-                        ),
-                        child: Text(_sending ? '...' : 'Gonder'),
+                          const SizedBox(width: 8),
+                          FilledButton(
+                            onPressed: (_sending || _attachmentBusy)
+                                ? null
+                                : _sendRootMessage,
+                            style: FilledButton.styleFrom(
+                              backgroundColor: _CommunityUiTokens.text,
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                            ),
+                            child: Text(_sending ? '...' : 'Gonder'),
+                          ),
+                        ],
                       ),
-                    ],
+                    ),
                   ),
-                ),
+                ],
               ),
             ),
           ),
@@ -5007,19 +5371,26 @@ class _CommunityThreadPageState extends State<_CommunityThreadPage> {
   final ScrollController _scrollController = ScrollController();
   final Map<String, GlobalKey> _messageKeys = <String, GlobalKey>{};
   io.Socket? _socket;
+  Timer? _mentionDebounce;
   _CommunityMessageSummary? _root;
   bool _loading = true;
   bool _sending = false;
   bool _attachmentBusy = false;
+  bool _mentionLoading = false;
   bool _initialFocusHandled = false;
   String? _highlightMessageId;
   String? _errorMessage;
+  String _mentionLookupKey = '';
+  _CommunityMentionQuery? _activeMentionQuery;
+  List<_CommunityMemberSummary> _mentionSuggestions =
+      const <_CommunityMemberSummary>[];
 
   @override
   void initState() {
     super.initState();
     _highlightMessageId = widget.initialFocusMessageId;
     _root = widget.rootMessage;
+    _composerController.addListener(_handleComposerChanged);
     _loadInitial();
     _connectRealtime();
   }
@@ -5032,9 +5403,103 @@ class _CommunityThreadPageState extends State<_CommunityThreadPage> {
       'messageId': widget.rootMessage.id,
     });
     _socket?.dispose();
+    _mentionDebounce?.cancel();
+    _composerController.removeListener(_handleComposerChanged);
     _scrollController.dispose();
     _composerController.dispose();
     super.dispose();
+  }
+
+  void _clearMentionSuggestions() {
+    _mentionDebounce?.cancel();
+    if (!mounted) return;
+    setState(() {
+      _mentionLoading = false;
+      _mentionLookupKey = '';
+      _activeMentionQuery = null;
+      _mentionSuggestions = const <_CommunityMemberSummary>[];
+    });
+  }
+
+  void _handleComposerChanged() {
+    final mention = _extractCommunityMentionQuery(_composerController.value);
+    if (mention == null) {
+      if (_activeMentionQuery != null ||
+          _mentionSuggestions.isNotEmpty ||
+          _mentionLoading) {
+        _clearMentionSuggestions();
+      }
+      return;
+    }
+
+    final lookupKey = mention.query;
+    if (mounted) {
+      setState(() => _activeMentionQuery = mention);
+    }
+    if (_mentionLookupKey == lookupKey && _mentionSuggestions.isNotEmpty) {
+      return;
+    }
+
+    _mentionDebounce?.cancel();
+    setState(() {
+      _mentionLookupKey = lookupKey;
+      _mentionLoading = true;
+    });
+    _mentionDebounce = Timer(const Duration(milliseconds: 180), () async {
+      try {
+        final results = await widget.api.fetchMembers(
+          communityId: widget.community.id,
+          query: lookupKey.isEmpty ? null : lookupKey,
+        );
+        if (!mounted) return;
+        final currentMention = _extractCommunityMentionQuery(
+          _composerController.value,
+        );
+        if (currentMention == null || currentMention.query != lookupKey) {
+          return;
+        }
+        setState(() {
+          _activeMentionQuery = currentMention;
+          _mentionLoading = false;
+          _mentionSuggestions = results
+              .where(
+                (item) =>
+                    item.user.id != widget.currentUserId &&
+                    (item.user.username ?? '').trim().isNotEmpty,
+              )
+              .take(5)
+              .toList();
+        });
+      } catch (_) {
+        if (!mounted) return;
+        final currentMention = _extractCommunityMentionQuery(
+          _composerController.value,
+        );
+        if (currentMention == null || currentMention.query != lookupKey) {
+          return;
+        }
+        setState(() {
+          _mentionLoading = false;
+          _mentionSuggestions = const <_CommunityMemberSummary>[];
+        });
+      }
+    });
+  }
+
+  void _applyMention(_CommunityMemberSummary member) {
+    final username = member.user.username?.trim();
+    final mention = _extractCommunityMentionQuery(_composerController.value);
+    if (username == null || username.isEmpty || mention == null) return;
+    final value = _composerController.value;
+    final nextText =
+        '${value.text.substring(0, mention.start)}@$username ${value.text.substring(mention.end)}';
+    final nextOffset = mention.start + username.length + 2;
+    _composerController.value = value.copyWith(
+      text: nextText,
+      selection: TextSelection.collapsed(offset: nextOffset),
+      composing: TextRange.empty,
+    );
+    _clearMentionSuggestions();
   }
 
   void _connectRealtime() {
@@ -5609,75 +6074,97 @@ class _CommunityThreadPageState extends State<_CommunityThreadPage> {
                         top: false,
                         child: Padding(
                           padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-                          child: DecoratedBox(
-                            decoration: BoxDecoration(
-                              color: Colors.white.withValues(alpha: 0.96),
-                              borderRadius: BorderRadius.circular(20),
-                              border: Border.all(
-                                color: _CommunityUiTokens.border,
-                              ),
-                              boxShadow: _CommunityUiTokens.softShadow,
-                            ),
-                            child: Padding(
-                              padding: const EdgeInsets.fromLTRB(
-                                14,
-                                12,
-                                10,
-                                12,
-                              ),
-                              child: Row(
-                                children: [
-                                  IconButton(
-                                    onPressed: (_sending || _attachmentBusy)
-                                        ? null
-                                        : _showAttachmentSheet,
-                                    visualDensity: VisualDensity.compact,
-                                    icon: _attachmentBusy
-                                        ? const SizedBox(
-                                            width: 18,
-                                            height: 18,
-                                            child: CircularProgressIndicator(
-                                              strokeWidth: 2,
-                                            ),
-                                          )
-                                        : const Icon(
-                                            Icons.add_circle_outline_rounded,
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (_activeMentionQuery != null &&
+                                  (_mentionLoading ||
+                                      _mentionSuggestions.isNotEmpty)) ...[
+                                _CommunityMentionSuggestionsCard(
+                                  items: _mentionSuggestions,
+                                  loading: _mentionLoading,
+                                  onSelect: _applyMention,
+                                ),
+                                const SizedBox(height: 10),
+                              ],
+                              DecoratedBox(
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withValues(alpha: 0.96),
+                                  borderRadius: BorderRadius.circular(20),
+                                  border: Border.all(
+                                    color: _CommunityUiTokens.border,
+                                  ),
+                                  boxShadow: _CommunityUiTokens.softShadow,
+                                ),
+                                child: Padding(
+                                  padding: const EdgeInsets.fromLTRB(
+                                    14,
+                                    12,
+                                    10,
+                                    12,
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      IconButton(
+                                        onPressed: (_sending || _attachmentBusy)
+                                            ? null
+                                            : _showAttachmentSheet,
+                                        visualDensity: VisualDensity.compact,
+                                        icon: _attachmentBusy
+                                            ? const SizedBox(
+                                                width: 18,
+                                                height: 18,
+                                                child:
+                                                    CircularProgressIndicator(
+                                                      strokeWidth: 2,
+                                                    ),
+                                              )
+                                            : const Icon(
+                                                Icons
+                                                    .add_circle_outline_rounded,
+                                              ),
+                                        color: _CommunityUiTokens.textMuted,
+                                      ),
+                                      Expanded(
+                                        child: TextField(
+                                          controller: _composerController,
+                                          minLines: 1,
+                                          maxLines: 5,
+                                          decoration: const InputDecoration(
+                                            hintText: 'Thread yanıtı yaz',
+                                            border: InputBorder.none,
+                                            isCollapsed: true,
                                           ),
-                                    color: _CommunityUiTokens.textMuted,
-                                  ),
-                                  Expanded(
-                                    child: TextField(
-                                      controller: _composerController,
-                                      minLines: 1,
-                                      maxLines: 5,
-                                      decoration: const InputDecoration(
-                                        hintText: 'Thread yanıtı yaz',
-                                        border: InputBorder.none,
-                                        isCollapsed: true,
+                                        ),
                                       ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  FilledButton(
-                                    onPressed: (_sending || _attachmentBusy)
-                                        ? null
-                                        : _send,
-                                    style: FilledButton.styleFrom(
-                                      backgroundColor: _CommunityUiTokens.text,
-                                      foregroundColor: Colors.white,
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 14,
-                                        vertical: 12,
+                                      const SizedBox(width: 8),
+                                      FilledButton(
+                                        onPressed: (_sending || _attachmentBusy)
+                                            ? null
+                                            : _send,
+                                        style: FilledButton.styleFrom(
+                                          backgroundColor:
+                                              _CommunityUiTokens.text,
+                                          foregroundColor: Colors.white,
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 14,
+                                            vertical: 12,
+                                          ),
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(
+                                              16,
+                                            ),
+                                          ),
+                                        ),
+                                        child: Text(
+                                          _sending ? '...' : 'Gonder',
+                                        ),
                                       ),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(16),
-                                      ),
-                                    ),
-                                    child: Text(_sending ? '...' : 'Gonder'),
+                                    ],
                                   ),
-                                ],
+                                ),
                               ),
-                            ),
+                            ],
                           ),
                         ),
                       ),
@@ -6234,13 +6721,16 @@ class _CommunityTopicDetailPageState extends State<_CommunityTopicDetailPage> {
                                         .trim()
                                         .isNotEmpty) ...[
                                       const SizedBox(height: 16),
-                                      Text(
-                                        topic.body!.trim(),
+                                      _CommunityTextWithMentions(
+                                        text: topic.body!.trim(),
                                         style: const TextStyle(
                                           fontSize: 14,
                                           height: 1.55,
                                           color: _CommunityUiTokens.text,
                                         ),
+                                        mentionBackgroundColor:
+                                            _CommunityUiTokens.success
+                                                .withValues(alpha: 0.12),
                                       ),
                                     ],
                                     if (topic.tags.isNotEmpty) ...[
@@ -7093,6 +7583,161 @@ class _CommunityReportsInboxCardState
     }
   }
 
+  Future<void> _openDetail(_CommunityReportSummary report) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (sheetContext) {
+        final detailText = (report.details ?? '').trim();
+        return SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(18, 18, 18, 24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Report detayi',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: _CommunityUiTokens.text,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    _CommunityChip(
+                      label: 'Sebep: ${report.reasonCode.toUpperCase()}',
+                    ),
+                    _CommunityChip(
+                      label: _communityReportStatusLabel(report.status),
+                    ),
+                    _CommunityChip(
+                      label: _formatCommunityDate(report.createdAt),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                Text(
+                  'Raporlayan: ${report.reporter.displayName}',
+                  style: const TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w700,
+                    color: _CommunityUiTokens.text,
+                  ),
+                ),
+                if (report.reportedUser != null) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    'Hedef: ${report.reportedUser!.displayName}',
+                    style: const TextStyle(
+                      fontSize: 12.5,
+                      color: _CommunityUiTokens.textMuted,
+                    ),
+                  ),
+                ],
+                if (report.channel != null) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    '#${report.channel!.name}',
+                    style: const TextStyle(
+                      fontSize: 12.5,
+                      color: _CommunityUiTokens.textMuted,
+                    ),
+                  ),
+                ],
+                if (report.message != null) ...[
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Hedef mesaj',
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w700,
+                      color: _CommunityUiTokens.textMuted,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  _SurfaceCard(
+                    padding: const EdgeInsets.all(14),
+                    color: _CommunityUiTokens.surfaceSoft,
+                    child: _CommunityMessageBubble(
+                      message: report.message!,
+                      mine: false,
+                      dense: true,
+                      showCreatedAt: true,
+                    ),
+                  ),
+                ],
+                if (detailText.isNotEmpty) ...[
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Moderator notu',
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w700,
+                      color: _CommunityUiTokens.textMuted,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  _SurfaceCard(
+                    padding: const EdgeInsets.all(14),
+                    color: _CommunityUiTokens.surfaceSoft,
+                    child: Text(
+                      detailText,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        height: 1.5,
+                        color: _CommunityUiTokens.text,
+                      ),
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 18),
+                Row(
+                  children: [
+                    Expanded(
+                      child: FilledButton.tonal(
+                        onPressed: () {
+                          Navigator.of(sheetContext).pop();
+                          _updateStatus(report);
+                        },
+                        child: const Text('Durumu guncelle'),
+                      ),
+                    ),
+                    if (widget.onOpenTarget != null &&
+                        report.message != null &&
+                        report.channel != null) ...[
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: FilledButton(
+                          onPressed: () {
+                            Navigator.of(sheetContext).pop();
+                            widget.onOpenTarget!(report);
+                          },
+                          style: FilledButton.styleFrom(
+                            backgroundColor: _CommunityUiTokens.text,
+                            foregroundColor: Colors.white,
+                          ),
+                          child: const Text('Mesaja git'),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<List<_CommunityReportSummary>>(
@@ -7167,6 +7812,15 @@ class _CommunityReportsInboxCardState
                                 ),
                               ),
                               const SizedBox(width: 10),
+                              TextButton(
+                                onPressed: () => _openDetail(report),
+                                style: TextButton.styleFrom(
+                                  visualDensity: VisualDensity.compact,
+                                  foregroundColor: _CommunityUiTokens.text,
+                                ),
+                                child: const Text('Detay'),
+                              ),
+                              const SizedBox(width: 6),
                               FilledButton.tonal(
                                 onPressed: busy
                                     ? null
@@ -8284,16 +8938,276 @@ class _CommunityDmRequestsCard extends StatelessWidget {
   }
 }
 
+class _CommunityInviteHistoryCard extends StatelessWidget {
+  const _CommunityInviteHistoryCard({
+    required this.invites,
+    required this.pendingInvites,
+    required this.historyInvites,
+  });
+
+  final List<_CommunityInviteSummary> invites;
+  final List<_CommunityInviteSummary> pendingInvites;
+  final List<_CommunityInviteSummary> historyInvites;
+
+  @override
+  Widget build(BuildContext context) {
+    return _SurfaceCard(
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const _CommunitySectionHeader(emoji: '✉️', title: 'Davet gecmisi'),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              _CommunityChip(label: 'Toplam ${invites.length}'),
+              _CommunityChip(label: 'Bekleyen ${pendingInvites.length}'),
+              _CommunityChip(label: 'Gecmis ${historyInvites.length}'),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (invites.isEmpty)
+            const Text(
+              'Gonderilmis community daveti yok.',
+              style: TextStyle(
+                fontSize: 13,
+                color: _CommunityUiTokens.textMuted,
+              ),
+            )
+          else ...[
+            if (pendingInvites.isNotEmpty) ...[
+              const Text(
+                'Bekleyen',
+                style: TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w700,
+                  color: _CommunityUiTokens.textMuted,
+                ),
+              ),
+              const SizedBox(height: 8),
+              ...List<Widget>.generate(pendingInvites.length, (index) {
+                final invite = pendingInvites[index];
+                return Padding(
+                  padding: EdgeInsets.only(
+                    bottom: index == pendingInvites.length - 1 ? 0 : 10,
+                  ),
+                  child: _CommunityInviteListTile(invite: invite),
+                );
+              }),
+            ],
+            if (historyInvites.isNotEmpty) ...[
+              if (pendingInvites.isNotEmpty) const SizedBox(height: 14),
+              const Text(
+                'Son durumlar',
+                style: TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w700,
+                  color: _CommunityUiTokens.textMuted,
+                ),
+              ),
+              const SizedBox(height: 8),
+              ...List<Widget>.generate(historyInvites.length, (index) {
+                final invite = historyInvites[index];
+                return Padding(
+                  padding: EdgeInsets.only(
+                    bottom: index == historyInvites.length - 1 ? 0 : 10,
+                  ),
+                  child: _CommunityInviteListTile(invite: invite),
+                );
+              }),
+            ],
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _CommunityInviteListTile extends StatelessWidget {
+  const _CommunityInviteListTile({required this.invite});
+
+  final _CommunityInviteSummary invite;
+
+  @override
+  Widget build(BuildContext context) {
+    final note = (invite.note ?? '').trim();
+    final username = (invite.invitedUser.username ?? '').trim();
+    final dateLabel = invite.status == 'pending'
+        ? _formatCommunityDate(invite.createdAt)
+        : _formatCommunityDate(invite.respondedAt ?? invite.createdAt);
+    return _SurfaceCard(
+      padding: const EdgeInsets.all(14),
+      color: _CommunityUiTokens.surfaceSoft,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  invite.invitedUser.displayName,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: _CommunityUiTokens.text,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              _CommunityChip(label: _communityInviteStatusLabel(invite.status)),
+            ],
+          ),
+          if (username.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              '@$username',
+              style: const TextStyle(
+                fontSize: 12.5,
+                color: _CommunityUiTokens.textMuted,
+              ),
+            ),
+          ],
+          const SizedBox(height: 6),
+          Text(
+            'Olusturma: $dateLabel',
+            style: const TextStyle(
+              fontSize: 12,
+              color: _CommunityUiTokens.textMuted,
+            ),
+          ),
+          if (note.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(
+              note,
+              style: const TextStyle(
+                fontSize: 12.5,
+                height: 1.45,
+                color: _CommunityUiTokens.text,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _CommunityBannedMembersCard extends StatelessWidget {
+  const _CommunityBannedMembersCard({
+    required this.items,
+    required this.onUnban,
+  });
+
+  final List<_CommunityBanSummary> items;
+  final ValueChanged<_CommunityBanSummary> onUnban;
+
+  @override
+  Widget build(BuildContext context) {
+    return _SurfaceCard(
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const _CommunitySectionHeader(emoji: '⛔', title: 'Aktif banlar'),
+          const SizedBox(height: 12),
+          if (items.isEmpty)
+            const Text(
+              'Aktif community ban kaydi yok.',
+              style: TextStyle(
+                fontSize: 13,
+                color: _CommunityUiTokens.textMuted,
+              ),
+            )
+          else
+            ...List<Widget>.generate(items.length, (index) {
+              final item = items[index];
+              final reason = (item.reason ?? '').trim();
+              return Padding(
+                padding: EdgeInsets.only(
+                  bottom: index == items.length - 1 ? 0 : 10,
+                ),
+                child: _SurfaceCard(
+                  padding: const EdgeInsets.all(14),
+                  color: _CommunityUiTokens.surfaceSoft,
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              item.user.displayName,
+                              style: const TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w700,
+                                color: _CommunityUiTokens.text,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              item.user.subtitle,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: _CommunityUiTokens.textMuted,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              'Ban: ${_formatCommunityDate(item.createdAt)}',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: _CommunityUiTokens.textMuted,
+                              ),
+                            ),
+                            if (reason.isNotEmpty) ...[
+                              const SizedBox(height: 8),
+                              Text(
+                                reason,
+                                style: const TextStyle(
+                                  fontSize: 12.5,
+                                  height: 1.45,
+                                  color: _CommunityUiTokens.text,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      FilledButton.tonal(
+                        onPressed: () => onUnban(item),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: Colors.white,
+                          foregroundColor: _CommunityUiTokens.text,
+                        ),
+                        child: const Text('Ban kaldir'),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }),
+        ],
+      ),
+    );
+  }
+}
+
 class _NotificationTile extends StatelessWidget {
   const _NotificationTile({
     required this.emoji,
     required this.title,
     required this.subtitle,
+    this.highlightMentions = false,
   });
 
   final String emoji;
   final String title;
   final String subtitle;
+  final bool highlightMentions;
 
   @override
   Widget build(BuildContext context) {
@@ -8316,21 +9230,28 @@ class _NotificationTile extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  title,
+                _CommunityTextWithMentions(
+                  text: title,
                   style: const TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w700,
                     color: _CommunityUiTokens.text,
                   ),
+                  mentionBackgroundColor: highlightMentions
+                      ? _CommunityUiTokens.success.withValues(alpha: 0.14)
+                      : null,
+                  mentionColor: _CommunityUiTokens.text,
                 ),
                 const SizedBox(height: 4),
-                Text(
-                  subtitle,
+                _CommunityTextWithMentions(
+                  text: subtitle,
                   style: const TextStyle(
                     fontSize: 12,
                     color: _CommunityUiTokens.textMuted,
                   ),
+                  mentionBackgroundColor: highlightMentions
+                      ? _CommunityUiTokens.success.withValues(alpha: 0.12)
+                      : null,
                 ),
               ],
             ),
@@ -8567,12 +9488,15 @@ class _CommunityTopicReplyTile extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 10),
-            Text(
-              reply.body,
+            _CommunityTextWithMentions(
+              text: reply.body,
               style: const TextStyle(
                 fontSize: 13,
                 height: 1.45,
                 color: _CommunityUiTokens.text,
+              ),
+              mentionBackgroundColor: _CommunityUiTokens.success.withValues(
+                alpha: 0.12,
               ),
             ),
           ],
@@ -8875,13 +9799,17 @@ class _CommunityMessageBubble extends StatelessWidget {
                     ),
                   ),
                 if ((message.text ?? '').trim().isNotEmpty)
-                  Text(
-                    message.text!.trim(),
+                  _CommunityTextWithMentions(
+                    text: message.text!.trim(),
                     style: TextStyle(
                       fontSize: bodyFontSize,
                       height: 1.42,
                       color: textColor,
                     ),
+                    mentionColor: textColor,
+                    mentionBackgroundColor: mine
+                        ? Colors.white.withValues(alpha: 0.14)
+                        : _CommunityUiTokens.success.withValues(alpha: 0.14),
                   ),
               ],
             ),
@@ -9292,6 +10220,154 @@ class _RuleTile extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+final RegExp _kCommunityMentionPattern = RegExp(
+  r'(^|[\s(])@([a-zA-Z0-9_]{3,32})\b',
+);
+final RegExp _kCommunityMentionDraftPattern = RegExp(
+  r'(^|[\s(])@([a-zA-Z0-9_]{0,32})$',
+);
+
+class _CommunityMentionQuery {
+  const _CommunityMentionQuery({
+    required this.query,
+    required this.start,
+    required this.end,
+  });
+
+  final String query;
+  final int start;
+  final int end;
+}
+
+class _CommunityTextWithMentions extends StatelessWidget {
+  const _CommunityTextWithMentions({
+    required this.text,
+    required this.style,
+    this.mentionColor,
+    this.mentionBackgroundColor,
+  });
+
+  final String text;
+  final TextStyle style;
+  final Color? mentionColor;
+  final Color? mentionBackgroundColor;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text.rich(
+      _buildCommunityMentionText(
+        text,
+        style: style,
+        mentionColor: mentionColor,
+        mentionBackgroundColor: mentionBackgroundColor,
+      ),
+    );
+  }
+}
+
+class _CommunityMentionSuggestionsCard extends StatelessWidget {
+  const _CommunityMentionSuggestionsCard({
+    required this.items,
+    required this.loading,
+    required this.onSelect,
+  });
+
+  final List<_CommunityMemberSummary> items;
+  final bool loading;
+  final ValueChanged<_CommunityMemberSummary> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!loading && items.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return _SurfaceCard(
+      padding: const EdgeInsets.all(10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            '@ mention',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: _CommunityUiTokens.textMuted,
+            ),
+          ),
+          const SizedBox(height: 8),
+          if (loading)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 10),
+              child: Center(child: CircularProgressIndicator()),
+            )
+          else
+            ...List<Widget>.generate(items.length, (index) {
+              final item = items[index];
+              final username = item.user.username?.trim() ?? '';
+              return InkWell(
+                onTap: username.isEmpty ? null : () => onSelect(item),
+                borderRadius: BorderRadius.circular(16),
+                child: Ink(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 36,
+                        height: 36,
+                        decoration: BoxDecoration(
+                          color: _CommunityUiTokens.surfaceSoft,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        alignment: Alignment.center,
+                        child: Text(
+                          item.user.displayName.trim().isNotEmpty
+                              ? item.user.displayName.trim()[0].toUpperCase()
+                              : '@',
+                          style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            color: _CommunityUiTokens.text,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              item.user.displayName,
+                              style: const TextStyle(
+                                fontSize: 13.5,
+                                fontWeight: FontWeight.w700,
+                                color: _CommunityUiTokens.text,
+                              ),
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              '@$username',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: _CommunityUiTokens.textMuted,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }),
+        ],
       ),
     );
   }
@@ -9778,6 +10854,65 @@ _CommunityMessageSummary _copyCommunityMessage(
   );
 }
 
+TextSpan _buildCommunityMentionText(
+  String rawText, {
+  required TextStyle style,
+  Color? mentionColor,
+  Color? mentionBackgroundColor,
+}) {
+  final text = rawText.trim();
+  final spans = <InlineSpan>[];
+  var cursor = 0;
+  for (final match in _kCommunityMentionPattern.allMatches(text)) {
+    final username = match.group(2)?.trim();
+    if (username == null || username.isEmpty) continue;
+    final mentionStart = match.start + (match.group(1)?.length ?? 0);
+    if (mentionStart > cursor) {
+      spans.add(
+        TextSpan(text: text.substring(cursor, mentionStart), style: style),
+      );
+    }
+    spans.add(
+      TextSpan(
+        text: '@$username',
+        style: style.copyWith(
+          fontWeight: FontWeight.w700,
+          color: mentionColor ?? style.color,
+          backgroundColor: mentionBackgroundColor,
+        ),
+      ),
+    );
+    cursor = match.end;
+  }
+  if (cursor < text.length) {
+    spans.add(TextSpan(text: text.substring(cursor), style: style));
+  }
+  if (spans.isEmpty) {
+    spans.add(TextSpan(text: text, style: style));
+  }
+  return TextSpan(style: style, children: spans);
+}
+
+_CommunityMentionQuery? _extractCommunityMentionQuery(TextEditingValue value) {
+  final text = value.text;
+  if (text.trim().isEmpty) return null;
+  final caret = value.selection.baseOffset >= 0
+      ? value.selection.baseOffset
+      : text.length;
+  if (caret < 0 || caret > text.length) return null;
+  final prefix = text.substring(0, caret);
+  final match = _kCommunityMentionDraftPattern.firstMatch(prefix);
+  if (match == null) return null;
+  final query = (match.group(2) ?? '').trim();
+  final start = prefix.length - query.length - 1;
+  if (start < 0) return null;
+  return _CommunityMentionQuery(
+    query: query.toLowerCase(),
+    start: start,
+    end: caret,
+  );
+}
+
 String _labelForVisibility(String value) {
   switch (value) {
     case 'request_only':
@@ -9812,6 +10947,17 @@ String _communityReportStatusLabel(String value) {
       return 'Kapandi';
     default:
       return 'Acik';
+  }
+}
+
+String _communityInviteStatusLabel(String value) {
+  switch (value) {
+    case 'accepted':
+      return 'Kabul edildi';
+    case 'rejected':
+      return 'Reddedildi';
+    default:
+      return 'Bekliyor';
   }
 }
 
