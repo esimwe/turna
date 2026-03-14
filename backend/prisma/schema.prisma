@@ -143,6 +143,19 @@ enum CommunityNotificationType {
   DM_REQUEST
 }
 
+enum CommunityJoinRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELED
+}
+
+enum CommunityInviteStatus {
+  PENDING
+  ACCEPTED
+  REVOKED
+}
+
 model User {
   id                    String             @id @default(uuid())
   username              String?            @unique
@@ -189,6 +202,10 @@ model User {
   communityTopics       CommunityTopic[]     @relation("CommunityTopicAuthor")
   communityTopicReplies CommunityTopicReply[] @relation("CommunityTopicReplyAuthor")
   communityNotifications CommunityNotification[]
+  communityJoinRequests CommunityJoinRequest[] @relation("CommunityJoinRequester")
+  reviewedCommunityJoinRequests CommunityJoinRequest[] @relation("CommunityJoinReviewer")
+  communityInvitesReceived CommunityInvite[] @relation("CommunityInviteRecipient")
+  communityInvitesSent   CommunityInvite[]   @relation("CommunityInviteCreator")
 
   @@index([accountStatus])
 }
@@ -536,6 +553,8 @@ model Community {
   updatedAt         DateTime              @updatedAt
 
   memberships       CommunityMembership[]
+  joinRequests      CommunityJoinRequest[]
+  invites           CommunityInvite[]
   channels          CommunityChannel[]
   topics            CommunityTopic[]
 
@@ -554,6 +573,46 @@ model CommunityMembership {
   @@id([communityId, userId])
   @@index([userId, joinedAt(sort: Desc)])
   @@index([communityId, role])
+}
+
+model CommunityJoinRequest {
+  id               String                     @id @default(uuid())
+  communityId      String
+  requesterUserId  String
+  note             String?
+  status           CommunityJoinRequestStatus @default(PENDING)
+  reviewedByUserId String?
+  reviewedAt       DateTime?
+  createdAt        DateTime                   @default(now())
+  updatedAt        DateTime                   @updatedAt
+
+  community        Community                  @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  requester        User                       @relation("CommunityJoinRequester", fields: [requesterUserId], references: [id], onDelete: Cascade)
+  reviewedBy       User?                      @relation("CommunityJoinReviewer", fields: [reviewedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([communityId, status, createdAt(sort: Desc)])
+  @@index([requesterUserId, createdAt(sort: Desc)])
+  @@unique([communityId, requesterUserId, status])
+}
+
+model CommunityInvite {
+  id            String                @id @default(uuid())
+  communityId   String
+  invitedUserId String
+  createdByUserId String
+  note          String?
+  status        CommunityInviteStatus @default(PENDING)
+  respondedAt   DateTime?
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+
+  community     Community             @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  invitedUser   User                  @relation("CommunityInviteRecipient", fields: [invitedUserId], references: [id], onDelete: Cascade)
+  createdBy     User                  @relation("CommunityInviteCreator", fields: [createdByUserId], references: [id], onDelete: Cascade)
+
+  @@index([communityId, status, createdAt(sort: Desc)])
+  @@index([invitedUserId, status, createdAt(sort: Desc)])
+  @@unique([communityId, invitedUserId, status])
 }
 
 model CommunityChannel {
