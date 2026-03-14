@@ -13,6 +13,8 @@ class ChatPreview {
     this.isMuted = false,
     this.isBlockedByMe = false,
     this.isArchived = false,
+    this.isFavorited = false,
+    this.isLocked = false,
     this.folderId,
     this.folderName,
   });
@@ -28,6 +30,8 @@ class ChatPreview {
   final bool isMuted;
   final bool isBlockedByMe;
   final bool isArchived;
+  final bool isFavorited;
+  final bool isLocked;
   final String? folderId;
   final String? folderName;
 }
@@ -2144,6 +2148,8 @@ class ChatApi {
           isMuted: map['isMuted'] == true,
           isBlockedByMe: map['isBlockedByMe'] == true,
           isArchived: map['isArchived'] == true,
+          isFavorited: map['isFavorited'] == true,
+          isLocked: map['isLocked'] == true,
           folderId: _nullableString(map['folderId']),
           folderName: _nullableString(map['folderName']),
         );
@@ -2442,6 +2448,62 @@ class ChatApi {
     } catch (_) {
       throw TurnaApiException(
         archived ? 'Sohbet arşivlenemedi.' : 'Sohbet arşivden çıkarılamadı.',
+      );
+    }
+  }
+
+  static Future<bool> setChatFavorited(
+    AuthSession session, {
+    required String chatId,
+    required bool favorited,
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse('$kBackendBaseUrl/api/chats/$chatId/favorite'),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'favorited': favorited}),
+      );
+      _throwIfApiError(res);
+
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = map['data'] as Map<String, dynamic>? ?? const {};
+      return data['favorited'] == true;
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException(
+        favorited ? 'Sohbet favorilere eklenemedi.' : 'Sohbet favorilerden çıkarılamadı.',
+      );
+    }
+  }
+
+  static Future<bool> setChatLocked(
+    AuthSession session, {
+    required String chatId,
+    required bool locked,
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse('$kBackendBaseUrl/api/chats/$chatId/lock'),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'locked': locked}),
+      );
+      _throwIfApiError(res);
+
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = map['data'] as Map<String, dynamic>? ?? const {};
+      return data['locked'] == true;
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException(
+        locked ? 'Sohbet kilitlenemedi.' : 'Sohbet kilidi kaldırılamadı.',
       );
     }
   }

@@ -2,6 +2,112 @@ part of '../main.dart';
 
 enum TurnaShellMode { turna, community }
 
+final LocalAuthentication _turnaChatLocalAuth = LocalAuthentication();
+const String _kTurnaAppLockEnabledPrefKey = 'turna_app_lock_enabled';
+final ValueNotifier<bool> kTurnaAppLockEnabledNotifier = ValueNotifier<bool>(
+  false,
+);
+
+Future<bool> loadTurnaAppLockEnabledPreference() async {
+  final prefs = await SharedPreferences.getInstance();
+  final enabled = prefs.getBool(_kTurnaAppLockEnabledPrefKey) ?? false;
+  if (kTurnaAppLockEnabledNotifier.value != enabled) {
+    kTurnaAppLockEnabledNotifier.value = enabled;
+  }
+  return enabled;
+}
+
+Future<void> setTurnaAppLockEnabledPreference(bool enabled) async {
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.setBool(_kTurnaAppLockEnabledPrefKey, enabled);
+  if (kTurnaAppLockEnabledNotifier.value != enabled) {
+    kTurnaAppLockEnabledNotifier.value = enabled;
+  }
+}
+
+String _turnaDeviceUnlockMethodLabel() {
+  if (Platform.isIOS) {
+    return 'Face ID veya cihaz sifresi';
+  }
+  if (Platform.isAndroid) {
+    return 'parmak izi veya ekran kilidi';
+  }
+  return 'cihaz dogrulamasi';
+}
+
+Future<bool> _authenticateTurnaDeviceAccess(
+  BuildContext context, {
+  required String localizedReason,
+  required String unsupportedMessage,
+}) async {
+  try {
+    final supported = await _turnaChatLocalAuth.isDeviceSupported();
+    if (!supported) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(unsupportedMessage)));
+      }
+      return false;
+    }
+
+    return await _turnaChatLocalAuth.authenticate(
+      localizedReason: localizedReason,
+      options: const AuthenticationOptions(
+        biometricOnly: false,
+        stickyAuth: true,
+        sensitiveTransaction: true,
+      ),
+    );
+  } on PlatformException catch (error) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            error.message?.trim().isNotEmpty == true
+                ? error.message!.trim()
+                : 'Cihaz dogrulamasi basarisiz oldu.',
+          ),
+        ),
+      );
+    }
+    return false;
+  } catch (_) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Cihaz dogrulamasi su anda yapilamiyor.')),
+      );
+    }
+    return false;
+  }
+}
+
+List<ChatPreview> _prioritizeFavoritedChats(Iterable<ChatPreview> chats) {
+  final favorited = <ChatPreview>[];
+  final regular = <ChatPreview>[];
+  for (final chat in chats) {
+    if (chat.isFavorited) {
+      favorited.add(chat);
+    } else {
+      regular.add(chat);
+    }
+  }
+  return [...favorited, ...regular];
+}
+
+Future<bool> _authenticateLockedChatAccess(
+  BuildContext context, {
+  required String chatName,
+  required String actionLabel,
+}) async {
+  return _authenticateTurnaDeviceAccess(
+    context,
+    localizedReason:
+        '"$chatName" sohbetini $actionLabel cihaz dogrulamasi gerekiyor.',
+    unsupportedMessage: 'Bu cihazda sohbet kilidi desteklenmiyor.',
+  );
+}
+
 class TurnaShellHost extends StatefulWidget {
   const TurnaShellHost({
     super.key,
@@ -18,12 +124,112 @@ class TurnaShellHost extends StatefulWidget {
   State<TurnaShellHost> createState() => _TurnaShellHostState();
 }
 
-class _TurnaShellHostState extends State<TurnaShellHost> {
+class _TurnaShellHostState extends State<TurnaShellHost>
+    with WidgetsBindingObserver {
   static const Duration _communityReturnLock = Duration(milliseconds: 420);
 
   final GlobalKey<_MainTabsState> _mainTabsKey = GlobalKey<_MainTabsState>();
   TurnaShellMode _mode = TurnaShellMode.turna;
   DateTime? _communityTapLockedUntil;
+  bool _appLockEnabled = false;
+  bool _appLockReady = false;
+  bool _appLockBusy = false;
+  bool _appUnlocked = true;
+  bool _needsAppRelock = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    kTurnaAppLockEnabledNotifier.addListener(_handleAppLockPreferenceChanged);
+    unawaited(_loadAppLockPreference());
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    kTurnaAppLockEnabledNotifier.removeListener(
+      _handleAppLockPreferenceChanged,
+    );
+    super.dispose();
+  }
+
+  Future<void> _loadAppLockPreference() async {
+    final enabled = await loadTurnaAppLockEnabledPreference();
+    if (!mounted) return;
+    setState(() {
+      _appLockEnabled = enabled;
+      _appLockReady = true;
+      _appUnlocked = !enabled;
+      _needsAppRelock = enabled;
+    });
+    if (enabled) {
+      unawaited(_promptAppUnlock());
+    }
+  }
+
+  void _handleAppLockPreferenceChanged() {
+    final enabled = kTurnaAppLockEnabledNotifier.value;
+    if (!mounted) return;
+    setState(() {
+      _appLockEnabled = enabled;
+      _appLockReady = true;
+      if (!enabled) {
+        _appUnlocked = true;
+        _appLockBusy = false;
+        _needsAppRelock = false;
+      } else {
+        _appUnlocked = true;
+        _needsAppRelock = false;
+      }
+    });
+  }
+
+  Future<void> _promptAppUnlock() async {
+    if (!_appLockEnabled || _appLockBusy || _appUnlocked || !_appLockReady) {
+      return;
+    }
+    setState(() => _appLockBusy = true);
+    final authenticated = await _authenticateTurnaDeviceAccess(
+      context,
+      localizedReason:
+          'Turna uygulamasini acmak icin cihaz dogrulamasi gerekiyor.',
+      unsupportedMessage: 'Bu cihazda uygulama kilidi desteklenmiyor.',
+    );
+    if (!mounted) return;
+    setState(() {
+      _appLockBusy = false;
+      if (authenticated) {
+        _appUnlocked = true;
+        _needsAppRelock = false;
+      } else {
+        _appUnlocked = false;
+        _needsAppRelock = true;
+      }
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (!_appLockEnabled || !_appLockReady) return;
+
+    if (state == AppLifecycleState.resumed) {
+      if (_needsAppRelock || !_appUnlocked) {
+        unawaited(_promptAppUnlock());
+      }
+      return;
+    }
+
+    if ((state == AppLifecycleState.hidden ||
+            state == AppLifecycleState.paused ||
+            state == AppLifecycleState.detached) &&
+        !_appLockBusy) {
+      setState(() {
+        _appUnlocked = false;
+        _needsAppRelock = true;
+      });
+    }
+  }
 
   void _openCommunity() {
     final now = DateTime.now();
@@ -86,30 +292,131 @@ class _TurnaShellHostState extends State<TurnaShellHost> {
           _handlePopAttempt();
         }
       },
-      child: IndexedStack(
-        index: _mode == TurnaShellMode.turna ? 0 : 1,
+      child: Stack(
         children: [
-          TickerMode(
-            enabled: _mode == TurnaShellMode.turna,
-            child: MainTabs(
-              key: _mainTabsKey,
-              session: widget.session,
-              onSessionUpdated: widget.onSessionUpdated,
-              onLogout: widget.onLogout,
-              onCommunitySelected: _openCommunity,
-            ),
+          IndexedStack(
+            index: _mode == TurnaShellMode.turna ? 0 : 1,
+            children: [
+              TickerMode(
+                enabled: _mode == TurnaShellMode.turna,
+                child: MainTabs(
+                  key: _mainTabsKey,
+                  session: widget.session,
+                  onSessionUpdated: widget.onSessionUpdated,
+                  onLogout: widget.onLogout,
+                  onCommunitySelected: _openCommunity,
+                ),
+              ),
+              TickerMode(
+                enabled: _mode == TurnaShellMode.community,
+                child: CommunityShellPreviewPage(
+                  authToken: widget.session.token,
+                  backendBaseUrl: kBackendBaseUrl,
+                  currentUserId: widget.session.userId,
+                  onTurnaTap: _openTurna,
+                  onProfileTap: _openTurnaProfile,
+                ),
+              ),
+            ],
           ),
-          TickerMode(
-            enabled: _mode == TurnaShellMode.community,
-            child: CommunityShellPreviewPage(
-              authToken: widget.session.token,
-              backendBaseUrl: kBackendBaseUrl,
-              currentUserId: widget.session.userId,
-              onTurnaTap: _openTurna,
-              onProfileTap: _openTurnaProfile,
+          if (_appLockReady && _appLockEnabled && !_appUnlocked)
+            Positioned.fill(
+              child: _TurnaAppLockOverlay(
+                busy: _appLockBusy,
+                unlockMethodLabel: _turnaDeviceUnlockMethodLabel(),
+                onUnlock: _promptAppUnlock,
+              ),
             ),
-          ),
         ],
+      ),
+    );
+  }
+}
+
+class _TurnaAppLockOverlay extends StatelessWidget {
+  const _TurnaAppLockOverlay({
+    required this.busy,
+    required this.unlockMethodLabel,
+    required this.onUnlock,
+  });
+
+  final bool busy;
+  final String unlockMethodLabel;
+  final Future<void> Function() onUnlock;
+
+  @override
+  Widget build(BuildContext context) {
+    return ColoredBox(
+      color: TurnaColors.backgroundSoft,
+      child: SafeArea(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 28),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 74,
+                  height: 74,
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(24),
+                    boxShadow: const [TurnaColors.shadowSoft],
+                  ),
+                  child: const Icon(
+                    Icons.lock_outline_rounded,
+                    size: 34,
+                    color: TurnaColors.primary,
+                  ),
+                ),
+                const SizedBox(height: 20),
+                const Text(
+                  'Uygulama kilitli',
+                  style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w700,
+                    color: TurnaColors.text,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Turna\'yi acmak icin $unlockMethodLabel kullan.',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 14.5,
+                    height: 1.45,
+                    color: TurnaColors.textMuted,
+                  ),
+                ),
+                const SizedBox(height: 22),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton(
+                    onPressed: busy ? null : onUnlock,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: TurnaColors.primary,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 15),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                    ),
+                    child: busy
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Text('Turna\'yi ac'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -711,6 +1018,75 @@ class _ChatsPageState extends State<ChatsPage> {
     }
   }
 
+  Future<void> _toggleFavoriteChat(ChatPreview chat) async {
+    if (_bulkActionBusy) return;
+    setState(() => _bulkActionBusy = true);
+    try {
+      final favorited = await ChatApi.setChatFavorited(
+        widget.session,
+        chatId: chat.chatId,
+        favorited: !chat.isFavorited,
+      );
+      if (!mounted) return;
+      setState(() {
+        _bulkActionBusy = false;
+        _scheduleInboxReload();
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            favorited
+                ? '"${chat.name}" favorilere eklendi.'
+                : '"${chat.name}" favorilerden cikarildi.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _bulkActionBusy = false);
+      _handleActionError(error);
+    }
+  }
+
+  Future<void> _toggleLockChat(ChatPreview chat) async {
+    if (_bulkActionBusy) return;
+    final authenticated = await _authenticateLockedChatAccess(
+      context,
+      chatName: chat.name,
+      actionLabel: chat.isLocked
+          ? 'kilidini kaldirmak icin'
+          : 'kilitlemek icin',
+    );
+    if (!mounted || !authenticated) return;
+
+    setState(() => _bulkActionBusy = true);
+    try {
+      final locked = await ChatApi.setChatLocked(
+        widget.session,
+        chatId: chat.chatId,
+        locked: !chat.isLocked,
+      );
+      if (!mounted) return;
+      setState(() {
+        _bulkActionBusy = false;
+        _scheduleInboxReload();
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            locked
+                ? '"${chat.name}" kilitlendi.'
+                : '"${chat.name}" kilidi kaldirildi.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _bulkActionBusy = false);
+      _handleActionError(error);
+    }
+  }
+
   Future<String?> _promptFolderName() async {
     final controller = TextEditingController();
     final name = await showDialog<String>(
@@ -1060,13 +1436,55 @@ class _ChatsPageState extends State<ChatsPage> {
                 },
               ),
               _ChatListActionTile(
+                icon: chat.isArchived
+                    ? Icons.unarchive_outlined
+                    : Icons.archive_outlined,
+                title: chat.isArchived ? 'Arşivden çıkar' : 'Arşive at',
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  _toggleArchiveChat(chat);
+                },
+              ),
+              _ChatListActionTile(
+                icon: chat.isLocked
+                    ? Icons.lock_open_outlined
+                    : Icons.lock_outline,
+                title: chat.isLocked
+                    ? 'Sohbet kilidini kaldir'
+                    : 'Sohbeti kilitle',
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  _toggleLockChat(chat);
+                },
+              ),
+              _ChatListActionTile(
+                icon: chat.isFavorited
+                    ? Icons.star_border_rounded
+                    : Icons.star_outline_rounded,
+                title: chat.isFavorited
+                    ? 'Favorilerden cikar'
+                    : 'Favorilere ekle',
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  _toggleFavoriteChat(chat);
+                },
+              ),
+              _ChatListActionTile(
                 icon: chat.isMuted
                     ? Icons.notifications_active_outlined
                     : Icons.notifications_off_outlined,
-                title: chat.isMuted ? 'Sessizi kapat' : 'Sessiz',
+                title: chat.isMuted ? 'Sessizi kapat' : 'Sessize al',
                 onTap: () {
                   Navigator.of(sheetContext).pop();
                   _toggleChatMute(chat);
+                },
+              ),
+              _ChatListActionTile(
+                icon: Icons.folder_open_outlined,
+                title: 'Kategori ata',
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  _assignChatFolder(chat, folders);
                 },
               ),
               if (chat.peerId != null)
@@ -1083,24 +1501,6 @@ class _ChatsPageState extends State<ChatsPage> {
                     _toggleBlockChat(chat);
                   },
                 ),
-              _ChatListActionTile(
-                icon: chat.isArchived
-                    ? Icons.unarchive_outlined
-                    : Icons.archive_outlined,
-                title: chat.isArchived ? 'Arşivden çıkar' : 'Arşive at',
-                onTap: () {
-                  Navigator.of(sheetContext).pop();
-                  _toggleArchiveChat(chat);
-                },
-              ),
-              _ChatListActionTile(
-                icon: Icons.folder_open_outlined,
-                title: 'Kategori ata',
-                onTap: () {
-                  Navigator.of(sheetContext).pop();
-                  _assignChatFolder(chat, folders);
-                },
-              ),
               _ChatListActionTile(
                 icon: Icons.layers_clear_outlined,
                 title: 'Sohbeti temizle',
@@ -1249,8 +1649,12 @@ class _ChatsPageState extends State<ChatsPage> {
             widget.onUnreadChanged?.call(unreadTotal);
           });
 
-          final archivedChats = chats.where((chat) => chat.isArchived).toList();
-          final activeChats = chats.where((chat) => !chat.isArchived).toList();
+          final archivedChats = _prioritizeFavoritedChats(
+            chats.where((chat) => chat.isArchived),
+          );
+          final activeChats = _prioritizeFavoritedChats(
+            chats.where((chat) => !chat.isArchived),
+          );
           final scopedChats = switch (_selectedFilterId) {
             _allChatsFilterId => activeChats,
             _ =>
@@ -1261,8 +1665,11 @@ class _ChatsPageState extends State<ChatsPage> {
           final query = _searchController.text.trim().toLowerCase();
           final filteredChats = scopedChats.where((chat) {
             if (query.isEmpty) return true;
+            final searchableMessage = chat.isLocked
+                ? ''
+                : chat.message.toLowerCase();
             return chat.name.toLowerCase().contains(query) ||
-                chat.message.toLowerCase().contains(query);
+                searchableMessage.contains(query);
           }).toList();
           final archivedTopVisible = archivedChats.isNotEmpty;
           final filtersVisible = folders.isNotEmpty;
@@ -1532,6 +1939,7 @@ class ArchivedChatsPage extends StatefulWidget {
 
 class _ArchivedChatsPageState extends State<ArchivedChatsPage> {
   int _refreshTick = 0;
+  bool _actionBusy = false;
 
   @override
   void initState() {
@@ -1549,6 +1957,341 @@ class _ArchivedChatsPageState extends State<ArchivedChatsPage> {
   void _onContactsChanged() {
     if (!mounted) return;
     setState(() => _refreshTick++);
+  }
+
+  void _scheduleRefresh() {
+    _refreshTick++;
+  }
+
+  void _handleActionError(Object error) {
+    if (error is TurnaUnauthorizedException) {
+      widget.onSessionExpired();
+      return;
+    }
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(error.toString())));
+  }
+
+  Future<void> _toggleArchiveChat(ChatPreview chat) async {
+    if (_actionBusy) return;
+    setState(() => _actionBusy = true);
+    try {
+      final archived = await ChatApi.setChatArchived(
+        widget.session,
+        chatId: chat.chatId,
+        archived: !chat.isArchived,
+      );
+      if (!mounted) return;
+      setState(() {
+        _actionBusy = false;
+        _scheduleRefresh();
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            archived
+                ? '"${chat.name}" arşive taşındı.'
+                : '"${chat.name}" arşivden çıkarıldı.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _actionBusy = false);
+      _handleActionError(error);
+    }
+  }
+
+  Future<void> _toggleFavoriteChat(ChatPreview chat) async {
+    if (_actionBusy) return;
+    setState(() => _actionBusy = true);
+    try {
+      final favorited = await ChatApi.setChatFavorited(
+        widget.session,
+        chatId: chat.chatId,
+        favorited: !chat.isFavorited,
+      );
+      if (!mounted) return;
+      setState(() {
+        _actionBusy = false;
+        _scheduleRefresh();
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            favorited
+                ? '"${chat.name}" favorilere eklendi.'
+                : '"${chat.name}" favorilerden cikarildi.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _actionBusy = false);
+      _handleActionError(error);
+    }
+  }
+
+  Future<void> _toggleLockChat(ChatPreview chat) async {
+    if (_actionBusy) return;
+    final authenticated = await _authenticateLockedChatAccess(
+      context,
+      chatName: chat.name,
+      actionLabel: chat.isLocked
+          ? 'kilidini kaldirmak icin'
+          : 'kilitlemek icin',
+    );
+    if (!mounted || !authenticated) return;
+
+    setState(() => _actionBusy = true);
+    try {
+      final locked = await ChatApi.setChatLocked(
+        widget.session,
+        chatId: chat.chatId,
+        locked: !chat.isLocked,
+      );
+      if (!mounted) return;
+      setState(() {
+        _actionBusy = false;
+        _scheduleRefresh();
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            locked
+                ? '"${chat.name}" kilitlendi.'
+                : '"${chat.name}" kilidi kaldirildi.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _actionBusy = false);
+      _handleActionError(error);
+    }
+  }
+
+  Future<void> _toggleBlockChat(ChatPreview chat) async {
+    if (_actionBusy || chat.peerId == null) return;
+
+    final willBlock = !chat.isBlockedByMe;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(willBlock ? 'Kişiyi engelle' : 'Engeli kaldır'),
+        content: Text(
+          willBlock
+              ? '"${chat.name}" artık sana mesaj gönderemez ve seni arayamaz.'
+              : '"${chat.name}" ile iletişim yeniden açılsın mı?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Vazgeç'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: Text(willBlock ? 'Engelle' : 'Kaldır'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    setState(() => _actionBusy = true);
+    try {
+      final blocked = await ChatApi.setChatBlocked(
+        widget.session,
+        chatId: chat.chatId,
+        blocked: willBlock,
+      );
+      if (!mounted) return;
+      setState(() {
+        _actionBusy = false;
+        _scheduleRefresh();
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            blocked
+                ? '"${chat.name}" engellendi.'
+                : '"${chat.name}" engeli kaldırıldı.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _actionBusy = false);
+      _handleActionError(error);
+    }
+  }
+
+  Future<void> _clearChat(ChatPreview chat) async {
+    if (_actionBusy) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Sohbeti temizle'),
+        content: Text(
+          '"${chat.name}" sohbetinin içeriği bu cihazda temizlenecek. Karşı tarafta kalmaya devam edecek.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Vazgeç'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Temizle'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    setState(() => _actionBusy = true);
+    try {
+      await ChatApi.clearChat(widget.session, chat.chatId);
+      if (!mounted) return;
+      setState(() {
+        _actionBusy = false;
+        _scheduleRefresh();
+      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('"${chat.name}" temizlendi.')));
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _actionBusy = false);
+      _handleActionError(error);
+    }
+  }
+
+  Future<void> _deleteSingleChat(ChatPreview chat) async {
+    if (_actionBusy) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Sohbeti sil'),
+        content: Text(
+          '"${chat.name}" sohbeti sadece senden silinecek. Karsi tarafta kalmaya devam edecek.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Vazgeç'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Sil'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    setState(() => _actionBusy = true);
+    try {
+      final deletedCount = await ChatApi.deleteChats(widget.session, [
+        chat.chatId,
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _actionBusy = false;
+        _scheduleRefresh();
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            deletedCount > 0 ? '"${chat.name}" silindi.' : 'Sohbet silinemedi.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _actionBusy = false);
+      _handleActionError(error);
+    }
+  }
+
+  Future<void> _showChatActions(ChatPreview chat) async {
+    if (_actionBusy) return;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.white,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _ChatListActionTile(
+              icon: Icons.unarchive_outlined,
+              title: 'Arşivden çıkar',
+              onTap: () {
+                Navigator.of(sheetContext).pop();
+                _toggleArchiveChat(chat);
+              },
+            ),
+            _ChatListActionTile(
+              icon: chat.isLocked
+                  ? Icons.lock_open_outlined
+                  : Icons.lock_outline,
+              title: chat.isLocked
+                  ? 'Sohbet kilidini kaldir'
+                  : 'Sohbeti kilitle',
+              onTap: () {
+                Navigator.of(sheetContext).pop();
+                _toggleLockChat(chat);
+              },
+            ),
+            _ChatListActionTile(
+              icon: chat.isFavorited
+                  ? Icons.star_border_rounded
+                  : Icons.star_outline_rounded,
+              title: chat.isFavorited
+                  ? 'Favorilerden cikar'
+                  : 'Favorilere ekle',
+              onTap: () {
+                Navigator.of(sheetContext).pop();
+                _toggleFavoriteChat(chat);
+              },
+            ),
+            if (chat.peerId != null)
+              _ChatListActionTile(
+                icon: chat.isBlockedByMe
+                    ? Icons.person_add_alt_1_outlined
+                    : Icons.block_outlined,
+                title: chat.isBlockedByMe ? 'Engeli kaldır' : 'Kişiyi engelle',
+                destructive: !chat.isBlockedByMe,
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  _toggleBlockChat(chat);
+                },
+              ),
+            _ChatListActionTile(
+              icon: Icons.layers_clear_outlined,
+              title: 'Sohbeti temizle',
+              onTap: () {
+                Navigator.of(sheetContext).pop();
+                _clearChat(chat);
+              },
+            ),
+            _ChatListActionTile(
+              icon: Icons.delete_outline,
+              title: 'Sohbeti sil',
+              destructive: true,
+              onTap: () {
+                Navigator.of(sheetContext).pop();
+                _deleteSingleChat(chat);
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -1588,9 +2331,9 @@ class _ArchivedChatsPageState extends State<ArchivedChatsPage> {
           final inbox =
               snapshot.data ??
               ChatInboxData(chats: const [], folders: const []);
-          final archivedChats = inbox.chats
-              .where((chat) => chat.isArchived)
-              .toList();
+          final archivedChats = _prioritizeFavoritedChats(
+            inbox.chats.where((chat) => chat.isArchived),
+          );
 
           return RefreshIndicator(
             onRefresh: () async => setState(() => _refreshTick++),
@@ -1628,6 +2371,7 @@ class _ArchivedChatsPageState extends State<ArchivedChatsPage> {
                             ),
                           );
                         },
+                        onLongPress: () => _showChatActions(chat),
                       );
                     },
                   ),
@@ -1662,6 +2406,7 @@ class _ChatPreviewListTile extends StatelessWidget {
         : chat.unreadCount > 0
         ? TurnaColors.chatUnreadBg
         : Colors.transparent;
+    final subtitleText = chat.isLocked ? 'Sohbet kilitli' : chat.message;
     return Material(
       color: tileColor,
       child: InkWell(
@@ -1719,16 +2464,38 @@ class _ChatPreviewListTile extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Expanded(
-                              child: Text(
-                                chat.name,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w700,
-                                  color: TurnaColors.text,
-                                  height: 1.1,
-                                ),
+                              child: Row(
+                                children: [
+                                  Flexible(
+                                    child: Text(
+                                      chat.name,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w700,
+                                        color: TurnaColors.text,
+                                        height: 1.1,
+                                      ),
+                                    ),
+                                  ),
+                                  if (chat.isFavorited) ...[
+                                    const SizedBox(width: 6),
+                                    const Icon(
+                                      Icons.star_rounded,
+                                      size: 14,
+                                      color: Color(0xFFDAA520),
+                                    ),
+                                  ],
+                                  if (chat.isLocked) ...[
+                                    const SizedBox(width: 5),
+                                    const Icon(
+                                      Icons.lock_outline,
+                                      size: 13,
+                                      color: TurnaColors.textSoft,
+                                    ),
+                                  ],
+                                ],
                               ),
                             ),
                             const SizedBox(width: 10),
@@ -1736,7 +2503,7 @@ class _ChatPreviewListTile extends StatelessWidget {
                           ],
                         ),
                         const SizedBox(height: 4),
-                        _ChatPreviewSubtitle(text: chat.message),
+                        _ChatPreviewSubtitle(text: subtitleText),
                       ],
                     ),
                   ),
@@ -2011,13 +2778,66 @@ PageRoute<void> buildChatRoomRoute({
       name: kChatRoomRouteName,
       arguments: {'chatId': chat.chatId},
     ),
-    builder: (_) => ChatRoomPage(
+    builder: (_) => _LockedChatAccessGate(
       chat: chat,
-      session: session,
-      callCoordinator: callCoordinator,
-      onSessionExpired: onSessionExpired,
+      child: ChatRoomPage(
+        chat: chat,
+        session: session,
+        callCoordinator: callCoordinator,
+        onSessionExpired: onSessionExpired,
+      ),
     ),
   );
+}
+
+class _LockedChatAccessGate extends StatefulWidget {
+  const _LockedChatAccessGate({required this.chat, required this.child});
+
+  final ChatPreview chat;
+  final Widget child;
+
+  @override
+  State<_LockedChatAccessGate> createState() => _LockedChatAccessGateState();
+}
+
+class _LockedChatAccessGateState extends State<_LockedChatAccessGate> {
+  bool _authorized = false;
+  bool _authStarted = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _authorized = !widget.chat.isLocked;
+    if (!_authorized) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _authenticate();
+      });
+    }
+  }
+
+  Future<void> _authenticate() async {
+    if (_authStarted || !mounted || _authorized) return;
+    _authStarted = true;
+    final authenticated = await _authenticateLockedChatAccess(
+      context,
+      chatName: widget.chat.name,
+      actionLabel: 'acmak icin',
+    );
+    if (!mounted) return;
+    if (authenticated) {
+      setState(() => _authorized = true);
+      return;
+    }
+    Navigator.of(context).maybePop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_authorized) {
+      return widget.child;
+    }
+    return const Scaffold(body: Center(child: CircularProgressIndicator()));
+  }
 }
 
 ChatPreview buildDirectChatPreviewForCall(

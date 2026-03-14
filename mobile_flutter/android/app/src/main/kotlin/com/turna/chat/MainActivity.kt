@@ -11,14 +11,14 @@ import android.provider.MediaStore
 import android.telephony.TelephonyManager
 import android.view.WindowManager
 import androidx.core.content.FileProvider
-import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import me.leolin.shortcutbadger.ShortcutBadger
 import java.io.File
 import java.util.Locale
 
-class MainActivity : FlutterActivity() {
+class MainActivity : FlutterFragmentActivity() {
     private var proximityWakeLock: PowerManager.WakeLock? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {

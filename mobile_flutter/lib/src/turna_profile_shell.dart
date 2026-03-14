@@ -235,8 +235,7 @@ class _SettingsPageState extends State<SettingsPage> {
               _SettingsMenuAction(
                 icon: Icons.lock_outline_rounded,
                 label: 'Gizlilik',
-                onTap: () =>
-                    _openPage(const PlaceholderPage(title: 'Gizlilik')),
+                onTap: () => _openPage(const TurnaPrivacyPage()),
               ),
               _SettingsMenuAction(
                 icon: Icons.chat_bubble_outline_rounded,
@@ -289,6 +288,115 @@ class _SettingsPageState extends State<SettingsPage> {
           ],
         ),
       ),
+    );
+  }
+}
+
+class TurnaPrivacyPage extends StatefulWidget {
+  const TurnaPrivacyPage({super.key});
+
+  @override
+  State<TurnaPrivacyPage> createState() => _TurnaPrivacyPageState();
+}
+
+class _TurnaPrivacyPageState extends State<TurnaPrivacyPage> {
+  bool _appLockEnabled = false;
+  bool _loading = true;
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_loadSettings());
+  }
+
+  Future<void> _loadSettings() async {
+    final enabled = await loadTurnaAppLockEnabledPreference();
+    if (!mounted) return;
+    setState(() {
+      _appLockEnabled = enabled;
+      _loading = false;
+    });
+  }
+
+  Future<void> _toggleAppLock(bool nextValue) async {
+    if (_busy) return;
+    final authenticated = await _authenticateTurnaDeviceAccess(
+      context,
+      localizedReason: nextValue
+          ? 'Turna uygulama kilidini acmak icin cihaz dogrulamasi gerekiyor.'
+          : 'Turna uygulama kilidini kapatmak icin cihaz dogrulamasi gerekiyor.',
+      unsupportedMessage: 'Bu cihazda uygulama kilidi desteklenmiyor.',
+    );
+    if (!mounted || !authenticated) return;
+
+    setState(() => _busy = true);
+    try {
+      await setTurnaAppLockEnabledPreference(nextValue);
+      if (!mounted) return;
+      setState(() {
+        _appLockEnabled = nextValue;
+        _busy = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            nextValue
+                ? 'Uygulama kilidi acildi.'
+                : 'Uygulama kilidi kapatildi.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final unlockMethodLabel = _turnaDeviceUnlockMethodLabel();
+    return Scaffold(
+      appBar: AppBar(title: const Text('Gizlilik')),
+      backgroundColor: TurnaColors.backgroundSoft,
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
+              children: [
+                _UserProfileGroupCard(
+                  children: [
+                    _UserProfileSwitchRow(
+                      icon: Icons.lock_outline_rounded,
+                      title: 'Uygulama Kilidi',
+                      subtitle:
+                          'Turna acilirken $unlockMethodLabel ile dogrulama iste.',
+                      value: _appLockEnabled,
+                      onChanged: _busy ? (_) {} : _toggleAppLock,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(18),
+                  ),
+                  child: const Text(
+                    'Bu ayar acikken Turna her acildiginda ve uygulama arka plandan geri geldiginde cihaz dogrulamasi ister.',
+                    style: TextStyle(
+                      fontSize: 13.5,
+                      height: 1.45,
+                      color: TurnaColors.textMuted,
+                    ),
+                  ),
+                ),
+              ],
+            ),
     );
   }
 }

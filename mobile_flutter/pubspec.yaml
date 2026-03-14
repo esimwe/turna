@@ -39,10 +39,12 @@ dependencies:
   shared_preferences: ^2.5.3
   http: ^1.2.2
   image_picker: ^1.2.1
+  camera: ^0.11.3+1
   image: ^4.5.4
   file_picker: ^10.3.2
   livekit_client: ^2.5.2
   path_provider: ^2.1.5
+  photo_manager: ^3.8.3
   record: ^6.2.0
   flutter_contacts: ^1.1.9+2
   connectivity_plus: ^7.0.0
@@ -56,6 +58,7 @@ dependencies:
   geolocator: ^14.0.2
   latlong2: ^0.9.1
   video_player: 2.10.1
+  local_auth: ^2.3.0
 
 dev_dependencies:
   flutter_test:

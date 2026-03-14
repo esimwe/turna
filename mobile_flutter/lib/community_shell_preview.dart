@@ -494,6 +494,28 @@ class _CommunityApiClient {
     }
   }
 
+  Future<List<String>> updateMemberChannelRestrictions({
+    required String communityId,
+    required String userId,
+    required List<String> channelIds,
+  }) async {
+    final res = await http.post(
+      _uri(
+        '/api/communities/$communityId/members/$userId/channel-restrictions',
+      ),
+      headers: _headers,
+      body: jsonEncode({'channelIds': channelIds}),
+    );
+    if (res.statusCode >= 400) {
+      throw _CommunityApiException(
+        _decodeError(res, 'Kanal kisitlari guncellenemedi.'),
+      );
+    }
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    final data = Map<String, dynamic>.from(body['data'] as Map? ?? const {});
+    return _CommunitySummary._stringList(data['restrictedChannelIds']);
+  }
+
   Future<void> banMember({
     required String communityId,
     required String userId,
@@ -1075,6 +1097,10 @@ class _CommunityApiClient {
             return 'Community medya alani henuz hazir degil.';
           case 'community_member_muted':
             return 'Şu anda paylaşım yapamazsın, susturulmuşsun.';
+          case 'community_member_channel_restricted':
+            return 'Bu odada yazma iznin kapatildi.';
+          case 'community_channel_write_forbidden':
+            return 'Bu odada mesaj gonderme yetkin yok.';
           case 'community_owner_cannot_leave':
             return 'Kurucu rolu ile topluluktan ayrilamazsin.';
           case 'community_event_start_required':
@@ -1105,6 +1131,9 @@ class _CommunityApiClient {
             return 'Aktif ban kaydi bulunamadi.';
           case 'community_member_unban_failed':
             return 'Ban kaldirma islemi basarisiz oldu.';
+          case 'community_member_channel_restrictions_failed':
+          case 'community_channel_restrictions_invalid':
+            return 'Kanal kisitlari guncellenemedi.';
           case 'community_report_review_forbidden':
             return 'Community raporlarini inceleme yetkin yok.';
           case 'community_report_not_found':
@@ -1897,6 +1926,7 @@ class _CommunityMemberSummary {
     required this.user,
     this.mutedUntil,
     this.muteReason,
+    this.restrictedChannelIds = const <String>[],
   });
 
   final String? role;
@@ -1904,6 +1934,7 @@ class _CommunityMemberSummary {
   final _CommunityUserSummary user;
   final String? mutedUntil;
   final String? muteReason;
+  final List<String> restrictedChannelIds;
 
   bool get isMuted {
     final parsed = DateTime.tryParse(mutedUntil ?? '')?.toLocal();
@@ -1925,12 +1956,17 @@ class _CommunityMemberSummary {
     }
   }
 
+  int get restrictedChannelCount => restrictedChannelIds.length;
+
   factory _CommunityMemberSummary.fromMap(Map<String, dynamic> map) {
     return _CommunityMemberSummary(
       role: _CommunitySummary._nullableString(map['role']),
       joinedAt: (map['joinedAt'] ?? '').toString(),
       mutedUntil: _CommunitySummary._nullableString(map['mutedUntil']),
       muteReason: _CommunitySummary._nullableString(map['muteReason']),
+      restrictedChannelIds: _CommunitySummary._stringList(
+        map['restrictedChannelIds'],
+      ),
       user: _CommunityUserSummary.fromMap(
         Map<String, dynamic>.from(map['user'] as Map? ?? const {}),
       ),
@@ -2180,6 +2216,7 @@ class _CommunitySummary {
     this.hasInvite = false,
     this.joinState = 'open',
     this.permissions = const _CommunityPermissions(),
+    this.restrictedChannelIds = const <String>[],
   });
 
   final String id;
@@ -2204,6 +2241,7 @@ class _CommunitySummary {
   final bool hasInvite;
   final String joinState;
   final _CommunityPermissions permissions;
+  final List<String> restrictedChannelIds;
 
   String get summaryText {
     final channelCount = channels.length;
@@ -2234,6 +2272,9 @@ class _CommunitySummary {
             ? description!.trim()
             : 'Topluluk alanı');
 
+  bool isRestrictedFromChannel(String channelId) =>
+      restrictedChannelIds.contains(channelId);
+
   factory _CommunitySummary.fromMap(Map<String, dynamic> map) {
     return _CommunitySummary(
       id: (map['id'] ?? '').toString(),
@@ -2256,6 +2297,7 @@ class _CommunitySummary {
       hasPendingJoinRequest: map['hasPendingJoinRequest'] == true,
       hasInvite: map['hasInvite'] == true,
       joinState: (map['joinState'] ?? 'open').toString(),
+      restrictedChannelIds: _stringList(map['restrictedChannelIds']),
       permissions: _CommunityPermissions.fromMap(
         Map<String, dynamic>.from(map['permissions'] as Map? ?? const {}),
       ),
@@ -4094,6 +4136,8 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
                         if (member.isMuted) 'Sessizde',
                         if (member.muteReason?.trim().isNotEmpty == true)
                           member.muteReason!.trim(),
+                        if (member.restrictedChannelCount > 0)
+                          '${member.restrictedChannelCount} oda kisiti',
                       ];
                       return Padding(
                         padding: EdgeInsets.only(
@@ -4320,6 +4364,17 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
                     title: const Text('Sessizi kaldir'),
                     onTap: () => Navigator.of(context).pop('unmute'),
                   ),
+                if (community.channels.any((item) => item.type == 'chat'))
+                  ListTile(
+                    leading: const Icon(Icons.forum_outlined),
+                    title: const Text('Oda yazma izinleri'),
+                    subtitle: Text(
+                      member.restrictedChannelCount > 0
+                          ? '${member.restrictedChannelCount} odada kisitli'
+                          : 'Hangi chat odalarinda yazabilecegini sec',
+                    ),
+                    onTap: () => Navigator.of(context).pop('channels'),
+                  ),
                 ListTile(
                   leading: const Icon(Icons.gavel_rounded),
                   title: const Text('Topluluktan banla'),
@@ -4359,6 +4414,9 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
             minutes: 0,
           );
           break;
+        case 'channels':
+          await _editMemberChannelRestrictions(community, member);
+          return;
         case 'ban':
           if (!mounted) return;
           final confirmed = await showDialog<bool>(
@@ -4405,6 +4463,51 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
           ),
         ),
       );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
+  Future<void> _editMemberChannelRestrictions(
+    _CommunitySummary community,
+    _CommunityMemberSummary member,
+  ) async {
+    final channels = community.channels
+        .where((item) => item.type == 'chat')
+        .toList();
+    if (channels.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Kisit uygulanacak chat odasi bulunamadi.'),
+        ),
+      );
+      return;
+    }
+    final selected = await _showCommunityChannelRestrictionEditor(
+      context,
+      channels: channels,
+      selectedIds: member.restrictedChannelIds,
+      memberName: member.user.displayName,
+    );
+    if (selected == null) return;
+    try {
+      final updated = await widget.api.updateMemberChannelRestrictions(
+        communityId: community.id,
+        userId: member.user.id,
+        channelIds: selected,
+      );
+      if (!mounted) return;
+      setState(() {});
+      final label = updated.isEmpty
+          ? '${member.user.displayName} icin kanal kisiti kaldirildi.'
+          : '${member.user.displayName} artik ${updated.length} odada yazamaz.';
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(label)));
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -4768,6 +4871,9 @@ class _CommunityChannelPageState extends State<_CommunityChannelPage> {
   _CommunityMentionQuery? _activeMentionQuery;
   List<_CommunityMemberSummary> _mentionSuggestions =
       const <_CommunityMemberSummary>[];
+
+  bool get _isWriteRestricted =>
+      widget.community.isRestrictedFromChannel(widget.channel.id);
 
   @override
   void initState() {
@@ -5212,6 +5318,13 @@ class _CommunityChannelPageState extends State<_CommunityChannelPage> {
   }
 
   Future<void> _sendRootMessage() async {
+    if (_isWriteRestricted) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Bu odada yazma iznin kapatildi.')),
+      );
+      return;
+    }
     final text = _composerController.text.trim();
     if (text.isEmpty || _sending) return;
     setState(() => _sending = true);
@@ -5239,6 +5352,13 @@ class _CommunityChannelPageState extends State<_CommunityChannelPage> {
   }
 
   Future<void> _showAttachmentSheet() async {
+    if (_isWriteRestricted) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Bu odada dosya gonderemezsin.')),
+      );
+      return;
+    }
     if (_attachmentBusy || _sending) return;
     await showModalBottomSheet<void>(
       context: context,
@@ -5393,6 +5513,7 @@ class _CommunityChannelPageState extends State<_CommunityChannelPage> {
   @override
   Widget build(BuildContext context) {
     final descriptor = _communityChannelDescriptor(widget.channel.type);
+    final isWriteRestricted = _isWriteRestricted;
     return Scaffold(
       backgroundColor: _CommunityUiTokens.background,
       appBar: AppBar(
@@ -5479,7 +5600,8 @@ class _CommunityChannelPageState extends State<_CommunityChannelPage> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  if (_activeMentionQuery != null &&
+                  if (!isWriteRestricted &&
+                      _activeMentionQuery != null &&
                       (_mentionLoading || _mentionSuggestions.isNotEmpty)) ...[
                     _CommunityMentionSuggestionsCard(
                       items: _mentionSuggestions,
@@ -5488,62 +5610,89 @@ class _CommunityChannelPageState extends State<_CommunityChannelPage> {
                     ),
                     const SizedBox(height: 10),
                   ],
-                  DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(22),
-                      border: Border.all(color: _CommunityUiTokens.border),
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
+                  if (isWriteRestricted)
+                    const _SurfaceCard(
+                      padding: EdgeInsets.all(14),
+                      color: _CommunityUiTokens.surfaceSoft,
                       child: Row(
                         children: [
-                          IconButton(
-                            onPressed: (_sending || _attachmentBusy)
-                                ? null
-                                : _showAttachmentSheet,
-                            visualDensity: VisualDensity.compact,
-                            icon: _attachmentBusy
-                                ? const SizedBox(
-                                    width: 18,
-                                    height: 18,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                    ),
-                                  )
-                                : const Icon(Icons.add_circle_outline_rounded),
+                          Icon(
+                            Icons.lock_outline_rounded,
                             color: _CommunityUiTokens.textMuted,
                           ),
+                          SizedBox(width: 10),
                           Expanded(
-                            child: TextField(
-                              controller: _composerController,
-                              minLines: 1,
-                              maxLines: 5,
-                              decoration: const InputDecoration(
-                                hintText: 'Kanal mesajı yaz',
-                                border: InputBorder.none,
-                                isCollapsed: true,
+                            child: Text(
+                              'Bu odada yazma iznin topluluk yonetimi tarafindan kapatildi.',
+                              style: TextStyle(
+                                fontSize: 12.5,
+                                height: 1.45,
+                                color: _CommunityUiTokens.textMuted,
                               ),
                             ),
-                          ),
-                          const SizedBox(width: 8),
-                          FilledButton(
-                            onPressed: (_sending || _attachmentBusy)
-                                ? null
-                                : _sendRootMessage,
-                            style: FilledButton.styleFrom(
-                              backgroundColor: _CommunityUiTokens.text,
-                              foregroundColor: Colors.white,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(16),
-                              ),
-                            ),
-                            child: Text(_sending ? '...' : 'Gonder'),
                           ),
                         ],
                       ),
+                    )
+                  else
+                    DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(22),
+                        border: Border.all(color: _CommunityUiTokens.border),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
+                        child: Row(
+                          children: [
+                            IconButton(
+                              onPressed: (_sending || _attachmentBusy)
+                                  ? null
+                                  : _showAttachmentSheet,
+                              visualDensity: VisualDensity.compact,
+                              icon: _attachmentBusy
+                                  ? const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Icon(
+                                      Icons.add_circle_outline_rounded,
+                                    ),
+                              color: _CommunityUiTokens.textMuted,
+                            ),
+                            Expanded(
+                              child: TextField(
+                                controller: _composerController,
+                                minLines: 1,
+                                maxLines: 5,
+                                decoration: const InputDecoration(
+                                  hintText: 'Kanal mesajı yaz',
+                                  border: InputBorder.none,
+                                  isCollapsed: true,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            FilledButton(
+                              onPressed: (_sending || _attachmentBusy)
+                                  ? null
+                                  : _sendRootMessage,
+                              style: FilledButton.styleFrom(
+                                backgroundColor: _CommunityUiTokens.text,
+                                foregroundColor: Colors.white,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                              ),
+                              child: Text(_sending ? '...' : 'Gonder'),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
-                  ),
                 ],
               ),
             ),
@@ -5595,6 +5744,9 @@ class _CommunityThreadPageState extends State<_CommunityThreadPage> {
   _CommunityMentionQuery? _activeMentionQuery;
   List<_CommunityMemberSummary> _mentionSuggestions =
       const <_CommunityMemberSummary>[];
+
+  bool get _isWriteRestricted =>
+      widget.community.isRestrictedFromChannel(widget.channel.id);
 
   @override
   void initState() {
@@ -6003,6 +6155,13 @@ class _CommunityThreadPageState extends State<_CommunityThreadPage> {
   }
 
   Future<void> _send() async {
+    if (_isWriteRestricted) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Bu odada yanit yazma iznin kapatildi.')),
+      );
+      return;
+    }
     final text = _composerController.text.trim();
     if (text.isEmpty || _sending) return;
     setState(() => _sending = true);
@@ -6032,6 +6191,13 @@ class _CommunityThreadPageState extends State<_CommunityThreadPage> {
   }
 
   Future<void> _showAttachmentSheet() async {
+    if (_isWriteRestricted) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Bu odada dosya gonderemezsin.')),
+      );
+      return;
+    }
     if (_attachmentBusy || _sending) return;
     await showModalBottomSheet<void>(
       context: context,
@@ -6188,6 +6354,7 @@ class _CommunityThreadPageState extends State<_CommunityThreadPage> {
   @override
   Widget build(BuildContext context) {
     final root = _root;
+    final isWriteRestricted = _isWriteRestricted;
     return Scaffold(
       backgroundColor: _CommunityUiTokens.background,
       appBar: AppBar(
@@ -6288,7 +6455,8 @@ class _CommunityThreadPageState extends State<_CommunityThreadPage> {
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              if (_activeMentionQuery != null &&
+                              if (!isWriteRestricted &&
+                                  _activeMentionQuery != null &&
                                   (_mentionLoading ||
                                       _mentionSuggestions.isNotEmpty)) ...[
                                 _CommunityMentionSuggestionsCard(
@@ -6298,83 +6466,109 @@ class _CommunityThreadPageState extends State<_CommunityThreadPage> {
                                 ),
                                 const SizedBox(height: 10),
                               ],
-                              DecoratedBox(
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withValues(alpha: 0.96),
-                                  borderRadius: BorderRadius.circular(20),
-                                  border: Border.all(
-                                    color: _CommunityUiTokens.border,
-                                  ),
-                                  boxShadow: _CommunityUiTokens.softShadow,
-                                ),
-                                child: Padding(
-                                  padding: const EdgeInsets.fromLTRB(
-                                    14,
-                                    12,
-                                    10,
-                                    12,
-                                  ),
+                              if (isWriteRestricted)
+                                const _SurfaceCard(
+                                  padding: EdgeInsets.all(14),
+                                  color: _CommunityUiTokens.surfaceSoft,
                                   child: Row(
                                     children: [
-                                      IconButton(
-                                        onPressed: (_sending || _attachmentBusy)
-                                            ? null
-                                            : _showAttachmentSheet,
-                                        visualDensity: VisualDensity.compact,
-                                        icon: _attachmentBusy
-                                            ? const SizedBox(
-                                                width: 18,
-                                                height: 18,
-                                                child:
-                                                    CircularProgressIndicator(
-                                                      strokeWidth: 2,
-                                                    ),
-                                              )
-                                            : const Icon(
-                                                Icons
-                                                    .add_circle_outline_rounded,
-                                              ),
+                                      Icon(
+                                        Icons.lock_outline_rounded,
                                         color: _CommunityUiTokens.textMuted,
                                       ),
+                                      SizedBox(width: 10),
                                       Expanded(
-                                        child: TextField(
-                                          controller: _composerController,
-                                          minLines: 1,
-                                          maxLines: 5,
-                                          decoration: const InputDecoration(
-                                            hintText: 'Thread yanıtı yaz',
-                                            border: InputBorder.none,
-                                            isCollapsed: true,
-                                          ),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      FilledButton(
-                                        onPressed: (_sending || _attachmentBusy)
-                                            ? null
-                                            : _send,
-                                        style: FilledButton.styleFrom(
-                                          backgroundColor:
-                                              _CommunityUiTokens.text,
-                                          foregroundColor: Colors.white,
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 14,
-                                            vertical: 12,
-                                          ),
-                                          shape: RoundedRectangleBorder(
-                                            borderRadius: BorderRadius.circular(
-                                              16,
-                                            ),
-                                          ),
-                                        ),
                                         child: Text(
-                                          _sending ? '...' : 'Gonder',
+                                          'Bu odadaki threadlerde yazi ve dosya gonderme iznin kapatildi.',
+                                          style: TextStyle(
+                                            fontSize: 12.5,
+                                            height: 1.45,
+                                            color: _CommunityUiTokens.textMuted,
+                                          ),
                                         ),
                                       ),
                                     ],
                                   ),
+                                )
+                              else
+                                DecoratedBox(
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withValues(alpha: 0.96),
+                                    borderRadius: BorderRadius.circular(20),
+                                    border: Border.all(
+                                      color: _CommunityUiTokens.border,
+                                    ),
+                                    boxShadow: _CommunityUiTokens.softShadow,
+                                  ),
+                                  child: Padding(
+                                    padding: const EdgeInsets.fromLTRB(
+                                      14,
+                                      12,
+                                      10,
+                                      12,
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        IconButton(
+                                          onPressed:
+                                              (_sending || _attachmentBusy)
+                                              ? null
+                                              : _showAttachmentSheet,
+                                          visualDensity: VisualDensity.compact,
+                                          icon: _attachmentBusy
+                                              ? const SizedBox(
+                                                  width: 18,
+                                                  height: 18,
+                                                  child:
+                                                      CircularProgressIndicator(
+                                                        strokeWidth: 2,
+                                                      ),
+                                                )
+                                              : const Icon(
+                                                  Icons
+                                                      .add_circle_outline_rounded,
+                                                ),
+                                          color: _CommunityUiTokens.textMuted,
+                                        ),
+                                        Expanded(
+                                          child: TextField(
+                                            controller: _composerController,
+                                            minLines: 1,
+                                            maxLines: 5,
+                                            decoration: const InputDecoration(
+                                              hintText: 'Thread yanıtı yaz',
+                                              border: InputBorder.none,
+                                              isCollapsed: true,
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        FilledButton(
+                                          onPressed:
+                                              (_sending || _attachmentBusy)
+                                              ? null
+                                              : _send,
+                                          style: FilledButton.styleFrom(
+                                            backgroundColor:
+                                                _CommunityUiTokens.text,
+                                            foregroundColor: Colors.white,
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 14,
+                                              vertical: 12,
+                                            ),
+                                            shape: RoundedRectangleBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(16),
+                                            ),
+                                          ),
+                                          child: Text(
+                                            _sending ? '...' : 'Gonder',
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
                                 ),
-                              ),
                             ],
                           ),
                         ),
@@ -12052,6 +12246,130 @@ Future<_CommunityUserSummary?> _showCommunityInvitePicker(
                             );
                           },
                         ),
+                ),
+              ],
+            ),
+          );
+        },
+      );
+    },
+  );
+}
+
+Future<List<String>?> _showCommunityChannelRestrictionEditor(
+  BuildContext context, {
+  required List<_CommunityChannelSummary> channels,
+  required List<String> selectedIds,
+  required String memberName,
+}) {
+  final selected = selectedIds.toSet();
+  return showModalBottomSheet<List<String>>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.white,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+    ),
+    builder: (sheetContext) {
+      return StatefulBuilder(
+        builder: (context, setSheetState) {
+          return Padding(
+            padding: EdgeInsets.fromLTRB(
+              18,
+              18,
+              18,
+              18 + MediaQuery.of(sheetContext).viewInsets.bottom,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '$memberName icin oda kisitlari',
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: _CommunityUiTokens.text,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Secili chat odalarinda mesaj gonderemez. Okuma erisimi degismez.',
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    height: 1.45,
+                    color: _CommunityUiTokens.textMuted,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                SizedBox(
+                  height: 320,
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: channels.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 10),
+                    itemBuilder: (context, index) {
+                      final channel = channels[index];
+                      final isSelected = selected.contains(channel.id);
+                      return _SurfaceCard(
+                        padding: const EdgeInsets.all(6),
+                        color: _CommunityUiTokens.surfaceSoft,
+                        child: CheckboxListTile(
+                          value: isSelected,
+                          onChanged: (value) {
+                            setSheetState(() {
+                              if (value == true) {
+                                selected.add(channel.id);
+                              } else {
+                                selected.remove(channel.id);
+                              }
+                            });
+                          },
+                          controlAffinity: ListTileControlAffinity.leading,
+                          title: Text(
+                            channel.name,
+                            style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              color: _CommunityUiTokens.text,
+                            ),
+                          ),
+                          subtitle: Text(
+                            channel.description?.trim().isNotEmpty == true
+                                ? channel.description!.trim()
+                                : 'Chat odasi',
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Row(
+                  children: [
+                    TextButton(
+                      onPressed: () => Navigator.of(sheetContext).pop(),
+                      child: const Text('Vazgec'),
+                    ),
+                    const Spacer(),
+                    FilledButton.tonal(
+                      onPressed: () {
+                        setSheetState(() => selected.clear());
+                      },
+                      style: FilledButton.styleFrom(
+                        backgroundColor: _CommunityUiTokens.surfaceSoft,
+                        foregroundColor: _CommunityUiTokens.text,
+                      ),
+                      child: const Text('Temizle'),
+                    ),
+                    const SizedBox(width: 10),
+                    FilledButton(
+                      onPressed: () => Navigator.of(
+                        sheetContext,
+                      ).pop(selected.toList()..sort()),
+                      child: const Text('Kaydet'),
+                    ),
+                  ],
                 ),
               ],
             ),
