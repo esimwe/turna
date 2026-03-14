@@ -2981,8 +2981,10 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
 
   Future<void> _openChannel(
     _CommunitySummary community,
-    _CommunityChannelSummary channel,
-  ) async {
+    _CommunityChannelSummary channel, {
+    _CommunityMessageSummary? initialMessage,
+    String? focusMessageId,
+  }) async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => _CommunityChannelPage(
@@ -2990,11 +2992,66 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
           community: community,
           channel: channel,
           currentUserId: widget.currentUserId,
+          initialMessage: initialMessage,
+          initialFocusMessageId: focusMessageId,
         ),
       ),
     );
     if (!mounted) return;
     await _reload();
+  }
+
+  Future<void> _openReportTarget(
+    _CommunitySummary community,
+    _CommunityReportSummary report,
+  ) async {
+    final channel = report.channel;
+    final message = report.message;
+    if (channel == null || message == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Raporun bagli oldugu mesaj bulunamadi.')),
+      );
+      return;
+    }
+
+    final rootMessageId = (message.replyToMessageId ?? '').trim();
+    if (rootMessageId.isEmpty) {
+      await _openChannel(
+        community,
+        channel,
+        initialMessage: message,
+        focusMessageId: message.id,
+      );
+      return;
+    }
+
+    try {
+      final thread = await widget.api.fetchThread(
+        communityId: community.id,
+        channelId: channel.id,
+        messageId: rootMessageId,
+      );
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => _CommunityThreadPage(
+            api: widget.api,
+            community: community,
+            channel: channel,
+            rootMessage: thread.root,
+            currentUserId: widget.currentUserId,
+            initialFocusMessageId: message.id,
+          ),
+        ),
+      );
+      if (!mounted) return;
+      await _reload();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
   }
 
   Future<void> _openTopic(_CommunityTopicSummary topic) async {
@@ -3200,8 +3257,13 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
                   snapshot.data ?? const <_CommunityPinnedMessageSummary>[];
               return _CommunityPinnedMessagesCard(
                 items: pinned,
-                onOpenChannel: (_CommunityChannelSummary channel) =>
-                    _openChannel(community, channel),
+                onOpenMessage: (_CommunityPinnedMessageSummary item) =>
+                    _openChannel(
+                      community,
+                      item.channel,
+                      initialMessage: item.message,
+                      focusMessageId: item.message.id,
+                    ),
               );
             },
           ),
@@ -3510,7 +3572,12 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
                 onChanged: _reload,
               ),
               const SizedBox(height: 16),
-              _CommunityReportsInboxCard(api: widget.api, community: community),
+              _CommunityReportsInboxCard(
+                api: widget.api,
+                community: community,
+                onOpenTarget: (_CommunityReportSummary report) =>
+                    _openReportTarget(community, report),
+              ),
               const SizedBox(height: 16),
             ],
             _CommunityDmRequestsCard(
@@ -4207,12 +4274,16 @@ class _CommunityChannelPage extends StatefulWidget {
     required this.community,
     required this.channel,
     required this.currentUserId,
+    this.initialMessage,
+    this.initialFocusMessageId,
   });
 
   final _CommunityApiClient api;
   final _CommunitySummary community;
   final _CommunityChannelSummary channel;
   final String currentUserId;
+  final _CommunityMessageSummary? initialMessage;
+  final String? initialFocusMessageId;
 
   @override
   State<_CommunityChannelPage> createState() => _CommunityChannelPageState();
@@ -4222,15 +4293,20 @@ class _CommunityChannelPageState extends State<_CommunityChannelPage> {
   final _composerController = TextEditingController();
   final ImagePicker _imagePicker = ImagePicker();
   final List<_CommunityMessageSummary> _items = <_CommunityMessageSummary>[];
+  final ScrollController _scrollController = ScrollController();
+  final Map<String, GlobalKey> _messageKeys = <String, GlobalKey>{};
   io.Socket? _socket;
   bool _loading = true;
   bool _sending = false;
   bool _attachmentBusy = false;
+  bool _initialFocusHandled = false;
+  String? _highlightMessageId;
   String? _errorMessage;
 
   @override
   void initState() {
     super.initState();
+    _highlightMessageId = widget.initialFocusMessageId;
     _loadInitial();
     _connectRealtime();
   }
@@ -4242,6 +4318,7 @@ class _CommunityChannelPageState extends State<_CommunityChannelPage> {
       'channelId': widget.channel.id,
     });
     _socket?.dispose();
+    _scrollController.dispose();
     _composerController.dispose();
     super.dispose();
   }
@@ -4355,7 +4432,17 @@ class _CommunityChannelPageState extends State<_CommunityChannelPage> {
         _items
           ..clear()
           ..addAll(feed.items);
+        final injected = widget.initialMessage;
+        if (injected != null &&
+            (injected.replyToMessageId ?? '').trim().isEmpty &&
+            !_items.any((item) => item.id == injected.id)) {
+          _items.add(injected);
+          _items.sort(
+            (left, right) => left.createdAt.compareTo(right.createdAt),
+          );
+        }
       });
+      _scheduleFocusToMessage();
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -4384,6 +4471,41 @@ class _CommunityChannelPageState extends State<_CommunityChannelPage> {
     }
     _items.add(message);
     _items.sort((left, right) => left.createdAt.compareTo(right.createdAt));
+  }
+
+  GlobalKey _messageKeyFor(String messageId) {
+    return _messageKeys.putIfAbsent(messageId, () => GlobalKey());
+  }
+
+  Future<bool> _scrollToMessage(String messageId) async {
+    final targetKey = _messageKeys[messageId];
+    final targetContext = targetKey?.currentContext;
+    if (targetContext == null) return false;
+    await Scrollable.ensureVisible(
+      targetContext,
+      duration: const Duration(milliseconds: 320),
+      curve: Curves.easeOutCubic,
+      alignment: 0.2,
+    );
+    return true;
+  }
+
+  void _scheduleFocusToMessage() {
+    final messageId = widget.initialFocusMessageId?.trim();
+    if (_initialFocusHandled || messageId == null || messageId.isEmpty) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      final focused = await _scrollToMessage(messageId);
+      if (!mounted || !focused) return;
+      setState(() {
+        _initialFocusHandled = true;
+        _highlightMessageId = messageId;
+      });
+      Future<void>.delayed(const Duration(seconds: 3), () {
+        if (!mounted || _highlightMessageId != messageId) return;
+        setState(() => _highlightMessageId = null);
+      });
+    });
   }
 
   Future<void> _toggleReaction(
@@ -4754,6 +4876,7 @@ class _CommunityChannelPageState extends State<_CommunityChannelPage> {
                             : RefreshIndicator(
                                 onRefresh: _reload,
                                 child: ListView.separated(
+                                  controller: _scrollController,
                                   padding: const EdgeInsets.fromLTRB(
                                     16,
                                     12,
@@ -4765,19 +4888,24 @@ class _CommunityChannelPageState extends State<_CommunityChannelPage> {
                                       const SizedBox(height: 10),
                                   itemBuilder: (context, index) {
                                     final item = _items[index];
-                                    return _CommunityMessageBubble(
-                                      message: item,
-                                      mine:
-                                          item.author.id ==
-                                          widget.currentUserId,
-                                      onReply: () => _openThread(item),
-                                      onTap: () => _openThread(item),
-                                      onAddReaction: () =>
-                                          _showReactionPicker(item),
-                                      onToggleReaction: (emoji) =>
-                                          _toggleReaction(item, emoji),
-                                      onMore: () => _handleMessageMenu(item),
-                                      showCreatedAt: true,
+                                    return KeyedSubtree(
+                                      key: _messageKeyFor(item.id),
+                                      child: _CommunityMessageBubble(
+                                        message: item,
+                                        mine:
+                                            item.author.id ==
+                                            widget.currentUserId,
+                                        onReply: () => _openThread(item),
+                                        onTap: () => _openThread(item),
+                                        onAddReaction: () =>
+                                            _showReactionPicker(item),
+                                        onToggleReaction: (emoji) =>
+                                            _toggleReaction(item, emoji),
+                                        onMore: () => _handleMessageMenu(item),
+                                        showCreatedAt: true,
+                                        highlighted:
+                                            _highlightMessageId == item.id,
+                                      ),
                                     );
                                   },
                                 ),
@@ -4858,6 +4986,7 @@ class _CommunityThreadPage extends StatefulWidget {
     required this.channel,
     required this.rootMessage,
     required this.currentUserId,
+    this.initialFocusMessageId,
   });
 
   final _CommunityApiClient api;
@@ -4865,6 +4994,7 @@ class _CommunityThreadPage extends StatefulWidget {
   final _CommunityChannelSummary channel;
   final _CommunityMessageSummary rootMessage;
   final String currentUserId;
+  final String? initialFocusMessageId;
 
   @override
   State<_CommunityThreadPage> createState() => _CommunityThreadPageState();
@@ -4874,16 +5004,21 @@ class _CommunityThreadPageState extends State<_CommunityThreadPage> {
   final _composerController = TextEditingController();
   final ImagePicker _imagePicker = ImagePicker();
   final List<_CommunityMessageSummary> _replies = <_CommunityMessageSummary>[];
+  final ScrollController _scrollController = ScrollController();
+  final Map<String, GlobalKey> _messageKeys = <String, GlobalKey>{};
   io.Socket? _socket;
   _CommunityMessageSummary? _root;
   bool _loading = true;
   bool _sending = false;
   bool _attachmentBusy = false;
+  bool _initialFocusHandled = false;
+  String? _highlightMessageId;
   String? _errorMessage;
 
   @override
   void initState() {
     super.initState();
+    _highlightMessageId = widget.initialFocusMessageId;
     _root = widget.rootMessage;
     _loadInitial();
     _connectRealtime();
@@ -4897,6 +5032,7 @@ class _CommunityThreadPageState extends State<_CommunityThreadPage> {
       'messageId': widget.rootMessage.id,
     });
     _socket?.dispose();
+    _scrollController.dispose();
     _composerController.dispose();
     super.dispose();
   }
@@ -4989,6 +5125,7 @@ class _CommunityThreadPageState extends State<_CommunityThreadPage> {
           ..clear()
           ..addAll(thread.replies);
       });
+      _scheduleFocusToMessage();
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -5014,6 +5151,41 @@ class _CommunityThreadPageState extends State<_CommunityThreadPage> {
       _replies.add(message);
       _replies.sort((left, right) => left.createdAt.compareTo(right.createdAt));
     }
+  }
+
+  GlobalKey _messageKeyFor(String messageId) {
+    return _messageKeys.putIfAbsent(messageId, () => GlobalKey());
+  }
+
+  Future<bool> _scrollToMessage(String messageId) async {
+    final targetKey = _messageKeys[messageId];
+    final targetContext = targetKey?.currentContext;
+    if (targetContext == null) return false;
+    await Scrollable.ensureVisible(
+      targetContext,
+      duration: const Duration(milliseconds: 320),
+      curve: Curves.easeOutCubic,
+      alignment: 0.2,
+    );
+    return true;
+  }
+
+  void _scheduleFocusToMessage() {
+    final messageId = widget.initialFocusMessageId?.trim();
+    if (_initialFocusHandled || messageId == null || messageId.isEmpty) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      final focused = await _scrollToMessage(messageId);
+      if (!mounted || !focused) return;
+      setState(() {
+        _initialFocusHandled = true;
+        _highlightMessageId = messageId;
+      });
+      Future<void>.delayed(const Duration(seconds: 3), () {
+        if (!mounted || _highlightMessageId != messageId) return;
+        setState(() => _highlightMessageId = null);
+      });
+    });
   }
 
   Future<void> _toggleReaction(
@@ -5374,17 +5546,23 @@ class _CommunityThreadPageState extends State<_CommunityThreadPage> {
                         child: RefreshIndicator(
                           onRefresh: _reload,
                           child: ListView(
+                            controller: _scrollController,
                             padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
                             children: [
-                              _CommunityThreadRootCard(
-                                message: root,
-                                mine: root.author.id == widget.currentUserId,
-                                channelName: widget.channel.name,
-                                replyCount: _replies.length,
-                                onAddReaction: () => _showReactionPicker(root),
-                                onToggleReaction: (emoji) =>
-                                    _toggleReaction(root, emoji),
-                                onMore: () => _handleMessageMenu(root),
+                              KeyedSubtree(
+                                key: _messageKeyFor(root.id),
+                                child: _CommunityThreadRootCard(
+                                  message: root,
+                                  mine: root.author.id == widget.currentUserId,
+                                  channelName: widget.channel.name,
+                                  replyCount: _replies.length,
+                                  onAddReaction: () =>
+                                      _showReactionPicker(root),
+                                  onToggleReaction: (emoji) =>
+                                      _toggleReaction(root, emoji),
+                                  onMore: () => _handleMessageMenu(root),
+                                  highlighted: _highlightMessageId == root.id,
+                                ),
                               ),
                               const SizedBox(height: 18),
                               _CommunityThreadRepliesHeader(
@@ -5404,17 +5582,22 @@ class _CommunityThreadPageState extends State<_CommunityThreadPage> {
                                           ? 0
                                           : 12,
                                     ),
-                                    child: _CommunityThreadReplyTile(
-                                      message: item,
-                                      mine:
-                                          item.author.id ==
-                                          widget.currentUserId,
-                                      isLast: index == _replies.length - 1,
-                                      onAddReaction: () =>
-                                          _showReactionPicker(item),
-                                      onToggleReaction: (emoji) =>
-                                          _toggleReaction(item, emoji),
-                                      onMore: () => _handleMessageMenu(item),
+                                    child: KeyedSubtree(
+                                      key: _messageKeyFor(item.id),
+                                      child: _CommunityThreadReplyTile(
+                                        message: item,
+                                        mine:
+                                            item.author.id ==
+                                            widget.currentUserId,
+                                        isLast: index == _replies.length - 1,
+                                        onAddReaction: () =>
+                                            _showReactionPicker(item),
+                                        onToggleReaction: (emoji) =>
+                                            _toggleReaction(item, emoji),
+                                        onMore: () => _handleMessageMenu(item),
+                                        highlighted:
+                                            _highlightMessageId == item.id,
+                                      ),
                                     ),
                                   );
                                 }),
@@ -5510,6 +5693,7 @@ class _CommunityThreadRootCard extends StatelessWidget {
     required this.mine,
     required this.channelName,
     required this.replyCount,
+    this.highlighted = false,
     this.onAddReaction,
     this.onToggleReaction,
     this.onMore,
@@ -5519,6 +5703,7 @@ class _CommunityThreadRootCard extends StatelessWidget {
   final bool mine;
   final String channelName;
   final int replyCount;
+  final bool highlighted;
   final VoidCallback? onAddReaction;
   final ValueChanged<String>? onToggleReaction;
   final VoidCallback? onMore;
@@ -5573,6 +5758,7 @@ class _CommunityThreadRootCard extends StatelessWidget {
               dense: true,
               showReplyPreview: false,
               showCreatedAt: true,
+              highlighted: highlighted,
               onAddReaction: onAddReaction,
               onToggleReaction: onToggleReaction,
               onMore: onMore,
@@ -5679,6 +5865,7 @@ class _CommunityThreadReplyTile extends StatelessWidget {
     required this.message,
     required this.mine,
     required this.isLast,
+    this.highlighted = false,
     this.onAddReaction,
     this.onToggleReaction,
     this.onMore,
@@ -5687,6 +5874,7 @@ class _CommunityThreadReplyTile extends StatelessWidget {
   final _CommunityMessageSummary message;
   final bool mine;
   final bool isLast;
+  final bool highlighted;
   final VoidCallback? onAddReaction;
   final ValueChanged<String>? onToggleReaction;
   final VoidCallback? onMore;
@@ -5735,6 +5923,7 @@ class _CommunityThreadReplyTile extends StatelessWidget {
               dense: true,
               showReplyPreview: false,
               showCreatedAt: true,
+              highlighted: highlighted,
               onAddReaction: onAddReaction,
               onToggleReaction: onToggleReaction,
               onMore: onMore,
@@ -6844,10 +7033,12 @@ class _CommunityReportsInboxCard extends StatefulWidget {
   const _CommunityReportsInboxCard({
     required this.api,
     required this.community,
+    this.onOpenTarget,
   });
 
   final _CommunityApiClient api;
   final _CommunitySummary community;
+  final ValueChanged<_CommunityReportSummary>? onOpenTarget;
 
   @override
   State<_CommunityReportsInboxCard> createState() =>
@@ -6987,6 +7178,21 @@ class _CommunityReportsInboxCardState
                               ),
                             ],
                           ),
+                          if (widget.onOpenTarget != null) ...[
+                            const SizedBox(height: 8),
+                            TextButton.icon(
+                              onPressed: () => widget.onOpenTarget!(report),
+                              style: TextButton.styleFrom(
+                                visualDensity: VisualDensity.compact,
+                                foregroundColor: _CommunityUiTokens.text,
+                              ),
+                              icon: const Icon(
+                                Icons.open_in_new_rounded,
+                                size: 16,
+                              ),
+                              label: const Text('Mesaja git'),
+                            ),
+                          ],
                           const SizedBox(height: 10),
                           Text(
                             'Raporlayan: ${report.reporter.displayName}',
@@ -7058,11 +7264,11 @@ class _CommunityReportsInboxCardState
 class _CommunityPinnedMessagesCard extends StatelessWidget {
   const _CommunityPinnedMessagesCard({
     required this.items,
-    required this.onOpenChannel,
+    required this.onOpenMessage,
   });
 
   final List<_CommunityPinnedMessageSummary> items;
-  final ValueChanged<_CommunityChannelSummary> onOpenChannel;
+  final ValueChanged<_CommunityPinnedMessageSummary> onOpenMessage;
 
   @override
   Widget build(BuildContext context) {
@@ -7092,7 +7298,7 @@ class _CommunityPinnedMessagesCard extends StatelessWidget {
                   bottom: index == items.length - 1 ? 0 : 10,
                 ),
                 child: InkWell(
-                  onTap: () => onOpenChannel(item.channel),
+                  onTap: () => onOpenMessage(item),
                   borderRadius: BorderRadius.circular(18),
                   child: Ink(
                     padding: const EdgeInsets.all(14),
@@ -8531,6 +8737,7 @@ class _CommunityMessageBubble extends StatelessWidget {
     this.dense = false,
     this.showReplyPreview = true,
     this.showCreatedAt = false,
+    this.highlighted = false,
   });
 
   final _CommunityMessageSummary message;
@@ -8543,6 +8750,7 @@ class _CommunityMessageBubble extends StatelessWidget {
   final bool dense;
   final bool showReplyPreview;
   final bool showCreatedAt;
+  final bool highlighted;
 
   @override
   Widget build(BuildContext context) {
@@ -8553,6 +8761,18 @@ class _CommunityMessageBubble extends StatelessWidget {
     final authorSpacing = dense ? 3.0 : 6.0;
     final bodyFontSize = dense ? 13.5 : 14.0;
     final pinColor = mine ? Colors.white70 : _CommunityUiTokens.textMuted;
+    final decorationBorderColor = highlighted
+        ? _CommunityUiTokens.success
+        : _CommunityUiTokens.border;
+    final decorationShadow = highlighted
+        ? <BoxShadow>[
+            BoxShadow(
+              color: _CommunityUiTokens.success.withValues(alpha: 0.14),
+              blurRadius: 18,
+              offset: const Offset(0, 8),
+            ),
+          ]
+        : const <BoxShadow>[];
     final hasActionRow =
         onReply != null ||
         onAddReaction != null ||
@@ -8608,7 +8828,8 @@ class _CommunityMessageBubble extends StatelessWidget {
             decoration: BoxDecoration(
               color: color,
               borderRadius: BorderRadius.circular(dense ? 18 : 20),
-              border: Border.all(color: _CommunityUiTokens.border),
+              border: Border.all(color: decorationBorderColor, width: 1.2),
+              boxShadow: decorationShadow,
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
