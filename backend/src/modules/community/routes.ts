@@ -38,6 +38,9 @@ const prismaCommunityJoinRequest = (prisma as unknown as { communityJoinRequest:
 const prismaCommunityInvite = (prisma as unknown as { communityInvite: any }).communityInvite;
 const prismaCommunityDmRequest = (prisma as unknown as { communityDmRequest: any }).communityDmRequest;
 const prismaCommunityBan = (prisma as unknown as { communityBan: any }).communityBan;
+const prismaCommunityTopicEventPreference = (prisma as unknown as {
+  communityTopicEventPreference: any;
+}).communityTopicEventPreference;
 const prismaCommunityMessageReaction = (prisma as unknown as {
   communityMessageReaction: any;
 }).communityMessageReaction;
@@ -192,7 +195,9 @@ const communityCreateTopicSchema = z.object({
   body: z.string().trim().max(4000).optional(),
   channelId: z.string().trim().min(1).max(255).optional(),
   tags: z.array(z.string().trim().min(1).max(40)).max(8).optional().default([]),
+  resourceCategory: z.string().trim().max(60).optional(),
   eventStartsAt: z.string().trim().max(64).optional(),
+  eventLocation: z.string().trim().max(160).optional(),
   isPinned: z.boolean().optional()
 });
 
@@ -206,6 +211,14 @@ const communityTopicSolvedSchema = z.object({
 
 const communityTopicPinSchema = z.object({
   pinned: z.boolean().optional().default(true)
+});
+
+const communityTopicEventRsvpSchema = z.object({
+  status: z.enum(["going", "maybe", "not_going"])
+});
+
+const communityTopicEventReminderSchema = z.object({
+  enabled: z.boolean().optional().default(true)
 });
 
 const communityJoinRequestCreateSchema = z.object({
@@ -332,12 +345,20 @@ type CommunityTopicReplyRow = {
   };
 };
 
+type CommunityTopicEventPreferenceRow = {
+  userId: string;
+  status: string | null;
+  reminderEnabled: boolean;
+};
+
 type CommunityTopicRow = {
   id: string;
   title: string;
   body: string | null;
   type: string;
   tags?: unknown;
+  resourceCategory: string | null;
+  eventLocation: string | null;
   isPinned: boolean;
   isSolved: boolean;
   eventStartsAt: Date | null;
@@ -351,6 +372,7 @@ type CommunityTopicRow = {
   } | null;
   author: CommunityUserRow;
   replies?: CommunityTopicReplyRow[];
+  eventPreferences?: CommunityTopicEventPreferenceRow[];
   _count?: {
     replies?: number;
   };
@@ -580,6 +602,32 @@ function toApiTopicType(value: string | null | undefined): "question" | "resourc
       return "event";
     default:
       return "question";
+  }
+}
+
+function toApiEventRsvpStatus(
+  value: string | null | undefined
+): "going" | "maybe" | "not_going" | null {
+  switch ((value ?? "").toUpperCase()) {
+    case "GOING":
+      return "going";
+    case "MAYBE":
+      return "maybe";
+    case "NOT_GOING":
+      return "not_going";
+    default:
+      return null;
+  }
+}
+
+function toDbEventRsvpStatus(value: "going" | "maybe" | "not_going"): "GOING" | "MAYBE" | "NOT_GOING" {
+  switch (value) {
+    case "going":
+      return "GOING";
+    case "maybe":
+      return "MAYBE";
+    default:
+      return "NOT_GOING";
   }
 }
 
@@ -1034,15 +1082,41 @@ function toCommunityTopicDto(
 ) {
   const viewerUserId = options?.viewerUserId ?? null;
   const viewerRole = options?.viewerRole ?? null;
+  const normalizedTags = normalizeStringList(row.tags);
+  const viewerEventPreference =
+    viewerUserId == null
+      ? null
+      : (row.eventPreferences ?? []).find((item) => item.userId === viewerUserId) ?? null;
+  const goingCount = (row.eventPreferences ?? []).filter((item) => item.status === "GOING").length;
+  const maybeCount = (row.eventPreferences ?? []).filter((item) => item.status === "MAYBE").length;
+  const notGoingCount = (row.eventPreferences ?? []).filter((item) => item.status === "NOT_GOING").length;
+  const resourceCategory =
+    (row.resourceCategory ?? "").trim() ||
+    (toApiTopicType(row.type) === "resource" ? normalizedTags[0] ?? "" : "");
   return {
     id: row.id,
     title: row.title,
     body: row.body,
     type: toApiTopicType(row.type),
-    tags: normalizeStringList(row.tags),
+    tags: normalizedTags,
+    resourceCategory: resourceCategory.trim().length === 0 ? null : resourceCategory.trim(),
+    eventLocation: row.eventLocation?.trim() || null,
     isPinned: row.isPinned,
     isSolved: row.isSolved,
     eventStartsAt: row.eventStartsAt ? row.eventStartsAt.toISOString() : null,
+    event:
+      toApiTopicType(row.type) === "event"
+        ? {
+            counts: {
+              going: goingCount,
+              maybe: maybeCount,
+              notGoing: notGoingCount,
+              total: goingCount + maybeCount + notGoingCount
+            },
+            viewerStatus: toApiEventRsvpStatus(viewerEventPreference?.status),
+            reminderEnabled: viewerEventPreference?.reminderEnabled === true
+          }
+        : null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     replyCount: row._count?.replies ?? 0,
@@ -1380,6 +1454,8 @@ function communityTopicSelect(replyTake: number | null) {
     body: true,
     type: true,
     tags: true,
+    resourceCategory: true,
+    eventLocation: true,
     isPinned: true,
     isSolved: true,
     eventStartsAt: true,
@@ -1424,6 +1500,13 @@ function communityTopicSelect(replyTake: number | null) {
             updatedAt: true
           }
         }
+      }
+    },
+    eventPreferences: {
+      select: {
+        userId: true,
+        status: true,
+        reminderEnabled: true
       }
     },
     _count: {
@@ -1597,7 +1680,7 @@ communityRouter.get("/home", requireAuth, async (req, res) => {
         prismaCommunityTopic.findFirst({
           where: {
             communityId: { in: mineIds },
-            type: { in: ["RESOURCE", "EVENT"] }
+            type: "RESOURCE"
           },
           orderBy: [{ isPinned: "desc" }, { updatedAt: "desc" }],
           select: communityTopicSelect(1)
@@ -1780,7 +1863,15 @@ communityRouter.post("/:communityId/join", requireAuth, async (req, res) => {
       return;
     }
 
-    if ((community.visibility ?? "PUBLIC") === "REQUEST_ONLY") {
+    const visibility = community.visibility ?? "PUBLIC";
+    const pendingInvite = community.invites?.[0] ?? null;
+
+    if (visibility === "INVITE_ONLY" && !pendingInvite) {
+      res.status(403).json({ error: "community_invite_required" });
+      return;
+    }
+
+    if (visibility === "REQUEST_ONLY" && !pendingInvite) {
       if (!community.joinRequests?.[0]) {
         await prismaCommunityJoinRequest.create({
           data: {
@@ -1795,47 +1886,39 @@ communityRouter.post("/:communityId/join", requireAuth, async (req, res) => {
       return;
     }
 
-    if ((community.visibility ?? "PUBLIC") === "INVITE_ONLY") {
-      const pendingInvite = community.invites?.[0] ?? null;
-      if (!pendingInvite) {
-        res.status(403).json({ error: "community_invite_required" });
-        return;
-      }
-      await prismaCommunityMembership.create({
-        data: {
+    const now = new Date();
+    await prisma.$transaction(async (tx: any) => {
+      await tx.communityMembership.upsert({
+        where: {
+          communityId_userId: {
+            communityId: community.id,
+            userId: req.authUserId!
+          }
+        },
+        create: {
           communityId: community.id,
           userId: req.authUserId!
-        }
+        },
+        update: {}
       });
-      await prismaCommunityInvite.update({
-        where: { id: pendingInvite.id },
-        data: {
-          status: "ACCEPTED",
-          respondedAt: new Date()
-        }
-      });
-      const updated = await findCommunityForUser(community.id, req.authUserId!);
-      res.json({ data: updated ? toCommunityDto(updated) : null });
-      return;
-    }
-
-    const existing = await prismaCommunityMembership.findUnique({
-      where: {
-        communityId_userId: {
-          communityId: community.id,
-          userId: req.authUserId!
-        }
+      if (pendingInvite) {
+        await tx.communityInvite.update({
+          where: { id: pendingInvite.id },
+          data: {
+            status: "ACCEPTED",
+            respondedAt: now
+          }
+        });
       }
+      await tx.communityJoinRequest.deleteMany({
+        where: {
+          communityId: community.id,
+          requesterUserId: req.authUserId!,
+          status: "PENDING"
+        }
+      });
     });
 
-    if (!existing) {
-      await prismaCommunityMembership.create({
-        data: {
-          communityId: community.id,
-          userId: req.authUserId!
-        }
-      });
-    }
     const updated = await findCommunityForUser(community.id, req.authUserId!);
     res.json({ data: updated ? toCommunityDto(updated) : null });
   } catch (error) {
@@ -2009,6 +2092,10 @@ communityRouter.post("/:communityId/members/:userId/mute", requireAuth, async (r
       res.status(403).json({ error: "community_membership_required" });
       return;
     }
+    if (isCommunityMemberMuted(membership.mutedUntil)) {
+      res.status(403).json({ error: "community_member_muted" });
+      return;
+    }
 
     const targetMembership = await prismaCommunityMembership.findUnique({
       where: {
@@ -2087,6 +2174,10 @@ communityRouter.post("/:communityId/members/:userId/ban", requireAuth, async (re
     const membership = access.memberships?.[0] ?? null;
     if (!membership) {
       res.status(403).json({ error: "community_membership_required" });
+      return;
+    }
+    if (isCommunityMemberMuted(membership.mutedUntil)) {
+      res.status(403).json({ error: "community_member_muted" });
       return;
     }
 
@@ -2184,6 +2275,10 @@ communityRouter.post("/:communityId/members/:userId/unban", requireAuth, async (
       res.status(403).json({ error: "community_membership_required" });
       return;
     }
+    if (isCommunityMemberMuted(membership.mutedUntil)) {
+      res.status(403).json({ error: "community_member_muted" });
+      return;
+    }
     if (!canManageCommunity(membership.role)) {
       res.status(403).json({ error: "community_member_moderation_forbidden" });
       return;
@@ -2262,71 +2357,16 @@ communityRouter.get("/:communityId/topics", requireAuth, async (req, res) => {
           ? {
               OR: [
                 { title: { contains: parsedQuery.data.q, mode: "insensitive" } },
-                { body: { contains: parsedQuery.data.q, mode: "insensitive" } }
+                { body: { contains: parsedQuery.data.q, mode: "insensitive" } },
+                { resourceCategory: { contains: parsedQuery.data.q, mode: "insensitive" } },
+                { eventLocation: { contains: parsedQuery.data.q, mode: "insensitive" } }
               ]
             }
           : {})
       },
       take: parsedQuery.data.limit,
       orderBy: [{ isPinned: "desc" }, { createdAt: "desc" }],
-      select: {
-        id: true,
-        title: true,
-        body: true,
-        type: true,
-        tags: true,
-        isPinned: true,
-        isSolved: true,
-        eventStartsAt: true,
-        createdAt: true,
-        updatedAt: true,
-        channel: {
-          select: {
-            id: true,
-            slug: true,
-            name: true,
-            type: true
-          }
-        },
-        author: {
-          select: {
-            id: true,
-            displayName: true,
-            username: true,
-            avatarUrl: true,
-            about: true,
-            city: true,
-            country: true,
-            expertise: true,
-            communityRole: true,
-            updatedAt: true
-          }
-        },
-        replies: {
-          take: 2,
-          orderBy: [{ isAccepted: "desc" }, { createdAt: "asc" }],
-          select: {
-            id: true,
-            body: true,
-            isAccepted: true,
-            createdAt: true,
-            author: {
-              select: {
-                id: true,
-                displayName: true,
-                username: true,
-                avatarUrl: true,
-                updatedAt: true
-              }
-            }
-          }
-        },
-        _count: {
-          select: {
-            replies: true
-          }
-        }
-      }
+      select: communityTopicSelect(2)
     });
 
     res.json({
@@ -3364,7 +3404,9 @@ communityRouter.get("/:communityId/search", requireAuth, async (req, res) => {
           communityId: access.id,
           OR: [
             { title: { contains: parsedQuery.data.q, mode: "insensitive" } },
-            { body: { contains: parsedQuery.data.q, mode: "insensitive" } }
+            { body: { contains: parsedQuery.data.q, mode: "insensitive" } },
+            { resourceCategory: { contains: parsedQuery.data.q, mode: "insensitive" } },
+            { eventLocation: { contains: parsedQuery.data.q, mode: "insensitive" } }
           ]
         },
         take: parsedQuery.data.limit,
@@ -3602,6 +3644,10 @@ communityRouter.post("/:communityId/join-requests/:requestId/reject", requireAut
       res.status(403).json({ error: "community_membership_required" });
       return;
     }
+    if (isCommunityMemberMuted(membership.mutedUntil)) {
+      res.status(403).json({ error: "community_member_muted" });
+      return;
+    }
     if (!canManageCommunity(membership.role)) {
       res.status(403).json({ error: "community_join_request_review_forbidden" });
       return;
@@ -3659,6 +3705,10 @@ communityRouter.post("/:communityId/invites", requireAuth, async (req, res) => {
     const membership = access.memberships?.[0] ?? null;
     if (!membership) {
       res.status(403).json({ error: "community_membership_required" });
+      return;
+    }
+    if (isCommunityMemberMuted(membership.mutedUntil)) {
+      res.status(403).json({ error: "community_member_muted" });
       return;
     }
     if (!canInviteCommunityMembers(membership.role)) {
@@ -4390,6 +4440,198 @@ communityRouter.get("/:communityId/topics/:topicId", requireAuth, async (req, re
   }
 });
 
+communityRouter.post("/:communityId/topics/:topicId/rsvp", requireAuth, async (req, res) => {
+  const parsedParams = communityTopicParamSchema.safeParse(req.params);
+  const parsedBody = communityTopicEventRsvpSchema.safeParse(req.body ?? {});
+  if (!parsedParams.success) {
+    res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+    return;
+  }
+  if (!parsedBody.success) {
+    res.status(400).json({ error: "validation_error", details: parsedBody.error.flatten() });
+    return;
+  }
+
+  try {
+    const access = await findCommunityAccess(parsedParams.data.communityId, req.authUserId!);
+    if (!access) {
+      res.status(404).json({ error: "community_not_found" });
+      return;
+    }
+    const membership = access.memberships?.[0] ?? null;
+    if (!membership) {
+      res.status(403).json({ error: "community_membership_required" });
+      return;
+    }
+
+    const topic = await prismaCommunityTopic.findFirst({
+      where: {
+        id: parsedParams.data.topicId,
+        communityId: access.id
+      },
+      select: {
+        id: true,
+        type: true
+      }
+    });
+    if (!topic) {
+      res.status(404).json({ error: "community_topic_not_found" });
+      return;
+    }
+    if ((topic.type ?? "").toUpperCase() !== "EVENT") {
+      res.status(400).json({ error: "community_topic_event_required" });
+      return;
+    }
+
+    await prismaCommunityTopicEventPreference.upsert({
+      where: {
+        topicId_userId: {
+          topicId: topic.id,
+          userId: req.authUserId!
+        }
+      },
+      create: {
+        topicId: topic.id,
+        userId: req.authUserId!,
+        status: toDbEventRsvpStatus(parsedBody.data.status)
+      },
+      update: {
+        status: toDbEventRsvpStatus(parsedBody.data.status)
+      }
+    });
+
+    const updated: CommunityTopicRow | null = await prismaCommunityTopic.findFirst({
+      where: {
+        id: topic.id,
+        communityId: access.id
+      },
+      select: communityTopicSelect(null)
+    });
+
+    res.json({
+      data: updated
+        ? toCommunityTopicDto(req, updated, {
+            viewerUserId: req.authUserId!,
+            viewerRole: membership.role
+          })
+        : null
+    });
+  } catch (error) {
+    logError("community topic rsvp failed", error);
+    res.status(500).json({ error: "community_topic_rsvp_failed" });
+  }
+});
+
+communityRouter.post("/:communityId/topics/:topicId/reminder", requireAuth, async (req, res) => {
+  const parsedParams = communityTopicParamSchema.safeParse(req.params);
+  const parsedBody = communityTopicEventReminderSchema.safeParse(req.body ?? {});
+  if (!parsedParams.success) {
+    res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+    return;
+  }
+  if (!parsedBody.success) {
+    res.status(400).json({ error: "validation_error", details: parsedBody.error.flatten() });
+    return;
+  }
+
+  try {
+    const access = await findCommunityAccess(parsedParams.data.communityId, req.authUserId!);
+    if (!access) {
+      res.status(404).json({ error: "community_not_found" });
+      return;
+    }
+    const membership = access.memberships?.[0] ?? null;
+    if (!membership) {
+      res.status(403).json({ error: "community_membership_required" });
+      return;
+    }
+
+    const topic = await prismaCommunityTopic.findFirst({
+      where: {
+        id: parsedParams.data.topicId,
+        communityId: access.id
+      },
+      select: {
+        id: true,
+        type: true
+      }
+    });
+    if (!topic) {
+      res.status(404).json({ error: "community_topic_not_found" });
+      return;
+    }
+    if ((topic.type ?? "").toUpperCase() !== "EVENT") {
+      res.status(400).json({ error: "community_topic_event_required" });
+      return;
+    }
+
+    const existingPreference = await prismaCommunityTopicEventPreference.findUnique({
+      where: {
+        topicId_userId: {
+          topicId: topic.id,
+          userId: req.authUserId!
+        }
+      },
+      select: {
+        status: true
+      }
+    });
+
+    if (existingPreference) {
+      if (!parsedBody.data.enabled && existingPreference.status == null) {
+        await prismaCommunityTopicEventPreference.delete({
+          where: {
+            topicId_userId: {
+              topicId: topic.id,
+              userId: req.authUserId!
+            }
+          }
+        });
+      } else {
+        await prismaCommunityTopicEventPreference.update({
+          where: {
+            topicId_userId: {
+              topicId: topic.id,
+              userId: req.authUserId!
+            }
+          },
+          data: {
+            reminderEnabled: parsedBody.data.enabled
+          }
+        });
+      }
+    } else if (parsedBody.data.enabled) {
+      await prismaCommunityTopicEventPreference.create({
+        data: {
+          topicId: topic.id,
+          userId: req.authUserId!,
+          reminderEnabled: true
+        }
+      });
+    }
+
+    const updated: CommunityTopicRow | null = await prismaCommunityTopic.findFirst({
+      where: {
+        id: topic.id,
+        communityId: access.id
+      },
+      select: communityTopicSelect(null)
+    });
+
+    res.json({
+      data: updated
+        ? toCommunityTopicDto(req, updated, {
+            viewerUserId: req.authUserId!,
+            viewerRole: membership.role
+          })
+        : null
+    });
+  } catch (error) {
+    logError("community topic reminder failed", error);
+    res.status(500).json({ error: "community_topic_reminder_failed" });
+  }
+});
+
 communityRouter.post("/:communityId/topics", requireAuth, async (req, res) => {
   const parsedParams = communityParamSchema.safeParse(req.params);
   const parsedBody = communityCreateTopicSchema.safeParse(req.body);
@@ -4431,6 +4673,14 @@ communityRouter.post("/:communityId/topics", requireAuth, async (req, res) => {
       res.status(400).json({ error: "community_event_start_required" });
       return;
     }
+    const resourceCategory =
+      parsedBody.data.type === "resource"
+        ? parsedBody.data.resourceCategory?.trim() || null
+        : null;
+    const eventLocation =
+      parsedBody.data.type === "event"
+        ? parsedBody.data.eventLocation?.trim() || null
+        : null;
 
     let channelId: string | null = null;
     if (parsedBody.data.channelId) {
@@ -4459,7 +4709,9 @@ communityRouter.post("/:communityId/topics", requireAuth, async (req, res) => {
         body: parsedBody.data.body?.trim() || null,
         authorUserId: req.authUserId!,
         tags: parsedBody.data.tags,
+        resourceCategory,
         eventStartsAt,
+        eventLocation,
         isPinned: parsedBody.data.isPinned === true && canPinCommunityTopic(membership.role)
       },
       select: communityTopicSelect(null)

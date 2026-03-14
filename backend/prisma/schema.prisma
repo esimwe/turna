@@ -136,6 +136,12 @@ enum CommunityTopicType {
   EVENT
 }
 
+enum CommunityEventRsvpStatus {
+  GOING
+  MAYBE
+  NOT_GOING
+}
+
 enum CommunityNotificationType {
   REPLY
   MENTION
@@ -215,6 +221,7 @@ model User {
   communityBans          CommunityBan[]
   communityDmRequestsSent CommunityDmRequest[] @relation("CommunityDmRequester")
   communityDmRequestsReceived CommunityDmRequest[] @relation("CommunityDmRecipient")
+  communityTopicEventPreferences CommunityTopicEventPreference[]
   communityMessageReactions CommunityMessageReaction[]
   communityReportsSubmitted CommunityReport[] @relation("CommunityReportReporter")
   communityReportsAgainst CommunityReport[] @relation("CommunityReportTarget")
@@ -732,24 +739,27 @@ model CommunityMessageReaction {
 }
 
 model CommunityTopic {
-  id           String             @id @default(uuid())
-  communityId  String
-  channelId    String?
-  type         CommunityTopicType
-  title        String
-  body         String?
-  authorUserId String
-  tags         Json?
-  isPinned     Boolean            @default(false)
-  isSolved     Boolean            @default(false)
-  eventStartsAt DateTime?
-  createdAt    DateTime           @default(now())
-  updatedAt    DateTime           @updatedAt
+  id               String                       @id @default(uuid())
+  communityId      String
+  channelId        String?
+  type             CommunityTopicType
+  title            String
+  body             String?
+  authorUserId     String
+  tags             Json?
+  resourceCategory String?
+  eventLocation    String?
+  isPinned         Boolean                      @default(false)
+  isSolved         Boolean                      @default(false)
+  eventStartsAt    DateTime?
+  createdAt        DateTime                     @default(now())
+  updatedAt        DateTime                     @updatedAt
 
-  community    Community          @relation(fields: [communityId], references: [id], onDelete: Cascade)
-  channel      CommunityChannel?  @relation(fields: [channelId], references: [id], onDelete: SetNull)
-  author       User               @relation("CommunityTopicAuthor", fields: [authorUserId], references: [id], onDelete: Cascade)
-  replies      CommunityTopicReply[]
+  community        Community                    @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  channel          CommunityChannel?            @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  author           User                         @relation("CommunityTopicAuthor", fields: [authorUserId], references: [id], onDelete: Cascade)
+  replies          CommunityTopicReply[]
+  eventPreferences CommunityTopicEventPreference[]
 
   @@index([communityId, type, createdAt(sort: Desc)])
   @@index([channelId, createdAt(sort: Desc)])
@@ -770,6 +780,22 @@ model CommunityTopicReply {
 
   @@index([topicId, createdAt(sort: Asc)])
   @@index([authorUserId, createdAt(sort: Desc)])
+}
+
+model CommunityTopicEventPreference {
+  topicId          String
+  userId           String
+  status           CommunityEventRsvpStatus?
+  reminderEnabled  Boolean                  @default(false)
+  createdAt        DateTime                 @default(now())
+  updatedAt        DateTime                 @updatedAt
+
+  topic            CommunityTopic           @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  user             User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([topicId, userId])
+  @@index([userId, updatedAt(sort: Desc)])
+  @@index([topicId, status])
 }
 
 model CommunityNotification {
