@@ -295,6 +295,10 @@ const communityBanMemberSchema = z.object({
   reason: z.string().trim().max(240).optional()
 });
 
+const communityChannelRestrictionSchema = z.object({
+  channelIds: z.array(z.string().trim().min(1).max(255)).max(40).default([])
+});
+
 type CommunityUserRow = {
   id: string;
   displayName: string;
@@ -305,14 +309,19 @@ type CommunityUserRow = {
   country?: string | null;
   expertise?: string | null;
   communityRole?: string | null;
+  memberships?: Array<{
+    communityRole?: string | null;
+  }>;
   updatedAt: Date;
 };
 
 type CommunityMembershipRow = {
   role: string;
+  communityRole?: string | null;
   joinedAt: Date;
   mutedUntil?: Date | null;
   muteReason?: string | null;
+  restrictedChannelIds?: unknown;
   user: CommunityUserRow;
 };
 
@@ -538,6 +547,36 @@ function normalizeStringList(value: unknown): string[] {
     .filter((item) => item.length > 0);
 }
 
+function normalizeUniqueStringList(value: unknown): string[] {
+  return [...new Set(normalizeStringList(value))];
+}
+
+function communityUserSelectForContext(communityId: string | null | undefined) {
+  return {
+    id: true,
+    displayName: true,
+    username: true,
+    avatarUrl: true,
+    about: true,
+    city: true,
+    country: true,
+    expertise: true,
+    communityRole: true,
+    updatedAt: true,
+    ...(communityId
+      ? {
+          memberships: {
+            where: { communityId },
+            take: 1,
+            select: {
+              communityRole: true
+            }
+          }
+        }
+      : {})
+  } as const;
+}
+
 function normalizeNullableInteger(value: unknown): number | null {
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
   return Math.max(0, Math.trunc(value));
@@ -721,13 +760,42 @@ function canAcceptCommunityTopicReply(params: {
   return canManageCommunity(params.viewerRole);
 }
 
-function canPostCommunityChannel(channelType: string | null | undefined, role: string | null | undefined) {
+function isCommunityMemberRestrictedFromChannel(
+  membership:
+    | {
+        restrictedChannelIds?: unknown;
+      }
+    | null
+    | undefined,
+  channelId: string | null | undefined
+) {
+  const normalizedChannelId = channelId?.trim();
+  if (!normalizedChannelId || !membership) return false;
+  return normalizeUniqueStringList(membership.restrictedChannelIds).includes(normalizedChannelId);
+}
+
+function canPostCommunityChannel(
+  channelType: string | null | undefined,
+  role: string | null | undefined,
+  options?: {
+    channelId?: string | null | undefined;
+    membership?:
+      | {
+          restrictedChannelIds?: unknown;
+        }
+      | null
+      | undefined;
+  }
+) {
   const normalizedChannel = (channelType ?? "").toUpperCase();
   const normalizedRole = (role ?? "").toUpperCase();
   if (normalizedChannel === "ANNOUNCEMENT") {
     return ["OWNER", "ADMIN", "MODERATOR", "MENTOR"].includes(normalizedRole);
   }
-  return normalizedChannel === "CHAT";
+  if (normalizedChannel !== "CHAT") {
+    return false;
+  }
+  return !isCommunityMemberRestrictedFromChannel(options?.membership, options?.channelId);
 }
 
 function canPinCommunityMessage(role: string | null | undefined): boolean {
@@ -773,9 +841,11 @@ function communitySelectForUser(userId: string) {
       select: {
         userId: true,
         role: true,
+        communityRole: true,
         joinedAt: true,
         mutedUntil: true,
-        muteReason: true
+        muteReason: true,
+        restrictedChannelIds: true
       }
     },
     joinRequests: {
@@ -837,9 +907,11 @@ function toCommunityDto(
     memberships?: Array<{
       userId: string;
       role: string;
+      communityRole?: string | null;
       joinedAt: Date;
       mutedUntil?: Date | null;
       muteReason?: string | null;
+      restrictedChannelIds?: unknown;
     }>;
     joinRequests?: CommunityPendingJoinRequestRow[];
     invites?: CommunityInviteRow[];
@@ -870,6 +942,9 @@ function toCommunityDto(
     isMember: membership != null,
     role: membership ? toApiRole(membership.role) : null,
     joinedAt: membership ? membership.joinedAt.toISOString() : null,
+    restrictedChannelIds: membership
+      ? normalizeUniqueStringList(membership.restrictedChannelIds)
+      : [],
     hasPendingJoinRequest: pendingJoinRequest != null,
     hasInvite: pendingInvite != null,
     joinState: membership
@@ -926,9 +1001,11 @@ async function findCommunityAccess(communityIdOrSlug: string, userId: string) {
         select: {
           userId: true,
           role: true,
+          communityRole: true,
           joinedAt: true,
           mutedUntil: true,
-          muteReason: true
+          muteReason: true,
+          restrictedChannelIds: true
         }
       }
     }
@@ -969,10 +1046,25 @@ async function findCommunityChannelForUser(
   };
 }
 
+async function findUserCommunityProfileRole(userId: string): Promise<string | null> {
+  const user = await prismaUser.findUnique({
+    where: { id: userId },
+    select: {
+      communityRole: true
+    }
+  });
+  const role = user?.communityRole?.trim();
+  return role ? role : null;
+}
+
 function toCommunityUserDto(
   req: Request,
-  user: CommunityUserRow
+  user: CommunityUserRow,
+  options?: {
+    communityRole?: string | null;
+  }
 ) {
+  const membershipRole = options?.communityRole ?? user.memberships?.[0]?.communityRole ?? user.communityRole ?? null;
   return {
     id: user.id,
     displayName: user.displayName,
@@ -982,7 +1074,7 @@ function toCommunityUserDto(
     city: user.city ?? null,
     country: user.country ?? null,
     expertise: user.expertise ?? null,
-    communityRole: user.communityRole ?? null
+    communityRole: membershipRole
   };
 }
 
@@ -1390,7 +1482,7 @@ function isCommunityMemberMuted(mutedUntil: Date | null | undefined): boolean {
   return mutedUntil != null && mutedUntil.getTime() > Date.now();
 }
 
-function communityMessageSelect() {
+function communityMessageSelect(communityId: string | null | undefined = null) {
   return {
     id: true,
     text: true,
@@ -1401,31 +1493,14 @@ function communityMessageSelect() {
     deletedAt: true,
     replyToMessageId: true,
     author: {
-      select: {
-        id: true,
-        displayName: true,
-        username: true,
-        avatarUrl: true,
-        about: true,
-        city: true,
-        country: true,
-        expertise: true,
-        communityRole: true,
-        updatedAt: true
-      }
+      select: communityUserSelectForContext(communityId)
     },
     replyToMessage: {
       select: {
         id: true,
         text: true,
         author: {
-          select: {
-            id: true,
-            displayName: true,
-            username: true,
-            avatarUrl: true,
-            updatedAt: true
-          }
+          select: communityUserSelectForContext(communityId)
         }
       }
     },
@@ -1447,7 +1522,7 @@ function communityMessageSelect() {
   } as const;
 }
 
-function communityTopicSelect(replyTake: number | null) {
+function communityTopicSelect(replyTake: number | null, communityId: string | null | undefined = null) {
   return {
     id: true,
     title: true,
@@ -1470,18 +1545,7 @@ function communityTopicSelect(replyTake: number | null) {
       }
     },
     author: {
-      select: {
-        id: true,
-        displayName: true,
-        username: true,
-        avatarUrl: true,
-        about: true,
-        city: true,
-        country: true,
-        expertise: true,
-        communityRole: true,
-        updatedAt: true
-      }
+      select: communityUserSelectForContext(communityId)
     },
     replies: {
       ...(replyTake == null ? {} : { take: replyTake }),
@@ -1492,13 +1556,7 @@ function communityTopicSelect(replyTake: number | null) {
         isAccepted: true,
         createdAt: true,
         author: {
-          select: {
-            id: true,
-            displayName: true,
-            username: true,
-            avatarUrl: true,
-            updatedAt: true
-          }
+          select: communityUserSelectForContext(communityId)
         }
       }
     },
@@ -1694,20 +1752,10 @@ communityRouter.get("/home", requireAuth, async (req, res) => {
           orderBy: [{ joinedAt: "desc" }],
           select: {
             role: true,
+            communityRole: true,
             joinedAt: true,
             user: {
-              select: {
-                id: true,
-                displayName: true,
-                username: true,
-                avatarUrl: true,
-                about: true,
-                city: true,
-                country: true,
-                expertise: true,
-                communityRole: true,
-                updatedAt: true
-              }
+              select: communityUserSelectForContext(null)
             }
           }
         })
@@ -1735,7 +1783,9 @@ communityRouter.get("/home", requireAuth, async (req, res) => {
         suggestedMembers: suggestedMembers.map((item) => ({
           role: toApiRole(item.role),
           joinedAt: item.joinedAt.toISOString(),
-          user: toCommunityUserDto(req, item.user)
+          user: toCommunityUserDto(req, item.user, {
+            communityRole: item.communityRole ?? null
+          })
         }))
       }
     });
@@ -1886,6 +1936,7 @@ communityRouter.post("/:communityId/join", requireAuth, async (req, res) => {
       return;
     }
 
+    const joiningCommunityRole = await findUserCommunityProfileRole(req.authUserId!);
     const now = new Date();
     await prisma.$transaction(async (tx: any) => {
       await tx.communityMembership.upsert({
@@ -1897,9 +1948,12 @@ communityRouter.post("/:communityId/join", requireAuth, async (req, res) => {
         },
         create: {
           communityId: community.id,
-          userId: req.authUserId!
+          userId: req.authUserId!,
+          communityRole: joiningCommunityRole
         },
-        update: {}
+        update: {
+          ...(joiningCommunityRole ? { communityRole: joiningCommunityRole } : {})
+        }
       });
       if (pendingInvite) {
         await tx.communityInvite.update({
@@ -2028,22 +2082,13 @@ communityRouter.get("/:communityId/members", requireAuth, async (req, res) => {
       orderBy: [{ joinedAt: "asc" }],
       select: {
         role: true,
+        communityRole: true,
         joinedAt: true,
         mutedUntil: true,
         muteReason: true,
+        restrictedChannelIds: true,
         user: {
-          select: {
-            id: true,
-            displayName: true,
-            username: true,
-            avatarUrl: true,
-            about: true,
-            city: true,
-            country: true,
-            expertise: true,
-            communityRole: true,
-            updatedAt: true
-          }
+          select: communityUserSelectForContext(access.id)
         }
       }
     });
@@ -2059,7 +2104,10 @@ communityRouter.get("/:communityId/members", requireAuth, async (req, res) => {
         joinedAt: item.joinedAt.toISOString(),
         mutedUntil: item.mutedUntil ? item.mutedUntil.toISOString() : null,
         muteReason: item.muteReason ?? null,
-        user: toCommunityUserDto(req, item.user)
+        restrictedChannelIds: normalizeUniqueStringList(item.restrictedChannelIds),
+        user: toCommunityUserDto(req, item.user, {
+          communityRole: item.communityRole ?? null
+        })
       }));
 
     res.json({ data });
@@ -2152,6 +2200,108 @@ communityRouter.post("/:communityId/members/:userId/mute", requireAuth, async (r
     res.status(500).json({ error: "community_member_mute_failed" });
   }
 });
+
+communityRouter.post(
+  "/:communityId/members/:userId/channel-restrictions",
+  requireAuth,
+  async (req, res) => {
+    const parsedParams = communityMemberActionParamSchema.safeParse(req.params);
+    const parsedBody = communityChannelRestrictionSchema.safeParse(req.body ?? {});
+    if (!parsedParams.success) {
+      res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+      return;
+    }
+    if (!parsedBody.success) {
+      res.status(400).json({ error: "validation_error", details: parsedBody.error.flatten() });
+      return;
+    }
+
+    try {
+      const access = await findCommunityAccess(parsedParams.data.communityId, req.authUserId!);
+      if (!access) {
+        res.status(404).json({ error: "community_not_found" });
+        return;
+      }
+      const membership = access.memberships?.[0] ?? null;
+      if (!membership) {
+        res.status(403).json({ error: "community_membership_required" });
+        return;
+      }
+      if (isCommunityMemberMuted(membership.mutedUntil)) {
+        res.status(403).json({ error: "community_member_muted" });
+        return;
+      }
+
+      const targetMembership = await prismaCommunityMembership.findUnique({
+        where: {
+          communityId_userId: {
+            communityId: access.id,
+            userId: parsedParams.data.userId
+          }
+        },
+        select: {
+          role: true
+        }
+      });
+      if (!targetMembership) {
+        res.status(404).json({ error: "community_member_not_found" });
+        return;
+      }
+      if (
+        !canModerateCommunityMember({
+          viewerRole: membership.role,
+          viewerUserId: req.authUserId!,
+          targetRole: targetMembership.role,
+          targetUserId: parsedParams.data.userId
+        })
+      ) {
+        res.status(403).json({ error: "community_member_moderation_forbidden" });
+        return;
+      }
+
+      const requestedChannelIds = normalizeUniqueStringList(parsedBody.data.channelIds);
+      if (requestedChannelIds.length > 0) {
+        const channels = await prismaCommunityChannel.findMany({
+          where: {
+            communityId: access.id,
+            id: { in: requestedChannelIds },
+            type: "CHAT"
+          },
+          select: {
+            id: true
+          }
+        });
+        if (channels.length !== requestedChannelIds.length) {
+          res.status(400).json({ error: "community_channel_restrictions_invalid" });
+          return;
+        }
+      }
+
+      await prismaCommunityMembership.update({
+        where: {
+          communityId_userId: {
+            communityId: access.id,
+            userId: parsedParams.data.userId
+          }
+        },
+        data: {
+          restrictedChannelIds:
+            requestedChannelIds.length > 0 ? requestedChannelIds : null
+        }
+      });
+
+      res.json({
+        data: {
+          userId: parsedParams.data.userId,
+          restrictedChannelIds: requestedChannelIds
+        }
+      });
+    } catch (error) {
+      logError("community member channel restrictions failed", error);
+      res.status(500).json({ error: "community_member_channel_restrictions_failed" });
+    }
+  }
+);
 
 communityRouter.post("/:communityId/members/:userId/ban", requireAuth, async (req, res) => {
   const parsedParams = communityMemberActionParamSchema.safeParse(req.params);
@@ -2366,7 +2516,7 @@ communityRouter.get("/:communityId/topics", requireAuth, async (req, res) => {
       },
       take: parsedQuery.data.limit,
       orderBy: [{ isPinned: "desc" }, { createdAt: "desc" }],
-      select: communityTopicSelect(2)
+      select: communityTopicSelect(2, access.id)
     });
 
     res.json({
@@ -2422,7 +2572,7 @@ communityRouter.get("/:communityId/channels/:channelId/messages", requireAuth, a
       },
       take: parsedQuery.data.limit,
       orderBy: [{ isPinned: "desc" }, { createdAt: "desc" }],
-      select: communityMessageSelect()
+      select: communityMessageSelect(access.community.id)
     });
 
     const items = await Promise.all(
@@ -2508,7 +2658,7 @@ communityRouter.get(
             channelId: access.channel.id,
             deletedAt: null
           },
-          select: communityMessageSelect()
+          select: communityMessageSelect(access.community.id)
         }),
         prismaCommunityMessage.findMany({
           where: {
@@ -2517,7 +2667,7 @@ communityRouter.get(
             replyToMessageId: rootMessageId
           },
           orderBy: [{ createdAt: "asc" }],
-          select: communityMessageSelect()
+          select: communityMessageSelect(access.community.id)
         })
       ]);
 
@@ -2585,8 +2735,17 @@ communityRouter.post(
         res.status(404).json({ error: "community_channel_not_found" });
         return;
       }
-      if (!canPostCommunityChannel(access.channel.type, access.membership.role)) {
-        res.status(403).json({ error: "community_channel_write_forbidden" });
+      if (
+        !canPostCommunityChannel(access.channel.type, access.membership.role, {
+          channelId: access.channel.id,
+          membership: access.membership
+        })
+      ) {
+        res.status(403).json({
+          error: isCommunityMemberRestrictedFromChannel(access.membership, access.channel.id)
+            ? "community_member_channel_restricted"
+            : "community_channel_write_forbidden"
+        });
         return;
       }
 
@@ -2653,8 +2812,17 @@ communityRouter.post("/:communityId/channels/:channelId/messages", requireAuth, 
       res.status(404).json({ error: "community_channel_not_found" });
       return;
     }
-    if (!canPostCommunityChannel(access.channel.type, access.membership.role)) {
-      res.status(403).json({ error: "community_channel_write_forbidden" });
+    if (
+      !canPostCommunityChannel(access.channel.type, access.membership.role, {
+        channelId: access.channel.id,
+        membership: access.membership
+      })
+    ) {
+      res.status(403).json({
+        error: isCommunityMemberRestrictedFromChannel(access.membership, access.channel.id)
+          ? "community_member_channel_restricted"
+          : "community_channel_write_forbidden"
+      });
       return;
     }
     if (isCommunityMemberMuted(access.membership.mutedUntil)) {
@@ -2715,7 +2883,7 @@ communityRouter.post("/:communityId/channels/:channelId/messages", requireAuth, 
         replyToMessageId,
         attachments
       },
-      select: communityMessageSelect()
+      select: communityMessageSelect(access.community.id)
     });
 
     const senderDisplayName = created.author.displayName.trim() || "Bir uye";
@@ -2896,7 +3064,7 @@ communityRouter.post(
           id: parsedParams.data.messageId,
           channelId: access.channel?.id ?? ""
         },
-        select: communityMessageSelect()
+        select: communityMessageSelect(access.community.id)
       });
       if (!message) {
         res.status(404).json({ error: "community_message_not_found" });
@@ -2929,7 +3097,7 @@ communityRouter.post(
 
       const updated = await prismaCommunityMessage.findFirst({
         where: { id: message.id },
-        select: communityMessageSelect()
+        select: communityMessageSelect(access.community.id)
       });
       if (!updated || !access.channel) {
         res.status(404).json({ error: "community_message_not_found" });
@@ -3018,7 +3186,7 @@ communityRouter.post(
 
       const updated = await prismaCommunityMessage.findFirst({
         where: { id: existing.id },
-        select: communityMessageSelect()
+        select: communityMessageSelect(access.community.id)
       });
       if (!updated) {
         res.status(404).json({ error: "community_message_not_found" });
@@ -3152,7 +3320,7 @@ communityRouter.get("/:communityId/pinned-messages", requireAuth, async (req, re
       take: parsedQuery.data.limit,
       orderBy: [{ updatedAt: "desc" }],
       select: {
-        ...communityMessageSelect(),
+        ...communityMessageSelect(access.id),
         channel: {
           select: {
             id: true,
@@ -3226,36 +3394,14 @@ communityRouter.get("/:communityId/reports", requireAuth, async (req, res) => {
         createdAt: true,
         updatedAt: true,
         reporterUser: {
-          select: {
-            id: true,
-            displayName: true,
-            username: true,
-            avatarUrl: true,
-            about: true,
-            city: true,
-            country: true,
-            expertise: true,
-            communityRole: true,
-            updatedAt: true
-          }
+          select: communityUserSelectForContext(access.id)
         },
         reportedUser: {
-          select: {
-            id: true,
-            displayName: true,
-            username: true,
-            avatarUrl: true,
-            about: true,
-            city: true,
-            country: true,
-            expertise: true,
-            communityRole: true,
-            updatedAt: true
-          }
+          select: communityUserSelectForContext(access.id)
         },
         message: {
           select: {
-            ...communityMessageSelect(),
+            ...communityMessageSelect(access.id),
             channel: {
               select: {
                 id: true,
@@ -3411,7 +3557,7 @@ communityRouter.get("/:communityId/search", requireAuth, async (req, res) => {
         },
         take: parsedQuery.data.limit,
         orderBy: [{ isPinned: "desc" }, { updatedAt: "desc" }],
-        select: communityTopicSelect(1)
+        select: communityTopicSelect(1, access.id)
       }),
       prismaCommunityMembership.findMany({
         where: {
@@ -3429,20 +3575,10 @@ communityRouter.get("/:communityId/search", requireAuth, async (req, res) => {
         orderBy: [{ joinedAt: "asc" }],
         select: {
           role: true,
+          communityRole: true,
           joinedAt: true,
           user: {
-            select: {
-              id: true,
-              displayName: true,
-              username: true,
-              avatarUrl: true,
-              about: true,
-              city: true,
-              country: true,
-              expertise: true,
-              communityRole: true,
-              updatedAt: true
-            }
+            select: communityUserSelectForContext(access.id)
           }
         }
       })
@@ -3467,7 +3603,9 @@ communityRouter.get("/:communityId/search", requireAuth, async (req, res) => {
         members: (members as CommunityMembershipRow[]).map((item) => ({
           role: toApiRole(item.role),
           joinedAt: item.joinedAt.toISOString(),
-          user: toCommunityUserDto(req, item.user)
+          user: toCommunityUserDto(req, item.user, {
+            communityRole: item.communityRole ?? null
+          })
         }))
       }
     });
@@ -3530,18 +3668,7 @@ communityRouter.get("/:communityId/join-requests", requireAuth, async (req, res)
         createdAt: true,
         updatedAt: true,
         requester: {
-          select: {
-            id: true,
-            displayName: true,
-            username: true,
-            avatarUrl: true,
-            about: true,
-            city: true,
-            country: true,
-            expertise: true,
-            communityRole: true,
-            updatedAt: true
-          }
+          select: communityUserSelectForContext(access.id)
         }
       }
     });
@@ -3596,6 +3723,7 @@ communityRouter.post("/:communityId/join-requests/:requestId/approve", requireAu
       return;
     }
 
+    const requesterCommunityRole = await findUserCommunityProfileRole(requestRow.requesterUserId);
     await prismaCommunityMembership.upsert({
       where: {
         communityId_userId: {
@@ -3605,9 +3733,12 @@ communityRouter.post("/:communityId/join-requests/:requestId/approve", requireAu
       },
       create: {
         communityId: access.id,
-        userId: requestRow.requesterUserId
+        userId: requestRow.requesterUserId,
+        communityRole: requesterCommunityRole
       },
-      update: {}
+      update: {
+        ...(requesterCommunityRole ? { communityRole: requesterCommunityRole } : {})
+      }
     });
 
     await prismaCommunityJoinRequest.update({
@@ -3848,32 +3979,10 @@ communityRouter.get("/:communityId/invites", requireAuth, async (req, res) => {
         createdAt: true,
         respondedAt: true,
         invitedUser: {
-          select: {
-            id: true,
-            displayName: true,
-            username: true,
-            avatarUrl: true,
-            about: true,
-            city: true,
-            country: true,
-            expertise: true,
-            communityRole: true,
-            updatedAt: true
-          }
+          select: communityUserSelectForContext(access.id)
         },
         createdBy: {
-          select: {
-            id: true,
-            displayName: true,
-            username: true,
-            avatarUrl: true,
-            about: true,
-            city: true,
-            country: true,
-            expertise: true,
-            communityRole: true,
-            updatedAt: true
-          }
+          select: communityUserSelectForContext(access.id)
         }
       }
     });
@@ -3930,18 +4039,7 @@ communityRouter.get("/:communityId/bans", requireAuth, async (req, res) => {
         createdAt: true,
         updatedAt: true,
         user: {
-          select: {
-            id: true,
-            displayName: true,
-            username: true,
-            avatarUrl: true,
-            about: true,
-            city: true,
-            country: true,
-            expertise: true,
-            communityRole: true,
-            updatedAt: true
-          }
+          select: communityUserSelectForContext(access.id)
         }
       }
     });
@@ -3992,32 +4090,10 @@ communityRouter.get("/:communityId/dm-requests", requireAuth, async (req, res) =
           createdAt: true,
           updatedAt: true,
           requester: {
-            select: {
-              id: true,
-              displayName: true,
-              username: true,
-              avatarUrl: true,
-              about: true,
-              city: true,
-              country: true,
-              expertise: true,
-              communityRole: true,
-              updatedAt: true
-            }
+            select: communityUserSelectForContext(access.id)
           },
           target: {
-            select: {
-              id: true,
-              displayName: true,
-              username: true,
-              avatarUrl: true,
-              about: true,
-              city: true,
-              country: true,
-              expertise: true,
-              communityRole: true,
-              updatedAt: true
-            }
+            select: communityUserSelectForContext(access.id)
           }
         }
       }),
@@ -4036,32 +4112,10 @@ communityRouter.get("/:communityId/dm-requests", requireAuth, async (req, res) =
           createdAt: true,
           updatedAt: true,
           requester: {
-            select: {
-              id: true,
-              displayName: true,
-              username: true,
-              avatarUrl: true,
-              about: true,
-              city: true,
-              country: true,
-              expertise: true,
-              communityRole: true,
-              updatedAt: true
-            }
+            select: communityUserSelectForContext(access.id)
           },
           target: {
-            select: {
-              id: true,
-              displayName: true,
-              username: true,
-              avatarUrl: true,
-              about: true,
-              city: true,
-              country: true,
-              expertise: true,
-              communityRole: true,
-              updatedAt: true
-            }
+            select: communityUserSelectForContext(access.id)
           }
         }
       })
@@ -4126,18 +4180,7 @@ communityRouter.post("/:communityId/dm-requests", requireAuth, async (req, res) 
             mutedUntil: true,
             muteReason: true,
             user: {
-              select: {
-                id: true,
-                displayName: true,
-                username: true,
-                avatarUrl: true,
-                about: true,
-                city: true,
-                country: true,
-                expertise: true,
-                communityRole: true,
-                updatedAt: true
-              }
+              select: communityUserSelectForContext(access.id)
             }
           }
         }),
@@ -4213,32 +4256,10 @@ communityRouter.post("/:communityId/dm-requests", requireAuth, async (req, res) 
         createdAt: true,
         updatedAt: true,
         requester: {
-          select: {
-            id: true,
-            displayName: true,
-            username: true,
-            avatarUrl: true,
-            about: true,
-            city: true,
-            country: true,
-            expertise: true,
-            communityRole: true,
-            updatedAt: true
-          }
+          select: communityUserSelectForContext(access.id)
         },
         target: {
-          select: {
-            id: true,
-            displayName: true,
-            username: true,
-            avatarUrl: true,
-            about: true,
-            city: true,
-            country: true,
-            expertise: true,
-            communityRole: true,
-            updatedAt: true
-          }
+          select: communityUserSelectForContext(access.id)
         }
       }
     });
@@ -4421,7 +4442,7 @@ communityRouter.get("/:communityId/topics/:topicId", requireAuth, async (req, re
         id: parsed.data.topicId,
         communityId: access.id
       },
-      select: communityTopicSelect(null)
+      select: communityTopicSelect(null, access.id)
     });
     if (!topic) {
       res.status(404).json({ error: "community_topic_not_found" });
@@ -4505,7 +4526,7 @@ communityRouter.post("/:communityId/topics/:topicId/rsvp", requireAuth, async (r
         id: topic.id,
         communityId: access.id
       },
-      select: communityTopicSelect(null)
+      select: communityTopicSelect(null, access.id)
     });
 
     res.json({
@@ -4615,7 +4636,7 @@ communityRouter.post("/:communityId/topics/:topicId/reminder", requireAuth, asyn
         id: topic.id,
         communityId: access.id
       },
-      select: communityTopicSelect(null)
+      select: communityTopicSelect(null, access.id)
     });
 
     res.json({
@@ -4714,7 +4735,7 @@ communityRouter.post("/:communityId/topics", requireAuth, async (req, res) => {
         eventLocation,
         isPinned: parsedBody.data.isPinned === true && canPinCommunityTopic(membership.role)
       },
-      select: communityTopicSelect(null)
+      select: communityTopicSelect(null, access.id)
     });
 
     const actorName = created.author.displayName.trim() || "Bir uye";
@@ -4850,7 +4871,7 @@ communityRouter.post("/:communityId/topics/:topicId/replies", requireAuth, async
         id: topic.id,
         communityId: access.id
       },
-      select: communityTopicSelect(null)
+      select: communityTopicSelect(null, access.id)
     });
 
     res.status(201).json({
@@ -4984,7 +5005,7 @@ communityRouter.post(
           id: topic.id,
           communityId: access.id
         },
-        select: communityTopicSelect(null)
+        select: communityTopicSelect(null, access.id)
       });
 
       res.json({
@@ -5063,7 +5084,7 @@ communityRouter.post("/:communityId/topics/:topicId/solve", requireAuth, async (
         id: topic.id,
         communityId: access.id
       },
-      select: communityTopicSelect(null)
+      select: communityTopicSelect(null, access.id)
     });
 
     res.json({
@@ -5134,7 +5155,7 @@ communityRouter.post("/:communityId/topics/:topicId/pin", requireAuth, async (re
         id: topic.id,
         communityId: access.id
       },
-      select: communityTopicSelect(null)
+      select: communityTopicSelect(null, access.id)
     });
 
     res.json({

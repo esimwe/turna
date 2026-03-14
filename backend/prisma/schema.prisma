@@ -587,6 +587,8 @@ model CommunityMembership {
   communityId String
   userId      String
   role        CommunityMemberRole @default(MEMBER)
+  communityRole String?
+  restrictedChannelIds Json?
   joinedAt    DateTime            @default(now())
   mutedUntil  DateTime?
   muteReason  String?
