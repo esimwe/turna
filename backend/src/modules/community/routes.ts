@@ -222,8 +222,17 @@ const communityJoinRequestListQuerySchema = z.object({
   status: z.enum(["pending", "approved", "rejected"]).optional()
 });
 
+const communityInviteListQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  status: z.enum(["pending", "accepted", "rejected"]).optional()
+});
+
 const communityDmRequestListQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20)
+});
+
+const communityBanListQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(30)
 });
 
 const communityDmRequestCreateSchema = z.object({
@@ -351,6 +360,25 @@ type CommunityInviteRow = {
   id: string;
   status: string;
   createdAt: Date;
+};
+
+type CommunityInviteListRow = {
+  id: string;
+  status: string;
+  note: string | null;
+  createdAt: Date;
+  respondedAt: Date | null;
+  invitedUser: CommunityUserRow;
+  createdBy: CommunityUserRow;
+};
+
+type CommunityBanListRow = {
+  id: string;
+  reason: string | null;
+  bannedByUserId: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  user: CommunityUserRow;
 };
 
 type CommunityDmRequestRow = {
@@ -1082,6 +1110,42 @@ function toCommunityDmRequestDto(req: Request, row: CommunityDmRequestRow) {
     updatedAt: row.updatedAt.toISOString(),
     requester: toCommunityUserDto(req, row.requester),
     target: toCommunityUserDto(req, row.target)
+  };
+}
+
+function toApiInviteStatus(
+  value: string | null | undefined
+): "pending" | "accepted" | "rejected" {
+  switch ((value ?? "").toUpperCase()) {
+    case "ACCEPTED":
+      return "accepted";
+    case "REJECTED":
+      return "rejected";
+    default:
+      return "pending";
+  }
+}
+
+function toCommunityInviteDto(req: Request, row: CommunityInviteListRow) {
+  return {
+    id: row.id,
+    status: toApiInviteStatus(row.status),
+    note: row.note,
+    createdAt: row.createdAt.toISOString(),
+    respondedAt: row.respondedAt ? row.respondedAt.toISOString() : null,
+    invitedUser: toCommunityUserDto(req, row.invitedUser),
+    createdBy: toCommunityUserDto(req, row.createdBy)
+  };
+}
+
+function toCommunityBanDto(req: Request, row: CommunityBanListRow) {
+  return {
+    id: row.id,
+    reason: row.reason,
+    bannedByUserId: row.bannedByUserId,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+    user: toCommunityUserDto(req, row.user)
   };
 }
 
@@ -2099,6 +2163,59 @@ communityRouter.post("/:communityId/members/:userId/ban", requireAuth, async (re
   } catch (error) {
     logError("community member ban failed", error);
     res.status(500).json({ error: "community_member_ban_failed" });
+  }
+});
+
+communityRouter.post("/:communityId/members/:userId/unban", requireAuth, async (req, res) => {
+  const parsedParams = communityMemberActionParamSchema.safeParse(req.params);
+  if (!parsedParams.success) {
+    res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+    return;
+  }
+
+  try {
+    const access = await findCommunityAccess(parsedParams.data.communityId, req.authUserId!);
+    if (!access) {
+      res.status(404).json({ error: "community_not_found" });
+      return;
+    }
+    const membership = access.memberships?.[0] ?? null;
+    if (!membership) {
+      res.status(403).json({ error: "community_membership_required" });
+      return;
+    }
+    if (!canManageCommunity(membership.role)) {
+      res.status(403).json({ error: "community_member_moderation_forbidden" });
+      return;
+    }
+
+    const activeBan = await prismaCommunityBan.findUnique({
+      where: {
+        communityId_userId: {
+          communityId: access.id,
+          userId: parsedParams.data.userId
+        }
+      },
+      select: { id: true }
+    });
+    if (!activeBan) {
+      res.status(404).json({ error: "community_ban_not_found" });
+      return;
+    }
+
+    await prismaCommunityBan.delete({
+      where: {
+        communityId_userId: {
+          communityId: access.id,
+          userId: parsedParams.data.userId
+        }
+      }
+    });
+
+    res.json({ data: { unbanned: true } });
+  } catch (error) {
+    logError("community member unban failed", error);
+    res.status(500).json({ error: "community_member_unban_failed" });
   }
 });
 
@@ -3623,6 +3740,166 @@ communityRouter.post("/:communityId/invites", requireAuth, async (req, res) => {
   } catch (error) {
     logError("community invite create failed", error);
     res.status(500).json({ error: "community_invite_create_failed" });
+  }
+});
+
+communityRouter.get("/:communityId/invites", requireAuth, async (req, res) => {
+  const parsedParams = communityParamSchema.safeParse(req.params);
+  const parsedQuery = communityInviteListQuerySchema.safeParse(req.query);
+  if (!parsedParams.success) {
+    res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+    return;
+  }
+  if (!parsedQuery.success) {
+    res.status(400).json({ error: "validation_error", details: parsedQuery.error.flatten() });
+    return;
+  }
+
+  try {
+    const access = await findCommunityAccess(parsedParams.data.communityId, req.authUserId!);
+    if (!access) {
+      res.status(404).json({ error: "community_not_found" });
+      return;
+    }
+    const membership = access.memberships?.[0] ?? null;
+    if (!membership) {
+      res.status(403).json({ error: "community_membership_required" });
+      return;
+    }
+    if (isCommunityMemberMuted(membership.mutedUntil)) {
+      res.status(403).json({ error: "community_member_muted" });
+      return;
+    }
+    if (!canInviteCommunityMembers(membership.role)) {
+      res.status(403).json({ error: "community_invite_forbidden" });
+      return;
+    }
+
+    const statusWhere =
+      parsedQuery.data.status === "accepted"
+        ? { status: "ACCEPTED" as const }
+        : parsedQuery.data.status === "rejected"
+        ? { status: "REJECTED" as const }
+        : parsedQuery.data.status === "pending"
+        ? { status: "PENDING" as const }
+        : {};
+
+    const invites: CommunityInviteListRow[] = await prismaCommunityInvite.findMany({
+      where: {
+        communityId: access.id,
+        ...statusWhere
+      },
+      take: parsedQuery.data.limit,
+      orderBy: [{ updatedAt: "desc" }],
+      select: {
+        id: true,
+        status: true,
+        note: true,
+        createdAt: true,
+        respondedAt: true,
+        invitedUser: {
+          select: {
+            id: true,
+            displayName: true,
+            username: true,
+            avatarUrl: true,
+            about: true,
+            city: true,
+            country: true,
+            expertise: true,
+            communityRole: true,
+            updatedAt: true
+          }
+        },
+        createdBy: {
+          select: {
+            id: true,
+            displayName: true,
+            username: true,
+            avatarUrl: true,
+            about: true,
+            city: true,
+            country: true,
+            expertise: true,
+            communityRole: true,
+            updatedAt: true
+          }
+        }
+      }
+    });
+
+    res.json({ data: invites.map((item) => toCommunityInviteDto(req, item)) });
+  } catch (error) {
+    logError("community invites failed", error);
+    res.status(500).json({ error: "community_invites_failed" });
+  }
+});
+
+communityRouter.get("/:communityId/bans", requireAuth, async (req, res) => {
+  const parsedParams = communityParamSchema.safeParse(req.params);
+  const parsedQuery = communityBanListQuerySchema.safeParse(req.query);
+  if (!parsedParams.success) {
+    res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+    return;
+  }
+  if (!parsedQuery.success) {
+    res.status(400).json({ error: "validation_error", details: parsedQuery.error.flatten() });
+    return;
+  }
+
+  try {
+    const access = await findCommunityAccess(parsedParams.data.communityId, req.authUserId!);
+    if (!access) {
+      res.status(404).json({ error: "community_not_found" });
+      return;
+    }
+    const membership = access.memberships?.[0] ?? null;
+    if (!membership) {
+      res.status(403).json({ error: "community_membership_required" });
+      return;
+    }
+    if (isCommunityMemberMuted(membership.mutedUntil)) {
+      res.status(403).json({ error: "community_member_muted" });
+      return;
+    }
+    if (!canManageCommunity(membership.role)) {
+      res.status(403).json({ error: "community_member_moderation_forbidden" });
+      return;
+    }
+
+    const bans: CommunityBanListRow[] = await prismaCommunityBan.findMany({
+      where: {
+        communityId: access.id
+      },
+      take: parsedQuery.data.limit,
+      orderBy: [{ createdAt: "desc" }],
+      select: {
+        id: true,
+        reason: true,
+        bannedByUserId: true,
+        createdAt: true,
+        updatedAt: true,
+        user: {
+          select: {
+            id: true,
+            displayName: true,
+            username: true,
+            avatarUrl: true,
+            about: true,
+            city: true,
+            country: true,
+            expertise: true,
+            communityRole: true,
+            updatedAt: true
+          }
+        }
+      }
+    });
+
+    res.json({ data: bans.map((item) => toCommunityBanDto(req, item)) });
+  } catch (error) {
+    logError("community bans failed", error);
+    res.status(500).json({ error: "community_bans_failed" });
   }
 });
 
