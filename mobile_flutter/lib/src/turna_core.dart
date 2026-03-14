@@ -168,6 +168,26 @@ class TurnaUserProfile {
     );
   }
 
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'displayName': displayName,
+      'username': username,
+      'phone': phone,
+      'email': email,
+      'about': about,
+      'avatarUrl': avatarUrl,
+      'city': city,
+      'country': country,
+      'expertise': expertise,
+      'communityRole': communityRole,
+      'interests': interests,
+      'socialLinks': socialLinks,
+      'onboardingCompletedAt': onboardingCompletedAt,
+      'createdAt': createdAt,
+    };
+  }
+
   static String? _nullableString(Object? value) {
     final text = value?.toString().trim();
     if (text == null || text.isEmpty) return null;
@@ -180,6 +200,61 @@ class TurnaUserProfile {
         .map((item) => item.toString().trim())
         .where((item) => item.isNotEmpty)
         .toList();
+  }
+}
+
+TurnaUserProfile buildTurnaSelfProfileFromSession(
+  AuthSession session, {
+  TurnaUserProfile? previous,
+}) {
+  return TurnaUserProfile(
+    id: session.userId,
+    displayName: session.displayName,
+    username: session.username,
+    phone: session.phone,
+    about: previous?.about,
+    email: previous?.email,
+    avatarUrl: session.avatarUrl ?? previous?.avatarUrl,
+    city: previous?.city,
+    country: previous?.country,
+    expertise: previous?.expertise,
+    communityRole: previous?.communityRole,
+    interests: previous?.interests ?? const <String>[],
+    socialLinks: previous?.socialLinks ?? const <String>[],
+    onboardingCompletedAt: previous?.onboardingCompletedAt,
+    createdAt: previous?.createdAt,
+  );
+}
+
+class TurnaProfileLocalCache {
+  static const String _selfProfileKey = 'turna_profile_me_v1';
+
+  static Future<TurnaUserProfile?> loadSelfProfile(AuthSession session) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_selfProfileKey);
+    if (raw == null || raw.trim().isEmpty) {
+      return buildTurnaSelfProfileFromSession(session);
+    }
+    try {
+      final decoded = jsonDecode(raw) as Map<String, dynamic>;
+      final cached = TurnaUserProfile.fromMap(decoded);
+      if (cached.id != session.userId) {
+        return buildTurnaSelfProfileFromSession(session);
+      }
+      return buildTurnaSelfProfileFromSession(session, previous: cached);
+    } catch (_) {
+      return buildTurnaSelfProfileFromSession(session);
+    }
+  }
+
+  static Future<void> saveSelfProfile(TurnaUserProfile profile) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_selfProfileKey, jsonEncode(profile.toMap()));
+  }
+
+  static Future<void> clearSelfProfile() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_selfProfileKey);
   }
 }
 

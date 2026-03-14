@@ -23,29 +23,24 @@ class _SettingsPageState extends State<SettingsPage> {
   void initState() {
     super.initState();
     _profile = _profileFromSession(widget.session);
+    unawaited(_loadCachedProfile());
   }
 
   @override
   void didUpdateWidget(covariant SettingsPage oldWidget) {
     super.didUpdateWidget(oldWidget);
     _profile = _profileFromSession(widget.session, previous: _profile);
+    if (oldWidget.session.userId != widget.session.userId ||
+        oldWidget.session.token != widget.session.token) {
+      unawaited(_loadCachedProfile());
+    }
   }
 
   TurnaUserProfile _profileFromSession(
     AuthSession session, {
     TurnaUserProfile? previous,
   }) {
-    return TurnaUserProfile(
-      id: session.userId,
-      displayName: session.displayName,
-      username: session.username,
-      phone: session.phone,
-      about: previous?.about,
-      email: previous?.email,
-      avatarUrl: session.avatarUrl,
-      onboardingCompletedAt: previous?.onboardingCompletedAt,
-      createdAt: previous?.createdAt,
-    );
+    return buildTurnaSelfProfileFromSession(session, previous: previous);
   }
 
   Future<void> _openPage(Widget page) async {
@@ -60,10 +55,19 @@ class _SettingsPageState extends State<SettingsPage> {
     await _openPage(
       ProfilePage(
         session: widget.session,
+        initialProfile: _profile,
         onProfileUpdated: widget.onSessionUpdated,
         onSessionExpired: widget.onLogout,
       ),
     );
+  }
+
+  Future<void> _loadCachedProfile() async {
+    final cached = await TurnaProfileLocalCache.loadSelfProfile(widget.session);
+    if (!mounted || cached == null) return;
+    setState(() {
+      _profile = _profileFromSession(widget.session, previous: cached);
+    });
   }
 
   Widget _buildSectionPanel(List<_SettingsMenuAction> actions) {
@@ -1873,11 +1877,13 @@ class ProfilePage extends StatefulWidget {
   const ProfilePage({
     super.key,
     required this.session,
+    this.initialProfile,
     required this.onProfileUpdated,
     required this.onSessionExpired,
   });
 
   final AuthSession session;
+  final TurnaUserProfile? initialProfile;
   final void Function(AuthSession session) onProfileUpdated;
   final VoidCallback onSessionExpired;
 
@@ -1911,7 +1917,12 @@ class _ProfilePageState extends State<ProfilePage> {
   @override
   void initState() {
     super.initState();
-    _loadProfile();
+    _profile =
+        widget.initialProfile ??
+        buildTurnaSelfProfileFromSession(widget.session);
+    _applyProfile(_profile!);
+    _loading = false;
+    unawaited(_loadCachedProfile());
   }
 
   @override
@@ -1938,9 +1949,19 @@ class _ProfilePageState extends State<ProfilePage> {
     widget.onSessionExpired();
   }
 
+  Future<void> _loadCachedProfile() async {
+    final cached = await TurnaProfileLocalCache.loadSelfProfile(widget.session);
+    if (!mounted || cached == null) return;
+    _applyProfile(cached);
+    setState(() {
+      _profile = cached;
+      _loading = false;
+    });
+  }
+
   Future<void> _loadProfile() async {
     setState(() {
-      _loading = true;
+      _loading = _profile == null;
       _error = null;
     });
 
@@ -1954,6 +1975,7 @@ class _ProfilePageState extends State<ProfilePage> {
         clearAvatarUrl: profile.avatarUrl == null,
       );
       await updatedSession.save();
+      await TurnaProfileLocalCache.saveSelfProfile(profile);
       if (!mounted) return;
       _applyProfile(profile);
       setState(() {
@@ -2061,6 +2083,7 @@ class _ProfilePageState extends State<ProfilePage> {
       clearAvatarUrl: updatedProfile.avatarUrl == null,
     );
     await updatedSession.save();
+    await TurnaProfileLocalCache.saveSelfProfile(updatedProfile);
     widget.onProfileUpdated(updatedSession);
     await TurnaAnalytics.logEvent('profile_updated', {
       'user_id': updatedSession.userId,
