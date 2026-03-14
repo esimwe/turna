@@ -447,6 +447,9 @@ class TurnaSocketClient extends ChangeNotifier {
   final VoidCallback? onSessionExpired;
 
   static const int _pageSize = 30;
+  static const int _recentCacheLimit = 60;
+  static final Map<String, List<Map<String, dynamic>>> _warmMessageCache =
+      <String, List<Map<String, dynamic>>>{};
   final List<ChatMessage> messages = [];
   final Map<String, Timer> _messageTimeouts = {};
   final Map<String, ChatMessageStatus> _pendingStatusByMessageId = {};
@@ -455,6 +458,7 @@ class TurnaSocketClient extends ChangeNotifier {
   Timer? _peerTypingTimeout;
   bool _historyLoadedFromSocket = false;
   bool _restoredPendingMessages = false;
+  bool _restoredRecentMessages = false;
   bool _isFlushingQueue = false;
   bool _localTyping = false;
   int _localMessageSeq = 0;
@@ -488,8 +492,27 @@ class TurnaSocketClient extends ChangeNotifier {
         raw.contains('session_revoked');
   }
 
+  String _pendingMessagesKey() => 'turna_pending_chat_${senderId}_$chatId';
+  String _recentMessagesKey() => 'turna_recent_chat_${senderId}_$chatId';
+  String _warmCacheKey() => '$senderId:$chatId';
+
+  void _hydrateWarmCache() {
+    if (messages.isNotEmpty) return;
+    final cached = _warmMessageCache[_warmCacheKey()];
+    if (cached == null || cached.isEmpty) return;
+    for (final raw in cached) {
+      try {
+        messages.add(
+          ChatMessage.fromPendingMap(Map<String, dynamic>.from(raw)),
+        );
+      } catch (_) {}
+    }
+    _sortMessages();
+  }
+
   void connect() {
-    loadingInitial = true;
+    _hydrateWarmCache();
+    loadingInitial = messages.isEmpty;
     error = null;
     turnaLog('socket connect start', {
       'chatId': chatId,
@@ -578,7 +601,7 @@ class TurnaSocketClient extends ChangeNotifier {
         loadingInitial = false;
         error = null;
         _markSeen();
-        _persistPendingMessages();
+        _persistMessageCaches();
         notifyListeners();
       }
     });
@@ -610,7 +633,7 @@ class TurnaSocketClient extends ChangeNotifier {
           }
         }
         _sortMessages();
-        _persistPendingMessages();
+        _persistMessageCaches();
         if (resolvedMessage.senderId != senderId) {
           _markSeen();
         }
@@ -712,6 +735,7 @@ class TurnaSocketClient extends ChangeNotifier {
     });
 
     _restorePendingMessages();
+    _restoreRecentMessages();
     _syncMessagesFromHttp(onlyIfEmpty: true);
     _socket!.connect();
   }
@@ -745,7 +769,7 @@ class TurnaSocketClient extends ChangeNotifier {
       loadingInitial = false;
       error = null;
       _markSeen();
-      _persistPendingMessages();
+      _persistMessageCaches();
       notifyListeners();
     } on TurnaUnauthorizedException catch (authError) {
       loadingInitial = false;
@@ -789,6 +813,7 @@ class TurnaSocketClient extends ChangeNotifier {
         ..addAll(merged);
       hasMore = page.hasMore;
       nextBefore = page.nextBefore;
+      _persistMessageCaches();
     } on TurnaUnauthorizedException catch (authError) {
       error = authError.toString();
       onSessionExpired?.call();
@@ -835,7 +860,7 @@ class TurnaSocketClient extends ChangeNotifier {
       messages.add(resolvedMessage);
     }
     _sortMessages();
-    _persistPendingMessages();
+    _persistMessageCaches();
     notifyListeners();
   }
 
@@ -894,7 +919,7 @@ class TurnaSocketClient extends ChangeNotifier {
     );
     messages.add(localMessage);
     _sortMessages();
-    await _persistPendingMessages();
+    await _persistMessageCaches();
     notifyListeners();
 
     turnaLog('socket chat:send', {
@@ -920,15 +945,13 @@ class TurnaSocketClient extends ChangeNotifier {
           : 'Bağlantı yok. Geri gelince otomatik gönderilecek.',
       clearErrorText: isConnected,
     );
-    await _persistPendingMessages();
+    await _persistMessageCaches();
     notifyListeners();
 
     if (isConnected) {
       _emitQueuedMessage(messages[index].id);
     }
   }
-
-  String _pendingMessagesKey() => 'turna_pending_chat_${senderId}_$chatId';
 
   Future<void> _restorePendingMessages() async {
     if (_restoredPendingMessages) return;
@@ -948,8 +971,36 @@ class TurnaSocketClient extends ChangeNotifier {
     }
 
     _sortMessages();
+    _persistWarmCacheSnapshot();
     notifyListeners();
     _flushQueuedMessages();
+  }
+
+  Future<void> _restoreRecentMessages() async {
+    if (_restoredRecentMessages) return;
+    _restoredRecentMessages = true;
+
+    final prefs = await SharedPreferences.getInstance();
+    final rawList = prefs.getStringList(_recentMessagesKey()) ?? const [];
+    if (rawList.isEmpty) return;
+
+    var changed = false;
+    for (final raw in rawList) {
+      try {
+        final decoded = jsonDecode(raw) as Map<String, dynamic>;
+        final cached = ChatMessage.fromPendingMap(decoded);
+        if (messages.any((message) => message.id == cached.id)) continue;
+        messages.add(cached);
+        changed = true;
+      } catch (_) {}
+    }
+
+    if (!changed) return;
+    _sortMessages();
+    if (messages.isNotEmpty) {
+      loadingInitial = false;
+    }
+    notifyListeners();
   }
 
   Future<void> _persistPendingMessages() async {
@@ -965,6 +1016,30 @@ class TurnaSocketClient extends ChangeNotifier {
         .map((message) => jsonEncode(message.toPendingMap()))
         .toList();
     await prefs.setStringList(_pendingMessagesKey(), pending);
+  }
+
+  void _persistWarmCacheSnapshot() {
+    final recent = messages.length <= _recentCacheLimit
+        ? messages
+        : messages.sublist(messages.length - _recentCacheLimit);
+    _warmMessageCache[_warmCacheKey()] = recent
+        .map((message) => Map<String, dynamic>.from(message.toPendingMap()))
+        .toList();
+  }
+
+  Future<void> _persistRecentMessages() async {
+    _persistWarmCacheSnapshot();
+    final prefs = await SharedPreferences.getInstance();
+    final cached =
+        (_warmMessageCache[_warmCacheKey()] ?? const <Map<String, dynamic>>[])
+            .map((message) => jsonEncode(message))
+            .toList();
+    await prefs.setStringList(_recentMessagesKey(), cached);
+  }
+
+  Future<void> _persistMessageCaches() async {
+    await _persistPendingMessages();
+    await _persistRecentMessages();
   }
 
   void _emitQueuedMessage(String localId) {
@@ -989,7 +1064,7 @@ class TurnaSocketClient extends ChangeNotifier {
             ? 'Mesaj gönderilemedi. Tekrar dene.'
             : 'Bağlantı yok. Geri gelince otomatik gönderilecek.',
       );
-      await _persistPendingMessages();
+      await _persistMessageCaches();
       notifyListeners();
     });
   }
@@ -1026,7 +1101,7 @@ class TurnaSocketClient extends ChangeNotifier {
         _emitQueuedMessage(pendingId);
         await Future<void>.delayed(const Duration(milliseconds: 120));
       }
-      await _persistPendingMessages();
+      await _persistMessageCaches();
     } finally {
       _isFlushingQueue = false;
     }
@@ -1102,6 +1177,7 @@ class TurnaSocketClient extends ChangeNotifier {
     _messageTimeouts.clear();
     _typingPauseTimer?.cancel();
     _cancelPeerTypingTimeout();
+    _persistWarmCacheSnapshot();
     _socket?.dispose();
     super.dispose();
   }
@@ -2475,7 +2551,9 @@ class ChatApi {
       rethrow;
     } catch (_) {
       throw TurnaApiException(
-        favorited ? 'Sohbet favorilere eklenemedi.' : 'Sohbet favorilerden çıkarılamadı.',
+        favorited
+            ? 'Sohbet favorilere eklenemedi.'
+            : 'Sohbet favorilerden çıkarılamadı.',
       );
     }
   }

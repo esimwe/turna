@@ -6251,8 +6251,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
             child: Stack(
               children: [
                 const Positioned.fill(child: _ChatWallpaper()),
-                if (_client.loadingInitial && timelineEntries.isEmpty)
-                  const Center(child: CircularProgressIndicator())
+                if (timelineEntries.isEmpty && _client.loadingInitial)
+                  const SizedBox.expand()
                 else if (timelineEntries.isEmpty)
                   const _CenteredState(
                     icon: Icons.chat_bubble_outline,
@@ -6270,7 +6270,12 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                         if (_client.loadingMore) {
                           return const Padding(
                             padding: EdgeInsets.symmetric(vertical: 12),
-                            child: Center(child: CircularProgressIndicator()),
+                            child: Center(
+                              child: Text(
+                                'Eski mesajlar ekleniyor...',
+                                style: TextStyle(color: Color(0xFF777C79)),
+                              ),
+                            ),
                           );
                         }
                         if (_client.hasMore) {
