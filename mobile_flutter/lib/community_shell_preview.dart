@@ -611,6 +611,45 @@ class _CommunityApiClient {
     return _decodeCommunityItem(res, fallbackError: 'Topluluğa katılınamadı.');
   }
 
+  Future<List<_CommunityUserSummary>> fetchInviteDirectory() async {
+    final res = await http.get(
+      _uri('/api/chats/directory/list'),
+      headers: _headers,
+    );
+    if (res.statusCode >= 400) {
+      throw _CommunityApiException(
+        _decodeError(res, 'Davet dizini yüklenemedi.'),
+      );
+    }
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    final raw = body['data'] as List<dynamic>? ?? const [];
+    return raw
+        .whereType<Map>()
+        .map(
+          (item) =>
+              _CommunityUserSummary.fromMap(Map<String, dynamic>.from(item)),
+        )
+        .toList();
+  }
+
+  Future<void> createInvite({
+    required String communityId,
+    required String userId,
+    String? note,
+  }) async {
+    final res = await http.post(
+      _uri('/api/communities/$communityId/invites'),
+      headers: _headers,
+      body: jsonEncode({
+        'userId': userId,
+        if ((note ?? '').trim().isNotEmpty) 'note': note!.trim(),
+      }),
+    );
+    if (res.statusCode >= 400) {
+      throw _CommunityApiException(_decodeError(res, 'Davet gönderilemedi.'));
+    }
+  }
+
   Future<List<_CommunityJoinRequestSummary>> fetchJoinRequests({
     required String communityId,
   }) async {
@@ -874,6 +913,12 @@ class _CommunityApiClient {
             return 'Bu kullanıcı için DM isteği açılamadı.';
           case 'community_member_moderation_forbidden':
             return 'Bu üyede bu işlemi yapma yetkin yok.';
+          case 'community_invite_forbidden':
+            return 'Bu toplulukta davet gönderme yetkin yok.';
+          case 'community_invite_target_not_found':
+            return 'Davet gönderilecek kullanıcı bulunamadı.';
+          case 'community_invite_target_already_member':
+            return 'Bu kullanıcı zaten topluluk üyesi.';
           case 'community_report_self_forbidden':
             return 'Kendi mesajını raporlayamazsın.';
           case 'invalid_attachment_key':
@@ -3229,6 +3274,50 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
         };
         return Column(
           children: [
+            if (community.permissions.canManageCommunity ||
+                community.permissions.canInviteMembers) ...[
+              _SurfaceCard(
+                padding: const EdgeInsets.all(18),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const _CommunitySectionHeader(
+                      emoji: '🧰',
+                      title: 'Yonetim paneli',
+                    ),
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
+                      children: [
+                        _CommunityChip(label: 'Rol: ${community.roleLabel}'),
+                        _CommunityChip(
+                          label:
+                              'Gorunurluk: ${_labelForVisibility(community.visibility)}',
+                        ),
+                        if (community.permissions.canManageCommunity)
+                          const _CommunityChip(label: 'Join review acik'),
+                        if (community.permissions.canInviteMembers)
+                          const _CommunityChip(label: 'Davet acik'),
+                      ],
+                    ),
+                    if (community.permissions.canInviteMembers) ...[
+                      const SizedBox(height: 14),
+                      FilledButton.tonalIcon(
+                        onPressed: () => _openInvitePicker(community, members),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: _CommunityUiTokens.surfaceSoft,
+                          foregroundColor: _CommunityUiTokens.text,
+                        ),
+                        icon: const Icon(Icons.person_add_alt_1_rounded),
+                        label: const Text('Turna dizininden uye davet et'),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
             if (community.permissions.canManageCommunity) ...[
               _CommunityJoinRequestsCard(
                 api: widget.api,
@@ -3400,6 +3489,58 @@ class _CommunityDetailPageState extends State<_CommunityDetailPage> {
       members: results[0] as List<_CommunityMemberSummary>,
       dmRequests: results[1] as _CommunityDmRequestFeed,
     );
+  }
+
+  Future<void> _openInvitePicker(
+    _CommunitySummary community,
+    List<_CommunityMemberSummary> members,
+  ) async {
+    try {
+      final directory = await widget.api.fetchInviteDirectory();
+      if (!mounted) return;
+      final memberIds = members.map((item) => item.user.id).toSet();
+      final candidates =
+          directory
+              .where(
+                (item) =>
+                    item.id != widget.currentUserId &&
+                    !memberIds.contains(item.id),
+              )
+              .toList()
+            ..sort(
+              (left, right) => left.displayName.toLowerCase().compareTo(
+                right.displayName.toLowerCase(),
+              ),
+            );
+      if (candidates.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Davet edilebilecek yeni kisi bulunamadi.'),
+          ),
+        );
+        return;
+      }
+      final selected = await _showCommunityInvitePicker(
+        context,
+        candidates: candidates,
+      );
+      if (selected == null || !mounted) return;
+      await widget.api.createInvite(
+        communityId: community.id,
+        userId: selected.id,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('${selected.displayName} icin davet gonderildi.'),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
   }
 
   Future<void> _createDmRequest(
@@ -9236,6 +9377,162 @@ Future<String?> _showCommunityDmRequestComposer(
       );
     },
   ).whenComplete(controller.dispose);
+}
+
+Future<_CommunityUserSummary?> _showCommunityInvitePicker(
+  BuildContext context, {
+  required List<_CommunityUserSummary> candidates,
+}) {
+  var query = '';
+  return showModalBottomSheet<_CommunityUserSummary>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.white,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+    ),
+    builder: (sheetContext) {
+      return StatefulBuilder(
+        builder: (context, setSheetState) {
+          final filtered = candidates.where((item) {
+            final normalized = query.trim().toLowerCase();
+            if (normalized.isEmpty) return true;
+            return item.displayName.toLowerCase().contains(normalized) ||
+                (item.username ?? '').toLowerCase().contains(normalized) ||
+                (item.about ?? '').toLowerCase().contains(normalized);
+          }).toList();
+          return Padding(
+            padding: EdgeInsets.fromLTRB(
+              18,
+              18,
+              18,
+              18 + MediaQuery.of(sheetContext).viewInsets.bottom,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Uye davet et',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: _CommunityUiTokens.text,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  decoration: const InputDecoration(
+                    hintText: 'Isim veya username ara',
+                    border: OutlineInputBorder(),
+                  ),
+                  onChanged: (value) =>
+                      setSheetState(() => query = value.trim()),
+                ),
+                const SizedBox(height: 14),
+                SizedBox(
+                  height: 360,
+                  child: filtered.isEmpty
+                      ? const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 18),
+                          child: Text(
+                            'Eslestirilecek kisi bulunamadi.',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: _CommunityUiTokens.textMuted,
+                            ),
+                          ),
+                        )
+                      : ListView.separated(
+                          shrinkWrap: true,
+                          itemCount: filtered.length,
+                          separatorBuilder: (_, _) =>
+                              const SizedBox(height: 10),
+                          itemBuilder: (context, index) {
+                            final item = filtered[index];
+                            return _SurfaceCard(
+                              padding: const EdgeInsets.all(14),
+                              color: _CommunityUiTokens.surfaceSoft,
+                              child: Row(
+                                children: [
+                                  Container(
+                                    width: 42,
+                                    height: 42,
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      borderRadius: BorderRadius.circular(14),
+                                    ),
+                                    alignment: Alignment.center,
+                                    child: Text(
+                                      item.displayName.trim().isNotEmpty
+                                          ? item.displayName
+                                                .trim()[0]
+                                                .toUpperCase()
+                                          : '?',
+                                      style: const TextStyle(
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.w700,
+                                        color: _CommunityUiTokens.text,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          item.displayName,
+                                          style: const TextStyle(
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w700,
+                                            color: _CommunityUiTokens.text,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          item.about?.trim().isNotEmpty == true
+                                              ? item.about!.trim()
+                                              : (item.username
+                                                            ?.trim()
+                                                            .isNotEmpty ==
+                                                        true
+                                                    ? '@${item.username!.trim()}'
+                                                    : 'Turna kullanicisi'),
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            fontSize: 12.5,
+                                            color: _CommunityUiTokens.textMuted,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  FilledButton.tonal(
+                                    onPressed: () =>
+                                        Navigator.of(sheetContext).pop(item),
+                                    style: FilledButton.styleFrom(
+                                      backgroundColor: Colors.white,
+                                      foregroundColor: _CommunityUiTokens.text,
+                                    ),
+                                    child: const Text('Davet et'),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                ),
+              ],
+            ),
+          );
+        },
+      );
+    },
+  );
 }
 
 String _joinCtaLabel(_CommunitySummary community) {
