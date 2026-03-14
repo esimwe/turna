@@ -2,6 +2,12 @@ import { Router, type Request } from "express";
 import { z } from "zod";
 import { prisma } from "../../lib/prisma.js";
 import { logError } from "../../lib/logger.js";
+import {
+  createCommunityAttachmentUploadUrl,
+  createCommunityObjectReadUrl,
+  isCommunityAttachmentKeyOwnedByUser,
+  isCommunityStorageConfigured
+} from "../../lib/storage.js";
 import { requireAuth } from "../../middleware/auth.js";
 import { buildAvatarUrl } from "../profile/avatar-url.js";
 import {
@@ -77,8 +83,71 @@ const communityMemberListQuerySchema = z.object({
 });
 
 const communitySendMessageSchema = z.object({
-  text: z.string().trim().min(1).max(4000),
+  text: z
+    .preprocess(
+      (value) => (typeof value === "string" ? value.trim() : value),
+      z.string().max(4000).optional().nullable()
+    ),
+  attachments: z
+    .array(
+      z.object({
+        objectKey: z.string().trim().min(1).max(512),
+        kind: z.enum(["image", "video", "file"]),
+        fileName: z.string().trim().min(1).max(255).nullable().optional(),
+        contentType: z.string().trim().min(1).max(100),
+        sizeBytes: z.coerce
+          .number()
+          .int()
+          .min(0)
+          .max(500 * 1024 * 1024)
+          .nullable()
+          .optional(),
+        width: z.coerce.number().int().min(0).max(10000).nullable().optional(),
+        height: z.coerce.number().int().min(0).max(10000).nullable().optional(),
+        durationSeconds: z.coerce
+          .number()
+          .int()
+          .min(0)
+          .max(24 * 60 * 60)
+          .nullable()
+          .optional()
+      })
+    )
+    .max(20)
+    .optional()
+    .default([]),
   replyToMessageId: z.string().trim().min(1).max(255).optional()
+}).superRefine((value, ctx) => {
+  if ((value.text?.length ?? 0) > 0 || value.attachments.length > 0) {
+    return;
+  }
+
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    message: "text_or_attachment_required",
+    path: ["text"]
+  });
+});
+
+const communityAttachmentUploadInitSchema = z.object({
+  kind: z.enum(["image", "video", "file"]),
+  contentType: z.string().trim().min(1).max(100),
+  fileName: z.string().trim().min(1).max(255).optional()
+}).superRefine((value, ctx) => {
+  if (value.kind === "image" && !value.contentType.startsWith("image/")) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "image_content_type_required",
+      path: ["contentType"]
+    });
+  }
+  if (value.kind === "video" && !value.contentType.startsWith("video/")) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "video_content_type_required",
+      path: ["contentType"]
+    });
+  }
 });
 
 const communityTopicsQuerySchema = z.object({
@@ -232,6 +301,17 @@ type CommunityMessageRow = {
   };
 };
 
+type CommunityMessageAttachment = {
+  objectKey: string;
+  kind: "image" | "video" | "file";
+  fileName: string | null;
+  contentType: string;
+  sizeBytes: number | null;
+  width: number | null;
+  height: number | null;
+  durationSeconds: number | null;
+};
+
 function toApiVisibility(
   value: string | null | undefined
 ): "public" | "request_only" | "invite_only" {
@@ -286,6 +366,62 @@ function normalizeStringList(value: unknown): string[] {
   return value
     .map((item) => (typeof item === "string" ? item.trim() : ""))
     .filter((item) => item.length > 0);
+}
+
+function normalizeNullableInteger(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return Math.max(0, Math.trunc(value));
+}
+
+function normalizeCommunityAttachments(value: unknown): CommunityMessageAttachment[] {
+  if (!Array.isArray(value)) return [];
+
+  return value.flatMap<CommunityMessageAttachment>((item) => {
+    if (typeof item === "string") {
+      const objectKey = item.trim();
+      if (!objectKey) return [];
+      return [
+        {
+          objectKey,
+          kind: "file",
+          fileName: null,
+          contentType: "application/octet-stream",
+          sizeBytes: null,
+          width: null,
+          height: null,
+          durationSeconds: null
+        }
+      ];
+    }
+
+    if (!item || typeof item !== "object") return [];
+    const map = item as Record<string, unknown>;
+    const objectKey = typeof map.objectKey === "string" ? map.objectKey.trim() : "";
+    if (!objectKey) return [];
+
+    const rawKind = typeof map.kind === "string" ? map.kind.trim().toLowerCase() : "";
+    const kind: CommunityMessageAttachment["kind"] =
+      rawKind === "image" || rawKind === "video" ? rawKind : "file";
+
+    const contentType = typeof map.contentType === "string" ? map.contentType.trim() : "";
+    const fileName =
+      typeof map.fileName === "string" && map.fileName.trim().length > 0
+        ? map.fileName.trim()
+        : null;
+
+    return [
+      {
+        objectKey,
+        kind,
+        fileName,
+        contentType: contentType || "application/octet-stream",
+        sizeBytes: normalizeNullableInteger(map.sizeBytes),
+        width: normalizeNullableInteger(map.width),
+        height: normalizeNullableInteger(map.height),
+        durationSeconds: normalizeNullableInteger(map.durationSeconds)
+      }
+    ];
+  });
 }
 
 function toApiTopicType(value: string | null | undefined): "question" | "resource" | "event" {
@@ -628,14 +764,44 @@ function toCommunityUserDto(
   };
 }
 
-function toCommunityMessageDto(
+async function toCommunityAttachmentDto(attachment: CommunityMessageAttachment) {
+  let url: string | null = null;
+  try {
+    url = await createCommunityObjectReadUrl(attachment.objectKey);
+  } catch (error) {
+    if (
+      !(error instanceof Error) ||
+      (error.message !== "community_storage_not_configured" &&
+        error.message !== "storage_not_configured")
+    ) {
+      throw error;
+    }
+  }
+
+  return {
+    objectKey: attachment.objectKey,
+    kind: attachment.kind,
+    fileName: attachment.fileName,
+    contentType: attachment.contentType,
+    sizeBytes: attachment.sizeBytes,
+    width: attachment.width,
+    height: attachment.height,
+    durationSeconds: attachment.durationSeconds,
+    url
+  };
+}
+
+async function toCommunityMessageDto(
   req: Request,
   row: CommunityMessageRow
 ) {
+  const attachments = normalizeCommunityAttachments(row.attachments);
   return {
     id: row.id,
     text: row.text,
-    attachments: normalizeStringList(row.attachments),
+    attachments: await Promise.all(
+      attachments.map((attachment) => toCommunityAttachmentDto(attachment))
+    ),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     deletedAt: row.deletedAt ? row.deletedAt.toISOString() : null,
@@ -782,6 +948,22 @@ function truncateCommunityText(text: string | null | undefined, maxLength = 140)
   if (!normalized) return "";
   if (normalized.length <= maxLength) return normalized;
   return `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+}
+
+function describeCommunityMessage(
+  text: string | null | undefined,
+  attachments: CommunityMessageAttachment[]
+): string {
+  const summary = truncateCommunityText(text, 120);
+  if (summary) return summary;
+  if (attachments.length === 0) return "";
+  if (attachments.length === 1) {
+    const attachment = attachments[0];
+    if (attachment.kind === "image") return "Bir gorsel paylasti";
+    if (attachment.kind === "video") return "Bir video paylasti";
+    return attachment.fileName?.trim() || "Bir dosya paylasti";
+  }
+  return `${attachments.length} medya paylasti`;
 }
 
 function communityTopicSelect(replyTake: number | null) {
@@ -1591,9 +1773,11 @@ communityRouter.get("/:communityId/channels/:channelId/messages", requireAuth, a
       }
     });
 
-    const items = messages
-      .reverse()
-      .map((item: CommunityMessageRow) => toCommunityMessageDto(req, item));
+    const items = await Promise.all(
+      messages
+        .reverse()
+        .map((item: CommunityMessageRow) => toCommunityMessageDto(req, item))
+    );
     res.json({
       data: {
         channel: {
@@ -1780,13 +1964,80 @@ communityRouter.get(
 
       res.json({
         data: {
-          root: toCommunityMessageDto(req, root),
-          replies: replies.map((item: CommunityMessageRow) => toCommunityMessageDto(req, item))
+          root: await toCommunityMessageDto(req, root),
+          replies: await Promise.all(
+            replies.map((item: CommunityMessageRow) => toCommunityMessageDto(req, item))
+          )
         }
       });
     } catch (error) {
       logError("community thread failed", error);
       res.status(500).json({ error: "community_thread_failed" });
+    }
+  }
+);
+
+communityRouter.post(
+  "/:communityId/channels/:channelId/attachments/upload-url",
+  requireAuth,
+  async (req, res) => {
+    if (!isCommunityStorageConfigured()) {
+      res.status(503).json({ error: "community_storage_not_configured" });
+      return;
+    }
+
+    const parsedParams = communityChannelParamSchema.safeParse(req.params);
+    const parsedBody = communityAttachmentUploadInitSchema.safeParse(req.body);
+    if (!parsedParams.success) {
+      res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+      return;
+    }
+    if (!parsedBody.success) {
+      res.status(400).json({ error: "validation_error", details: parsedBody.error.flatten() });
+      return;
+    }
+
+    try {
+      const access = await findCommunityChannelForUser(
+        parsedParams.data.communityId,
+        parsedParams.data.channelId,
+        req.authUserId!
+      );
+      if (!access.community) {
+        res.status(404).json({ error: "community_not_found" });
+        return;
+      }
+      if (!access.membership) {
+        res.status(403).json({ error: "community_membership_required" });
+        return;
+      }
+      if (!access.channel) {
+        res.status(404).json({ error: "community_channel_not_found" });
+        return;
+      }
+      if (!canPostCommunityChannel(access.channel.type, access.membership.role)) {
+        res.status(403).json({ error: "community_channel_write_forbidden" });
+        return;
+      }
+
+      const upload = await createCommunityAttachmentUploadUrl({
+        communityId: access.community.id,
+        userId: req.authUserId!,
+        kind: parsedBody.data.kind,
+        contentType: parsedBody.data.contentType,
+        fileName: parsedBody.data.fileName
+      });
+
+      res.json({
+        data: {
+          objectKey: upload.objectKey,
+          uploadUrl: upload.uploadUrl,
+          headers: upload.headers
+        }
+      });
+    } catch (error) {
+      logError("community attachment upload init failed", error);
+      res.status(500).json({ error: "community_attachment_upload_init_failed" });
     }
   }
 );
@@ -1804,6 +2055,17 @@ communityRouter.post("/:communityId/channels/:channelId/messages", requireAuth, 
   }
 
   try {
+    const attachments = parsedBody.data.attachments.map((attachment) => ({
+      objectKey: attachment.objectKey,
+      kind: attachment.kind,
+      fileName: attachment.fileName ?? null,
+      contentType: attachment.contentType,
+      sizeBytes: attachment.sizeBytes ?? null,
+      width: attachment.width ?? null,
+      height: attachment.height ?? null,
+      durationSeconds: attachment.durationSeconds ?? null
+    }));
+
     const access = await findCommunityChannelForUser(
       parsedParams.data.communityId,
       parsedParams.data.channelId,
@@ -1824,6 +2086,19 @@ communityRouter.post("/:communityId/channels/:channelId/messages", requireAuth, 
     if (!canPostCommunityChannel(access.channel.type, access.membership.role)) {
       res.status(403).json({ error: "community_channel_write_forbidden" });
       return;
+    }
+
+    for (const attachment of attachments) {
+      if (
+        !isCommunityAttachmentKeyOwnedByUser({
+          communityId: access.community.id,
+          userId: req.authUserId!,
+          objectKey: attachment.objectKey
+        })
+      ) {
+        res.status(403).json({ error: "invalid_attachment_key" });
+        return;
+      }
     }
 
     let replyToMessageId: string | null = null;
@@ -1862,9 +2137,9 @@ communityRouter.post("/:communityId/channels/:channelId/messages", requireAuth, 
       data: {
         channelId: access.channel.id,
         authorUserId: req.authUserId!,
-        text: parsedBody.data.text,
+        text: parsedBody.data.text ?? null,
         replyToMessageId,
-        attachments: []
+        attachments
       },
       select: {
         id: true,
@@ -1916,6 +2191,7 @@ communityRouter.post("/:communityId/channels/:channelId/messages", requireAuth, 
     });
 
     const senderDisplayName = created.author.displayName.trim() || "Bir uye";
+    const messageSummary = describeCommunityMessage(parsedBody.data.text, attachments);
     const notificationInputs: CreateCommunityNotificationInput[] = [];
     const notifiedUserIds = new Set<string>();
 
@@ -1927,7 +2203,7 @@ communityRouter.post("/:communityId/channels/:channelId/messages", requireAuth, 
         channelId: access.channel.id,
         messageId: created.id,
         title: `${senderDisplayName} mesajina yanit verdi`,
-        body: truncateCommunityText(parsedBody.data.text, 120),
+        body: messageSummary,
         metadata: {
           channelName: access.channel.name,
           communityName: access.community.name
@@ -1936,7 +2212,7 @@ communityRouter.post("/:communityId/channels/:channelId/messages", requireAuth, 
       notifiedUserIds.add(replyTarget.authorUserId);
     }
 
-    const mentionedUsernames = extractMentionedUsernames(parsedBody.data.text);
+    const mentionedUsernames = extractMentionedUsernames(parsedBody.data.text ?? "");
     if (mentionedUsernames.length > 0) {
       const mentionedMemberships = await prismaCommunityMembership.findMany({
         where: {
@@ -1967,7 +2243,7 @@ communityRouter.post("/:communityId/channels/:channelId/messages", requireAuth, 
           channelId: access.channel.id,
           messageId: created.id,
           title: `${senderDisplayName} seni andi`,
-          body: truncateCommunityText(parsedBody.data.text, 120),
+          body: messageSummary,
           metadata: {
             channelName: access.channel.name,
             communityName: access.community.name,
@@ -1997,7 +2273,7 @@ communityRouter.post("/:communityId/channels/:channelId/messages", requireAuth, 
           channelId: access.channel.id,
           messageId: created.id,
           title: `${access.community.name} toplulugunda yeni duyuru`,
-          body: truncateCommunityText(parsedBody.data.text, 120),
+          body: messageSummary,
           metadata: {
             channelName: access.channel.name,
             communityName: access.community.name
@@ -2008,7 +2284,7 @@ communityRouter.post("/:communityId/channels/:channelId/messages", requireAuth, 
 
     await createCommunityNotifications(notificationInputs);
 
-    const createdDto = toCommunityMessageDto(req, created);
+    const createdDto = await toCommunityMessageDto(req, created);
     if (rootThreadMessageId) {
       const replyCount = await prismaCommunityMessage.count({
         where: {
