@@ -3139,38 +3139,32 @@ class _CommunityThreadRootCard extends StatelessWidget {
         : '$replyCount yanıt';
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(24),
+        color: _CommunityUiTokens.surfaceSoft,
+        borderRadius: BorderRadius.circular(20),
         border: Border.all(color: _CommunityUiTokens.border),
-        boxShadow: _CommunityUiTokens.softShadow,
       ),
       child: Padding(
         padding: const EdgeInsets.all(14),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              crossAxisAlignment: WrapCrossAlignment.center,
+            Row(
               children: [
-                DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: _CommunityUiTokens.surfaceSoft,
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                  child: const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    child: Text(
-                      'Ana mesaj',
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                        color: _CommunityUiTokens.text,
-                      ),
-                    ),
+                const Icon(
+                  Icons.push_pin_outlined,
+                  size: 15,
+                  color: _CommunityUiTokens.textMuted,
+                ),
+                const SizedBox(width: 6),
+                const Text(
+                  'Ana mesaj',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: _CommunityUiTokens.text,
                   ),
                 ),
+                const Spacer(),
                 Text(
                   '# $channelName',
                   style: const TextStyle(
@@ -3179,29 +3173,22 @@ class _CommunityThreadRootCard extends StatelessWidget {
                     color: _CommunityUiTokens.textMuted,
                   ),
                 ),
-                Text(
-                  '• ${_formatCommunityDate(message.createdAt)}',
-                  style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: _CommunityUiTokens.textMuted,
-                  ),
-                ),
               ],
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
             _CommunityMessageBubble(
               message: message,
               mine: mine,
               dense: true,
               showReplyPreview: false,
+              showCreatedAt: true,
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
             Row(
               children: [
                 const Icon(
                   Icons.forum_outlined,
-                  size: 16,
+                  size: 15,
                   color: _CommunityUiTokens.textMuted,
                 ),
                 const SizedBox(width: 6),
@@ -3209,7 +3196,7 @@ class _CommunityThreadRootCard extends StatelessWidget {
                   child: Text(
                     replyLabel,
                     style: const TextStyle(
-                      fontSize: 12,
+                      fontSize: 11.5,
                       fontWeight: FontWeight.w600,
                       color: _CommunityUiTokens.textMuted,
                     ),
@@ -3238,15 +3225,15 @@ class _CommunityThreadRepliesHeader extends StatelessWidget {
       children: [
         const Icon(
           Icons.subdirectory_arrow_right_rounded,
-          size: 18,
+          size: 16,
           color: _CommunityUiTokens.textMuted,
         ),
-        const SizedBox(width: 8),
+        const SizedBox(width: 6),
         const Expanded(
           child: Text(
             'Yanıtlar',
             style: TextStyle(
-              fontSize: 16,
+              fontSize: 14,
               fontWeight: FontWeight.w700,
               color: _CommunityUiTokens.text,
             ),
@@ -3255,7 +3242,7 @@ class _CommunityThreadRepliesHeader extends StatelessWidget {
         Text(
           trailing,
           style: const TextStyle(
-            fontSize: 12,
+            fontSize: 11.5,
             fontWeight: FontWeight.w600,
             color: _CommunityUiTokens.textMuted,
           ),
@@ -3308,16 +3295,16 @@ class _CommunityThreadReplyTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return IntrinsicHeight(
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
-            width: 20,
+            width: 16,
             child: Column(
               children: [
-                const SizedBox(height: 18),
+                const SizedBox(height: 10),
                 Container(
-                  width: 10,
-                  height: 10,
+                  width: 8,
+                  height: 8,
                   decoration: BoxDecoration(
                     color: Colors.white,
                     shape: BoxShape.circle,
@@ -3328,8 +3315,8 @@ class _CommunityThreadReplyTile extends StatelessWidget {
                   Expanded(
                     child: Center(
                       child: Container(
-                        width: 2,
-                        margin: const EdgeInsets.symmetric(vertical: 6),
+                        width: 1.5,
+                        margin: const EdgeInsets.symmetric(vertical: 5),
                         decoration: BoxDecoration(
                           color: _CommunityUiTokens.border,
                           borderRadius: BorderRadius.circular(999),
@@ -3340,13 +3327,14 @@ class _CommunityThreadReplyTile extends StatelessWidget {
               ],
             ),
           ),
-          const SizedBox(width: 10),
+          const SizedBox(width: 8),
           Expanded(
             child: _CommunityMessageBubble(
               message: message,
               mine: mine,
               dense: true,
               showReplyPreview: false,
+              showCreatedAt: true,
             ),
           ),
         ],
@@ -4645,6 +4633,7 @@ class _CommunityMessageBubble extends StatelessWidget {
     this.onTap,
     this.dense = false,
     this.showReplyPreview = true,
+    this.showCreatedAt = false,
   });
 
   final _CommunityMessageSummary message;
@@ -4653,26 +4642,54 @@ class _CommunityMessageBubble extends StatelessWidget {
   final VoidCallback? onTap;
   final bool dense;
   final bool showReplyPreview;
+  final bool showCreatedAt;
 
   @override
   Widget build(BuildContext context) {
     final alignment = mine ? CrossAxisAlignment.end : CrossAxisAlignment.start;
     final color = mine ? _CommunityUiTokens.text : Colors.white;
     final textColor = mine ? Colors.white : _CommunityUiTokens.text;
-    final bubblePadding = dense ? 12.0 : 14.0;
-    final authorSpacing = dense ? 4.0 : 6.0;
+    final bubblePadding = dense ? 11.0 : 14.0;
+    final authorSpacing = dense ? 3.0 : 6.0;
     final bodyFontSize = dense ? 13.5 : 14.0;
     return Column(
       crossAxisAlignment: alignment,
       children: [
-        Text(
-          message.author.displayName,
-          style: const TextStyle(
-            fontSize: 11,
-            fontWeight: FontWeight.w700,
-            color: _CommunityUiTokens.textMuted,
+        if (showCreatedAt)
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Flexible(
+                child: Text(
+                  message.author.displayName,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: _CommunityUiTokens.textMuted,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                _formatCommunityDate(message.createdAt),
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: _CommunityUiTokens.textMuted,
+                ),
+              ),
+            ],
+          )
+        else
+          Text(
+            message.author.displayName,
+            style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              color: _CommunityUiTokens.textMuted,
+            ),
           ),
-        ),
         SizedBox(height: authorSpacing),
         GestureDetector(
           onTap: onTap,
@@ -4681,7 +4698,7 @@ class _CommunityMessageBubble extends StatelessWidget {
             padding: EdgeInsets.all(bubblePadding),
             decoration: BoxDecoration(
               color: color,
-              borderRadius: BorderRadius.circular(20),
+              borderRadius: BorderRadius.circular(dense ? 18 : 20),
               border: Border.all(color: _CommunityUiTokens.border),
             ),
             child: Column(
