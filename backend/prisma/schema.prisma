@@ -156,6 +156,12 @@ enum CommunityInviteStatus {
   REVOKED
 }
 
+enum CommunityDmRequestStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
 model User {
   id                    String             @id @default(uuid())
   username              String?            @unique
@@ -206,6 +212,12 @@ model User {
   reviewedCommunityJoinRequests CommunityJoinRequest[] @relation("CommunityJoinReviewer")
   communityInvitesReceived CommunityInvite[] @relation("CommunityInviteRecipient")
   communityInvitesSent   CommunityInvite[]   @relation("CommunityInviteCreator")
+  communityBans          CommunityBan[]
+  communityDmRequestsSent CommunityDmRequest[] @relation("CommunityDmRequester")
+  communityDmRequestsReceived CommunityDmRequest[] @relation("CommunityDmRecipient")
+  communityMessageReactions CommunityMessageReaction[]
+  communityReportsSubmitted CommunityReport[] @relation("CommunityReportReporter")
+  communityReportsAgainst CommunityReport[] @relation("CommunityReportTarget")
 
   @@index([accountStatus])
 }
@@ -555,8 +567,11 @@ model Community {
   memberships       CommunityMembership[]
   joinRequests      CommunityJoinRequest[]
   invites           CommunityInvite[]
+  bans              CommunityBan[]
+  dmRequests        CommunityDmRequest[]
   channels          CommunityChannel[]
   topics            CommunityTopic[]
+  reports           CommunityReport[]
 
   @@index([isListed, createdAt(sort: Desc)])
 }
@@ -566,6 +581,8 @@ model CommunityMembership {
   userId      String
   role        CommunityMemberRole @default(MEMBER)
   joinedAt    DateTime            @default(now())
+  mutedUntil  DateTime?
+  muteReason  String?
 
   community   Community           @relation(fields: [communityId], references: [id], onDelete: Cascade)
   user        User                @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -615,6 +632,44 @@ model CommunityInvite {
   @@unique([communityId, invitedUserId, status])
 }
 
+model CommunityBan {
+  id             String    @id @default(uuid())
+  communityId    String
+  userId         String
+  reason         String?
+  bannedByUserId String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  community      Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([communityId, userId])
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([communityId, createdAt(sort: Desc)])
+}
+
+model CommunityDmRequest {
+  id              String                   @id @default(uuid())
+  communityId     String
+  requesterUserId String
+  targetUserId    String
+  note            String?
+  status          CommunityDmRequestStatus @default(PENDING)
+  respondedAt     DateTime?
+  createdAt       DateTime                 @default(now())
+  updatedAt       DateTime                 @updatedAt
+
+  community       Community                @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  requester       User                     @relation("CommunityDmRequester", fields: [requesterUserId], references: [id], onDelete: Cascade)
+  target          User                     @relation("CommunityDmRecipient", fields: [targetUserId], references: [id], onDelete: Cascade)
+
+  @@index([communityId, status, createdAt(sort: Desc)])
+  @@index([requesterUserId, status, createdAt(sort: Desc)])
+  @@index([targetUserId, status, createdAt(sort: Desc)])
+  @@unique([communityId, requesterUserId, targetUserId, status])
+}
+
 model CommunityChannel {
   id          String               @id @default(uuid())
   communityId String
@@ -642,6 +697,7 @@ model CommunityMessage {
   authorUserId     String
   text             String?
   attachments      Json?
+  isPinned         Boolean           @default(false)
   replyToMessageId String?
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
@@ -651,10 +707,28 @@ model CommunityMessage {
   author           User              @relation("CommunityMessageAuthor", fields: [authorUserId], references: [id], onDelete: Cascade)
   replyToMessage   CommunityMessage? @relation("CommunityMessageReplies", fields: [replyToMessageId], references: [id], onDelete: SetNull)
   replies          CommunityMessage[] @relation("CommunityMessageReplies")
+  reactions        CommunityMessageReaction[]
+  reports          CommunityReport[]
 
   @@index([channelId, createdAt(sort: Desc)])
+  @@index([channelId, isPinned, createdAt(sort: Desc)])
   @@index([authorUserId, createdAt(sort: Desc)])
   @@index([replyToMessageId])
+}
+
+model CommunityMessageReaction {
+  id          String           @id @default(uuid())
+  messageId   String
+  userId      String
+  emoji       String
+  createdAt   DateTime         @default(now())
+
+  message     CommunityMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId, emoji])
+  @@index([messageId, createdAt(sort: Desc)])
+  @@index([userId, createdAt(sort: Desc)])
 }
 
 model CommunityTopic {
@@ -718,6 +792,30 @@ model CommunityNotification {
   @@index([communityId, createdAt(sort: Desc)])
   @@index([channelId, createdAt(sort: Desc)])
   @@index([messageId])
+}
+
+model CommunityReport {
+  id             String          @id @default(uuid())
+  communityId    String
+  reporterUserId String
+  reportedUserId String?
+  messageId      String?
+  reasonCode     String
+  details        String?
+  status         ReportStatus    @default(OPEN)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  community      Community       @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  reporterUser   User            @relation("CommunityReportReporter", fields: [reporterUserId], references: [id], onDelete: Cascade)
+  reportedUser   User?           @relation("CommunityReportTarget", fields: [reportedUserId], references: [id], onDelete: SetNull)
+  message        CommunityMessage? @relation(fields: [messageId], references: [id], onDelete: SetNull)
+
+  @@index([communityId, createdAt(sort: Desc)])
+  @@index([reporterUserId, createdAt(sort: Desc)])
+  @@index([reportedUserId])
+  @@index([messageId])
+  @@index([status, createdAt(sort: Desc)])
 }
 
 model ReportCase {

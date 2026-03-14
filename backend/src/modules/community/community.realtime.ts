@@ -50,6 +50,21 @@ export function emitCommunityThreadUpdate(payload: {
     .emit("community:thread:update", payload);
 }
 
+export function emitCommunityMessageUpdate(payload: {
+  communityId: string;
+  channelId: string;
+  rootMessageId: string;
+  message: Record<string, unknown>;
+}): void {
+  if (!communityIo) return;
+  communityIo
+    .to(communityChannelRoom(payload.channelId))
+    .emit("community:message:update", payload);
+  communityIo
+    .to(communityThreadRoom(payload.rootMessageId))
+    .emit("community:message:update", payload);
+}
+
 export function emitCommunityNotification(userIds: string[], payload: Record<string, unknown>): void {
   if (!communityIo) return;
   for (const userId of new Set(userIds)) {
