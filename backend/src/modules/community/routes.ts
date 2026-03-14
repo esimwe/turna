@@ -248,6 +248,22 @@ const communityReportCreateSchema = z.object({
     )
 });
 
+const communityReportParamSchema = z.object({
+  communityId: z.string().trim().min(1).max(255),
+  reportId: z.string().trim().min(1).max(255)
+});
+
+const communityReportListQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  status: z
+    .enum(["active", "open", "under_review", "actioned", "rejected", "resolved"])
+    .optional()
+});
+
+const communityReportStatusSchema = z.object({
+  status: z.enum(["under_review", "actioned", "rejected", "resolved"])
+});
+
 const communityMuteMemberSchema = z.object({
   minutes: z.coerce.number().int().min(0).max(60 * 24 * 30).default(24 * 60),
   reason: z.string().trim().max(240).optional()
@@ -375,6 +391,34 @@ type CommunityMessageRow = {
   _count?: {
     replies?: number;
   };
+};
+
+type CommunityPinnedMessageRow = CommunityMessageRow & {
+  channel: {
+    id: string;
+    slug: string;
+    name: string;
+    type: string;
+  };
+};
+
+type CommunityReportRow = {
+  id: string;
+  reasonCode: string;
+  details: string | null;
+  status: string;
+  createdAt: Date;
+  updatedAt: Date;
+  reporterUser: CommunityUserRow;
+  reportedUser: CommunityUserRow | null;
+  message: (CommunityMessageRow & {
+    channel: {
+      id: string;
+      slug: string;
+      name: string;
+      type: string;
+    };
+  }) | null;
 };
 
 type CommunityMessageAttachment = {
@@ -1038,6 +1082,105 @@ function toCommunityDmRequestDto(req: Request, row: CommunityDmRequestRow) {
     updatedAt: row.updatedAt.toISOString(),
     requester: toCommunityUserDto(req, row.requester),
     target: toCommunityUserDto(req, row.target)
+  };
+}
+
+function toApiReportStatus(
+  value: string | null | undefined
+): "open" | "under_review" | "actioned" | "rejected" | "resolved" {
+  switch ((value ?? "").toUpperCase()) {
+    case "UNDER_REVIEW":
+      return "under_review";
+    case "ACTIONED":
+      return "actioned";
+    case "REJECTED":
+      return "rejected";
+    case "RESOLVED":
+      return "resolved";
+    default:
+      return "open";
+  }
+}
+
+function toDbReportStatus(
+  value: "under_review" | "actioned" | "rejected" | "resolved"
+): "UNDER_REVIEW" | "ACTIONED" | "REJECTED" | "RESOLVED" {
+  switch (value) {
+    case "under_review":
+      return "UNDER_REVIEW";
+    case "actioned":
+      return "ACTIONED";
+    case "rejected":
+      return "REJECTED";
+    case "resolved":
+      return "RESOLVED";
+  }
+}
+
+function communityReportWhereByStatus(
+  value: "active" | "open" | "under_review" | "actioned" | "rejected" | "resolved" | undefined
+) {
+  switch (value) {
+    case "open":
+      return { status: "OPEN" as const };
+    case "under_review":
+      return { status: "UNDER_REVIEW" as const };
+    case "actioned":
+      return { status: "ACTIONED" as const };
+    case "rejected":
+      return { status: "REJECTED" as const };
+    case "resolved":
+      return { status: "RESOLVED" as const };
+    default:
+      return { status: { in: ["OPEN", "UNDER_REVIEW"] as const } };
+  }
+}
+
+async function toCommunityPinnedMessageDto(
+  req: Request,
+  row: CommunityPinnedMessageRow,
+  options?: {
+    viewerUserId?: string | null;
+  }
+) {
+  return {
+    channel: {
+      id: row.channel.id,
+      slug: row.channel.slug,
+      name: row.channel.name,
+      type: toApiChannelType(row.channel.type)
+    },
+    message: await toCommunityMessageDto(req, row, options)
+  };
+}
+
+async function toCommunityReportDto(
+  req: Request,
+  row: CommunityReportRow,
+  options?: {
+    viewerUserId?: string | null;
+  }
+) {
+  return {
+    id: row.id,
+    reasonCode: row.reasonCode,
+    details: row.details,
+    status: toApiReportStatus(row.status),
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+    reporter: toCommunityUserDto(req, row.reporterUser),
+    reportedUser: row.reportedUser ? toCommunityUserDto(req, row.reportedUser) : null,
+    channel: row.message?.channel
+      ? {
+          id: row.message.channel.id,
+          slug: row.message.channel.slug,
+          name: row.message.channel.name,
+          type: toApiChannelType(row.message.channel.type)
+        }
+      : null,
+    message: row.message
+      ? await toCommunityMessageDto(req, row.message, options)
+      : null
   };
 }
 
@@ -2816,6 +2959,244 @@ communityRouter.post(
     }
   }
 );
+
+communityRouter.get("/:communityId/pinned-messages", requireAuth, async (req, res) => {
+  const parsedParams = communityParamSchema.safeParse(req.params);
+  const parsedQuery = communityListLimitSchema.safeParse(req.query);
+  if (!parsedParams.success) {
+    res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+    return;
+  }
+  if (!parsedQuery.success) {
+    res.status(400).json({ error: "validation_error", details: parsedQuery.error.flatten() });
+    return;
+  }
+
+  try {
+    const access = await findCommunityAccess(parsedParams.data.communityId, req.authUserId!);
+    if (!access) {
+      res.status(404).json({ error: "community_not_found" });
+      return;
+    }
+    if (!access.memberships?.[0]) {
+      res.status(403).json({ error: "community_membership_required" });
+      return;
+    }
+
+    const messages: CommunityPinnedMessageRow[] = await prismaCommunityMessage.findMany({
+      where: {
+        channel: {
+          communityId: access.id
+        },
+        isPinned: true,
+        replyToMessageId: null,
+        deletedAt: null
+      },
+      take: parsedQuery.data.limit,
+      orderBy: [{ updatedAt: "desc" }],
+      select: {
+        ...communityMessageSelect(),
+        channel: {
+          select: {
+            id: true,
+            slug: true,
+            name: true,
+            type: true
+          }
+        }
+      }
+    });
+
+    res.json({
+      data: await Promise.all(
+        messages.map((item) =>
+          toCommunityPinnedMessageDto(req, item, {
+            viewerUserId: req.authUserId!
+          })
+        )
+      )
+    });
+  } catch (error) {
+    logError("community pinned messages failed", error);
+    res.status(500).json({ error: "community_pinned_messages_failed" });
+  }
+});
+
+communityRouter.get("/:communityId/reports", requireAuth, async (req, res) => {
+  const parsedParams = communityParamSchema.safeParse(req.params);
+  const parsedQuery = communityReportListQuerySchema.safeParse(req.query);
+  if (!parsedParams.success) {
+    res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+    return;
+  }
+  if (!parsedQuery.success) {
+    res.status(400).json({ error: "validation_error", details: parsedQuery.error.flatten() });
+    return;
+  }
+
+  try {
+    const access = await findCommunityAccess(parsedParams.data.communityId, req.authUserId!);
+    if (!access) {
+      res.status(404).json({ error: "community_not_found" });
+      return;
+    }
+    const membership = access.memberships?.[0] ?? null;
+    if (!membership) {
+      res.status(403).json({ error: "community_membership_required" });
+      return;
+    }
+    if (isCommunityMemberMuted(membership.mutedUntil)) {
+      res.status(403).json({ error: "community_member_muted" });
+      return;
+    }
+    if (!canManageCommunity(membership.role)) {
+      res.status(403).json({ error: "community_report_review_forbidden" });
+      return;
+    }
+
+    const reports: CommunityReportRow[] = await prismaCommunityReport.findMany({
+      where: {
+        communityId: access.id,
+        ...communityReportWhereByStatus(parsedQuery.data.status)
+      },
+      take: parsedQuery.data.limit,
+      orderBy: [{ createdAt: "desc" }],
+      select: {
+        id: true,
+        reasonCode: true,
+        details: true,
+        status: true,
+        createdAt: true,
+        updatedAt: true,
+        reporterUser: {
+          select: {
+            id: true,
+            displayName: true,
+            username: true,
+            avatarUrl: true,
+            about: true,
+            city: true,
+            country: true,
+            expertise: true,
+            communityRole: true,
+            updatedAt: true
+          }
+        },
+        reportedUser: {
+          select: {
+            id: true,
+            displayName: true,
+            username: true,
+            avatarUrl: true,
+            about: true,
+            city: true,
+            country: true,
+            expertise: true,
+            communityRole: true,
+            updatedAt: true
+          }
+        },
+        message: {
+          select: {
+            ...communityMessageSelect(),
+            channel: {
+              select: {
+                id: true,
+                slug: true,
+                name: true,
+                type: true
+              }
+            }
+          }
+        }
+      }
+    });
+
+    res.json({
+      data: await Promise.all(
+        reports.map((item) =>
+          toCommunityReportDto(req, item, {
+            viewerUserId: req.authUserId!
+          })
+        )
+      )
+    });
+  } catch (error) {
+    logError("community reports failed", error);
+    res.status(500).json({ error: "community_reports_failed" });
+  }
+});
+
+communityRouter.post("/:communityId/reports/:reportId/status", requireAuth, async (req, res) => {
+  const parsedParams = communityReportParamSchema.safeParse(req.params);
+  const parsedBody = communityReportStatusSchema.safeParse(req.body);
+  if (!parsedParams.success) {
+    res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+    return;
+  }
+  if (!parsedBody.success) {
+    res.status(400).json({ error: "validation_error", details: parsedBody.error.flatten() });
+    return;
+  }
+
+  try {
+    const access = await findCommunityAccess(parsedParams.data.communityId, req.authUserId!);
+    if (!access) {
+      res.status(404).json({ error: "community_not_found" });
+      return;
+    }
+    const membership = access.memberships?.[0] ?? null;
+    if (!membership) {
+      res.status(403).json({ error: "community_membership_required" });
+      return;
+    }
+    if (isCommunityMemberMuted(membership.mutedUntil)) {
+      res.status(403).json({ error: "community_member_muted" });
+      return;
+    }
+    if (!canManageCommunity(membership.role)) {
+      res.status(403).json({ error: "community_report_review_forbidden" });
+      return;
+    }
+
+    const existing = await prismaCommunityReport.findFirst({
+      where: {
+        id: parsedParams.data.reportId,
+        communityId: access.id
+      },
+      select: {
+        id: true
+      }
+    });
+    if (!existing) {
+      res.status(404).json({ error: "community_report_not_found" });
+      return;
+    }
+
+    const updated = await prismaCommunityReport.update({
+      where: { id: existing.id },
+      data: {
+        status: toDbReportStatus(parsedBody.data.status)
+      },
+      select: {
+        id: true,
+        status: true,
+        updatedAt: true
+      }
+    });
+
+    res.json({
+      data: {
+        id: updated.id,
+        status: toApiReportStatus(updated.status),
+        updatedAt: updated.updatedAt.toISOString()
+      }
+    });
+  } catch (error) {
+    logError("community report update failed", error);
+    res.status(500).json({ error: "community_report_update_failed" });
+  }
+});
 
 communityRouter.get("/:communityId/search", requireAuth, async (req, res) => {
   const parsedParams = communityParamSchema.safeParse(req.params);
