@@ -2759,6 +2759,7 @@ class _CommunityChannelPageState extends State<_CommunityChannelPage> {
                                           widget.currentUserId,
                                       onReply: () => _openThread(item),
                                       onTap: () => _openThread(item),
+                                      showCreatedAt: true,
                                     );
                                   },
                                 ),
@@ -4768,22 +4769,45 @@ class _CommunityMessageBubble extends StatelessWidget {
                 ),
               if (message.replyCount > 0 && onTap != null) ...[
                 if (onReply != null) const SizedBox(width: 6),
-                TextButton(
-                  onPressed: onTap,
-                  style: TextButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 6,
+                InkWell(
+                  onTap: onTap,
+                  borderRadius: BorderRadius.circular(999),
+                  child: Ink(
+                    decoration: BoxDecoration(
+                      color: _CommunityUiTokens.surfaceSoft,
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: _CommunityUiTokens.border),
                     ),
-                    foregroundColor: _CommunityUiTokens.textMuted,
-                    minimumSize: Size.zero,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                  child: Text(
-                    '${message.replyCount} yanıt',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 7,
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(
+                            Icons.forum_outlined,
+                            size: 15,
+                            color: _CommunityUiTokens.textMuted,
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            '${message.replyCount} yanıt',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: _CommunityUiTokens.text,
+                            ),
+                          ),
+                          const SizedBox(width: 5),
+                          const Icon(
+                            Icons.arrow_forward_ios_rounded,
+                            size: 11,
+                            color: _CommunityUiTokens.textMuted,
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
