@@ -7677,7 +7677,7 @@ class _CommunityReportsInboxCardState
                 if (detailText.isNotEmpty) ...[
                   const SizedBox(height: 16),
                   const Text(
-                    'Moderator notu',
+                    'Rapor aciklamasi',
                     style: TextStyle(
                       fontSize: 12.5,
                       fontWeight: FontWeight.w700,
