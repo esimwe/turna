@@ -39,8 +39,10 @@
 	<string>Görsel ve videoları cihaza kaydedebilmek için galeri erişimi gerekiyor.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Fotograf ve video cekebilmek icin kamera erisimi gerekiyor.</string>
-		<key>NSMicrophoneUsageDescription</key>
-		<string>Sesli mesaj, arama ve video icin mikrofon erisimi gerekiyor.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Sesli mesaj, arama ve video icin mikrofon erisimi gerekiyor.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Kilitli sohbetleri ve Turna uygulamasini acmak icin Face ID veya cihaz dogrulamasi gerekiyor.</string>
 		<key>NSContactsUsageDescription</key>
 		<string>Rehberinizde kayitli kisileri isimleriyle gosterebilmek icin kisiler erisimi gerekiyor.</string>
 		<key>NSLocationWhenInUseUsageDescription</key>
