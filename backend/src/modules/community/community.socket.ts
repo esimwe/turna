@@ -3,7 +3,7 @@ import { z } from "zod";
 import { prisma } from "../../lib/prisma.js";
 import { assertUserCanAccessAppById } from "../../lib/user-access.js";
 import { logError, logInfo } from "../../lib/logger.js";
-import { communityChannelRoom } from "./community.realtime.js";
+import { communityChannelRoom, communityThreadRoom } from "./community.realtime.js";
 
 const prismaCommunity = (prisma as unknown as { community: any }).community;
 const prismaCommunityChannel = (prisma as unknown as { communityChannel: any }).communityChannel;
@@ -11,6 +11,12 @@ const prismaCommunityChannel = (prisma as unknown as { communityChannel: any }).
 const joinCommunityChannelSchema = z.object({
   communityId: z.string().trim().min(1).max(255),
   channelId: z.string().trim().min(1).max(255)
+});
+
+const joinCommunityThreadSchema = z.object({
+  communityId: z.string().trim().min(1).max(255),
+  channelId: z.string().trim().min(1).max(255),
+  messageId: z.string().trim().min(1).max(255)
 });
 
 async function findCommunityChannelAccess(
@@ -119,6 +125,58 @@ export function registerCommunitySocket(io: Server): void {
         communityId: parsed.data.communityId,
         channelId: parsed.data.channelId
       });
+    });
+
+    socket.on("community:thread:join", async (payload) => {
+      const parsed = joinCommunityThreadSchema.safeParse(payload);
+      if (!parsed.success) {
+        socket.emit("community:error", {
+          code: "validation_error",
+          details: parsed.error.flatten()
+        });
+        return;
+      }
+
+      try {
+        await assertUserCanAccessAppById(userId);
+        const access = await findCommunityChannelAccess(
+          parsed.data.communityId,
+          parsed.data.channelId,
+          userId
+        );
+
+        if (!access.community) {
+          socket.emit("community:error", { code: "community_not_found" });
+          return;
+        }
+        if (!access.membership) {
+          socket.emit("community:error", { code: "community_membership_required" });
+          return;
+        }
+        if (!access.channel) {
+          socket.emit("community:error", { code: "community_channel_not_found" });
+          return;
+        }
+
+        socket.join(communityThreadRoom(parsed.data.messageId));
+        socket.emit("community:thread:joined", {
+          communityId: access.community.id,
+          channelId: access.channel.id,
+          messageId: parsed.data.messageId
+        });
+      } catch (error) {
+        socket.emit("community:error", { code: "community_thread_join_failed" });
+        logError("community:thread:join failed", error);
+      }
+    });
+
+    socket.on("community:thread:leave", (payload) => {
+      const parsed = joinCommunityThreadSchema.safeParse(payload);
+      if (!parsed.success) {
+        return;
+      }
+
+      socket.leave(communityThreadRoom(parsed.data.messageId));
     });
   });
 }

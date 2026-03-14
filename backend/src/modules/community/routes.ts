@@ -12,7 +12,9 @@ import {
 } from "./community.notifications.js";
 import {
   emitCommunityChannelMessage,
-  emitCommunityNotification
+  emitCommunityNotification,
+  emitCommunityThreadMessage,
+  emitCommunityThreadUpdate
 } from "./community.realtime.js";
 
 export const communityRouter = Router();
@@ -35,6 +37,12 @@ const communityParamSchema = z.object({
 const communityChannelParamSchema = z.object({
   communityId: z.string().trim().min(1).max(255),
   channelId: z.string().trim().min(1).max(255)
+});
+
+const communityThreadParamSchema = z.object({
+  communityId: z.string().trim().min(1).max(255),
+  channelId: z.string().trim().min(1).max(255),
+  messageId: z.string().trim().min(1).max(255)
 });
 
 const communityListLimitSchema = z.object({
@@ -128,6 +136,9 @@ type CommunityMessageRow = {
       updatedAt: Date;
     };
   } | null;
+  _count?: {
+    replies?: number;
+  };
 };
 
 function toApiVisibility(
@@ -424,6 +435,7 @@ function toCommunityMessageDto(
     updatedAt: row.updatedAt.toISOString(),
     deletedAt: row.deletedAt ? row.deletedAt.toISOString() : null,
     replyToMessageId: row.replyToMessageId,
+    replyCount: row._count?.replies ?? 0,
     author: toCommunityUserDto(req, row.author),
     replyToMessage: row.replyToMessage
       ? {
@@ -1091,7 +1103,8 @@ communityRouter.get("/:communityId/channels/:channelId/messages", requireAuth, a
     const messages: CommunityMessageRow[] = await prismaCommunityMessage.findMany({
       where: {
         channelId: access.channel.id,
-        deletedAt: null
+        deletedAt: null,
+        replyToMessageId: null
       },
       take: parsedQuery.data.limit,
       orderBy: [{ createdAt: "desc" }],
@@ -1131,6 +1144,15 @@ communityRouter.get("/:communityId/channels/:channelId/messages", requireAuth, a
               }
             }
           }
+        },
+        _count: {
+          select: {
+            replies: {
+              where: {
+                deletedAt: null
+              }
+            }
+          }
         }
       }
     });
@@ -1155,6 +1177,185 @@ communityRouter.get("/:communityId/channels/:channelId/messages", requireAuth, a
     res.status(500).json({ error: "community_channel_messages_failed" });
   }
 });
+
+communityRouter.get(
+  "/:communityId/channels/:channelId/messages/:messageId/thread",
+  requireAuth,
+  async (req, res) => {
+    const parsedParams = communityThreadParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      res
+        .status(400)
+        .json({ error: "validation_error", details: parsedParams.error.flatten() });
+      return;
+    }
+
+    try {
+      const access = await findCommunityChannelForUser(
+        parsedParams.data.communityId,
+        parsedParams.data.channelId,
+        req.authUserId!
+      );
+      if (!access.community) {
+        res.status(404).json({ error: "community_not_found" });
+        return;
+      }
+      if (!access.membership) {
+        res.status(403).json({ error: "community_membership_required" });
+        return;
+      }
+      if (!access.channel) {
+        res.status(404).json({ error: "community_channel_not_found" });
+        return;
+      }
+
+      const anchorMessage = await prismaCommunityMessage.findFirst({
+        where: {
+          id: parsedParams.data.messageId,
+          channelId: access.channel.id,
+          deletedAt: null
+        },
+        select: {
+          id: true,
+          replyToMessageId: true
+        }
+      });
+
+      if (!anchorMessage) {
+        res.status(404).json({ error: "community_message_not_found" });
+        return;
+      }
+
+      const rootMessageId = anchorMessage.replyToMessageId ?? anchorMessage.id;
+      const [root, replies] = await Promise.all([
+        prismaCommunityMessage.findFirst({
+          where: {
+            id: rootMessageId,
+            channelId: access.channel.id,
+            deletedAt: null
+          },
+          select: {
+            id: true,
+            text: true,
+            attachments: true,
+            createdAt: true,
+            updatedAt: true,
+            deletedAt: true,
+            replyToMessageId: true,
+            author: {
+              select: {
+                id: true,
+                displayName: true,
+                username: true,
+                avatarUrl: true,
+                about: true,
+                city: true,
+                country: true,
+                expertise: true,
+                communityRole: true,
+                updatedAt: true
+              }
+            },
+            replyToMessage: {
+              select: {
+                id: true,
+                text: true,
+                author: {
+                  select: {
+                    id: true,
+                    displayName: true,
+                    username: true,
+                    avatarUrl: true,
+                    updatedAt: true
+                  }
+                }
+              }
+            },
+            _count: {
+              select: {
+                replies: {
+                  where: {
+                    deletedAt: null
+                  }
+                }
+              }
+            }
+          }
+        }),
+        prismaCommunityMessage.findMany({
+          where: {
+            channelId: access.channel.id,
+            deletedAt: null,
+            replyToMessageId: rootMessageId
+          },
+          orderBy: [{ createdAt: "asc" }],
+          select: {
+            id: true,
+            text: true,
+            attachments: true,
+            createdAt: true,
+            updatedAt: true,
+            deletedAt: true,
+            replyToMessageId: true,
+            author: {
+              select: {
+                id: true,
+                displayName: true,
+                username: true,
+                avatarUrl: true,
+                about: true,
+                city: true,
+                country: true,
+                expertise: true,
+                communityRole: true,
+                updatedAt: true
+              }
+            },
+            replyToMessage: {
+              select: {
+                id: true,
+                text: true,
+                author: {
+                  select: {
+                    id: true,
+                    displayName: true,
+                    username: true,
+                    avatarUrl: true,
+                    updatedAt: true
+                  }
+                }
+              }
+            },
+            _count: {
+              select: {
+                replies: {
+                  where: {
+                    deletedAt: null
+                  }
+                }
+              }
+            }
+          }
+        })
+      ]);
+
+      if (!root) {
+        res.status(404).json({ error: "community_message_not_found" });
+        return;
+      }
+
+      res.json({
+        data: {
+          root: toCommunityMessageDto(req, root),
+          replies: replies.map((item: CommunityMessageRow) => toCommunityMessageDto(req, item))
+        }
+      });
+    } catch (error) {
+      logError("community thread failed", error);
+      res.status(500).json({ error: "community_thread_failed" });
+    }
+  }
+);
 
 communityRouter.post("/:communityId/channels/:channelId/messages", requireAuth, async (req, res) => {
   const parsedParams = communityChannelParamSchema.safeParse(req.params);
@@ -1192,10 +1393,12 @@ communityRouter.post("/:communityId/channels/:channelId/messages", requireAuth, 
     }
 
     let replyToMessageId: string | null = null;
+    let rootThreadMessageId: string | null = null;
     let replyTarget:
       | {
           id: string;
           authorUserId: string;
+          replyToMessageId: string | null;
           text: string | null;
         }
       | null = null;
@@ -1209,6 +1412,7 @@ communityRouter.post("/:communityId/channels/:channelId/messages", requireAuth, 
         select: {
           id: true,
           authorUserId: true,
+          replyToMessageId: true,
           text: true
         }
       });
@@ -1216,7 +1420,8 @@ communityRouter.post("/:communityId/channels/:channelId/messages", requireAuth, 
         res.status(404).json({ error: "community_reply_target_not_found" });
         return;
       }
-      replyToMessageId = replyTarget.id;
+      rootThreadMessageId = replyTarget.replyToMessageId ?? replyTarget.id;
+      replyToMessageId = rootThreadMessageId;
     }
 
     const created = await prismaCommunityMessage.create({
@@ -1260,6 +1465,15 @@ communityRouter.post("/:communityId/channels/:channelId/messages", requireAuth, 
                 username: true,
                 avatarUrl: true,
                 updatedAt: true
+              }
+            }
+          }
+        },
+        _count: {
+          select: {
+            replies: {
+              where: {
+                deletedAt: null
               }
             }
           }
@@ -1361,11 +1575,33 @@ communityRouter.post("/:communityId/channels/:channelId/messages", requireAuth, 
     await createCommunityNotifications(notificationInputs);
 
     const createdDto = toCommunityMessageDto(req, created);
-    emitCommunityChannelMessage({
-      communityId: access.community.id,
-      channelId: access.channel.id,
-      message: createdDto
-    });
+    if (rootThreadMessageId) {
+      const replyCount = await prismaCommunityMessage.count({
+        where: {
+          channelId: access.channel.id,
+          deletedAt: null,
+          replyToMessageId: rootThreadMessageId
+        }
+      });
+      emitCommunityThreadMessage({
+        communityId: access.community.id,
+        channelId: access.channel.id,
+        rootMessageId: rootThreadMessageId,
+        message: createdDto
+      });
+      emitCommunityThreadUpdate({
+        communityId: access.community.id,
+        channelId: access.channel.id,
+        rootMessageId: rootThreadMessageId,
+        replyCount
+      });
+    } else {
+      emitCommunityChannelMessage({
+        communityId: access.community.id,
+        channelId: access.channel.id,
+        message: createdDto
+      });
+    }
     for (const notificationInput of notificationInputs) {
       emitCommunityNotification([notificationInput.userId], {
         type: notificationInput.type.toLowerCase(),
