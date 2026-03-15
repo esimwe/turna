@@ -2,6 +2,7 @@ export type ChatMessageStatus = "sent" | "delivered" | "read";
 export type ChatAttachmentKind = "image" | "video" | "file";
 export type AppChatType = "direct" | "group";
 export type ChatMemberRole = "OWNER" | "ADMIN" | "EDITOR" | "MEMBER";
+export type ChatPolicyScope = "OWNER_ONLY" | "ADMIN_ONLY" | "EDITOR_ONLY" | "EVERYONE";
 
 export interface ChatAttachment {
   id: string;
@@ -121,4 +122,9 @@ export interface ChatDetail {
   isPublic: boolean;
   joinApprovalRequired: boolean;
   memberAddPolicy: "OWNER_ONLY" | "ADMIN_ONLY" | "EDITOR_ONLY" | "EVERYONE";
+  whoCanSend: ChatPolicyScope;
+  whoCanEditInfo: ChatPolicyScope;
+  whoCanInvite: ChatPolicyScope;
+  whoCanAddMembers: ChatPolicyScope;
+  historyVisibleToNewMembers: boolean;
 }

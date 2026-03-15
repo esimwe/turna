@@ -45,12 +45,21 @@ const ChatMemberAddPolicy = {
   EDITOR_ONLY: "EDITOR_ONLY",
   EVERYONE: "EVERYONE"
 } as const;
+const ChatPolicyScope = {
+  OWNER_ONLY: "OWNER_ONLY",
+  ADMIN_ONLY: "ADMIN_ONLY",
+  EDITOR_ONLY: "EDITOR_ONLY",
+  EVERYONE: "EVERYONE"
+} as const;
 const ADMIN_NOTICE_SYSTEM_TYPE = "admin_notice";
 const ADMIN_NOTICE_SILENT_SYSTEM_TYPE = "admin_notice_silent";
 const GROUP_MEMBERS_ADDED_SYSTEM_TYPE = "group_members_added";
 const GROUP_MEMBER_LEFT_SYSTEM_TYPE = "group_member_left";
 const GROUP_MEMBER_REMOVED_SYSTEM_TYPE = "group_member_removed";
 const GROUP_INFO_UPDATED_SYSTEM_TYPE = "group_info_updated";
+const GROUP_SETTINGS_UPDATED_SYSTEM_TYPE = "group_settings_updated";
+const GROUP_ROLE_UPDATED_SYSTEM_TYPE = "group_role_updated";
+const GROUP_OWNER_TRANSFERRED_SYSTEM_TYPE = "group_owner_transferred";
 const MessageStatus = {
   sent: "sent",
   delivered: "delivered",
@@ -62,6 +71,7 @@ type ChatTypeValue = typeof ChatType[keyof typeof ChatType];
 type ChatMemberRoleValue = typeof ChatMemberRole[keyof typeof ChatMemberRole];
 type ChatMemberAddPolicyValue =
   typeof ChatMemberAddPolicy[keyof typeof ChatMemberAddPolicy];
+type ChatPolicyScopeValue = typeof ChatPolicyScope[keyof typeof ChatPolicyScope];
 
 const prismaUser = (prisma as unknown as { user: any }).user;
 const prismaReportCase = (prisma as unknown as { reportCase: any }).reportCase;
@@ -215,6 +225,36 @@ function summarizeMessage(row: {
     return "Grup bilgileri güncellendi";
   }
 
+  if (row.systemType === GROUP_SETTINGS_UPDATED_SYSTEM_TYPE) {
+    return "Grup ayarları güncellendi";
+  }
+
+  if (row.systemType === GROUP_ROLE_UPDATED_SYSTEM_TYPE) {
+    const payload =
+      row.systemPayload && typeof row.systemPayload === "object"
+        ? (row.systemPayload as Record<string, unknown>)
+        : null;
+    const memberDisplayName =
+      typeof payload?.memberDisplayName === "string" ? payload.memberDisplayName.trim() : "";
+    const roleLabel = typeof payload?.roleLabel === "string" ? payload.roleLabel.trim() : "";
+    if (memberDisplayName && roleLabel) {
+      return `${memberDisplayName} ${roleLabel} yapıldı`;
+    }
+    return "Üye rolü güncellendi";
+  }
+
+  if (row.systemType === GROUP_OWNER_TRANSFERRED_SYSTEM_TYPE) {
+    const payload =
+      row.systemPayload && typeof row.systemPayload === "object"
+        ? (row.systemPayload as Record<string, unknown>)
+        : null;
+    const newOwnerDisplayName =
+      typeof payload?.newOwnerDisplayName === "string" ? payload.newOwnerDisplayName.trim() : "";
+    return newOwnerDisplayName.length > 0
+      ? `Grubun sahipliği ${newOwnerDisplayName} kişisine devredildi`
+      : "Grubun sahipliği devredildi";
+  }
+
   if (
     row.systemType === ADMIN_NOTICE_SYSTEM_TYPE ||
     row.systemType === ADMIN_NOTICE_SILENT_SYSTEM_TYPE
@@ -321,6 +361,7 @@ export class ChatService {
   private async getMembershipState(chatId: string, userId: string): Promise<{
     role: ChatMemberRoleValue;
     canSend: boolean;
+    joinedAt: Date;
     hiddenAt: Date | null;
     clearedAt: Date | null;
     archivedAt: Date | null;
@@ -334,6 +375,7 @@ export class ChatService {
       select: {
         role: true,
         canSend: true,
+        joinedAt: true,
         hiddenAt: true,
         clearedAt: true,
         archivedAt: true,
@@ -355,6 +397,11 @@ export class ChatService {
     isPublic: boolean;
     joinApprovalRequired: boolean;
     memberAddPolicy: ChatMemberAddPolicyValue;
+    whoCanSend: ChatPolicyScopeValue;
+    whoCanEditInfo: ChatPolicyScopeValue;
+    whoCanInvite: ChatPolicyScopeValue;
+    whoCanAddMembers: ChatPolicyScopeValue;
+    historyVisibleToNewMembers: boolean;
   } | null> {
     return prisma.chat.findUnique({
       where: { id: chatId },
@@ -367,29 +414,32 @@ export class ChatService {
         createdByUserId: true,
         isPublic: true,
         joinApprovalRequired: true,
-        memberAddPolicy: true
+        memberAddPolicy: true,
+        whoCanSend: true,
+        whoCanEditInfo: true,
+        whoCanInvite: true,
+        whoCanAddMembers: true,
+        historyVisibleToNewMembers: true
       }
     });
   }
 
-  private canAddGroupMembers(params: {
-    policy: ChatMemberAddPolicyValue;
+  private canAddMembers(params: {
+    policy: ChatPolicyScopeValue;
     role: ChatMemberRoleValue;
   }): boolean {
-    if (params.role === ChatMemberRole.OWNER) return true;
-    switch (params.policy) {
-      case ChatMemberAddPolicy.EVERYONE:
-        return true;
-      case ChatMemberAddPolicy.EDITOR_ONLY:
-        return params.role === ChatMemberRole.ADMIN || params.role === ChatMemberRole.EDITOR;
-      case ChatMemberAddPolicy.ADMIN_ONLY:
-        return params.role === ChatMemberRole.ADMIN;
-      default:
-        return false;
-    }
+    return this.policyAllows(params.policy, params.role);
   }
 
-  private canManageGroupInfo(role: ChatMemberRoleValue): boolean {
+  private isOwner(role: ChatMemberRoleValue): boolean {
+    return role === ChatMemberRole.OWNER;
+  }
+
+  private isAdminOrAbove(role: ChatMemberRoleValue): boolean {
+    return role === ChatMemberRole.OWNER || role === ChatMemberRole.ADMIN;
+  }
+
+  private isEditorOrAbove(role: ChatMemberRoleValue): boolean {
     return (
       role === ChatMemberRole.OWNER ||
       role === ChatMemberRole.ADMIN ||
@@ -397,7 +447,43 @@ export class ChatService {
     );
   }
 
-  private canRemoveGroupMember(params: {
+  private policyAllows(policy: ChatPolicyScopeValue, role: ChatMemberRoleValue): boolean {
+    if (this.isOwner(role)) return true;
+    switch (policy) {
+      case ChatPolicyScope.EVERYONE:
+        return true;
+      case ChatPolicyScope.EDITOR_ONLY:
+        return this.isEditorOrAbove(role);
+      case ChatPolicyScope.ADMIN_ONLY:
+        return this.isAdminOrAbove(role);
+      default:
+        return false;
+    }
+  }
+
+  private canEditGroupInfo(params: {
+    policy: ChatPolicyScopeValue;
+    role: ChatMemberRoleValue;
+  }): boolean {
+    return this.policyAllows(params.policy, params.role);
+  }
+
+  private canInviteMembers(params: {
+    policy: ChatPolicyScopeValue;
+    role: ChatMemberRoleValue;
+  }): boolean {
+    return this.policyAllows(params.policy, params.role);
+  }
+
+  private canSendInGroup(params: {
+    policy: ChatPolicyScopeValue;
+    role: ChatMemberRoleValue;
+    canSend: boolean;
+  }): boolean {
+    return params.canSend && this.policyAllows(params.policy, params.role);
+  }
+
+  private canRemoveMember(params: {
     requesterRole: ChatMemberRoleValue;
     targetRole: ChatMemberRoleValue;
   }): boolean {
@@ -522,7 +608,18 @@ export class ChatService {
 
   async ensureCanInteract(chatId: string, userId: string): Promise<void> {
     const membership = await this.getMembershipState(chatId, userId);
-    if (membership && !membership.canSend) {
+    const chat = await this.getChatMeta(chatId);
+    if (chat?.type === ChatType.GROUP && membership) {
+      if (
+        !this.canSendInGroup({
+          policy: chat.whoCanSend,
+          role: membership.role,
+          canSend: membership.canSend
+        })
+      ) {
+        throw new Error("chat_send_restricted");
+      }
+    } else if (membership && !membership.canSend) {
       throw new Error("chat_send_restricted");
     }
 
@@ -839,7 +936,14 @@ export class ChatService {
       options.userId != null
         ? await this.getMembershipState(chatId, options.userId)
         : null;
-    const clearedAt = membership?.clearedAt ?? null;
+    const chat = await this.getChatMeta(chatId);
+    const visibleFrom =
+      chat?.type === ChatType.GROUP &&
+      chat.historyVisibleToNewMembers === false &&
+      membership?.joinedAt
+        ? membership.joinedAt
+        : null;
+    const clearedAt = latestDate(membership?.clearedAt ?? null, visibleFrom);
 
     const rows = await prisma.message.findMany({
       where: {
@@ -892,6 +996,7 @@ export class ChatService {
             avatarUrl: true,
             description: true,
             isPublic: true,
+            historyVisibleToNewMembers: true,
             members: {
               include: { user: true }
             },
@@ -922,15 +1027,22 @@ export class ChatService {
         const last = chat.messages.find((message: any) => !isSilentSystemType(message.systemType)) ?? null;
         const hiddenAt = membership.hiddenAt;
         const clearedAt = membership.clearedAt;
+        const visibleFrom =
+          chat.type === ChatType.GROUP &&
+          chat.historyVisibleToNewMembers === false &&
+          membership.joinedAt
+            ? membership.joinedAt
+            : null;
+        const visibilityCutoff = latestDate(clearedAt, visibleFrom);
         if (hiddenAt && (!last || last.createdAt <= hiddenAt)) {
           return null;
         }
-        const unreadCutoff = latestDate(hiddenAt, clearedAt);
+        const unreadCutoff = latestDate(hiddenAt, visibilityCutoff);
         const visibleLast =
           chat.messages.find(
             (message: any) =>
               !isSilentSystemType(message.systemType) &&
-              (!clearedAt || message.createdAt > clearedAt)
+              (!visibilityCutoff || message.createdAt > visibilityCutoff)
           ) ?? null;
         const unreadCount = await prisma.message.count({
           where: {
@@ -1044,6 +1156,12 @@ export class ChatService {
           type: ChatType.GROUP,
           title,
           createdByUserId: input.creatorUserId,
+          whoCanSend: ChatPolicyScope.EVERYONE,
+          whoCanEditInfo: ChatPolicyScope.EDITOR_ONLY,
+          whoCanInvite: ChatPolicyScope.ADMIN_ONLY,
+          whoCanAddMembers: ChatPolicyScope.ADMIN_ONLY,
+          memberAddPolicy: ChatMemberAddPolicy.ADMIN_ONLY,
+          historyVisibleToNewMembers: true,
           members: {
             create: participantIds.map((participantId, index) => ({
               userId: participantId,
@@ -1105,6 +1223,11 @@ export class ChatService {
         isPublic: true,
         joinApprovalRequired: true,
         memberAddPolicy: true,
+        whoCanSend: true,
+        whoCanEditInfo: true,
+        whoCanInvite: true,
+        whoCanAddMembers: true,
+        historyVisibleToNewMembers: true,
         members: {
           select: {
             userId: true,
@@ -1148,7 +1271,21 @@ export class ChatService {
       joinApprovalRequired:
         chat.type === ChatType.GROUP ? chat.joinApprovalRequired === true : false,
       memberAddPolicy:
-        chat.type === ChatType.GROUP ? chat.memberAddPolicy : ChatMemberAddPolicy.ADMIN_ONLY
+        chat.type === ChatType.GROUP
+          ? (chat.whoCanAddMembers ?? chat.memberAddPolicy)
+          : ChatMemberAddPolicy.ADMIN_ONLY,
+      whoCanSend:
+        chat.type === ChatType.GROUP ? chat.whoCanSend : ChatPolicyScope.EVERYONE,
+      whoCanEditInfo:
+        chat.type === ChatType.GROUP ? chat.whoCanEditInfo : ChatPolicyScope.EDITOR_ONLY,
+      whoCanInvite:
+        chat.type === ChatType.GROUP ? chat.whoCanInvite : ChatPolicyScope.ADMIN_ONLY,
+      whoCanAddMembers:
+        chat.type === ChatType.GROUP
+          ? (chat.whoCanAddMembers ?? chat.memberAddPolicy)
+          : ChatPolicyScope.ADMIN_ONLY,
+      historyVisibleToNewMembers:
+        chat.type === ChatType.GROUP ? chat.historyVisibleToNewMembers !== false : true
     };
   }
 
@@ -1180,8 +1317,8 @@ export class ChatService {
     }
 
     if (
-      !this.canAddGroupMembers({
-        policy: chat.memberAddPolicy,
+      !this.canAddMembers({
+        policy: chat.whoCanAddMembers ?? chat.memberAddPolicy,
         role: requesterMembership.role
       })
     ) {
@@ -1340,7 +1477,12 @@ export class ChatService {
     if (!membership) {
       throw new Error("forbidden_chat_access");
     }
-    if (!this.canManageGroupInfo(membership.role)) {
+    if (
+      !this.canEditGroupInfo({
+        policy: chat.whoCanEditInfo,
+        role: membership.role
+      })
+    ) {
       throw new Error("group_info_update_not_allowed");
     }
 
@@ -1405,6 +1547,279 @@ export class ChatService {
     };
   }
 
+  async updateGroupSettings(input: {
+    chatId: string;
+    requesterUserId: string;
+    whoCanSend?: ChatPolicyScopeValue;
+    whoCanEditInfo?: ChatPolicyScopeValue;
+    whoCanInvite?: ChatPolicyScopeValue;
+    whoCanAddMembers?: ChatPolicyScopeValue;
+    historyVisibleToNewMembers?: boolean;
+  }): Promise<{
+    detail: ChatDetail;
+    participantIds: string[];
+    systemMessage: ChatMessage | null;
+  }> {
+    const chat = await this.getChatMeta(input.chatId);
+    if (!chat || chat.type !== ChatType.GROUP) {
+      throw new Error("group_not_found");
+    }
+
+    const membership = await this.getMembershipState(input.chatId, input.requesterUserId);
+    if (!membership) {
+      throw new Error("forbidden_chat_access");
+    }
+    if (!this.isAdminOrAbove(membership.role)) {
+      throw new Error("group_settings_update_not_allowed");
+    }
+
+    const nextWhoCanSend = input.whoCanSend ?? chat.whoCanSend;
+    const nextWhoCanEditInfo = input.whoCanEditInfo ?? chat.whoCanEditInfo;
+    const nextWhoCanInvite = input.whoCanInvite ?? chat.whoCanInvite;
+    const nextWhoCanAddMembers = input.whoCanAddMembers ?? chat.whoCanAddMembers;
+    const nextHistoryVisibleToNewMembers =
+      input.historyVisibleToNewMembers ?? chat.historyVisibleToNewMembers;
+
+    const changed =
+      nextWhoCanSend !== chat.whoCanSend ||
+      nextWhoCanEditInfo !== chat.whoCanEditInfo ||
+      nextWhoCanInvite !== chat.whoCanInvite ||
+      nextWhoCanAddMembers !== chat.whoCanAddMembers ||
+      nextHistoryVisibleToNewMembers !== chat.historyVisibleToNewMembers;
+
+    if (!changed) {
+      const detail = await this.getGroupDetail(input.chatId, input.requesterUserId);
+      if (!detail) {
+        throw new Error("group_not_found");
+      }
+      return {
+        detail,
+        participantIds: await this.getChatParticipantIds(input.chatId),
+        systemMessage: null
+      };
+    }
+
+    await prisma.chat.update({
+      where: { id: input.chatId },
+      data: {
+        whoCanSend: nextWhoCanSend,
+        whoCanEditInfo: nextWhoCanEditInfo,
+        whoCanInvite: nextWhoCanInvite,
+        whoCanAddMembers: nextWhoCanAddMembers,
+        memberAddPolicy: nextWhoCanAddMembers as unknown as ChatMemberAddPolicyValue,
+        historyVisibleToNewMembers: nextHistoryVisibleToNewMembers
+      }
+    });
+
+    const systemMessage = await this.createSystemMessage({
+      chatId: input.chatId,
+      senderId: input.requesterUserId,
+      systemType: GROUP_SETTINGS_UPDATED_SYSTEM_TYPE,
+      systemPayload: {
+        whoCanSend: nextWhoCanSend,
+        whoCanEditInfo: nextWhoCanEditInfo,
+        whoCanInvite: nextWhoCanInvite,
+        whoCanAddMembers: nextWhoCanAddMembers,
+        historyVisibleToNewMembers: nextHistoryVisibleToNewMembers
+      }
+    });
+
+    const detail = await this.getGroupDetail(input.chatId, input.requesterUserId);
+    if (!detail) {
+      throw new Error("group_not_found");
+    }
+
+    return {
+      detail,
+      participantIds: await this.getChatParticipantIds(input.chatId),
+      systemMessage
+    };
+  }
+
+  async updateGroupMemberRole(input: {
+    chatId: string;
+    requesterUserId: string;
+    targetUserId: string;
+    nextRole: Exclude<ChatMemberRoleValue, "OWNER">;
+  }): Promise<{
+    participantIds: string[];
+    systemMessage: ChatMessage;
+  }> {
+    const chat = await this.getChatMeta(input.chatId);
+    if (!chat || chat.type !== ChatType.GROUP) {
+      throw new Error("group_not_found");
+    }
+    if (input.requesterUserId === input.targetUserId) {
+      throw new Error("group_role_update_not_allowed");
+    }
+
+    const [requesterMembership, targetMembership, targetUser] = await Promise.all([
+      this.getMembershipState(input.chatId, input.requesterUserId),
+      this.getMembershipState(input.chatId, input.targetUserId),
+      prismaUser.findUnique({
+        where: { id: input.targetUserId },
+        select: { displayName: true }
+      })
+    ]);
+    if (!requesterMembership) {
+      throw new Error("forbidden_chat_access");
+    }
+    if (!targetMembership) {
+      throw new Error("group_member_not_found");
+    }
+    if (targetMembership.role === ChatMemberRole.OWNER) {
+      throw new Error("group_role_update_not_allowed");
+    }
+
+    if (this.isOwner(requesterMembership.role)) {
+      // owner can update any non-owner to admin/editor/member
+    } else if (requesterMembership.role === ChatMemberRole.ADMIN) {
+      const targetRole = targetMembership.role;
+      const allowedTarget =
+        targetRole === ChatMemberRole.EDITOR || targetRole === ChatMemberRole.MEMBER;
+      const allowedNext =
+        input.nextRole === ChatMemberRole.EDITOR || input.nextRole === ChatMemberRole.MEMBER;
+      if (!allowedTarget || !allowedNext) {
+        throw new Error("group_role_update_not_allowed");
+      }
+    } else {
+      throw new Error("group_role_update_not_allowed");
+    }
+
+    if (targetMembership.role === input.nextRole) {
+      return {
+        participantIds: await this.getChatParticipantIds(input.chatId),
+        systemMessage: await this.createSystemMessage({
+          chatId: input.chatId,
+          senderId: input.requesterUserId,
+          systemType: GROUP_ROLE_UPDATED_SYSTEM_TYPE,
+          systemPayload: {
+            memberDisplayName: targetUser?.displayName?.trim() || "Üye",
+            roleLabel:
+              input.nextRole === ChatMemberRole.ADMIN
+                ? "admin"
+                : input.nextRole === ChatMemberRole.EDITOR
+                ? "editör"
+                : "üye"
+          },
+          touchChat: false
+        })
+      };
+    }
+
+    await prisma.chatMember.update({
+      where: {
+        chatId_userId: {
+          chatId: input.chatId,
+          userId: input.targetUserId
+        }
+      },
+      data: { role: input.nextRole }
+    });
+
+    const systemMessage = await this.createSystemMessage({
+      chatId: input.chatId,
+      senderId: input.requesterUserId,
+      systemType: GROUP_ROLE_UPDATED_SYSTEM_TYPE,
+      systemPayload: {
+        memberDisplayName: targetUser?.displayName?.trim() || "Üye",
+        roleLabel:
+          input.nextRole === ChatMemberRole.ADMIN
+            ? "admin"
+            : input.nextRole === ChatMemberRole.EDITOR
+            ? "editör"
+            : "üye"
+      }
+    });
+
+    return {
+      participantIds: await this.getChatParticipantIds(input.chatId),
+      systemMessage
+    };
+  }
+
+  async transferGroupOwnership(input: {
+    chatId: string;
+    requesterUserId: string;
+    newOwnerUserId: string;
+  }): Promise<{
+    detail: ChatDetail;
+    participantIds: string[];
+    systemMessage: ChatMessage;
+  }> {
+    const chat = await this.getChatMeta(input.chatId);
+    if (!chat || chat.type !== ChatType.GROUP) {
+      throw new Error("group_not_found");
+    }
+    if (input.requesterUserId === input.newOwnerUserId) {
+      throw new Error("group_owner_transfer_not_allowed");
+    }
+
+    const [requesterMembership, targetMembership, newOwnerUser] = await Promise.all([
+      this.getMembershipState(input.chatId, input.requesterUserId),
+      this.getMembershipState(input.chatId, input.newOwnerUserId),
+      prismaUser.findUnique({
+        where: { id: input.newOwnerUserId },
+        select: { displayName: true }
+      })
+    ]);
+    if (!requesterMembership) {
+      throw new Error("forbidden_chat_access");
+    }
+    if (!this.isOwner(requesterMembership.role)) {
+      throw new Error("group_owner_transfer_not_allowed");
+    }
+    if (!targetMembership) {
+      throw new Error("group_member_not_found");
+    }
+
+    await prisma.$transaction([
+      prisma.chatMember.update({
+        where: {
+          chatId_userId: {
+            chatId: input.chatId,
+            userId: input.requesterUserId
+          }
+        },
+        data: { role: ChatMemberRole.ADMIN }
+      }),
+      prisma.chatMember.update({
+        where: {
+          chatId_userId: {
+            chatId: input.chatId,
+            userId: input.newOwnerUserId
+          }
+        },
+        data: { role: ChatMemberRole.OWNER }
+      }),
+      prisma.chat.update({
+        where: { id: input.chatId },
+        data: { createdByUserId: input.newOwnerUserId }
+      })
+    ]);
+
+    const systemMessage = await this.createSystemMessage({
+      chatId: input.chatId,
+      senderId: input.requesterUserId,
+      systemType: GROUP_OWNER_TRANSFERRED_SYSTEM_TYPE,
+      systemPayload: {
+        newOwnerUserId: input.newOwnerUserId,
+        newOwnerDisplayName: newOwnerUser?.displayName?.trim() || "Yeni sahip"
+      }
+    });
+
+    const detail = await this.getGroupDetail(input.chatId, input.requesterUserId);
+    if (!detail) {
+      throw new Error("group_not_found");
+    }
+
+    return {
+      detail,
+      participantIds: await this.getChatParticipantIds(input.chatId),
+      systemMessage
+    };
+  }
+
   async removeGroupMember(input: {
     chatId: string;
     requesterUserId: string;
@@ -1434,7 +1849,7 @@ export class ChatService {
       throw new Error("group_member_not_found");
     }
     if (
-      !this.canRemoveGroupMember({
+      !this.canRemoveMember({
         requesterRole: requesterMembership.role,
         targetRole: targetMembership.role
       })

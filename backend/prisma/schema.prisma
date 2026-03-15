@@ -26,6 +26,13 @@ enum ChatMemberAddPolicy {
   EVERYONE
 }
 
+enum ChatPolicyScope {
+  OWNER_ONLY
+  ADMIN_ONLY
+  EDITOR_ONLY
+  EVERYONE
+}
+
 enum MessageStatus {
   sent
   delivered
@@ -268,6 +275,11 @@ model Chat {
   isPublic            Boolean             @default(false)
   joinApprovalRequired Boolean            @default(false)
   memberAddPolicy     ChatMemberAddPolicy @default(ADMIN_ONLY)
+  whoCanSend          ChatPolicyScope     @default(EVERYONE)
+  whoCanEditInfo      ChatPolicyScope     @default(EDITOR_ONLY)
+  whoCanInvite        ChatPolicyScope     @default(ADMIN_ONLY)
+  whoCanAddMembers    ChatPolicyScope     @default(ADMIN_ONLY)
+  historyVisibleToNewMembers Boolean      @default(true)
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @default(now()) @updatedAt
   members             ChatMember[]

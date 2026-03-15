@@ -192,9 +192,49 @@ const updateGroupSchema = z
     });
   });
 
+const chatPolicyScopeSchema = z.enum([
+  "OWNER_ONLY",
+  "ADMIN_ONLY",
+  "EDITOR_ONLY",
+  "EVERYONE"
+]);
+
+const updateGroupSettingsSchema = z
+  .object({
+    whoCanSend: chatPolicyScopeSchema.optional(),
+    whoCanEditInfo: chatPolicyScopeSchema.optional(),
+    whoCanInvite: chatPolicyScopeSchema.optional(),
+    whoCanAddMembers: chatPolicyScopeSchema.optional(),
+    historyVisibleToNewMembers: z.boolean().optional()
+  })
+  .superRefine((value, ctx) => {
+    if (
+      value.whoCanSend !== undefined ||
+      value.whoCanEditInfo !== undefined ||
+      value.whoCanInvite !== undefined ||
+      value.whoCanAddMembers !== undefined ||
+      value.historyVisibleToNewMembers !== undefined
+    ) {
+      return;
+    }
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "group_settings_update_required",
+      path: ["whoCanSend"]
+    });
+  });
+
 const groupMemberParamSchema = z.object({
   chatId: z.string().trim().min(1).max(255),
   memberUserId: z.string().trim().min(1).max(255)
+});
+
+const updateGroupMemberRoleSchema = z.object({
+  role: z.enum(["ADMIN", "EDITOR", "MEMBER"])
+});
+
+const transferGroupOwnerSchema = z.object({
+  newOwnerUserId: z.string().trim().min(1).max(255)
 });
 
 function isAbsoluteUrl(value: string): boolean {
@@ -1097,6 +1137,169 @@ chatRouter.put("/:chatId", requireAuth, requireMessagingAccess, async (req, res)
     res.status(500).json({ error: "failed_to_update_group" });
   }
 });
+
+chatRouter.put(
+  "/:chatId/settings",
+  requireAuth,
+  requireMessagingAccess,
+  async (req, res) => {
+    const parsedParams = chatIdParamSchema.safeParse(req.params);
+    const parsedBody = updateGroupSettingsSchema.safeParse(req.body);
+    if (!parsedParams.success) {
+      res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+      return;
+    }
+    if (!parsedBody.success) {
+      res.status(400).json({ error: "validation_error", details: parsedBody.error.flatten() });
+      return;
+    }
+
+    try {
+      const result = await chatService.updateGroupSettings({
+        chatId: parsedParams.data.chatId,
+        requesterUserId: req.authUserId!,
+        ...parsedBody.data
+      });
+      emitInboxUpdate(result.participantIds);
+      if (result.systemMessage) {
+        emitChatMessage(
+          parsedParams.data.chatId,
+          { ...result.systemMessage, chatType: "group" },
+          result.participantIds
+        );
+      }
+      res.json({
+        data: {
+          ...result.detail,
+          avatarUrl: await resolveGroupAvatarUrl(result.detail.avatarUrl)
+        }
+      });
+    } catch (error) {
+      if (error instanceof Error) {
+        switch (error.message) {
+          case "forbidden_chat_access":
+          case "group_settings_update_not_allowed":
+            res.status(403).json({ error: error.message });
+            return;
+          case "group_not_found":
+            res.status(404).json({ error: error.message });
+            return;
+        }
+      }
+
+      logError("group settings update failed", error);
+      res.status(500).json({ error: "failed_to_update_group_settings" });
+    }
+  }
+);
+
+chatRouter.put(
+  "/:chatId/members/:memberUserId/role",
+  requireAuth,
+  requireMessagingAccess,
+  async (req, res) => {
+    const parsedParams = groupMemberParamSchema.safeParse(req.params);
+    const parsedBody = updateGroupMemberRoleSchema.safeParse(req.body);
+    if (!parsedParams.success) {
+      res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+      return;
+    }
+    if (!parsedBody.success) {
+      res.status(400).json({ error: "validation_error", details: parsedBody.error.flatten() });
+      return;
+    }
+
+    try {
+      const result = await chatService.updateGroupMemberRole({
+        chatId: parsedParams.data.chatId,
+        requesterUserId: req.authUserId!,
+        targetUserId: parsedParams.data.memberUserId,
+        nextRole: parsedBody.data.role
+      });
+      emitInboxUpdate(result.participantIds);
+      emitChatMessage(
+        parsedParams.data.chatId,
+        { ...result.systemMessage, chatType: "group" },
+        result.participantIds
+      );
+      res.json({ ok: true });
+    } catch (error) {
+      if (error instanceof Error) {
+        switch (error.message) {
+          case "forbidden_chat_access":
+          case "group_role_update_not_allowed":
+            res.status(403).json({ error: error.message });
+            return;
+          case "group_not_found":
+            res.status(404).json({ error: error.message });
+            return;
+          case "group_member_not_found":
+            res.status(400).json({ error: error.message });
+            return;
+        }
+      }
+
+      logError("group role update failed", error);
+      res.status(500).json({ error: "failed_to_update_group_member_role" });
+    }
+  }
+);
+
+chatRouter.post(
+  "/:chatId/owner-transfer",
+  requireAuth,
+  requireMessagingAccess,
+  async (req, res) => {
+    const parsedParams = chatIdParamSchema.safeParse(req.params);
+    const parsedBody = transferGroupOwnerSchema.safeParse(req.body);
+    if (!parsedParams.success) {
+      res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+      return;
+    }
+    if (!parsedBody.success) {
+      res.status(400).json({ error: "validation_error", details: parsedBody.error.flatten() });
+      return;
+    }
+
+    try {
+      const result = await chatService.transferGroupOwnership({
+        chatId: parsedParams.data.chatId,
+        requesterUserId: req.authUserId!,
+        newOwnerUserId: parsedBody.data.newOwnerUserId
+      });
+      emitInboxUpdate(result.participantIds);
+      emitChatMessage(
+        parsedParams.data.chatId,
+        { ...result.systemMessage, chatType: "group" },
+        result.participantIds
+      );
+      res.json({
+        data: {
+          ...result.detail,
+          avatarUrl: await resolveGroupAvatarUrl(result.detail.avatarUrl)
+        }
+      });
+    } catch (error) {
+      if (error instanceof Error) {
+        switch (error.message) {
+          case "forbidden_chat_access":
+          case "group_owner_transfer_not_allowed":
+            res.status(403).json({ error: error.message });
+            return;
+          case "group_not_found":
+            res.status(404).json({ error: error.message });
+            return;
+          case "group_member_not_found":
+            res.status(400).json({ error: error.message });
+            return;
+        }
+      }
+
+      logError("group owner transfer failed", error);
+      res.status(500).json({ error: "failed_to_transfer_group_owner" });
+    }
+  }
+);
 
 chatRouter.delete(
   "/:chatId/members/:memberUserId",
