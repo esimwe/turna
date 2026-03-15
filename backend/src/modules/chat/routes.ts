@@ -139,8 +139,22 @@ const createFolderSchema = z.object({
   name: z.string().trim().min(1).max(24)
 });
 
+const createGroupSchema = z.object({
+  title: z.string().trim().min(1).max(80),
+  memberUserIds: z.array(z.string().trim().min(1).max(255)).min(1).max(255)
+});
+
 const folderIdParamSchema = z.object({
   folderId: z.string().trim().min(1).max(255)
+});
+
+const groupMembersBodySchema = z.object({
+  memberUserIds: z.array(z.string().trim().min(1).max(255)).min(1).max(255)
+});
+
+const groupMembersQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(40),
+  offset: z.coerce.number().int().min(0).default(0)
 });
 
 chatRouter.get("/:chatId/messages", requireAuth, async (req, res) => {
@@ -187,10 +201,15 @@ chatRouter.get("/", requireAuth, async (req, res) => {
     data: chats.map((chat) => ({
       chatId: chat.chatId,
       title: chat.title,
+      chatType: chat.chatType,
       lastMessage: chat.lastMessage,
       lastMessageAt: chat.lastMessageAt,
       unreadCount: chat.unreadCount,
       peerId: chat.peerId,
+      memberCount: chat.memberCount,
+      myRole: chat.myRole,
+      isPublic: chat.isPublic,
+      description: chat.groupDescription,
       isMuted: chat.isMuted,
       isBlockedByMe: chat.isBlockedByMe,
       isArchived: chat.isArchived,
@@ -199,7 +218,9 @@ chatRouter.get("/", requireAuth, async (req, res) => {
       folderId: chat.folderId,
       folderName: chat.folderName,
       avatarUrl:
-        chat.peerId && chat.peerAvatarKey && chat.peerUpdatedAt
+        chat.chatType === "group"
+          ? chat.groupAvatarUrl
+          : chat.peerId && chat.peerAvatarKey && chat.peerUpdatedAt
           ? buildAvatarUrl(req, chat.peerId, new Date(chat.peerUpdatedAt))
           : null
     })),
@@ -209,6 +230,37 @@ chatRouter.get("/", requireAuth, async (req, res) => {
       sortOrder: folder.sortOrder
     }))
   });
+});
+
+chatRouter.post("/groups", requireAuth, requireMessagingAccess, async (req, res) => {
+  const parsed = createGroupSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
+    return;
+  }
+
+  try {
+    const group = await chatService.createGroup({
+      creatorUserId: req.authUserId!,
+      title: parsed.data.title,
+      memberUserIds: parsed.data.memberUserIds
+    });
+    emitInboxUpdate([req.authUserId!, ...parsed.data.memberUserIds]);
+    res.status(201).json({ data: group });
+  } catch (error) {
+    if (error instanceof Error) {
+      switch (error.message) {
+        case "group_title_required":
+        case "group_min_members_required":
+        case "group_member_not_found":
+          res.status(400).json({ error: error.message });
+          return;
+      }
+    }
+
+    logError("group create failed", error);
+    res.status(500).json({ error: "failed_to_create_group" });
+  }
 });
 
 chatRouter.get("/folders", requireAuth, async (req, res) => {
@@ -765,6 +817,180 @@ chatRouter.get("/directory/lookup", requireAuth, async (req, res) => {
   });
 });
 
+chatRouter.get("/:chatId/members", requireAuth, async (req, res) => {
+  const parsedParams = chatIdParamSchema.safeParse(req.params);
+  const parsedQuery = groupMembersQuerySchema.safeParse(req.query);
+  if (!parsedParams.success) {
+    res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+    return;
+  }
+  if (!parsedQuery.success) {
+    res.status(400).json({ error: "validation_error", details: parsedQuery.error.flatten() });
+    return;
+  }
+
+  try {
+    const page = await chatService.listGroupMembers(
+      parsedParams.data.chatId,
+      req.authUserId!,
+      parsedQuery.data
+    );
+    res.json({
+      data: page.items.map((member) => ({
+        userId: member.userId,
+        displayName: member.displayName,
+        username: member.username,
+        phone: member.phone,
+        role: member.role,
+        canSend: member.canSend,
+        joinedAt: member.joinedAt,
+        lastSeenAt: member.lastSeenAt,
+        avatarUrl:
+          member.avatarKey && member.updatedAt
+            ? buildAvatarUrl(req, member.userId, new Date(member.updatedAt))
+            : null
+      })),
+      pageInfo: {
+        totalCount: page.totalCount,
+        hasMore: page.hasMore,
+        limit: parsedQuery.data.limit,
+        offset: parsedQuery.data.offset
+      }
+    });
+  } catch (error) {
+    if (error instanceof Error) {
+      if (error.message === "forbidden_chat_access") {
+        res.status(403).json({ error: error.message });
+        return;
+      }
+      if (error.message === "group_not_found") {
+        res.status(404).json({ error: error.message });
+        return;
+      }
+    }
+
+    logError("group member list failed", error);
+    res.status(500).json({ error: "failed_to_list_group_members" });
+  }
+});
+
+chatRouter.post("/:chatId/members", requireAuth, requireMessagingAccess, async (req, res) => {
+  const parsedParams = chatIdParamSchema.safeParse(req.params);
+  const parsedBody = groupMembersBodySchema.safeParse(req.body);
+  if (!parsedParams.success) {
+    res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+    return;
+  }
+  if (!parsedBody.success) {
+    res.status(400).json({ error: "validation_error", details: parsedBody.error.flatten() });
+    return;
+  }
+
+  try {
+    const result = await chatService.addGroupMembers({
+      chatId: parsedParams.data.chatId,
+      requesterUserId: req.authUserId!,
+      memberUserIds: parsedBody.data.memberUserIds
+    });
+    emitInboxUpdate([req.authUserId!, ...result.participantIds]);
+    if (result.systemMessage) {
+      emitChatMessage(parsedParams.data.chatId, result.systemMessage, result.participantIds);
+    }
+    res.status(201).json({
+      data: result.members.map((member) => ({
+        userId: member.userId,
+        displayName: member.displayName,
+        username: member.username,
+        phone: member.phone,
+        role: member.role,
+        canSend: member.canSend,
+        joinedAt: member.joinedAt,
+        lastSeenAt: member.lastSeenAt
+      }))
+    });
+  } catch (error) {
+    if (error instanceof Error) {
+      switch (error.message) {
+        case "forbidden_chat_access":
+          res.status(403).json({ error: error.message });
+          return;
+        case "group_member_add_not_allowed":
+          res.status(403).json({ error: error.message });
+          return;
+        case "group_not_found":
+          res.status(404).json({ error: error.message });
+          return;
+        case "group_member_not_found":
+          res.status(400).json({ error: error.message });
+          return;
+      }
+    }
+
+    logError("group add members failed", error);
+    res.status(500).json({ error: "failed_to_add_group_members" });
+  }
+});
+
+chatRouter.post("/:chatId/leave", requireAuth, requireMessagingAccess, async (req, res) => {
+  const parsedParams = chatIdParamSchema.safeParse(req.params);
+  if (!parsedParams.success) {
+    res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+    return;
+  }
+
+  try {
+    const result = await chatService.leaveGroup({
+      chatId: parsedParams.data.chatId,
+      requesterUserId: req.authUserId!
+    });
+    emitInboxUpdate([req.authUserId!, ...result.participantIds]);
+    emitChatMessage(parsedParams.data.chatId, result.systemMessage, result.participantIds);
+    res.json({ ok: true });
+  } catch (error) {
+    if (error instanceof Error) {
+      switch (error.message) {
+        case "forbidden_chat_access":
+          res.status(403).json({ error: error.message });
+          return;
+        case "group_owner_leave_not_allowed":
+          res.status(409).json({ error: error.message });
+          return;
+        case "group_not_found":
+          res.status(404).json({ error: error.message });
+          return;
+      }
+    }
+
+    logError("group leave failed", error);
+    res.status(500).json({ error: "failed_to_leave_group" });
+  }
+});
+
+chatRouter.get("/:chatId", requireAuth, async (req, res) => {
+  const parsedParams = chatIdParamSchema.safeParse(req.params);
+  if (!parsedParams.success) {
+    res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+    return;
+  }
+
+  try {
+    const detail = await chatService.getChatDetail(parsedParams.data.chatId, req.authUserId!);
+    if (!detail) {
+      res.status(404).json({ error: "chat_not_found" });
+      return;
+    }
+    res.json({ data: detail });
+  } catch (error) {
+    if (error instanceof Error && error.message === "forbidden_chat_access") {
+      res.status(403).json({ error: error.message });
+      return;
+    }
+
+    logError("chat detail failed", error);
+    res.status(500).json({ error: "failed_to_get_chat_detail" });
+  }
+});
+
 chatRouter.post("/attachments/upload-url", requireAuth, requireMessagingAccess, async (req, res) => {
   if (!isStorageConfigured()) {
     res.status(503).json({ error: "storage_not_configured" });
@@ -868,10 +1094,18 @@ chatRouter.post("/messages", requireAuth, requireMessagingAccess, async (req, re
         });
     }
 
+    let activeRecipientId: string | null = null;
     for (const peerId of recipientIds) {
       const peerSockets = await getSocketsInUserRoom(peerId);
       if (peerSockets.length === 0) continue;
-      const deliveredIds = await chatService.markMessagesDelivered(parsed.data.chatId, peerId);
+      activeRecipientId = peerId;
+      break;
+    }
+    if (activeRecipientId) {
+      const deliveredIds = await chatService.markMessagesDelivered(
+        parsed.data.chatId,
+        activeRecipientId
+      );
       if (deliveredIds.length > 0) {
         emitChatStatus({
           chatId: parsed.data.chatId,

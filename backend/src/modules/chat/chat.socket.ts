@@ -123,13 +123,13 @@ export function registerChatSocket(io: Server): void {
         const deliveredIds = await chatService.markMessagesDelivered(chatId, userId);
         if (deliveredIds.length > 0) {
           const participants = await chatService.getChatParticipantIds(chatId);
-          const senderId = participants.find(p => p !== userId);
-          if (senderId) {
+          const senderIds = participants.filter((participantId) => participantId !== userId);
+          if (senderIds.length > 0) {
             emitChatStatus({
               chatId,
               status: "delivered",
               messageIds: deliveredIds,
-              userIds: [senderId]
+              userIds: senderIds
             });
           }
         }
@@ -239,19 +239,26 @@ export function registerChatSocket(io: Server): void {
             });
         }
 
-        const peerId = recipientIds[0] ?? null;
-        if (peerId) {
-          const peerSockets = await getSocketsInUserRoom(peerId);
+        let activeRecipientId: string | null = null;
+        for (const recipientId of recipientIds) {
+          const peerSockets = await getSocketsInUserRoom(recipientId);
           if (peerSockets.length > 0) {
-            const deliveredIds = await chatService.markMessagesDelivered(parsed.data.chatId, peerId);
-            if (deliveredIds.length > 0) {
-              emitChatStatus({
-                chatId: parsed.data.chatId,
-                status: "delivered",
-                messageIds: deliveredIds,
-                userIds: [userId]
-              });
-            }
+            activeRecipientId = recipientId;
+            break;
+          }
+        }
+        if (activeRecipientId) {
+          const deliveredIds = await chatService.markMessagesDelivered(
+            parsed.data.chatId,
+            activeRecipientId
+          );
+          if (deliveredIds.length > 0) {
+            emitChatStatus({
+              chatId: parsed.data.chatId,
+              status: "delivered",
+              messageIds: deliveredIds,
+              userIds: [userId]
+            });
           }
         }
 
@@ -294,15 +301,14 @@ export function registerChatSocket(io: Server): void {
 
         const readIds = await chatService.markMessagesRead(parsed.data.chatId, userId);
         if (readIds.length > 0) {
-          const participants = await chatService.getChatParticipantIds(parsed.data.chatId);
-          const senderId = participants.find((p) => p !== userId);
           emitChatStatus({
             chatId: parsed.data.chatId,
             status: "read",
             messageIds: readIds,
-            userIds: senderId ? [senderId] : []
+            userIds: []
           });
 
+          const participants = await chatService.getChatParticipantIds(parsed.data.chatId);
           emitInboxUpdate(participants.length > 0 ? participants : [userId]);
         }
       } catch (error) {
@@ -338,7 +344,8 @@ export function registerChatSocket(io: Server): void {
         socket.to(parsed.data.chatId).emit("chat:typing", {
           chatId: parsed.data.chatId,
           userId,
-          isTyping: parsed.data.isTyping
+          isTyping: parsed.data.isTyping,
+          displayName: await chatService.getUserDisplayName(userId)
         });
       } catch (error) {
         if (error instanceof Error) {

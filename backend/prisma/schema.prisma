@@ -12,6 +12,20 @@ enum ChatType {
   GROUP
 }
 
+enum ChatMemberRole {
+  OWNER
+  ADMIN
+  EDITOR
+  MEMBER
+}
+
+enum ChatMemberAddPolicy {
+  OWNER_ONLY
+  ADMIN_ONLY
+  EDITOR_ONLY
+  EVERYONE
+}
+
 enum MessageStatus {
   sent
   delivered
@@ -245,24 +259,40 @@ model UserContact {
 }
 
 model Chat {
-  id        String       @id
-  type      ChatType
-  createdAt DateTime     @default(now())
-  members   ChatMember[]
-  messages  Message[]
+  id                  String              @id @default(uuid())
+  type                ChatType
+  title               String?
+  avatarUrl           String?
+  description         String?
+  createdByUserId     String?
+  isPublic            Boolean             @default(false)
+  joinApprovalRequired Boolean            @default(false)
+  memberAddPolicy     ChatMemberAddPolicy @default(ADMIN_ONLY)
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+  members             ChatMember[]
+  messages            Message[]
+
+  @@index([type, updatedAt(sort: Desc)])
+  @@index([createdByUserId])
 }
 
 model ChatMember {
-  chatId    String
-  userId    String
-  joinedAt  DateTime @default(now())
-  hiddenAt  DateTime?
-  clearedAt DateTime?
-  archivedAt DateTime?
-  muted     Boolean  @default(false)
-  favorited Boolean  @default(false)
-  locked    Boolean  @default(false)
-  folderId  String?
+  chatId            String
+  userId            String
+  role              ChatMemberRole @default(MEMBER)
+  canSend           Boolean        @default(true)
+  addedByUserId     String?
+  joinedVia         String?
+  lastReadMessageId String?
+  joinedAt          DateTime       @default(now())
+  hiddenAt          DateTime?
+  clearedAt         DateTime?
+  archivedAt        DateTime?
+  muted             Boolean        @default(false)
+  favorited         Boolean        @default(false)
+  locked            Boolean        @default(false)
+  folderId          String?
 
   chat      Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -270,6 +300,7 @@ model ChatMember {
 
   @@id([chatId, userId])
   @@index([userId])
+  @@index([chatId, role])
   @@index([userId, hiddenAt])
   @@index([userId, clearedAt])
   @@index([userId, archivedAt])
@@ -356,10 +387,12 @@ model StatusPreference {
 }
 
 model Message {
-  id           String              @id @default(uuid())
+  id            String              @id @default(uuid())
   chatId        String
   senderId      String
   text          String?
+  systemType    String?
+  systemPayload Json?
   status        MessageStatus      @default(sent)
   isViewOnce    Boolean            @default(false)
   editedAt      DateTime?
@@ -374,6 +407,7 @@ model Message {
   reports       ReportCase[]
 
   @@index([chatId, createdAt(sort: Desc)])
+  @@index([chatId, systemType, createdAt(sort: Desc)])
 }
 
 model MessageAttachment {

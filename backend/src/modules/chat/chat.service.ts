@@ -7,10 +7,13 @@ import {
   setUserBlocked
 } from "../../lib/user-relationship.js";
 import type {
+  AppChatType,
   ChatAttachment,
+  ChatDetail,
   ChatMessage,
   ChatMessageEditHistoryEntry,
   ChatMessagePage,
+  ChatMemberSummary,
   ChatSummary,
   DirectoryUser,
   SendMessageAttachmentInput,
@@ -30,6 +33,20 @@ const ChatType = {
   DIRECT: "DIRECT",
   GROUP: "GROUP"
 } as const;
+const ChatMemberRole = {
+  OWNER: "OWNER",
+  ADMIN: "ADMIN",
+  EDITOR: "EDITOR",
+  MEMBER: "MEMBER"
+} as const;
+const ChatMemberAddPolicy = {
+  OWNER_ONLY: "OWNER_ONLY",
+  ADMIN_ONLY: "ADMIN_ONLY",
+  EDITOR_ONLY: "EDITOR_ONLY",
+  EVERYONE: "EVERYONE"
+} as const;
+const GROUP_MEMBERS_ADDED_SYSTEM_TYPE = "group_members_added";
+const GROUP_MEMBER_LEFT_SYSTEM_TYPE = "group_member_left";
 const MessageStatus = {
   sent: "sent",
   delivered: "delivered",
@@ -37,22 +54,45 @@ const MessageStatus = {
 } as const;
 type AttachmentKindValue = typeof AttachmentKind[keyof typeof AttachmentKind];
 type MessageStatusValue = typeof MessageStatus[keyof typeof MessageStatus];
+type ChatTypeValue = typeof ChatType[keyof typeof ChatType];
+type ChatMemberRoleValue = typeof ChatMemberRole[keyof typeof ChatMemberRole];
+type ChatMemberAddPolicyValue =
+  typeof ChatMemberAddPolicy[keyof typeof ChatMemberAddPolicy];
 
 const prismaUser = (prisma as unknown as { user: any }).user;
 const prismaReportCase = (prisma as unknown as { reportCase: any }).reportCase;
 const DELETE_FOR_EVERYONE_WINDOW_MS = 10 * 60 * 1000;
 const EDIT_MESSAGE_WINDOW_MS = 10 * 60 * 1000;
 const CHAT_FOLDER_LIMIT = 3;
+const GROUP_CREATED_SYSTEM_TYPE = "group_created";
+
+const messageInclude = {
+  attachments: {
+    orderBy: { createdAt: "asc" as const }
+  },
+  sender: {
+    select: {
+      id: true,
+      displayName: true
+    }
+  }
+};
 
 type MessageRow = {
   id: string;
   chatId: string;
   senderId: string;
   text: string | null;
+  systemType: string | null;
+  systemPayload: unknown;
   createdAt: Date;
   status: MessageStatusValue;
   editedAt: Date | null;
   editHistory: unknown;
+  sender: {
+    id: string;
+    displayName: string;
+  };
   attachments: Array<{
     id: string;
     objectKey: string;
@@ -109,12 +149,51 @@ function isAudioAttachmentMeta(attachment: {
 
 function summarizeMessage(row: {
   text: string | null;
+  systemType?: string | null;
+  systemPayload?: Record<string, unknown> | null;
   attachments?: Array<{
     kind: AttachmentKindValue;
     contentType?: string | null;
     fileName?: string | null;
   }>;
 }): string {
+  if (row.systemType === GROUP_CREATED_SYSTEM_TYPE) {
+    const payload =
+      row.systemPayload && typeof row.systemPayload === "object"
+        ? (row.systemPayload as Record<string, unknown>)
+        : null;
+    const creatorName =
+      typeof payload?.createdByDisplayName === "string" ? payload.createdByDisplayName.trim() : "";
+    return creatorName ? `Grup oluşturuldu - ${creatorName} tarafından` : "Grup oluşturuldu";
+  }
+
+  if (row.systemType === GROUP_MEMBERS_ADDED_SYSTEM_TYPE) {
+    const payload =
+      row.systemPayload && typeof row.systemPayload === "object"
+        ? (row.systemPayload as Record<string, unknown>)
+        : null;
+    const rawNames = Array.isArray(payload?.memberNames)
+      ? payload?.memberNames.filter((item): item is string => typeof item === "string")
+      : [];
+    const names = rawNames.map((item) => item.trim()).filter((item) => item.length > 0);
+    if (names.length === 0) return "Yeni üyeler eklendi";
+    if (names.length === 1) return `${names[0]} gruba eklendi`;
+    if (names.length === 2) return `${names[0]} ve ${names[1]} gruba eklendi`;
+    return `${names[0]} ve ${names.length - 1} kişi daha gruba eklendi`;
+  }
+
+  if (row.systemType === GROUP_MEMBER_LEFT_SYSTEM_TYPE) {
+    const payload =
+      row.systemPayload && typeof row.systemPayload === "object"
+        ? (row.systemPayload as Record<string, unknown>)
+        : null;
+    const leftByDisplayName =
+      typeof payload?.leftByDisplayName === "string" ? payload.leftByDisplayName.trim() : "";
+    return leftByDisplayName.length > 0
+      ? `${leftByDisplayName} gruptan ayrıldı`
+      : "Bir üye gruptan ayrıldı";
+  }
+
   const text = summarizeTurnaMessageText(row.text);
   if (text) return text;
 
@@ -184,7 +263,13 @@ async function toChatMessage(row: MessageRow): Promise<ChatMessage> {
     id: row.id,
     chatId: row.chatId,
     senderId: row.senderId,
+    senderDisplayName: row.sender?.displayName ?? null,
     text: row.text ?? "",
+    systemType: row.systemType ?? null,
+    systemPayload:
+      row.systemPayload && typeof row.systemPayload === "object"
+        ? (row.systemPayload as Record<string, unknown>)
+        : null,
     createdAt: row.createdAt.toISOString(),
     status: row.status,
     editedAt: row.editedAt ? row.editedAt.toISOString() : null,
@@ -196,6 +281,8 @@ async function toChatMessage(row: MessageRow): Promise<ChatMessage> {
 
 export class ChatService {
   private async getMembershipState(chatId: string, userId: string): Promise<{
+    role: ChatMemberRoleValue;
+    canSend: boolean;
     hiddenAt: Date | null;
     clearedAt: Date | null;
     archivedAt: Date | null;
@@ -207,6 +294,8 @@ export class ChatService {
     return prisma.chatMember.findUnique({
       where: { chatId_userId: { chatId, userId } },
       select: {
+        role: true,
+        canSend: true,
         hiddenAt: true,
         clearedAt: true,
         archivedAt: true,
@@ -216,6 +305,79 @@ export class ChatService {
         folderId: true
       }
     });
+  }
+
+  private async getChatMeta(chatId: string): Promise<{
+    id: string;
+    type: ChatTypeValue;
+    title: string | null;
+    avatarUrl: string | null;
+    description: string | null;
+    createdByUserId: string | null;
+    isPublic: boolean;
+    joinApprovalRequired: boolean;
+    memberAddPolicy: ChatMemberAddPolicyValue;
+  } | null> {
+    return prisma.chat.findUnique({
+      where: { id: chatId },
+      select: {
+        id: true,
+        type: true,
+        title: true,
+        avatarUrl: true,
+        description: true,
+        createdByUserId: true,
+        isPublic: true,
+        joinApprovalRequired: true,
+        memberAddPolicy: true
+      }
+    });
+  }
+
+  private canAddGroupMembers(params: {
+    policy: ChatMemberAddPolicyValue;
+    role: ChatMemberRoleValue;
+  }): boolean {
+    if (params.role === ChatMemberRole.OWNER) return true;
+    switch (params.policy) {
+      case ChatMemberAddPolicy.EVERYONE:
+        return true;
+      case ChatMemberAddPolicy.EDITOR_ONLY:
+        return params.role === ChatMemberRole.ADMIN || params.role === ChatMemberRole.EDITOR;
+      case ChatMemberAddPolicy.ADMIN_ONLY:
+        return params.role === ChatMemberRole.ADMIN;
+      default:
+        return false;
+    }
+  }
+
+  private async createSystemMessage(input: {
+    chatId: string;
+    senderId: string;
+    systemType: string;
+    systemPayload?: Record<string, unknown>;
+  }): Promise<ChatMessage> {
+    const created = await prisma.$transaction(async (tx: any) => {
+      const message = await tx.message.create({
+        data: {
+          chatId: input.chatId,
+          senderId: input.senderId,
+          systemType: input.systemType,
+          systemPayload: input.systemPayload ?? undefined,
+          status: MessageStatus.sent
+        },
+        include: messageInclude
+      });
+
+      await tx.chat.update({
+        where: { id: input.chatId },
+        data: { updatedAt: new Date() }
+      });
+
+      return message;
+    });
+
+    return toChatMessage(created);
   }
 
   private extractDirectParticipants(chatId: string): [string, string] | null {
@@ -253,6 +415,8 @@ export class ChatService {
   async resolvePeerId(chatId: string, userId: string): Promise<string | null> {
     const directPeer = this.getDirectPeerId(chatId, userId);
     if (directPeer) return directPeer;
+    const chat = await this.getChatMeta(chatId);
+    if (!chat || chat.type === ChatType.GROUP) return null;
 
     const participants = await this.getChatParticipantIds(chatId);
     const peer = participants.find((participantId) => participantId !== userId);
@@ -260,6 +424,11 @@ export class ChatService {
   }
 
   async ensureCanInteract(chatId: string, userId: string): Promise<void> {
+    const membership = await this.getMembershipState(chatId, userId);
+    if (membership && !membership.canSend) {
+      throw new Error("chat_send_restricted");
+    }
+
     const peerId = this.getDirectPeerId(chatId, userId);
     if (!peerId) return;
 
@@ -324,32 +493,37 @@ export class ChatService {
       payload.attachments ?? []
     );
 
-    const message = await prisma.message.create({
-      data: {
-        chatId: payload.chatId,
-        senderId: payload.senderId,
-        text: payload.text?.trim() ? payload.text.trim() : null,
-        status: MessageStatus.sent,
-        attachments: preparedAttachments.length
-          ? {
-              create: preparedAttachments.map((attachment) => ({
-                objectKey: attachment.objectKey,
-                kind: attachment.kind,
-                fileName: attachment.fileName,
-                contentType: attachment.contentType,
-                sizeBytes: attachment.sizeBytes,
-                width: attachment.width,
-                height: attachment.height,
-                durationSeconds: attachment.durationSeconds
-              }))
-            }
-          : undefined
-      },
-      include: {
-        attachments: {
-          orderBy: { createdAt: "asc" }
-        }
-      }
+    const message = await prisma.$transaction(async (tx: any) => {
+      const created = await tx.message.create({
+        data: {
+          chatId: payload.chatId,
+          senderId: payload.senderId,
+          text: payload.text?.trim() ? payload.text.trim() : null,
+          status: MessageStatus.sent,
+          attachments: preparedAttachments.length
+            ? {
+                create: preparedAttachments.map((attachment) => ({
+                  objectKey: attachment.objectKey,
+                  kind: attachment.kind,
+                  fileName: attachment.fileName,
+                  contentType: attachment.contentType,
+                  sizeBytes: attachment.sizeBytes,
+                  width: attachment.width,
+                  height: attachment.height,
+                  durationSeconds: attachment.durationSeconds
+                }))
+              }
+            : undefined
+        },
+        include: messageInclude
+      });
+
+      await tx.chat.update({
+        where: { id: payload.chatId },
+        data: { updatedAt: new Date() }
+      });
+
+      return created;
     });
 
     return toChatMessage(message);
@@ -358,11 +532,7 @@ export class ChatService {
   async deleteMessageForEveryone(messageId: string, requesterId: string): Promise<ChatMessage> {
     const existing = await prisma.message.findUnique({
       where: { id: messageId },
-      include: {
-        attachments: {
-          orderBy: { createdAt: "asc" }
-        }
-      }
+      include: messageInclude
     });
 
     if (!existing) {
@@ -375,6 +545,10 @@ export class ChatService {
     }
 
     if (existing.senderId !== requesterId) {
+      throw new Error("message_delete_not_allowed");
+    }
+
+    if (existing.systemType) {
       throw new Error("message_delete_not_allowed");
     }
 
@@ -397,11 +571,7 @@ export class ChatService {
           text: TURNA_DELETED_EVERYONE_MARKER,
           isViewOnce: false
         },
-        include: {
-          attachments: {
-            orderBy: { createdAt: "asc" }
-          }
-        }
+        include: messageInclude
       });
     });
 
@@ -423,11 +593,7 @@ export class ChatService {
   ): Promise<ChatMessage> {
     const existing = await prisma.message.findUnique({
       where: { id: messageId },
-      include: {
-        attachments: {
-          orderBy: { createdAt: "asc" }
-        }
-      }
+      include: messageInclude
     });
 
     if (!existing) {
@@ -440,6 +606,10 @@ export class ChatService {
     }
 
     if (existing.senderId !== requesterId) {
+      throw new Error("message_edit_not_allowed");
+    }
+
+    if (existing.systemType) {
       throw new Error("message_edit_not_allowed");
     }
 
@@ -479,11 +649,7 @@ export class ChatService {
         editCount: (existing.editCount ?? 0) + 1,
         editHistory: history as unknown as any
       },
-      include: {
-        attachments: {
-          orderBy: { createdAt: "asc" }
-        }
-      }
+      include: messageInclude
     });
 
     return toChatMessage(updated as MessageRow);
@@ -586,11 +752,7 @@ export class ChatService {
           ...(clearedAt ? { gt: clearedAt } : {})
         }
       },
-      include: {
-        attachments: {
-          orderBy: { createdAt: "asc" }
-        }
-      },
+      include: messageInclude,
       orderBy: { createdAt: "desc" },
       take: limit + 1
     });
@@ -610,6 +772,7 @@ export class ChatService {
       where: { userId },
       select: {
         chatId: true,
+        role: true,
         joinedAt: true,
         hiddenAt: true,
         clearedAt: true,
@@ -625,19 +788,20 @@ export class ChatService {
           }
         },
         chat: {
-          include: {
+          select: {
+            id: true,
+            type: true,
+            title: true,
+            avatarUrl: true,
+            description: true,
+            isPublic: true,
             members: {
               include: { user: true }
             },
             messages: {
               orderBy: { createdAt: "desc" },
               take: 1,
-              include: {
-                attachments: {
-                  orderBy: { createdAt: "asc" },
-                  take: 3
-                }
-              }
+              include: messageInclude
             }
           }
         }
@@ -646,6 +810,7 @@ export class ChatService {
     });
 
     const peerIds = memberships
+      .filter((membership: any) => membership.chat.type === ChatType.DIRECT)
       .map((membership: any) => membership.chat.members.find((m: any) => m.userId !== userId)?.user.id)
       .filter((peerId: any): peerId is string => Boolean(peerId));
     const blockedPeerIds = await getBlockedUserIdsByUser(
@@ -677,15 +842,36 @@ export class ChatService {
 
         return {
           chatId: chat.id,
-          title: peer?.phone ?? peer?.displayName ?? "New Chat",
-          lastMessage: visibleLast ? summarizeMessage(visibleLast) : "Sohbet başlat",
+          title:
+            chat.type === ChatType.GROUP
+              ? chat.title?.trim() || "Yeni grup"
+              : peer?.phone ?? peer?.displayName ?? "New Chat",
+          chatType: (chat.type === ChatType.GROUP ? "group" : "direct") as AppChatType,
+          lastMessage: (() => {
+            if (!visibleLast) return "Sohbet başlat";
+            const summary = summarizeMessage(visibleLast);
+            if (chat.type !== ChatType.GROUP || visibleLast.systemType) {
+              return summary;
+            }
+            const senderName =
+              visibleLast.senderId === userId
+                ? "Siz"
+                : visibleLast.sender?.displayName?.trim() || "Bilinmeyen";
+            return `${senderName}: ${summary}`;
+          })(),
           lastMessageAt: visibleLast ? visibleLast.createdAt.toISOString() : null,
           unreadCount,
-          peerId: peer?.id ?? null,
-          peerAvatarKey: peer?.avatarUrl ?? null,
-          peerUpdatedAt: peer?.updatedAt ? peer.updatedAt.toISOString() : null,
+          peerId: chat.type === ChatType.DIRECT ? (peer?.id ?? null) : null,
+          peerAvatarKey: chat.type === ChatType.DIRECT ? (peer?.avatarUrl ?? null) : null,
+          peerUpdatedAt:
+            chat.type === ChatType.DIRECT && peer?.updatedAt ? peer.updatedAt.toISOString() : null,
+          groupAvatarUrl: chat.type === ChatType.GROUP ? (chat.avatarUrl ?? null) : null,
+          groupDescription: chat.type === ChatType.GROUP ? (chat.description ?? null) : null,
+          memberCount: chat.members.length,
+          myRole: chat.type === ChatType.GROUP ? membership.role : null,
+          isPublic: chat.type === ChatType.GROUP ? chat.isPublic === true : false,
           isMuted: membership.muted,
-          isBlockedByMe: peer ? blockedPeerIds.has(peer.id) : false,
+          isBlockedByMe: chat.type === ChatType.DIRECT && peer ? blockedPeerIds.has(peer.id) : false,
           isArchived: membership.archivedAt != null,
           isFavorited: membership.favorited === true,
           isLocked: membership.locked === true,
@@ -710,6 +896,367 @@ export class ChatService {
     });
 
     return visibleItems.map(({ joinedAt: _joinedAt, ...summary }) => summary);
+  }
+
+  async createGroup(input: {
+    creatorUserId: string;
+    title: string;
+    memberUserIds: string[];
+  }): Promise<ChatDetail> {
+    const title = input.title.trim();
+    if (!title) {
+      throw new Error("group_title_required");
+    }
+
+    const normalizedMemberIds = Array.from(
+      new Set(
+        input.memberUserIds
+          .map((item) => item.trim())
+          .filter((item) => item.length > 0 && item !== input.creatorUserId)
+      )
+    );
+
+    if (normalizedMemberIds.length < 1) {
+      throw new Error("group_min_members_required");
+    }
+
+    const participantIds = [input.creatorUserId, ...normalizedMemberIds];
+    const users = await prisma.user.findMany({
+      where: {
+        id: { in: participantIds }
+      },
+      select: { id: true }
+    });
+    if (users.length !== participantIds.length) {
+      throw new Error("group_member_not_found");
+    }
+
+    const created = await prisma.$transaction(async (tx: any) => {
+      const chat = await tx.chat.create({
+        data: {
+          type: ChatType.GROUP,
+          title,
+          createdByUserId: input.creatorUserId,
+          members: {
+            create: participantIds.map((participantId, index) => ({
+              userId: participantId,
+              role: index === 0 ? ChatMemberRole.OWNER : ChatMemberRole.MEMBER,
+              canSend: true,
+              addedByUserId: input.creatorUserId,
+              joinedVia: index === 0 ? "created" : "added"
+            }))
+          }
+        },
+        select: {
+          id: true
+        }
+      });
+
+      const creator = await tx.user.findUnique({
+        where: { id: input.creatorUserId },
+        select: { displayName: true }
+      });
+
+      await tx.message.create({
+        data: {
+          chatId: chat.id,
+          senderId: input.creatorUserId,
+          systemType: GROUP_CREATED_SYSTEM_TYPE,
+          systemPayload: {
+            createdByUserId: input.creatorUserId,
+            createdByDisplayName: creator?.displayName ?? "Turna"
+          },
+          status: MessageStatus.sent
+        }
+      });
+
+      return chat;
+    });
+
+    const detail = await this.getChatDetail(created.id, input.creatorUserId);
+    if (!detail) {
+      throw new Error("group_not_found");
+    }
+    return detail;
+  }
+
+  async getChatDetail(chatId: string, userId: string): Promise<ChatDetail | null> {
+    const hasAccess = await this.ensureChatAccess(chatId, userId);
+    if (!hasAccess) {
+      throw new Error("forbidden_chat_access");
+    }
+
+    const chat = await prisma.chat.findUnique({
+      where: { id: chatId },
+      select: {
+        id: true,
+        type: true,
+        title: true,
+        description: true,
+        avatarUrl: true,
+        createdByUserId: true,
+        isPublic: true,
+        joinApprovalRequired: true,
+        memberAddPolicy: true,
+        members: {
+          select: {
+            userId: true,
+            role: true,
+            user: {
+              select: {
+                id: true,
+                displayName: true,
+                phone: true,
+                avatarUrl: true,
+                updatedAt: true
+              }
+            }
+          }
+        }
+      }
+    });
+    if (!chat) return null;
+
+    const myMembership = chat.members.find((member: any) => member.userId === userId) ?? null;
+    const peer = chat.type === ChatType.DIRECT
+      ? chat.members.find((member: any) => member.userId !== userId)?.user ?? null
+      : null;
+
+    return {
+      chatId: chat.id,
+      chatType: chat.type === ChatType.GROUP ? "group" : "direct",
+      title:
+        chat.type === ChatType.GROUP
+          ? chat.title?.trim() || "Yeni grup"
+          : peer?.phone ?? peer?.displayName ?? "New Chat",
+      description: chat.type === ChatType.GROUP ? (chat.description ?? null) : null,
+      avatarUrl:
+        chat.type === ChatType.GROUP
+          ? (chat.avatarUrl ?? null)
+          : peer?.avatarUrl ?? null,
+      createdByUserId: chat.createdByUserId ?? null,
+      memberCount: chat.members.length,
+      myRole: chat.type === ChatType.GROUP ? (myMembership?.role ?? null) : null,
+      isPublic: chat.type === ChatType.GROUP ? chat.isPublic === true : false,
+      joinApprovalRequired:
+        chat.type === ChatType.GROUP ? chat.joinApprovalRequired === true : false,
+      memberAddPolicy:
+        chat.type === ChatType.GROUP ? chat.memberAddPolicy : ChatMemberAddPolicy.ADMIN_ONLY
+    };
+  }
+
+  async addGroupMembers(input: {
+    chatId: string;
+    requesterUserId: string;
+    memberUserIds: string[];
+  }): Promise<{
+    members: ChatMemberSummary[];
+    participantIds: string[];
+    systemMessage: ChatMessage | null;
+  }> {
+    const chat = await this.getChatMeta(input.chatId);
+    if (!chat || chat.type !== ChatType.GROUP) {
+      throw new Error("group_not_found");
+    }
+
+    const requesterMembership = await this.getMembershipState(input.chatId, input.requesterUserId);
+    if (!requesterMembership) {
+      throw new Error("forbidden_chat_access");
+    }
+
+    if (
+      !this.canAddGroupMembers({
+        policy: chat.memberAddPolicy,
+        role: requesterMembership.role
+      })
+    ) {
+      throw new Error("group_member_add_not_allowed");
+    }
+
+    const memberUserIds = Array.from(
+      new Set(
+        input.memberUserIds
+          .map((item) => item.trim())
+          .filter((item) => item.length > 0 && item !== input.requesterUserId)
+      )
+    );
+    if (memberUserIds.length === 0) {
+      return {
+        members: [],
+        participantIds: await this.getChatParticipantIds(input.chatId),
+        systemMessage: null
+      };
+    }
+
+    const existingRows = await prisma.chatMember.findMany({
+      where: {
+        chatId: input.chatId,
+        userId: { in: memberUserIds }
+      },
+      select: { userId: true }
+    });
+    const existingIds = new Set(existingRows.map((row: any) => row.userId));
+    const missingMemberIds = memberUserIds.filter((userId) => !existingIds.has(userId));
+    if (missingMemberIds.length === 0) {
+      return {
+        members: [],
+        participantIds: await this.getChatParticipantIds(input.chatId),
+        systemMessage: null
+      };
+    }
+
+    const users = await prisma.user.findMany({
+      where: { id: { in: missingMemberIds } },
+      select: { id: true, displayName: true }
+    });
+    if (users.length !== missingMemberIds.length) {
+      throw new Error("group_member_not_found");
+    }
+
+    await prisma.chatMember.createMany({
+      data: missingMemberIds.map((memberUserId) => ({
+        chatId: input.chatId,
+        userId: memberUserId,
+        role: ChatMemberRole.MEMBER,
+        canSend: true,
+        addedByUserId: input.requesterUserId,
+        joinedVia: "added"
+      }))
+    });
+
+    const addedNameMap = new Map(
+      users.map((user: any) => [user.id, (user.displayName ?? "").trim() || "Yeni üye"])
+    );
+    const systemMessage = await this.createSystemMessage({
+      chatId: input.chatId,
+      senderId: input.requesterUserId,
+      systemType: GROUP_MEMBERS_ADDED_SYSTEM_TYPE,
+      systemPayload: {
+        memberNames: missingMemberIds.map((userId) => addedNameMap.get(userId) ?? "Yeni üye")
+      }
+    });
+
+    const members = await this.listGroupMembers(input.chatId, input.requesterUserId, {
+      limit: 200,
+      offset: 0
+    });
+    return {
+      members: members.items.filter((member) => missingMemberIds.includes(member.userId)),
+      participantIds: await this.getChatParticipantIds(input.chatId),
+      systemMessage
+    };
+  }
+
+  async leaveGroup(input: {
+    chatId: string;
+    requesterUserId: string;
+  }): Promise<{
+    participantIds: string[];
+    systemMessage: ChatMessage;
+  }> {
+    const chat = await this.getChatMeta(input.chatId);
+    if (!chat || chat.type !== ChatType.GROUP) {
+      throw new Error("group_not_found");
+    }
+
+    const membership = await this.getMembershipState(input.chatId, input.requesterUserId);
+    if (!membership) {
+      throw new Error("forbidden_chat_access");
+    }
+
+    if (membership.role === ChatMemberRole.OWNER) {
+      throw new Error("group_owner_leave_not_allowed");
+    }
+
+    const requester = await prismaUser.findUnique({
+      where: { id: input.requesterUserId },
+      select: { displayName: true }
+    });
+
+    await prisma.chatMember.delete({
+      where: {
+        chatId_userId: {
+          chatId: input.chatId,
+          userId: input.requesterUserId
+        }
+      }
+    });
+
+    const systemMessage = await this.createSystemMessage({
+      chatId: input.chatId,
+      senderId: input.requesterUserId,
+      systemType: GROUP_MEMBER_LEFT_SYSTEM_TYPE,
+      systemPayload: {
+        leftByDisplayName: requester?.displayName?.trim() || "Bir üye"
+      }
+    });
+
+    return {
+      participantIds: await this.getChatParticipantIds(input.chatId),
+      systemMessage
+    };
+  }
+
+  async listGroupMembers(
+    chatId: string,
+    requesterUserId: string,
+    options: { limit?: number; offset?: number } = {}
+  ): Promise<{ items: ChatMemberSummary[]; totalCount: number; hasMore: boolean }> {
+    const chat = await this.getChatMeta(chatId);
+    if (!chat || chat.type !== ChatType.GROUP) {
+      throw new Error("group_not_found");
+    }
+
+    const hasAccess = await this.ensureChatAccess(chatId, requesterUserId);
+    if (!hasAccess) {
+      throw new Error("forbidden_chat_access");
+    }
+
+    const limit = Math.min(Math.max(options.limit ?? 40, 1), 100);
+    const offset = Math.max(options.offset ?? 0, 0);
+
+    const [totalCount, members] = await Promise.all([
+      prisma.chatMember.count({ where: { chatId } }),
+      prisma.chatMember.findMany({
+        where: { chatId },
+        orderBy: [{ role: "asc" }, { joinedAt: "asc" }],
+        skip: offset,
+        take: limit,
+        select: {
+          userId: true,
+          role: true,
+          canSend: true,
+          joinedAt: true,
+          user: {
+            select: {
+              displayName: true,
+              username: true,
+              phone: true,
+              avatarUrl: true,
+              updatedAt: true,
+              lastSeenAt: true
+            }
+          }
+        }
+      })
+    ]);
+
+    return {
+      items: members.map((member: any) => ({
+        userId: member.userId,
+        displayName: member.user.displayName,
+        username: member.user.username,
+        phone: member.user.phone,
+        avatarKey: member.user.avatarUrl,
+        updatedAt: member.user.updatedAt.toISOString(),
+        role: member.role,
+        canSend: member.canSend === true,
+        joinedAt: member.joinedAt.toISOString(),
+        lastSeenAt: member.user.lastSeenAt ? member.user.lastSeenAt.toISOString() : null
+      })),
+      totalCount,
+      hasMore: offset + members.length < totalCount
+    };
   }
 
   async getUserDirectory(userId: string): Promise<DirectoryUser[]> {

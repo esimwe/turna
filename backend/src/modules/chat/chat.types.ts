@@ -1,5 +1,7 @@
 export type ChatMessageStatus = "sent" | "delivered" | "read";
 export type ChatAttachmentKind = "image" | "video" | "file";
+export type AppChatType = "direct" | "group";
+export type ChatMemberRole = "OWNER" | "ADMIN" | "EDITOR" | "MEMBER";
 
 export interface ChatAttachment {
   id: string;
@@ -23,7 +25,10 @@ export interface ChatMessage {
   id: string;
   chatId: string;
   senderId: string;
+  senderDisplayName: string | null;
   text: string;
+  systemType: string | null;
+  systemPayload: Record<string, unknown> | null;
   createdAt: string;
   status: ChatMessageStatus;
   editedAt: string | null;
@@ -59,12 +64,18 @@ export interface SendMessageAttachmentInput {
 export interface ChatSummary {
   chatId: string;
   title: string;
+  chatType: AppChatType;
   lastMessage: string;
   lastMessageAt: string | null;
   unreadCount: number;
   peerId: string | null;
   peerAvatarKey: string | null;
   peerUpdatedAt: string | null;
+  groupAvatarUrl: string | null;
+  groupDescription: string | null;
+  memberCount: number;
+  myRole: ChatMemberRole | null;
+  isPublic: boolean;
   isMuted: boolean;
   isBlockedByMe: boolean;
   isArchived: boolean;
@@ -82,4 +93,31 @@ export interface DirectoryUser {
   about: string | null;
   avatarKey: string | null;
   updatedAt: string;
+}
+
+export interface ChatMemberSummary {
+  userId: string;
+  displayName: string;
+  username: string | null;
+  phone: string | null;
+  avatarKey: string | null;
+  updatedAt: string;
+  role: ChatMemberRole;
+  canSend: boolean;
+  joinedAt: string;
+  lastSeenAt: string | null;
+}
+
+export interface ChatDetail {
+  chatId: string;
+  chatType: AppChatType;
+  title: string;
+  description: string | null;
+  avatarUrl: string | null;
+  createdByUserId: string | null;
+  memberCount: number;
+  myRole: ChatMemberRole | null;
+  isPublic: boolean;
+  joinApprovalRequired: boolean;
+  memberAddPolicy: "OWNER_ONLY" | "ADMIN_ONLY" | "EDITOR_ONLY" | "EVERYONE";
 }
