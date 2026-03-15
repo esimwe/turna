@@ -3254,11 +3254,11 @@ class _ChatRoomPageState extends State<ChatRoomPage>
 
   String? _buildPeerStatusText() {
     if (_peerUserId == null) return null;
-    if (_client.peerTyping) return 'yaziyor...';
+    if (_client.peerTyping) return 'yazıyor...';
     if (_client.peerOnline) return 'online';
     final lastSeenAt = _client.peerLastSeenAt;
     if (lastSeenAt == null || lastSeenAt.trim().isEmpty) return null;
-    return 'son gorulme ${_formatPresenceTime(lastSeenAt)}';
+    return 'son görülme ${_formatPresenceTime(lastSeenAt)}';
   }
 
   String _formatPresenceTime(String iso) {
@@ -3271,8 +3271,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     final diffDays = today.difference(seenDay).inDays;
     final hh = dt.hour.toString().padLeft(2, '0');
     final mm = dt.minute.toString().padLeft(2, '0');
-    if (diffDays == 0) return 'bugun $hh:$mm';
-    if (diffDays == 1) return 'dun $hh:$mm';
+    if (diffDays == 0) return 'bugün $hh:$mm';
+    if (diffDays == 1) return 'dün $hh:$mm';
 
     final dd = dt.day.toString().padLeft(2, '0');
     final month = dt.month.toString().padLeft(2, '0');
@@ -6581,12 +6581,6 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                       );
                     },
                   ),
-                if (_client.peerTyping)
-                  const Positioned(
-                    left: 14,
-                    bottom: 12,
-                    child: _TypingIndicatorPill(),
-                  ),
                 if (_showScrollToBottom)
                   Positioned(
                     right: 16,
@@ -6737,80 +6731,6 @@ class _DateSeparatorChip extends StatelessWidget {
             fontWeight: FontWeight.w600,
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _TypingIndicatorPill extends StatefulWidget {
-  const _TypingIndicatorPill();
-
-  @override
-  State<_TypingIndicatorPill> createState() => _TypingIndicatorPillState();
-}
-
-class _TypingIndicatorPillState extends State<_TypingIndicatorPill>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _controller;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1100),
-    )..repeat();
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  double _opacityForDot(int index) {
-    final progress = (_controller.value + (index * 0.16)) % 1.0;
-    if (progress < 0.5) {
-      return 0.32 + (progress / 0.5) * 0.68;
-    }
-    return 1 - ((progress - 0.5) / 0.5) * 0.68;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-      decoration: BoxDecoration(
-        color: TurnaColors.chatIncoming,
-        borderRadius: BorderRadius.circular(TurnaChatTokens.bubbleRadius),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 8,
-            offset: const Offset(0, 1),
-          ),
-        ],
-      ),
-      child: AnimatedBuilder(
-        animation: _controller,
-        builder: (_, _) {
-          return Row(
-            mainAxisSize: MainAxisSize.min,
-            children: List.generate(3, (index) {
-              return Container(
-                width: 7,
-                height: 7,
-                margin: EdgeInsets.only(right: index == 2 ? 0 : 4),
-                decoration: BoxDecoration(
-                  color: TurnaColors.textMuted.withValues(
-                    alpha: _opacityForDot(index),
-                  ),
-                  shape: BoxShape.circle,
-                ),
-              );
-            }),
-          );
-        },
       ),
     );
   }
