@@ -3450,7 +3450,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   Future<void> _openGroupInfo() async {
     if (!_isGroupChat) return;
 
-    final shouldCloseRoom = await Navigator.push<bool>(
+    final result = await Navigator.push<Object?>(
       context,
       MaterialPageRoute(
         builder: (_) => _TurnaGroupInfoPage(
@@ -3466,8 +3466,29 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     if (mounted && _isGroupChat) {
       unawaited(_loadGroupDetail());
     }
-    if (!mounted || shouldCloseRoom != true) return;
-    Navigator.of(context).pop(true);
+    if (!mounted) return;
+    if (result == true) {
+      Navigator.of(context).pop(true);
+      return;
+    }
+    if (result is String && result.trim().isNotEmpty) {
+      await _scrollToReplyTarget(result);
+    }
+  }
+
+  Future<void> _openGroupSearch() async {
+    if (!_isGroupChat) return;
+    final result = await Navigator.of(context).push<String>(
+      MaterialPageRoute(
+        builder: (_) => _TurnaGroupSearchPage(
+          session: widget.session,
+          chat: widget.chat,
+          onSessionExpired: widget.onSessionExpired,
+        ),
+      ),
+    );
+    if (!mounted || result == null || result.trim().isEmpty) return;
+    await _scrollToReplyTarget(result);
   }
 
   Future<void> _loadGroupDetail() async {
@@ -7497,6 +7518,12 @@ class _ChatRoomPageState extends State<ChatRoomPage>
           ),
         ),
         actions: [
+          if (_isGroupChat)
+            IconButton(
+              tooltip: 'Grup içi ara',
+              onPressed: _openGroupSearch,
+              icon: const Icon(Icons.search_rounded),
+            ),
           if (_isGroupChat)
             IconButton(
               tooltip: 'Grup bilgisi',
@@ -13759,6 +13786,498 @@ class _CreateGroupPageState extends State<_CreateGroupPage> {
   }
 }
 
+class _TurnaGroupSearchPage extends StatefulWidget {
+  const _TurnaGroupSearchPage({
+    required this.session,
+    required this.chat,
+    required this.onSessionExpired,
+  });
+
+  final AuthSession session;
+  final ChatPreview chat;
+  final VoidCallback onSessionExpired;
+
+  @override
+  State<_TurnaGroupSearchPage> createState() => _TurnaGroupSearchPageState();
+}
+
+class _TurnaGroupSearchPageState extends State<_TurnaGroupSearchPage> {
+  final TextEditingController _searchController = TextEditingController();
+  Timer? _debounce;
+  List<ChatMessage> _items = const <ChatMessage>[];
+  bool _loading = false;
+  bool _loadingMore = false;
+  bool _searched = false;
+  bool _hasMore = false;
+  String? _nextBefore;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _searchController.addListener(_handleSearchChanged);
+  }
+
+  void _handleSearchChanged() {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 260), () {
+      unawaited(_runSearch(reset: true));
+    });
+  }
+
+  Future<void> _runSearch({required bool reset}) async {
+    final query = _searchController.text.trim();
+    if (query.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        _items = const <ChatMessage>[];
+        _searched = false;
+        _loading = false;
+        _loadingMore = false;
+        _hasMore = false;
+        _nextBefore = null;
+        _error = null;
+      });
+      return;
+    }
+
+    if (reset) {
+      setState(() {
+        _loading = true;
+        _searched = true;
+        _error = null;
+        _nextBefore = null;
+      });
+    } else {
+      if (_loadingMore || !_hasMore) return;
+      setState(() => _loadingMore = true);
+    }
+
+    try {
+      final page = await ChatApi.searchMessagesPage(
+        widget.session,
+        chatId: widget.chat.chatId,
+        query: query,
+        before: reset ? null : _nextBefore,
+      );
+      if (!mounted) return;
+      setState(() {
+        _items = reset ? page.items : [..._items, ...page.items];
+        _hasMore = page.hasMore;
+        _nextBefore = page.nextBefore;
+        _loading = false;
+        _loadingMore = false;
+        _error = null;
+      });
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _loadingMore = false;
+        _error = error.toString();
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _searchController.removeListener(_handleSearchChanged);
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final query = _searchController.text.trim();
+    return Scaffold(
+      appBar: AppBar(title: const Text('Grup içi ara')),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
+            child: TextField(
+              controller: _searchController,
+              textInputAction: TextInputAction.search,
+              decoration: InputDecoration(
+                hintText: 'Mesaj, dosya veya kişi ara',
+                prefixIcon: const Icon(Icons.search_rounded),
+                suffixIcon: query.isEmpty
+                    ? null
+                    : IconButton(
+                        onPressed: _searchController.clear,
+                        icon: const Icon(Icons.close_rounded),
+                      ),
+                filled: true,
+                fillColor: TurnaColors.backgroundMuted,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(22),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+              onSubmitted: (_) => _runSearch(reset: true),
+            ),
+          ),
+          Expanded(
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : _error != null
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Text(
+                        _error!,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: TurnaColors.error),
+                      ),
+                    ),
+                  )
+                : !_searched
+                ? const _CenteredState(
+                    icon: Icons.search_rounded,
+                    title: 'Aramaya başla',
+                    message: 'Gruptaki mesajlarda anahtar kelime ara.',
+                  )
+                : _items.isEmpty
+                ? _CenteredState(
+                    icon: Icons.search_off_rounded,
+                    title: 'Sonuç yok',
+                    message: '"$query" için eşleşen mesaj bulunamadı.',
+                  )
+                : ListView(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+                    children: [
+                      ..._items.map(
+                        (message) => _TurnaGroupMessageResultTile(
+                          message: message,
+                          onTap: () => Navigator.of(context).pop(message.id),
+                        ),
+                      ),
+                      if (_hasMore)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: OutlinedButton(
+                            onPressed: _loadingMore
+                                ? null
+                                : () => _runSearch(reset: false),
+                            child: Text(
+                              _loadingMore
+                                  ? 'Yükleniyor...'
+                                  : 'Daha fazla sonuç',
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TurnaGroupMediaExplorerPage extends StatelessWidget {
+  const _TurnaGroupMediaExplorerPage({
+    required this.session,
+    required this.chat,
+    required this.onSessionExpired,
+  });
+
+  final AuthSession session;
+  final ChatPreview chat;
+  final VoidCallback onSessionExpired;
+
+  @override
+  Widget build(BuildContext context) {
+    return DefaultTabController(
+      length: 3,
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Paylaşılan içerikler'),
+          bottom: const TabBar(
+            tabs: [
+              Tab(text: 'Medya'),
+              Tab(text: 'Dosyalar'),
+              Tab(text: 'Bağlantılar'),
+            ],
+          ),
+        ),
+        body: TabBarView(
+          children: [
+            _TurnaGroupCollectionTab(
+              session: session,
+              chat: chat,
+              type: TurnaChatCollectionType.media,
+              emptyTitle: 'Medya yok',
+              emptyMessage: 'Bu grupta henüz fotoğraf veya video yok.',
+              onSessionExpired: onSessionExpired,
+            ),
+            _TurnaGroupCollectionTab(
+              session: session,
+              chat: chat,
+              type: TurnaChatCollectionType.docs,
+              emptyTitle: 'Dosya yok',
+              emptyMessage: 'Bu grupta henüz belge veya dosya yok.',
+              onSessionExpired: onSessionExpired,
+            ),
+            _TurnaGroupCollectionTab(
+              session: session,
+              chat: chat,
+              type: TurnaChatCollectionType.links,
+              emptyTitle: 'Bağlantı yok',
+              emptyMessage: 'Bu grupta henüz bağlantı paylaşılmadı.',
+              onSessionExpired: onSessionExpired,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TurnaGroupCollectionTab extends StatefulWidget {
+  const _TurnaGroupCollectionTab({
+    required this.session,
+    required this.chat,
+    required this.type,
+    required this.emptyTitle,
+    required this.emptyMessage,
+    required this.onSessionExpired,
+  });
+
+  final AuthSession session;
+  final ChatPreview chat;
+  final TurnaChatCollectionType type;
+  final String emptyTitle;
+  final String emptyMessage;
+  final VoidCallback onSessionExpired;
+
+  @override
+  State<_TurnaGroupCollectionTab> createState() =>
+      _TurnaGroupCollectionTabState();
+}
+
+class _TurnaGroupCollectionTabState extends State<_TurnaGroupCollectionTab> {
+  List<ChatMessage> _items = const <ChatMessage>[];
+  bool _loading = true;
+  bool _loadingMore = false;
+  bool _hasMore = false;
+  String? _nextBefore;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_load(reset: true));
+  }
+
+  Future<void> _load({required bool reset}) async {
+    if (reset) {
+      setState(() {
+        _loading = true;
+        _error = null;
+        _nextBefore = null;
+      });
+    } else {
+      if (_loadingMore || !_hasMore) return;
+      setState(() => _loadingMore = true);
+    }
+
+    try {
+      final page = await ChatApi.fetchMessageCollectionPage(
+        widget.session,
+        chatId: widget.chat.chatId,
+        type: widget.type,
+        before: reset ? null : _nextBefore,
+      );
+      if (!mounted) return;
+      setState(() {
+        _items = reset ? page.items : [..._items, ...page.items];
+        _hasMore = page.hasMore;
+        _nextBefore = page.nextBefore;
+        _loading = false;
+        _loadingMore = false;
+        _error = null;
+      });
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _loadingMore = false;
+        _error = error.toString();
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_error != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(
+            _error!,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: TurnaColors.error),
+          ),
+        ),
+      );
+    }
+    if (_items.isEmpty) {
+      return _CenteredState(
+        icon: Icons.perm_media_outlined,
+        title: widget.emptyTitle,
+        message: widget.emptyMessage,
+      );
+    }
+    return RefreshIndicator(
+      onRefresh: () => _load(reset: true),
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+        children: [
+          ..._items.map(
+            (message) => _TurnaGroupMessageResultTile(
+              message: message,
+              onTap: () => Navigator.of(context).pop(message.id),
+            ),
+          ),
+          if (_hasMore)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: OutlinedButton(
+                onPressed: _loadingMore ? null : () => _load(reset: false),
+                child: Text(_loadingMore ? 'Yükleniyor...' : 'Daha fazla yükle'),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TurnaGroupMessageResultTile extends StatelessWidget {
+  const _TurnaGroupMessageResultTile({
+    required this.message,
+    required this.onTap,
+  });
+
+  final ChatMessage message;
+  final VoidCallback onTap;
+
+  String _previewText() {
+    final parsed = parseTurnaMessageText(message.text);
+    if (parsed.text.trim().isNotEmpty) {
+      return parsed.text.trim();
+    }
+    if (parsed.location != null) {
+      return parsed.location!.previewLabel;
+    }
+    if (parsed.contact != null) {
+      return parsed.contact!.previewLabel;
+    }
+    if (message.attachments.isEmpty) return 'Mesaj';
+    final first = message.attachments.first;
+    if (_isImageAttachment(first)) return 'Fotoğraf';
+    if (_isVideoAttachment(first)) return 'Video';
+    if (_isAudioAttachment(first)) return 'Ses kaydı';
+    return first.fileName?.trim().isNotEmpty == true
+        ? first.fileName!.trim()
+        : 'Dosya';
+  }
+
+  IconData _leadingIcon() {
+    if (message.attachments.isNotEmpty) {
+      final first = message.attachments.first;
+      if (_isImageAttachment(first)) return Icons.photo_library_outlined;
+      if (_isVideoAttachment(first)) return Icons.videocam_outlined;
+      if (_isAudioAttachment(first)) return Icons.mic_none_rounded;
+      return Icons.insert_drive_file_outlined;
+    }
+    final text = message.text.toLowerCase();
+    if (text.contains('http://') ||
+        text.contains('https://') ||
+        text.contains('www.')) {
+      return Icons.link_rounded;
+    }
+    return Icons.chat_bubble_outline_rounded;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final sender = (message.senderDisplayName ?? '').trim().isNotEmpty
+        ? message.senderDisplayName!.trim()
+        : 'Birisi';
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: TurnaColors.divider),
+      ),
+      child: ListTile(
+        onTap: onTap,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        leading: Container(
+          width: 42,
+          height: 42,
+          decoration: BoxDecoration(
+            color: TurnaColors.primary50,
+            borderRadius: BorderRadius.circular(14),
+          ),
+          alignment: Alignment.center,
+          child: Icon(_leadingIcon(), color: TurnaColors.primary),
+        ),
+        title: Row(
+          children: [
+            Expanded(
+              child: Text(
+                sender,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Text(
+              formatTurnaLocalClock(message.createdAt),
+              style: const TextStyle(
+                fontSize: 12,
+                color: TurnaColors.textMuted,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+        subtitle: Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Text(
+            _previewText(),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: TurnaColors.textSoft,
+              height: 1.3,
+            ),
+          ),
+        ),
+        trailing: const Icon(
+          Icons.chevron_right_rounded,
+          color: TurnaColors.textMuted,
+        ),
+      ),
+    );
+  }
+}
+
 class _TurnaGroupInfoPage extends StatefulWidget {
   const _TurnaGroupInfoPage({
     required this.session,
@@ -14461,6 +14980,20 @@ class _TurnaGroupInfoPageState extends State<_TurnaGroupInfoPage> {
     await _load(showLoading: false);
   }
 
+  Future<void> _openSharedMediaExplorer() async {
+    final result = await Navigator.of(context).push<String>(
+      MaterialPageRoute(
+        builder: (_) => _TurnaGroupMediaExplorerPage(
+          session: widget.session,
+          chat: widget.chat,
+          onSessionExpired: widget.onSessionExpired,
+        ),
+      ),
+    );
+    if (!mounted || result == null || result.trim().isEmpty) return;
+    Navigator.of(context).pop(result);
+  }
+
   Future<void> _closeGroup() async {
     if (!_canCloseGroup || _closing) return;
     final confirmed = await showDialog<bool>(
@@ -14732,6 +15265,21 @@ class _TurnaGroupInfoPageState extends State<_TurnaGroupInfoPage> {
                 ],
               ),
             ),
+          const SizedBox(height: 14),
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: TurnaColors.divider),
+            ),
+            child: ListTile(
+              leading: const Icon(Icons.perm_media_outlined),
+              title: const Text('Medya, dosyalar ve bağlantılar'),
+              subtitle: const Text('Grupta paylaşılan içerikleri tara'),
+              trailing: const Icon(Icons.chevron_right_rounded),
+              onTap: _openSharedMediaExplorer,
+            ),
+          ),
           const SizedBox(height: 14),
           if (_canAddMembers)
             SizedBox(

@@ -2,6 +2,8 @@ part of '../main.dart';
 
 enum TurnaChatType { direct, group }
 
+enum TurnaChatCollectionType { media, docs, links }
+
 class ChatPreview {
   ChatPreview({
     required this.chatId,
@@ -3258,6 +3260,8 @@ class ProfileApi {
           return 'Düzenlenecek mesaj boş olamaz.';
         case 'message_reaction_not_allowed':
           return 'Bu mesaja tepki eklenemez.';
+        case 'chat_search_query_required':
+          return 'Arama için bir metin gir.';
         case 'chat_folder_limit_reached':
           return 'En fazla 3 kategori oluşturabilirsin.';
         case 'chat_folder_exists':
@@ -4490,6 +4494,169 @@ class ChatApi {
         }
       }
       throw TurnaApiException('Mesajlar yüklenemedi.');
+    }
+  }
+
+  static Future<ChatMessagesPage> searchMessagesPage(
+    AuthSession session, {
+    required String chatId,
+    required String query,
+    String? before,
+    int limit = 30,
+  }) async {
+    final trimmedQuery = query.trim();
+    if (trimmedQuery.isEmpty) {
+      return ChatMessagesPage(
+        items: const <ChatMessage>[],
+        hasMore: false,
+        nextBefore: null,
+      );
+    }
+
+    try {
+      final uri = Uri.parse('$kBackendBaseUrl/api/chats/$chatId/search')
+          .replace(
+            queryParameters: {
+              'q': trimmedQuery,
+              'limit': '$limit',
+              if (before != null && before.isNotEmpty) 'before': before,
+            },
+          );
+      final res = await http.get(
+        uri,
+        headers: {'Authorization': 'Bearer ${session.token}'},
+      );
+      _throwIfApiError(res);
+
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final items = (map['data'] as List<dynamic>? ?? const [])
+          .whereType<Map>()
+          .map((item) => ChatMessage.fromMap(Map<String, dynamic>.from(item)))
+          .toList();
+      final pageInfo = map['pageInfo'] as Map<String, dynamic>? ?? const {};
+      return ChatMessagesPage(
+        items: items,
+        hasMore: pageInfo['hasMore'] == true,
+        nextBefore: _nullableString(pageInfo['nextBefore']),
+      );
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      final cached = await TurnaChatHistoryLocalCache.load(
+        session.userId,
+        chatId,
+      );
+      final normalized = trimmedQuery.toLowerCase();
+      final filtered = cached.where((message) {
+        if ((message.systemType ?? '').trim().isNotEmpty) return false;
+        final text = message.text.toLowerCase();
+        final sender = (message.senderDisplayName ?? '').toLowerCase();
+        final fileNames = message.attachments
+            .map((attachment) => (attachment.fileName ?? '').toLowerCase())
+            .join(' ');
+        return text.contains(normalized) ||
+            sender.contains(normalized) ||
+            fileNames.contains(normalized);
+      }).toList()
+        ..sort((a, b) => compareTurnaTimestamps(a.createdAt, b.createdAt));
+      final window = before == null || before.isEmpty
+          ? filtered
+          : filtered
+                .where(
+                  (message) =>
+                      compareTurnaTimestamps(message.createdAt, before) < 0,
+                )
+                .toList();
+      final limited = window.length <= limit
+          ? window
+          : window.sublist(window.length - limit);
+      return ChatMessagesPage(
+        items: limited,
+        hasMore: window.length > limit,
+        nextBefore: limited.isEmpty ? null : limited.first.createdAt,
+      );
+    }
+  }
+
+  static Future<ChatMessagesPage> fetchMessageCollectionPage(
+    AuthSession session, {
+    required String chatId,
+    required TurnaChatCollectionType type,
+    String? before,
+    int limit = 30,
+  }) async {
+    try {
+      final uri = Uri.parse('$kBackendBaseUrl/api/chats/$chatId/media-items')
+          .replace(
+            queryParameters: {
+              'type': type.name,
+              'limit': '$limit',
+              if (before != null && before.isNotEmpty) 'before': before,
+            },
+          );
+      final res = await http.get(
+        uri,
+        headers: {'Authorization': 'Bearer ${session.token}'},
+      );
+      _throwIfApiError(res);
+
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final items = (map['data'] as List<dynamic>? ?? const [])
+          .whereType<Map>()
+          .map((item) => ChatMessage.fromMap(Map<String, dynamic>.from(item)))
+          .toList();
+      final pageInfo = map['pageInfo'] as Map<String, dynamic>? ?? const {};
+      return ChatMessagesPage(
+        items: items,
+        hasMore: pageInfo['hasMore'] == true,
+        nextBefore: _nullableString(pageInfo['nextBefore']),
+      );
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      final cached = await TurnaChatHistoryLocalCache.load(
+        session.userId,
+        chatId,
+      );
+      bool matches(ChatMessage message) {
+        if ((message.systemType ?? '').trim().isNotEmpty) return false;
+        switch (type) {
+          case TurnaChatCollectionType.media:
+            return message.attachments.any(
+              (attachment) =>
+                  attachment.kind == ChatAttachmentKind.image ||
+                  attachment.kind == ChatAttachmentKind.video,
+            );
+          case TurnaChatCollectionType.docs:
+            return message.attachments.any(
+              (attachment) => attachment.kind == ChatAttachmentKind.file,
+            );
+          case TurnaChatCollectionType.links:
+            final text = message.text.toLowerCase();
+            return text.contains('http://') ||
+                text.contains('https://') ||
+                text.contains('www.');
+        }
+      }
+
+      final filtered = cached.where(matches).toList()
+        ..sort((a, b) => compareTurnaTimestamps(a.createdAt, b.createdAt));
+      final window = before == null || before.isEmpty
+          ? filtered
+          : filtered
+                .where(
+                  (message) =>
+                      compareTurnaTimestamps(message.createdAt, before) < 0,
+                )
+                .toList();
+      final limited = window.length <= limit
+          ? window
+          : window.sublist(window.length - limit);
+      return ChatMessagesPage(
+        items: limited,
+        hasMore: window.length > limit,
+        nextBefore: limited.isEmpty ? null : limited.first.createdAt,
+      );
     }
   }
 
