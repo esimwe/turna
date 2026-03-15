@@ -23,6 +23,18 @@ export interface ChatMessageEditHistoryEntry {
   editedAt: string;
 }
 
+export interface ChatMessageMention {
+  userId: string;
+  username: string | null;
+  displayName: string | null;
+}
+
+export interface ChatMessageReaction {
+  emoji: string;
+  count: number;
+  userIds: string[];
+}
+
 export interface ChatMessage {
   id: string;
   chatId: string;
@@ -37,6 +49,9 @@ export interface ChatMessage {
   editedAt: string | null;
   isEdited: boolean;
   editHistory: ChatMessageEditHistoryEntry[];
+  mentions: ChatMessageMention[];
+  reactions: ChatMessageReaction[];
+  isPinned: boolean;
   attachments: ChatAttachment[];
 }
 
@@ -177,4 +192,16 @@ export interface ChatBanSummary {
   avatarKey: string | null;
   reason: string | null;
   createdAt: string;
+}
+
+export interface ChatPinnedMessageSummary {
+  messageId: string;
+  chatId: string;
+  senderId: string;
+  senderDisplayName: string | null;
+  previewText: string;
+  pinnedAt: string;
+  pinnedByUserId: string;
+  pinnedByDisplayName: string | null;
+  messageCreatedAt: string;
 }

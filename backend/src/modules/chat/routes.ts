@@ -19,6 +19,7 @@ import { normalizeLookupPhone } from "../auth/phone.js";
 import {
   emitChatMessage,
   emitChatStatus,
+  emitUserEvent,
   emitInboxUpdate,
   getActiveChatUserIds,
   getSocketsInUserRoom
@@ -104,6 +105,14 @@ const editMessageSchema = z.object({
     .preprocess(
       (value) => (typeof value === "string" ? value.trim() : value),
       z.string().min(1).max(4000)
+    )
+});
+
+const messageReactionSchema = z.object({
+  emoji: z
+    .preprocess(
+      (value) => (typeof value === "string" ? value.trim() : value),
+      z.string().min(1).max(16)
     )
 });
 
@@ -2086,6 +2095,26 @@ chatRouter.get("/:chatId", requireAuth, async (req, res) => {
   }
 });
 
+chatRouter.get("/:chatId/pins", requireAuth, async (req, res) => {
+  const parsedParams = chatIdParamSchema.safeParse(req.params);
+  if (!parsedParams.success) {
+    res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+    return;
+  }
+
+  try {
+    const data = await chatService.listPinnedMessages(parsedParams.data.chatId, req.authUserId!);
+    res.json({ data });
+  } catch (error) {
+    if (error instanceof Error && error.message === "forbidden_chat_access") {
+      res.status(403).json({ error: error.message });
+      return;
+    }
+    logError("chat pin list failed", error);
+    res.status(500).json({ error: "failed_to_get_pinned_messages" });
+  }
+});
+
 chatRouter.post("/attachments/upload-url", requireAuth, requireMessagingAccess, async (req, res) => {
   if (!isStorageConfigured()) {
     res.status(503).json({ error: "storage_not_configured" });
@@ -2345,6 +2374,170 @@ chatRouter.put("/messages/:messageId", requireAuth, async (req, res) => {
 
     logError("chat edit failed", error);
     res.status(500).json({ error: "failed_to_edit_message" });
+  }
+});
+
+chatRouter.post("/messages/:messageId/reactions", requireAuth, async (req, res) => {
+  const parsedParams = messageIdParamSchema.safeParse(req.params);
+  const parsedBody = messageReactionSchema.safeParse(req.body);
+  if (!parsedParams.success) {
+    res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+    return;
+  }
+  if (!parsedBody.success) {
+    res.status(400).json({ error: "validation_error", details: parsedBody.error.flatten() });
+    return;
+  }
+
+  const userId = req.authUserId!;
+  try {
+    const message = await chatService.addReaction(
+      parsedParams.data.messageId,
+      userId,
+      parsedBody.data.emoji
+    );
+    const audience = await chatService.getTypingAudience(message.chatId, userId);
+    const participants = await chatService.getChatParticipantIds(message.chatId);
+    emitChatMessage(message.chatId, { ...message, chatType: audience.chatType }, participants);
+    res.json({ data: message });
+  } catch (error) {
+    if (error instanceof Error) {
+      switch (error.message) {
+        case "message_not_found":
+          res.status(404).json({ error: error.message });
+          return;
+        case "reaction_emoji_required":
+          res.status(400).json({ error: error.message });
+          return;
+        case "message_reaction_not_allowed":
+        case "forbidden_chat_access":
+          res.status(403).json({ error: error.message });
+          return;
+      }
+    }
+
+    logError("chat reaction add failed", error);
+    res.status(500).json({ error: "failed_to_add_reaction" });
+  }
+});
+
+chatRouter.delete("/messages/:messageId/reactions", requireAuth, async (req, res) => {
+  const parsedParams = messageIdParamSchema.safeParse(req.params);
+  const parsedBody = messageReactionSchema.safeParse(req.body);
+  if (!parsedParams.success) {
+    res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+    return;
+  }
+  if (!parsedBody.success) {
+    res.status(400).json({ error: "validation_error", details: parsedBody.error.flatten() });
+    return;
+  }
+
+  const userId = req.authUserId!;
+  try {
+    const message = await chatService.removeReaction(
+      parsedParams.data.messageId,
+      userId,
+      parsedBody.data.emoji
+    );
+    const audience = await chatService.getTypingAudience(message.chatId, userId);
+    const participants = await chatService.getChatParticipantIds(message.chatId);
+    emitChatMessage(message.chatId, { ...message, chatType: audience.chatType }, participants);
+    res.json({ data: message });
+  } catch (error) {
+    if (error instanceof Error) {
+      switch (error.message) {
+        case "message_not_found":
+          res.status(404).json({ error: error.message });
+          return;
+        case "reaction_emoji_required":
+          res.status(400).json({ error: error.message });
+          return;
+        case "forbidden_chat_access":
+          res.status(403).json({ error: error.message });
+          return;
+      }
+    }
+
+    logError("chat reaction remove failed", error);
+    res.status(500).json({ error: "failed_to_remove_reaction" });
+  }
+});
+
+chatRouter.post("/messages/:messageId/pin", requireAuth, async (req, res) => {
+  const parsedParams = messageIdParamSchema.safeParse(req.params);
+  if (!parsedParams.success) {
+    res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+    return;
+  }
+
+  const userId = req.authUserId!;
+  try {
+    const pinned = await chatService.pinMessage(parsedParams.data.messageId, userId);
+    const participants = await chatService.getChatParticipantIds(pinned.chatId);
+    const payload = {
+      chatId: pinned.chatId,
+      pinnedMessages: await chatService.listPinnedMessages(pinned.chatId, userId)
+    };
+    emitUserEvent(participants, "chat:pin:update", payload);
+    res.json({ data: pinned });
+  } catch (error) {
+    if (error instanceof Error) {
+      switch (error.message) {
+        case "message_not_found":
+        case "group_not_found":
+          res.status(404).json({ error: error.message });
+          return;
+        case "group_pin_not_allowed":
+        case "forbidden_chat_access":
+          res.status(403).json({ error: error.message });
+          return;
+      }
+    }
+
+    logError("chat pin failed", error);
+    res.status(500).json({ error: "failed_to_pin_message" });
+  }
+});
+
+chatRouter.delete("/messages/:messageId/pin", requireAuth, async (req, res) => {
+  const parsedParams = messageIdParamSchema.safeParse(req.params);
+  if (!parsedParams.success) {
+    res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+    return;
+  }
+
+  const userId = req.authUserId!;
+  try {
+    const message = await chatService.getMessageById(parsedParams.data.messageId);
+    if (!message) {
+      res.status(404).json({ error: "message_not_found" });
+      return;
+    }
+    await chatService.unpinMessage(parsedParams.data.messageId, userId);
+    const participants = await chatService.getChatParticipantIds(message.chatId);
+    const payload = {
+      chatId: message.chatId,
+      pinnedMessages: await chatService.listPinnedMessages(message.chatId, userId)
+    };
+    emitUserEvent(participants, "chat:pin:update", payload);
+    res.json({ data: { ok: true } });
+  } catch (error) {
+    if (error instanceof Error) {
+      switch (error.message) {
+        case "message_not_found":
+        case "group_not_found":
+          res.status(404).json({ error: error.message });
+          return;
+        case "group_pin_not_allowed":
+        case "forbidden_chat_access":
+          res.status(403).json({ error: error.message });
+          return;
+      }
+    }
+
+    logError("chat unpin failed", error);
+    res.status(500).json({ error: "failed_to_unpin_message" });
   }
 });
 

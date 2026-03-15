@@ -16,9 +16,12 @@ import type {
   ChatJoinRequestSummary,
   ChatMessage,
   ChatMessageEditHistoryEntry,
+  ChatMessageMention,
+  ChatMessageReaction,
   ChatMessagePage,
   ChatMemberSummary,
   ChatMuteSummary,
+  ChatPinnedMessageSummary,
   ChatSummary,
   DirectoryUser,
   SendMessageAttachmentInput,
@@ -29,6 +32,7 @@ import {
   canExtendLiveLocationEditWindow,
   summarizeTurnaMessageText
 } from "./message-text.js";
+import { normalizeUsername } from "../profile/username.js";
 const AttachmentKind = {
   IMAGE: "IMAGE",
   VIDEO: "VIDEO",
@@ -107,6 +111,8 @@ const prismaChatInviteLink = (prisma as unknown as { chatInviteLink: any }).chat
 const prismaChatJoinRequest = (prisma as unknown as { chatJoinRequest: any }).chatJoinRequest;
 const prismaChatMute = (prisma as unknown as { chatMute: any }).chatMute;
 const prismaChatBan = (prisma as unknown as { chatBan: any }).chatBan;
+const prismaMessageReaction = (prisma as unknown as { messageReaction: any }).messageReaction;
+const prismaChatPinnedMessage = (prisma as unknown as { chatPinnedMessage: any }).chatPinnedMessage;
 const DELETE_FOR_EVERYONE_WINDOW_MS = 10 * 60 * 1000;
 const EDIT_MESSAGE_WINDOW_MS = 10 * 60 * 1000;
 const CHAT_FOLDER_LIMIT = 3;
@@ -124,6 +130,29 @@ const messageInclude = {
     select: {
       id: true,
       displayName: true
+    }
+  },
+  mentions: {
+    select: {
+      mentionedUser: {
+        select: {
+          id: true,
+          username: true,
+          displayName: true
+        }
+      }
+    }
+  },
+  reactions: {
+    select: {
+      emoji: true,
+      userId: true
+    }
+  },
+  pins: {
+    where: { unpinnedAt: null },
+    select: {
+      messageId: true
     }
   }
 };
@@ -143,6 +172,20 @@ type MessageRow = {
     id: string;
     displayName: string;
   };
+  mentions: Array<{
+    mentionedUser: {
+      id: string;
+      username: string | null;
+      displayName: string | null;
+    };
+  }>;
+  reactions: Array<{
+    emoji: string;
+    userId: string;
+  }>;
+  pins: Array<{
+    messageId: string;
+  }>;
   attachments: Array<{
     id: string;
     objectKey: string;
@@ -155,6 +198,43 @@ type MessageRow = {
     durationSeconds: number | null;
   }>;
 };
+
+function extractMentionUsernames(text: string | null | undefined): string[] {
+  if (!text) return [];
+  const matches = text.matchAll(/(^|[\s(])@([a-z][a-z0-9._]{2,23})/gi);
+  const usernames = new Set<string>();
+  for (const match of matches) {
+    const raw = match[2]?.trim();
+    if (!raw) continue;
+    usernames.add(normalizeUsername(raw));
+  }
+  return [...usernames];
+}
+
+async function resolveMentionedUsersForChat(
+  tx: any,
+  chatId: string,
+  senderId: string,
+  text: string | null | undefined
+): Promise<Array<{ userId: string }>> {
+  const usernames = extractMentionUsernames(text);
+  if (usernames.length === 0) return [];
+
+  const members = await tx.chatMember.findMany({
+    where: {
+      chatId,
+      userId: { not: senderId },
+      user: {
+        username: { in: usernames }
+      }
+    },
+    select: {
+      userId: true
+    }
+  });
+
+  return members;
+}
 
 function toAttachmentKind(kind: AttachmentKindValue): ChatAttachment["kind"] {
   switch (kind) {
@@ -436,6 +516,25 @@ function toEditHistoryEntries(value: unknown): ChatMessageEditHistoryEntry[] {
 
 async function toChatMessage(row: MessageRow): Promise<ChatMessage> {
   const attachments = await Promise.all(row.attachments.map((attachment) => toChatAttachment(attachment)));
+  const mentions: ChatMessageMention[] = row.mentions.map((entry) => ({
+    userId: entry.mentionedUser.id,
+    username: entry.mentionedUser.username ?? null,
+    displayName: entry.mentionedUser.displayName ?? null
+  }));
+  const reactionsByEmoji = new Map<string, Set<string>>();
+  for (const reaction of row.reactions) {
+    if (!reactionsByEmoji.has(reaction.emoji)) {
+      reactionsByEmoji.set(reaction.emoji, new Set<string>());
+    }
+    reactionsByEmoji.get(reaction.emoji)!.add(reaction.userId);
+  }
+  const reactions: ChatMessageReaction[] = [...reactionsByEmoji.entries()]
+    .map(([emoji, userIds]) => ({
+      emoji,
+      count: userIds.size,
+      userIds: [...userIds]
+    }))
+    .sort((a, b) => a.emoji.localeCompare(b.emoji));
   return {
     id: row.id,
     chatId: row.chatId,
@@ -452,11 +551,33 @@ async function toChatMessage(row: MessageRow): Promise<ChatMessage> {
     editedAt: row.editedAt ? row.editedAt.toISOString() : null,
     isEdited: row.editedAt != null,
     editHistory: toEditHistoryEntries(row.editHistory),
+    mentions,
+    reactions,
+    isPinned: row.pins.length > 0,
     attachments
   };
 }
 
 export class ChatService {
+  async getMessageById(messageId: string): Promise<{
+    id: string;
+    chatId: string;
+    senderId: string;
+    text: string | null;
+    createdAt: Date;
+  } | null> {
+    return prisma.message.findUnique({
+      where: { id: messageId },
+      select: {
+        id: true,
+        chatId: true,
+        senderId: true,
+        text: true,
+        createdAt: true
+      }
+    });
+  }
+
   private async getMembershipState(chatId: string, userId: string): Promise<{
     role: ChatMemberRoleValue;
     canSend: boolean;
@@ -854,6 +975,15 @@ export class ChatService {
     );
 
     const message = await prisma.$transaction(async (tx: any) => {
+      const mentionedUsers =
+        chat?.type === ChatType.GROUP
+          ? await resolveMentionedUsersForChat(
+              tx,
+              payload.chatId,
+              payload.senderId,
+              payload.text ?? null
+            )
+          : [];
       const created = await tx.message.create({
         data: {
           chatId: payload.chatId,
@@ -871,6 +1001,13 @@ export class ChatService {
                   width: attachment.width,
                   height: attachment.height,
                   durationSeconds: attachment.durationSeconds
+                }))
+              }
+            : undefined,
+          mentions: mentionedUsers.length
+            ? {
+                create: mentionedUsers.map((user) => ({
+                  mentionedUserId: user.userId
                 }))
               }
             : undefined
@@ -1001,18 +1138,307 @@ export class ChatService {
       editedAt: new Date().toISOString()
     });
 
-    const updated = await prisma.message.update({
-      where: { id: messageId },
-      data: {
-        text: trimmedText,
-        editedAt: new Date(),
-        editCount: (existing.editCount ?? 0) + 1,
-        editHistory: history as unknown as any
-      },
-      include: messageInclude
+    const updated = await prisma.$transaction(async (tx: any) => {
+      const chat = await tx.chat.findUnique({
+        where: { id: existing.chatId },
+        select: { type: true }
+      });
+      const mentionedUsers =
+        chat?.type === ChatType.GROUP
+          ? await resolveMentionedUsersForChat(
+              tx,
+              existing.chatId,
+              requesterId,
+              trimmedText
+            )
+          : [];
+
+      await tx.messageMention.deleteMany({
+        where: { messageId }
+      });
+
+      return tx.message.update({
+        where: { id: messageId },
+        data: {
+          text: trimmedText,
+          editedAt: new Date(),
+          editCount: (existing.editCount ?? 0) + 1,
+          editHistory: history as unknown as any,
+          mentions: mentionedUsers.length
+            ? {
+                create: mentionedUsers.map((user) => ({
+                  mentionedUserId: user.userId
+                }))
+              }
+            : undefined
+        },
+        include: messageInclude
+      });
     });
 
     return toChatMessage(updated as MessageRow);
+  }
+
+  async addReaction(messageId: string, requesterId: string, emoji: string): Promise<ChatMessage> {
+    const normalizedEmoji = emoji.trim();
+    if (!normalizedEmoji) {
+      throw new Error("reaction_emoji_required");
+    }
+
+    const existing = await prisma.message.findUnique({
+      where: { id: messageId },
+      include: messageInclude
+    });
+    if (!existing) {
+      throw new Error("message_not_found");
+    }
+
+    const hasAccess = await this.ensureChatAccess(existing.chatId, requesterId);
+    if (!hasAccess) {
+      throw new Error("forbidden_chat_access");
+    }
+    if (existing.systemType) {
+      throw new Error("message_reaction_not_allowed");
+    }
+
+    await prismaMessageReaction.upsert({
+      where: {
+        messageId_userId_emoji: {
+          messageId,
+          userId: requesterId,
+          emoji: normalizedEmoji
+        }
+      },
+      create: {
+        messageId,
+        userId: requesterId,
+        emoji: normalizedEmoji
+      },
+      update: {}
+    });
+
+    const updated = await prisma.message.findUnique({
+      where: { id: messageId },
+      include: messageInclude
+    });
+    if (!updated) {
+      throw new Error("message_not_found");
+    }
+    return toChatMessage(updated as MessageRow);
+  }
+
+  async removeReaction(messageId: string, requesterId: string, emoji: string): Promise<ChatMessage> {
+    const normalizedEmoji = emoji.trim();
+    if (!normalizedEmoji) {
+      throw new Error("reaction_emoji_required");
+    }
+
+    const existing = await prisma.message.findUnique({
+      where: { id: messageId },
+      include: messageInclude
+    });
+    if (!existing) {
+      throw new Error("message_not_found");
+    }
+
+    const hasAccess = await this.ensureChatAccess(existing.chatId, requesterId);
+    if (!hasAccess) {
+      throw new Error("forbidden_chat_access");
+    }
+
+    await prismaMessageReaction.deleteMany({
+      where: {
+        messageId,
+        userId: requesterId,
+        emoji: normalizedEmoji
+      }
+    });
+
+    const updated = await prisma.message.findUnique({
+      where: { id: messageId },
+      include: messageInclude
+    });
+    if (!updated) {
+      throw new Error("message_not_found");
+    }
+    return toChatMessage(updated as MessageRow);
+  }
+
+  async pinMessage(messageId: string, requesterId: string): Promise<ChatPinnedMessageSummary> {
+    const message = await prisma.message.findUnique({
+      where: { id: messageId },
+      include: {
+        sender: {
+          select: {
+            id: true,
+            displayName: true
+          }
+        }
+      }
+    });
+    if (!message) {
+      throw new Error("message_not_found");
+    }
+
+    const chat = await this.getChatMeta(message.chatId);
+    if (!chat || chat.type !== ChatType.GROUP) {
+      throw new Error("group_not_found");
+    }
+
+    const membership = await this.getMembershipState(message.chatId, requesterId);
+    if (
+      !membership ||
+      !this.canEditGroupInfo({
+        policy: chat.whoCanEditInfo,
+        role: membership.role
+      })
+    ) {
+      throw new Error("group_pin_not_allowed");
+    }
+
+    await prismaChatPinnedMessage.updateMany({
+      where: {
+        chatId: message.chatId,
+        unpinnedAt: null
+      },
+      data: {
+        unpinnedAt: new Date()
+      }
+    });
+
+    await prismaChatPinnedMessage.upsert({
+      where: {
+        chatId_messageId: {
+          chatId: message.chatId,
+          messageId
+        }
+      },
+      create: {
+        chatId: message.chatId,
+        messageId,
+        pinnedByUserId: requesterId
+      },
+      update: {
+        pinnedByUserId: requesterId,
+        createdAt: new Date(),
+        unpinnedAt: null
+      }
+    });
+
+    const latest = await this.listPinnedMessages(message.chatId, requesterId, { limit: 1 });
+    if (latest.length === 0) {
+      throw new Error("group_pin_failed");
+    }
+    return latest[0];
+  }
+
+  async unpinMessage(messageId: string, requesterId: string): Promise<void> {
+    const message = await prisma.message.findUnique({
+      where: { id: messageId },
+      select: {
+        id: true,
+        chatId: true
+      }
+    });
+    if (!message) {
+      throw new Error("message_not_found");
+    }
+
+    const chat = await this.getChatMeta(message.chatId);
+    if (!chat || chat.type !== ChatType.GROUP) {
+      throw new Error("group_not_found");
+    }
+
+    const membership = await this.getMembershipState(message.chatId, requesterId);
+    if (
+      !membership ||
+      !this.canEditGroupInfo({
+        policy: chat.whoCanEditInfo,
+        role: membership.role
+      })
+    ) {
+      throw new Error("group_pin_not_allowed");
+    }
+
+    await prismaChatPinnedMessage.updateMany({
+      where: {
+        chatId: message.chatId,
+        messageId,
+        unpinnedAt: null
+      },
+      data: {
+        unpinnedAt: new Date()
+      }
+    });
+  }
+
+  async listPinnedMessages(
+    chatId: string,
+    requesterId: string,
+    options: { limit?: number } = {}
+  ): Promise<ChatPinnedMessageSummary[]> {
+    const hasAccess = await this.ensureChatAccess(chatId, requesterId);
+    if (!hasAccess) {
+      throw new Error("forbidden_chat_access");
+    }
+
+    const rows = await prismaChatPinnedMessage.findMany({
+      where: {
+        chatId,
+        unpinnedAt: null
+      },
+      orderBy: { createdAt: "desc" },
+      take: options.limit ?? 20,
+      select: {
+        chatId: true,
+        messageId: true,
+        createdAt: true,
+        pinnedByUserId: true,
+        pinnedByUser: {
+          select: {
+            displayName: true
+          }
+        },
+        message: {
+          select: {
+            id: true,
+            senderId: true,
+            text: true,
+            systemType: true,
+            systemPayload: true,
+            createdAt: true,
+            sender: {
+              select: {
+                displayName: true
+              }
+            },
+            attachments: {
+              orderBy: { createdAt: "asc" }
+            }
+          }
+        }
+      }
+    });
+
+    return rows.map((row: any) => ({
+      messageId: row.messageId,
+      chatId: row.chatId,
+      senderId: row.message.senderId,
+      senderDisplayName: row.message.sender?.displayName ?? null,
+      previewText: summarizeMessage({
+        text: row.message.text ?? "",
+        systemType: row.message.systemType ?? null,
+        systemPayload:
+          row.message.systemPayload && typeof row.message.systemPayload === "object"
+            ? (row.message.systemPayload as Record<string, unknown>)
+            : null,
+        attachments: row.message.attachments ?? []
+      }),
+      pinnedAt: row.createdAt.toISOString(),
+      pinnedByUserId: row.pinnedByUserId,
+      pinnedByDisplayName: row.pinnedByUser?.displayName ?? null,
+      messageCreatedAt: row.message.createdAt.toISOString()
+    }));
   }
 
   async markMessagesDelivered(chatId: string, userId: string): Promise<string[]> {
@@ -3305,25 +3731,6 @@ export class ChatService {
       select: { displayName: true }
     });
     return user?.displayName ?? "Turna";
-  }
-
-  async getMessageById(messageId: string): Promise<{
-    id: string;
-    chatId: string;
-    senderId: string;
-    text: string | null;
-    createdAt: Date;
-  } | null> {
-    return prisma.message.findUnique({
-      where: { id: messageId },
-      select: {
-        id: true,
-        chatId: true,
-        senderId: true,
-        text: true,
-        createdAt: true
-      }
-    });
   }
 
   async findOpenMessageReport(input: {
