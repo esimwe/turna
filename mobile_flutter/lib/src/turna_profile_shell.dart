@@ -328,8 +328,8 @@ class _TurnaPrivacyPageState extends State<TurnaPrivacyPage> {
     final authenticated = await _authenticateTurnaDeviceAccess(
       context,
       localizedReason: nextValue
-          ? 'Turna uygulama kilidini acmak icin cihaz dogrulamasi gerekiyor.'
-          : 'Turna uygulama kilidini kapatmak icin cihaz dogrulamasi gerekiyor.',
+          ? 'Turna uygulama kilidini açmak için cihaz doğrulaması gerekiyor.'
+          : 'Turna uygulama kilidini kapatmak için cihaz doğrulaması gerekiyor.',
       unsupportedMessage: 'Bu cihazda uygulama kilidi desteklenmiyor.',
     );
     if (!mounted || !authenticated) return;
@@ -346,8 +346,8 @@ class _TurnaPrivacyPageState extends State<TurnaPrivacyPage> {
         SnackBar(
           content: Text(
             nextValue
-                ? 'Uygulama kilidi acildi.'
-                : 'Uygulama kilidi kapatildi.',
+                ? 'Uygulama kilidi açıldı.'
+                : 'Uygulama kilidi kapatıldı.',
           ),
         ),
       );
@@ -377,7 +377,7 @@ class _TurnaPrivacyPageState extends State<TurnaPrivacyPage> {
                       icon: Icons.lock_outline_rounded,
                       title: 'Uygulama Kilidi',
                       subtitle:
-                          'Turna acilirken $unlockMethodLabel ile dogrulama iste.',
+                          'Turna açılırken $unlockMethodLabel ile doğrulama iste.',
                       value: _appLockEnabled,
                       onChanged: _busy ? (_) {} : _toggleAppLock,
                     ),
@@ -391,7 +391,7 @@ class _TurnaPrivacyPageState extends State<TurnaPrivacyPage> {
                     borderRadius: BorderRadius.circular(18),
                   ),
                   child: const Text(
-                    'Bu ayar acikken Turna her acildiginda ve uygulama arka plandan geri geldiginde cihaz dogrulamasi ister.',
+                    'Bu ayar açıkken Turna her açıldığında ve uygulama arka plandan geri geldiğinde cihaz doğrulaması ister.',
                     style: TextStyle(
                       fontSize: 13.5,
                       height: 1.45,

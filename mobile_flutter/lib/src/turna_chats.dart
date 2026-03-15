@@ -27,12 +27,12 @@ Future<void> setTurnaAppLockEnabledPreference(bool enabled) async {
 
 String _turnaDeviceUnlockMethodLabel() {
   if (Platform.isIOS) {
-    return 'Face ID veya cihaz sifresi';
+    return 'Face ID veya cihaz şifresi';
   }
   if (Platform.isAndroid) {
     return 'parmak izi veya ekran kilidi';
   }
-  return 'cihaz dogrulamasi';
+  return 'cihaz doğrulaması';
 }
 
 Future<bool> _authenticateTurnaDeviceAccess(
@@ -66,7 +66,7 @@ Future<bool> _authenticateTurnaDeviceAccess(
           content: Text(
             error.message?.trim().isNotEmpty == true
                 ? error.message!.trim()
-                : 'Cihaz dogrulamasi basarisiz oldu.',
+                : 'Cihaz doğrulaması başarısız oldu.',
           ),
         ),
       );
@@ -75,7 +75,7 @@ Future<bool> _authenticateTurnaDeviceAccess(
   } catch (_) {
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Cihaz dogrulamasi su anda yapilamiyor.')),
+        const SnackBar(content: Text('Cihaz doğrulaması şu anda yapılamıyor.')),
       );
     }
     return false;
@@ -103,7 +103,7 @@ Future<bool> _authenticateLockedChatAccess(
   return _authenticateTurnaDeviceAccess(
     context,
     localizedReason:
-        '"$chatName" sohbetini $actionLabel cihaz dogrulamasi gerekiyor.',
+        '"$chatName" sohbetini $actionLabel cihaz doğrulaması gerekiyor.',
     unsupportedMessage: 'Bu cihazda sohbet kilidi desteklenmiyor.',
   );
 }
@@ -339,7 +339,7 @@ class _TurnaShellHostState extends State<TurnaShellHost>
     final authenticated = await _authenticateTurnaDeviceAccess(
       context,
       localizedReason:
-          'Turna uygulamasini acmak icin cihaz dogrulamasi gerekiyor.',
+          'Turna uygulamasını açmak için cihaz doğrulaması gerekiyor.',
       unsupportedMessage: 'Bu cihazda uygulama kilidi desteklenmiyor.',
     );
     if (!mounted) return;
@@ -1605,105 +1605,113 @@ class _ChatsPageState extends State<ChatsPage> {
     await showModalBottomSheet<void>(
       context: context,
       backgroundColor: Colors.white,
+      isScrollControlled: true,
       showDragHandle: true,
       builder: (sheetContext) {
         return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _ChatListActionTile(
-                icon: Icons.mark_chat_read_outlined,
-                title: 'Okundu olarak isaretle',
-                onTap: () {
-                  Navigator.of(sheetContext).pop();
-                  _markChatRead(chat);
-                },
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(sheetContext).size.height * 0.82,
+            ),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _ChatListActionTile(
+                    icon: Icons.mark_chat_read_outlined,
+                    title: 'Okundu olarak işaretle',
+                    onTap: () {
+                      Navigator.of(sheetContext).pop();
+                      _markChatRead(chat);
+                    },
+                  ),
+                  _ChatListActionTile(
+                    icon: chat.isArchived
+                        ? Icons.unarchive_outlined
+                        : Icons.archive_outlined,
+                    title: chat.isArchived ? 'Arşivden çıkar' : 'Arşive at',
+                    onTap: () {
+                      Navigator.of(sheetContext).pop();
+                      _toggleArchiveChat(chat);
+                    },
+                  ),
+                  _ChatListActionTile(
+                    icon: chat.isLocked
+                        ? Icons.lock_open_outlined
+                        : Icons.lock_outline,
+                    title: chat.isLocked
+                        ? 'Sohbet kilidini kaldır'
+                        : 'Sohbeti kilitle',
+                    onTap: () {
+                      Navigator.of(sheetContext).pop();
+                      _toggleLockChat(chat);
+                    },
+                  ),
+                  _ChatListActionTile(
+                    icon: chat.isFavorited
+                        ? Icons.star_border_rounded
+                        : Icons.star_outline_rounded,
+                    title: chat.isFavorited
+                        ? 'Favorilerden çıkar'
+                        : 'Favorilere ekle',
+                    onTap: () {
+                      Navigator.of(sheetContext).pop();
+                      _toggleFavoriteChat(chat);
+                    },
+                  ),
+                  _ChatListActionTile(
+                    icon: chat.isMuted
+                        ? Icons.notifications_active_outlined
+                        : Icons.notifications_off_outlined,
+                    title: chat.isMuted ? 'Sessizden çıkar' : 'Sessize al',
+                    onTap: () {
+                      Navigator.of(sheetContext).pop();
+                      _toggleChatMute(chat);
+                    },
+                  ),
+                  _ChatListActionTile(
+                    icon: Icons.folder_open_outlined,
+                    title: 'Kategori ata',
+                    onTap: () {
+                      Navigator.of(sheetContext).pop();
+                      _assignChatFolder(chat, folders);
+                    },
+                  ),
+                  if (chat.peerId != null)
+                    _ChatListActionTile(
+                      icon: chat.isBlockedByMe
+                          ? Icons.person_add_alt_1_outlined
+                          : Icons.block_outlined,
+                      title: chat.isBlockedByMe
+                          ? 'Engeli kaldır'
+                          : 'Kişiyi engelle',
+                      destructive: !chat.isBlockedByMe,
+                      onTap: () {
+                        Navigator.of(sheetContext).pop();
+                        _toggleBlockChat(chat);
+                      },
+                    ),
+                  _ChatListActionTile(
+                    icon: Icons.layers_clear_outlined,
+                    title: 'Sohbeti temizle',
+                    onTap: () {
+                      Navigator.of(sheetContext).pop();
+                      _clearChat(chat);
+                    },
+                  ),
+                  _ChatListActionTile(
+                    icon: Icons.delete_outline,
+                    title: 'Sohbeti sil',
+                    destructive: true,
+                    onTap: () {
+                      Navigator.of(sheetContext).pop();
+                      _deleteSingleChat(chat);
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                ],
               ),
-              _ChatListActionTile(
-                icon: chat.isArchived
-                    ? Icons.unarchive_outlined
-                    : Icons.archive_outlined,
-                title: chat.isArchived ? 'Arşivden çıkar' : 'Arşive at',
-                onTap: () {
-                  Navigator.of(sheetContext).pop();
-                  _toggleArchiveChat(chat);
-                },
-              ),
-              _ChatListActionTile(
-                icon: chat.isLocked
-                    ? Icons.lock_open_outlined
-                    : Icons.lock_outline,
-                title: chat.isLocked
-                    ? 'Sohbet kilidini kaldir'
-                    : 'Sohbeti kilitle',
-                onTap: () {
-                  Navigator.of(sheetContext).pop();
-                  _toggleLockChat(chat);
-                },
-              ),
-              _ChatListActionTile(
-                icon: chat.isFavorited
-                    ? Icons.star_border_rounded
-                    : Icons.star_outline_rounded,
-                title: chat.isFavorited
-                    ? 'Favorilerden cikar'
-                    : 'Favorilere ekle',
-                onTap: () {
-                  Navigator.of(sheetContext).pop();
-                  _toggleFavoriteChat(chat);
-                },
-              ),
-              _ChatListActionTile(
-                icon: chat.isMuted
-                    ? Icons.notifications_active_outlined
-                    : Icons.notifications_off_outlined,
-                title: chat.isMuted ? 'Sessizi kapat' : 'Sessize al',
-                onTap: () {
-                  Navigator.of(sheetContext).pop();
-                  _toggleChatMute(chat);
-                },
-              ),
-              _ChatListActionTile(
-                icon: Icons.folder_open_outlined,
-                title: 'Kategori ata',
-                onTap: () {
-                  Navigator.of(sheetContext).pop();
-                  _assignChatFolder(chat, folders);
-                },
-              ),
-              if (chat.peerId != null)
-                _ChatListActionTile(
-                  icon: chat.isBlockedByMe
-                      ? Icons.person_add_alt_1_outlined
-                      : Icons.block_outlined,
-                  title: chat.isBlockedByMe
-                      ? 'Engeli kaldır'
-                      : 'Kişiyi engelle',
-                  destructive: !chat.isBlockedByMe,
-                  onTap: () {
-                    Navigator.of(sheetContext).pop();
-                    _toggleBlockChat(chat);
-                  },
-                ),
-              _ChatListActionTile(
-                icon: Icons.layers_clear_outlined,
-                title: 'Sohbeti temizle',
-                onTap: () {
-                  Navigator.of(sheetContext).pop();
-                  _clearChat(chat);
-                },
-              ),
-              _ChatListActionTile(
-                icon: Icons.delete_outline,
-                title: 'Sohbeti sil',
-                destructive: true,
-                onTap: () {
-                  Navigator.of(sheetContext).pop();
-                  _deleteSingleChat(chat);
-                },
-              ),
-              const SizedBox(height: 8),
-            ],
+            ),
           ),
         );
       },
@@ -2414,74 +2422,84 @@ class _ArchivedChatsPageState extends State<ArchivedChatsPage> {
     await showModalBottomSheet<void>(
       context: context,
       backgroundColor: Colors.white,
+      isScrollControlled: true,
       showDragHandle: true,
       builder: (sheetContext) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _ChatListActionTile(
-              icon: Icons.unarchive_outlined,
-              title: 'Arşivden çıkar',
-              onTap: () {
-                Navigator.of(sheetContext).pop();
-                _toggleArchiveChat(chat);
-              },
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(sheetContext).size.height * 0.82,
+          ),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _ChatListActionTile(
+                  icon: Icons.unarchive_outlined,
+                  title: 'Arşivden çıkar',
+                  onTap: () {
+                    Navigator.of(sheetContext).pop();
+                    _toggleArchiveChat(chat);
+                  },
+                ),
+                _ChatListActionTile(
+                  icon: chat.isLocked
+                      ? Icons.lock_open_outlined
+                      : Icons.lock_outline,
+                  title: chat.isLocked
+                      ? 'Sohbet kilidini kaldır'
+                      : 'Sohbeti kilitle',
+                  onTap: () {
+                    Navigator.of(sheetContext).pop();
+                    _toggleLockChat(chat);
+                  },
+                ),
+                _ChatListActionTile(
+                  icon: chat.isFavorited
+                      ? Icons.star_border_rounded
+                      : Icons.star_outline_rounded,
+                  title: chat.isFavorited
+                      ? 'Favorilerden çıkar'
+                      : 'Favorilere ekle',
+                  onTap: () {
+                    Navigator.of(sheetContext).pop();
+                    _toggleFavoriteChat(chat);
+                  },
+                ),
+                if (chat.peerId != null)
+                  _ChatListActionTile(
+                    icon: chat.isBlockedByMe
+                        ? Icons.person_add_alt_1_outlined
+                        : Icons.block_outlined,
+                    title: chat.isBlockedByMe
+                        ? 'Engeli kaldır'
+                        : 'Kişiyi engelle',
+                    destructive: !chat.isBlockedByMe,
+                    onTap: () {
+                      Navigator.of(sheetContext).pop();
+                      _toggleBlockChat(chat);
+                    },
+                  ),
+                _ChatListActionTile(
+                  icon: Icons.layers_clear_outlined,
+                  title: 'Sohbeti temizle',
+                  onTap: () {
+                    Navigator.of(sheetContext).pop();
+                    _clearChat(chat);
+                  },
+                ),
+                _ChatListActionTile(
+                  icon: Icons.delete_outline,
+                  title: 'Sohbeti sil',
+                  destructive: true,
+                  onTap: () {
+                    Navigator.of(sheetContext).pop();
+                    _deleteSingleChat(chat);
+                  },
+                ),
+                const SizedBox(height: 8),
+              ],
             ),
-            _ChatListActionTile(
-              icon: chat.isLocked
-                  ? Icons.lock_open_outlined
-                  : Icons.lock_outline,
-              title: chat.isLocked
-                  ? 'Sohbet kilidini kaldir'
-                  : 'Sohbeti kilitle',
-              onTap: () {
-                Navigator.of(sheetContext).pop();
-                _toggleLockChat(chat);
-              },
-            ),
-            _ChatListActionTile(
-              icon: chat.isFavorited
-                  ? Icons.star_border_rounded
-                  : Icons.star_outline_rounded,
-              title: chat.isFavorited
-                  ? 'Favorilerden cikar'
-                  : 'Favorilere ekle',
-              onTap: () {
-                Navigator.of(sheetContext).pop();
-                _toggleFavoriteChat(chat);
-              },
-            ),
-            if (chat.peerId != null)
-              _ChatListActionTile(
-                icon: chat.isBlockedByMe
-                    ? Icons.person_add_alt_1_outlined
-                    : Icons.block_outlined,
-                title: chat.isBlockedByMe ? 'Engeli kaldır' : 'Kişiyi engelle',
-                destructive: !chat.isBlockedByMe,
-                onTap: () {
-                  Navigator.of(sheetContext).pop();
-                  _toggleBlockChat(chat);
-                },
-              ),
-            _ChatListActionTile(
-              icon: Icons.layers_clear_outlined,
-              title: 'Sohbeti temizle',
-              onTap: () {
-                Navigator.of(sheetContext).pop();
-                _clearChat(chat);
-              },
-            ),
-            _ChatListActionTile(
-              icon: Icons.delete_outline,
-              title: 'Sohbeti sil',
-              destructive: true,
-              onTap: () {
-                Navigator.of(sheetContext).pop();
-                _deleteSingleChat(chat);
-              },
-            ),
-            const SizedBox(height: 8),
-          ],
+          ),
         ),
       ),
     );
