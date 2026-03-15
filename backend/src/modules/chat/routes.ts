@@ -17,6 +17,7 @@ import {
   emitChatMessage,
   emitChatStatus,
   emitInboxUpdate,
+  getActiveChatUserIds,
   getSocketsInUserRoom
 } from "./chat.realtime.js";
 import { chatService } from "./chat.service.js";
@@ -328,13 +329,16 @@ chatRouter.post("/read-all", requireAuth, async (req, res) => {
     const results = await chatService.markAllChatsRead(userId);
 
     for (const result of results) {
-      const participants = await chatService.getChatParticipantIds(result.chatId);
-      const senderIds = participants.filter((participantId) => participantId !== userId);
+      const audience = await chatService.getTypingAudience(result.chatId, userId);
+      const activeUserIds = await getActiveChatUserIds(result.chatId);
       emitChatStatus({
         chatId: result.chatId,
+        chatType: audience.chatType,
         status: "read",
         messageIds: result.messageIds,
-        userIds: senderIds
+        userIds: audience.recipientUserIds.filter((participantId) =>
+          activeUserIds.includes(participantId)
+        )
       });
     }
 
@@ -393,12 +397,16 @@ chatRouter.post("/:chatId/read", requireAuth, async (req, res) => {
     const messageIds = await chatService.markMessagesRead(parsed.data.chatId, userId);
     if (messageIds.length > 0) {
       const participants = await chatService.getChatParticipantIds(parsed.data.chatId);
-      const senderIds = participants.filter((participantId) => participantId !== userId);
+      const audience = await chatService.getTypingAudience(parsed.data.chatId, userId);
+      const activeUserIds = await getActiveChatUserIds(parsed.data.chatId);
       emitChatStatus({
         chatId: parsed.data.chatId,
+        chatType: audience.chatType,
         status: "read",
         messageIds,
-        userIds: senderIds
+        userIds: audience.recipientUserIds.filter((participantId) =>
+          activeUserIds.includes(participantId)
+        )
       });
       emitInboxUpdate(participants.length > 0 ? participants : [userId]);
     }
@@ -917,7 +925,11 @@ chatRouter.post("/:chatId/members", requireAuth, requireMessagingAccess, async (
     });
     emitInboxUpdate([req.authUserId!, ...result.participantIds]);
     if (result.systemMessage) {
-      emitChatMessage(parsedParams.data.chatId, result.systemMessage, result.participantIds);
+      emitChatMessage(
+        parsedParams.data.chatId,
+        { ...result.systemMessage, chatType: "group" },
+        result.participantIds
+      );
     }
     res.status(201).json({
       data: result.members.map((member) => ({
@@ -967,7 +979,11 @@ chatRouter.post("/:chatId/leave", requireAuth, requireMessagingAccess, async (re
       requesterUserId: req.authUserId!
     });
     emitInboxUpdate([req.authUserId!, ...result.participantIds]);
-    emitChatMessage(parsedParams.data.chatId, result.systemMessage, result.participantIds);
+    emitChatMessage(
+      parsedParams.data.chatId,
+      { ...result.systemMessage, chatType: "group" },
+      result.participantIds
+    );
     res.json({ ok: true });
   } catch (error) {
     if (error instanceof Error) {
@@ -1092,22 +1108,24 @@ chatRouter.post("/messages", requireAuth, requireMessagingAccess, async (req, re
       }
     }
 
+    const audience = await chatService.getTypingAudience(parsed.data.chatId, userId);
     const message = await chatService.sendMessage({
       chatId: parsed.data.chatId,
       senderId: userId,
       text: parsed.data.text,
       attachments
     });
+    const socketMessage = { ...message, chatType: audience.chatType };
 
     const participants = await chatService.getChatParticipantIds(parsed.data.chatId);
-    emitChatMessage(parsed.data.chatId, message, participants);
+    emitChatMessage(parsed.data.chatId, socketMessage, participants);
     const recipientIds = participants.filter((participantId) => participantId !== userId);
     if (recipientIds.length > 0) {
       chatService
         .getUserDisplayName(userId)
         .then((senderDisplayName) =>
           sendChatMessagePush({
-            message,
+            message: socketMessage,
             senderDisplayName,
             recipientUserIds: recipientIds
           })
@@ -1130,11 +1148,13 @@ chatRouter.post("/messages", requireAuth, requireMessagingAccess, async (req, re
         activeRecipientId
       );
       if (deliveredIds.length > 0) {
+        const activeUserIds = await getActiveChatUserIds(parsed.data.chatId);
         emitChatStatus({
           chatId: parsed.data.chatId,
+          chatType: audience.chatType,
           status: "delivered",
           messageIds: deliveredIds,
-          userIds: [userId]
+          userIds: activeUserIds.includes(userId) ? [userId] : []
         });
       }
     }
@@ -1229,8 +1249,9 @@ chatRouter.put("/messages/:messageId", requireAuth, async (req, res) => {
       userId,
       parsedBody.data.text
     );
+    const audience = await chatService.getTypingAudience(message.chatId, userId);
     const participants = await chatService.getChatParticipantIds(message.chatId);
-    emitChatMessage(message.chatId, message, participants);
+    emitChatMessage(message.chatId, { ...message, chatType: audience.chatType }, participants);
     emitInboxUpdate(participants.length > 0 ? participants : [userId]);
     res.json({ data: message });
   } catch (error) {
@@ -1269,8 +1290,9 @@ chatRouter.post("/messages/:messageId/delete-for-everyone", requireAuth, async (
   const userId = req.authUserId!;
   try {
     const message = await chatService.deleteMessageForEveryone(parsed.data.messageId, userId);
+    const audience = await chatService.getTypingAudience(message.chatId, userId);
     const participants = await chatService.getChatParticipantIds(message.chatId);
-    emitChatMessage(message.chatId, message, participants);
+    emitChatMessage(message.chatId, { ...message, chatType: audience.chatType }, participants);
     emitInboxUpdate(participants.length > 0 ? participants : [userId]);
     res.json({ data: message });
   } catch (error) {

@@ -1,0 +1,63 @@
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'ChatMemberRole') THEN
+    CREATE TYPE "ChatMemberRole" AS ENUM ('OWNER', 'ADMIN', 'EDITOR', 'MEMBER');
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'ChatMemberRole') THEN
+    ALTER TYPE "ChatMemberRole" ADD VALUE IF NOT EXISTS 'OWNER';
+    ALTER TYPE "ChatMemberRole" ADD VALUE IF NOT EXISTS 'ADMIN';
+    ALTER TYPE "ChatMemberRole" ADD VALUE IF NOT EXISTS 'EDITOR';
+    ALTER TYPE "ChatMemberRole" ADD VALUE IF NOT EXISTS 'MEMBER';
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'ChatMemberAddPolicy') THEN
+    CREATE TYPE "ChatMemberAddPolicy" AS ENUM (
+      'OWNER_ONLY',
+      'ADMIN_ONLY',
+      'EDITOR_ONLY',
+      'EVERYONE'
+    );
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'ChatMemberAddPolicy') THEN
+    ALTER TYPE "ChatMemberAddPolicy" ADD VALUE IF NOT EXISTS 'OWNER_ONLY';
+    ALTER TYPE "ChatMemberAddPolicy" ADD VALUE IF NOT EXISTS 'ADMIN_ONLY';
+    ALTER TYPE "ChatMemberAddPolicy" ADD VALUE IF NOT EXISTS 'EDITOR_ONLY';
+    ALTER TYPE "ChatMemberAddPolicy" ADD VALUE IF NOT EXISTS 'EVERYONE';
+  END IF;
+END $$;
+
+ALTER TABLE "Chat"
+  ADD COLUMN IF NOT EXISTS "title" TEXT,
+  ADD COLUMN IF NOT EXISTS "avatarUrl" TEXT,
+  ADD COLUMN IF NOT EXISTS "description" TEXT,
+  ADD COLUMN IF NOT EXISTS "createdByUserId" TEXT,
+  ADD COLUMN IF NOT EXISTS "isPublic" BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS "joinApprovalRequired" BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS "memberAddPolicy" "ChatMemberAddPolicy" NOT NULL DEFAULT 'ADMIN_ONLY',
+  ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP;
+
+UPDATE "Chat"
+SET "updatedAt" = COALESCE("updatedAt", "createdAt", CURRENT_TIMESTAMP)
+WHERE "updatedAt" IS NULL;
+
+ALTER TABLE "ChatMember"
+  ADD COLUMN IF NOT EXISTS "role" "ChatMemberRole" NOT NULL DEFAULT 'MEMBER',
+  ADD COLUMN IF NOT EXISTS "canSend" BOOLEAN NOT NULL DEFAULT TRUE,
+  ADD COLUMN IF NOT EXISTS "addedByUserId" TEXT,
+  ADD COLUMN IF NOT EXISTS "joinedVia" TEXT,
+  ADD COLUMN IF NOT EXISTS "lastReadMessageId" TEXT;
+
+CREATE INDEX IF NOT EXISTS "Chat_type_updatedAt_idx" ON "Chat"("type", "updatedAt" DESC);
+CREATE INDEX IF NOT EXISTS "Chat_createdByUserId_idx" ON "Chat"("createdByUserId");
+CREATE INDEX IF NOT EXISTS "ChatMember_chatId_role_idx" ON "ChatMember"("chatId", "role");

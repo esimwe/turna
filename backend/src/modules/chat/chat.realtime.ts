@@ -53,6 +53,10 @@ export function sessionRoom(sessionId: string): string {
   return `session:${sessionId}`;
 }
 
+export function chatRoom(chatId: string): string {
+  return `chat:${chatId}`;
+}
+
 export async function registerUserSocket(
   userId: string,
   sessionId?: string | null
@@ -123,15 +127,37 @@ export function emitPresenceUpdate(userIds: string[], payload: UserPresencePaylo
 
 export function emitChatMessage(chatId: string, message: ChatMessage, participantIds: string[]): void {
   if (!chatIo) return;
-  chatIo.to(chatId).emit("chat:message", message);
-  for (const participantId of participantIds) {
-    chatIo.to(userRoom(participantId)).emit("chat:message", message);
-  }
+  chatIo.to(chatRoom(chatId)).emit("chat:message", message);
+  void getActiveChatUserIds(chatId)
+    .then((activeUserIds) => {
+      for (const participantId of participantIds) {
+        if (activeUserIds.includes(participantId)) continue;
+        chatIo?.to(userRoom(participantId)).emit("chat:message", message);
+      }
+    })
+    .catch(() => {
+      for (const participantId of participantIds) {
+        chatIo?.to(userRoom(participantId)).emit("chat:message", message);
+      }
+    });
 }
 
 export async function getSocketsInUserRoom(userId: string) {
   if (!chatIo) return [];
   return chatIo.in(userRoom(userId)).fetchSockets();
+}
+
+export async function getActiveChatUserIds(chatId: string): Promise<string[]> {
+  if (!chatIo) return [];
+  const sockets = await chatIo.in(chatRoom(chatId)).fetchSockets();
+  const userIds = new Set<string>();
+  for (const socket of sockets) {
+    const userId = typeof socket.data.userId === "string" ? socket.data.userId : null;
+    if (userId) {
+      userIds.add(userId);
+    }
+  }
+  return [...userIds];
 }
 
 export async function emitSessionRevoked(sessionId: string, reason: string): Promise<void> {
@@ -150,6 +176,7 @@ export async function emitSessionRevoked(sessionId: string, reason: string): Pro
 
 export function emitChatStatus(params: {
   chatId: string;
+  chatType?: "direct" | "group";
   status: "delivered" | "read";
   messageIds: string[];
   participantIds?: string[];
@@ -159,11 +186,12 @@ export function emitChatStatus(params: {
 
   const payload = {
     chatId: params.chatId,
+    chatType: params.chatType ?? null,
     status: params.status,
     messageIds: params.messageIds
   };
 
-  chatIo.to(params.chatId).emit("chat:status", payload);
+  chatIo.to(chatRoom(params.chatId)).emit("chat:status", payload);
 
   const userIds = params.userIds ?? params.participantIds ?? [];
   emitUserEvent(userIds, "chat:status", payload);

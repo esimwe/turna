@@ -10,11 +10,12 @@ import {
 } from "../../lib/user-access.js";
 import {
   buildUserPresencePayload,
+  chatRoom,
   emitChatMessage,
   emitPresenceUpdate,
   emitChatStatus,
   emitInboxUpdate,
-  getSocketsInUserRoom,
+  getActiveChatUserIds,
   registerUserSocket,
   sessionRoom,
   unregisterUserSocket,
@@ -154,28 +155,31 @@ export function registerChatSocket(io: Server): void {
           return;
         }
 
-        socket.join(parsed.data.chatId);
+        socket.join(chatRoom(parsed.data.chatId));
         const historyPage = await chatService.getMessagePage(parsed.data.chatId, {
           limit: 30,
           userId
         });
+        const audience = await chatService.getTypingAudience(parsed.data.chatId, userId);
         logInfo("chat:join ok", {
           socketId: socket.id,
           chatId: parsed.data.chatId,
           historyCount: historyPage.items.length
         });
-        socket.emit("chat:history", historyPage.items);
+        socket.emit(
+          "chat:history",
+          historyPage.items.map((message) => ({ ...message, chatType: audience.chatType }))
+        );
         await sendDirectPeerPresenceSnapshot(socket, parsed.data.chatId, userId);
 
         const deliveredIds = await chatService.markMessagesDelivered(parsed.data.chatId, userId);
         if (deliveredIds.length > 0) {
-          const participants = await chatService.getChatParticipantIds(parsed.data.chatId);
-          const senderIds = participants.filter((participantId) => participantId !== userId);
           emitChatStatus({
             chatId: parsed.data.chatId,
+            chatType: audience.chatType,
             status: "delivered",
             messageIds: deliveredIds,
-            userIds: senderIds
+            userIds: []
           });
         }
       } catch (error) {
@@ -213,23 +217,22 @@ export function registerChatSocket(io: Server): void {
           senderId: userId,
           text: parsed.data.text
         });
+        const audience = await chatService.getTypingAudience(parsed.data.chatId, userId);
         logInfo("chat:send ok", {
           socketId: socket.id,
           chatId: parsed.data.chatId,
           senderId: userId,
           messageId: message.id
         });
-        const participants = await chatService.getChatParticipantIds(parsed.data.chatId);
-        emitChatMessage(parsed.data.chatId, message, participants);
-        const recipientIds = participants.filter(
-          (participantId) => participantId !== userId
-        );
+        const socketMessage = { ...message, chatType: audience.chatType };
+        emitChatMessage(parsed.data.chatId, socketMessage, audience.participantIds);
+        const recipientIds = audience.recipientUserIds;
         if (recipientIds.length > 0) {
           chatService
             .getUserDisplayName(userId)
             .then((senderDisplayName) =>
               sendChatMessagePush({
-                message,
+                message: socketMessage,
                 senderDisplayName,
                 recipientUserIds: recipientIds
               })
@@ -240,9 +243,9 @@ export function registerChatSocket(io: Server): void {
         }
 
         let activeRecipientId: string | null = null;
+        const activeUserIds = await getActiveChatUserIds(parsed.data.chatId);
         for (const recipientId of recipientIds) {
-          const peerSockets = await getSocketsInUserRoom(recipientId);
-          if (peerSockets.length > 0) {
+          if (activeUserIds.includes(recipientId)) {
             activeRecipientId = recipientId;
             break;
           }
@@ -255,14 +258,17 @@ export function registerChatSocket(io: Server): void {
           if (deliveredIds.length > 0) {
             emitChatStatus({
               chatId: parsed.data.chatId,
+              chatType: audience.chatType,
               status: "delivered",
               messageIds: deliveredIds,
-              userIds: [userId]
+              userIds: []
             });
           }
         }
 
-        emitInboxUpdate(participants.length > 0 ? participants : [userId]);
+        emitInboxUpdate(
+          audience.participantIds.length > 0 ? audience.participantIds : [userId]
+        );
       } catch (error) {
         if (error instanceof Error) {
           if (error.message === "chat_blocked") {
@@ -301,8 +307,10 @@ export function registerChatSocket(io: Server): void {
 
         const readIds = await chatService.markMessagesRead(parsed.data.chatId, userId);
         if (readIds.length > 0) {
+          const audience = await chatService.getTypingAudience(parsed.data.chatId, userId);
           emitChatStatus({
             chatId: parsed.data.chatId,
+            chatType: audience.chatType,
             status: "read",
             messageIds: readIds,
             userIds: []
@@ -340,9 +348,10 @@ export function registerChatSocket(io: Server): void {
           return;
         }
         await chatService.ensureCanInteract(parsed.data.chatId, userId);
-
-        socket.to(parsed.data.chatId).emit("chat:typing", {
+        const audience = await chatService.getTypingAudience(parsed.data.chatId, userId);
+        socket.to(chatRoom(parsed.data.chatId)).emit("chat:typing", {
           chatId: parsed.data.chatId,
+          chatType: audience.chatType,
           userId,
           isTyping: parsed.data.isTyping,
           displayName: await chatService.getUserDisplayName(userId)

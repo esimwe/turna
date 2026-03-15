@@ -436,6 +436,29 @@ export class ChatService {
     return members.map((member: any) => member.userId);
   }
 
+  async getTypingAudience(chatId: string, userId: string): Promise<{
+    chatType: AppChatType;
+    participantIds: string[];
+    recipientUserIds: string[];
+  }> {
+    const hasAccess = await this.ensureChatAccess(chatId, userId);
+    if (!hasAccess) {
+      throw new Error("forbidden_chat_access");
+    }
+
+    const chat = await this.getChatMeta(chatId);
+    if (!chat) {
+      throw new Error("chat_not_found");
+    }
+
+    const participantIds = await this.getChatParticipantIds(chatId);
+    return {
+      chatType: chat.type === ChatType.GROUP ? "group" : "direct",
+      participantIds,
+      recipientUserIds: participantIds.filter((participantId) => participantId !== userId)
+    };
+  }
+
   async resolvePeerId(chatId: string, userId: string): Promise<string | null> {
     const directPeer = this.getDirectPeerId(chatId, userId);
     if (directPeer) return directPeer;
@@ -1074,6 +1097,14 @@ export class ChatService {
       memberAddPolicy:
         chat.type === ChatType.GROUP ? chat.memberAddPolicy : ChatMemberAddPolicy.ADMIN_ONLY
     };
+  }
+
+  async getGroupDetail(chatId: string, userId: string): Promise<ChatDetail | null> {
+    const detail = await this.getChatDetail(chatId, userId);
+    if (!detail || detail.chatType !== "group") {
+      return null;
+    }
+    return detail;
   }
 
   async addGroupMembers(input: {

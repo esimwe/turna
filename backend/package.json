@@ -9,6 +9,7 @@
     "start": "node dist/server.js",
     "check": "tsc --noEmit -p tsconfig.json",
     "prisma:generate": "prisma generate",
+    "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:push": "prisma db push",
     "reset:app-data": "tsx scripts/reset-app-data.ts",
     "seed:communities": "tsx scripts/seed-communities.ts"

@@ -24,6 +24,7 @@ export interface ChatMessageEditHistoryEntry {
 export interface ChatMessage {
   id: string;
   chatId: string;
+  chatType?: AppChatType | null;
   senderId: string;
   senderDisplayName: string | null;
   text: string;
