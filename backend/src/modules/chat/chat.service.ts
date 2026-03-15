@@ -45,6 +45,8 @@ const ChatMemberAddPolicy = {
   EDITOR_ONLY: "EDITOR_ONLY",
   EVERYONE: "EVERYONE"
 } as const;
+const ADMIN_NOTICE_SYSTEM_TYPE = "admin_notice";
+const ADMIN_NOTICE_SILENT_SYSTEM_TYPE = "admin_notice_silent";
 const GROUP_MEMBERS_ADDED_SYSTEM_TYPE = "group_members_added";
 const GROUP_MEMBER_LEFT_SYSTEM_TYPE = "group_member_left";
 const MessageStatus = {
@@ -194,6 +196,19 @@ function summarizeMessage(row: {
       : "Bir üye gruptan ayrıldı";
   }
 
+  if (
+    row.systemType === ADMIN_NOTICE_SYSTEM_TYPE ||
+    row.systemType === ADMIN_NOTICE_SILENT_SYSTEM_TYPE
+  ) {
+    const payload =
+      row.systemPayload && typeof row.systemPayload === "object"
+        ? (row.systemPayload as Record<string, unknown>)
+        : null;
+    const title = typeof payload?.title === "string" ? payload.title.trim() : "";
+    const text = typeof payload?.text === "string" ? payload.text.trim() : "";
+    return title || text || "Bilgi notu";
+  }
+
   const text = summarizeTurnaMessageText(row.text);
   if (text) return text;
 
@@ -209,6 +224,10 @@ function summarizeMessage(row: {
     default:
       return isAudioAttachmentMeta(attachments[0]) ? "Ses kaydı" : "Dosya";
   }
+}
+
+function isSilentSystemType(systemType: string | null | undefined): boolean {
+  return (systemType ?? "").trim() === ADMIN_NOTICE_SILENT_SYSTEM_TYPE;
 }
 
 async function toChatAttachment(
@@ -355,13 +374,16 @@ export class ChatService {
     chatId: string;
     senderId: string;
     systemType: string;
+    text?: string | null;
     systemPayload?: Record<string, unknown>;
+    touchChat?: boolean;
   }): Promise<ChatMessage> {
     const created = await prisma.$transaction(async (tx: any) => {
       const message = await tx.message.create({
         data: {
           chatId: input.chatId,
           senderId: input.senderId,
+          text: input.text?.trim() || undefined,
           systemType: input.systemType,
           systemPayload: input.systemPayload ?? undefined,
           status: MessageStatus.sent
@@ -369,10 +391,12 @@ export class ChatService {
         include: messageInclude
       });
 
-      await tx.chat.update({
-        where: { id: input.chatId },
-        data: { updatedAt: new Date() }
-      });
+      if (input.touchChat !== false) {
+        await tx.chat.update({
+          where: { id: input.chatId },
+          data: { updatedAt: new Date() }
+        });
+      }
 
       return message;
     });
@@ -800,7 +824,7 @@ export class ChatService {
             },
             messages: {
               orderBy: { createdAt: "desc" },
-              take: 1,
+              take: 12,
               include: messageInclude
             }
           }
@@ -822,7 +846,7 @@ export class ChatService {
       memberships.map(async (membership: any) => {
         const chat = membership.chat;
         const peer = chat.members.find((m: any) => m.userId !== userId)?.user;
-        const last = chat.messages[0];
+        const last = chat.messages.find((message: any) => !isSilentSystemType(message.systemType)) ?? null;
         const hiddenAt = membership.hiddenAt;
         const clearedAt = membership.clearedAt;
         if (hiddenAt && (!last || last.createdAt <= hiddenAt)) {
@@ -830,12 +854,19 @@ export class ChatService {
         }
         const unreadCutoff = latestDate(hiddenAt, clearedAt);
         const visibleLast =
-          last && (!clearedAt || last.createdAt > clearedAt) ? last : null;
+          chat.messages.find(
+            (message: any) =>
+              !isSilentSystemType(message.systemType) &&
+              (!clearedAt || message.createdAt > clearedAt)
+          ) ?? null;
         const unreadCount = await prisma.message.count({
           where: {
             chatId: chat.id,
             senderId: { not: userId },
             status: { not: MessageStatus.read },
+            NOT: {
+              systemType: ADMIN_NOTICE_SILENT_SYSTEM_TYPE
+            },
             ...(unreadCutoff ? { createdAt: { gt: unreadCutoff } } : {})
           }
         });
@@ -1658,6 +1689,66 @@ export class ChatService {
         };
       })
     );
+  }
+
+  async createAdminNotice(input: {
+    chatId: string;
+    title?: string | null;
+    text: string;
+    icon: string;
+    silent?: boolean;
+    createdByAdminId: string;
+    createdByAdminRole?: string | null;
+    createdByAdminDisplayName?: string | null;
+  }): Promise<{
+    message: ChatMessage;
+    participantIds: string[];
+  }> {
+    const chat = await prisma.chat.findUnique({
+      where: { id: input.chatId },
+      select: {
+        id: true,
+        members: {
+          orderBy: { joinedAt: "asc" },
+          select: { userId: true }
+        }
+      }
+    });
+
+    if (!chat) {
+      throw new Error("chat_not_found");
+    }
+
+    const senderId = chat.members[0]?.userId ?? null;
+    if (!senderId) {
+      throw new Error("chat_has_no_members");
+    }
+
+    const trimmedText = input.text.trim();
+    if (!trimmedText) {
+      throw new Error("admin_notice_text_required");
+    }
+
+    const message = await this.createSystemMessage({
+      chatId: input.chatId,
+      senderId,
+      text: trimmedText,
+      systemType: input.silent ? ADMIN_NOTICE_SILENT_SYSTEM_TYPE : ADMIN_NOTICE_SYSTEM_TYPE,
+      systemPayload: {
+        title: input.title?.trim() || null,
+        text: trimmedText,
+        icon: input.icon.trim() || "info",
+        createdByAdminId: input.createdByAdminId,
+        createdByAdminRole: input.createdByAdminRole ?? null,
+        createdByAdminDisplayName: input.createdByAdminDisplayName?.trim() || null
+      },
+      touchChat: input.silent !== true
+    });
+
+    return {
+      message,
+      participantIds: chat.members.map((member: any) => member.userId)
+    };
   }
 }
 

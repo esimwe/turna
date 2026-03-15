@@ -13,6 +13,7 @@ import {
 import { env } from "../../config/env.js";
 import { revokeAllAuthSessionsForUser } from "../../lib/auth-sessions.js";
 import { signAdminAccessToken } from "../../lib/jwt.js";
+import { logError } from "../../lib/logger.js";
 import { prisma } from "../../lib/prisma.js";
 import { redis } from "../../lib/redis.js";
 import { createObjectReadUrl } from "../../lib/storage.js";
@@ -20,6 +21,8 @@ import { writeAdminAuditLog } from "../../lib/admin-audit.js";
 import { requireAdminAuth, requireAdminRole } from "../../middleware/admin-auth.js";
 import { buildAvatarUrl } from "../profile/avatar-url.js";
 import { buildPhoneLookupKeys } from "../profile/contact-lookup.js";
+import { emitChatMessage, emitInboxUpdate } from "../chat/chat.realtime.js";
+import { chatService } from "../chat/chat.service.js";
 
 export const adminRouter = Router();
 const prismaUser = (prisma as unknown as { user: any }).user;
@@ -170,6 +173,23 @@ const listMessagesQuerySchema = z.object({
 
 const chatIdParamSchema = z.object({
   chatId: z.string().trim().min(1).max(255)
+});
+
+const ADMIN_NOTICE_ICONS = [
+  "lock",
+  "info",
+  "megaphone",
+  "shield",
+  "warning",
+  "sparkles"
+] as const;
+
+const sendChatNoticeSchema = z.object({
+  title: z.string().trim().min(1).max(80).nullable().optional(),
+  text: z.string().trim().min(1).max(1000),
+  icon: z.enum(ADMIN_NOTICE_ICONS).default("info"),
+  silent: z.boolean().default(true),
+  reason: z.string().trim().min(4).max(500).nullable().optional()
 });
 
 function summarizeMessage(row: {
@@ -912,6 +932,11 @@ adminRouter.get("/chats/:chatId/messages", requireAdminAuth, async (req, res) =>
               : null
         },
         text: message.text,
+        systemType: message.systemType ?? null,
+        systemPayload:
+          message.systemPayload && typeof message.systemPayload === "object"
+            ? message.systemPayload
+            : null,
         status: message.status,
         createdAt: message.createdAt.toISOString(),
         readAt: message.readAt?.toISOString?.() ?? null,
@@ -928,6 +953,96 @@ adminRouter.get("/chats/:chatId/messages", requireAdminAuth, async (req, res) =>
 
   res.json({ data: items });
 });
+
+adminRouter.post(
+  "/chats/:chatId/notice",
+  requireAdminAuth,
+  requireAdminRole("SUPER_ADMIN", "OPS_ADMIN", "SUPPORT_ADMIN", "MODERATOR"),
+  async (req, res) => {
+    const parsedParams = chatIdParamSchema.safeParse(req.params);
+    const parsedBody = sendChatNoticeSchema.safeParse(req.body);
+    if (!parsedParams.success) {
+      res.status(400).json({
+        error: "validation_error",
+        details: parsedParams.error.flatten()
+      });
+      return;
+    }
+    if (!parsedBody.success) {
+      res.status(400).json({
+        error: "validation_error",
+        details: parsedBody.error.flatten()
+      });
+      return;
+    }
+
+    const admin = await prismaAdminUser.findUnique({
+      where: { id: req.adminUserId! },
+      select: {
+        id: true,
+        displayName: true,
+        role: true
+      }
+    });
+    if (!admin) {
+      res.status(404).json({ error: "admin_not_found" });
+      return;
+    }
+
+    try {
+      const result = await chatService.createAdminNotice({
+        chatId: parsedParams.data.chatId,
+        title: parsedBody.data.title ?? null,
+        text: parsedBody.data.text,
+        icon: parsedBody.data.icon,
+        silent: parsedBody.data.silent,
+        createdByAdminId: admin.id,
+        createdByAdminRole: admin.role,
+        createdByAdminDisplayName: admin.displayName
+      });
+
+      emitChatMessage(parsedParams.data.chatId, result.message, result.participantIds);
+      if (!parsedBody.data.silent) {
+        emitInboxUpdate(result.participantIds);
+      }
+
+      await writeAdminAuditLog({
+        actorAdminId: req.adminUserId!,
+        action: "chat_notice_sent",
+        targetType: "chat",
+        targetId: parsedParams.data.chatId,
+        reason: parsedBody.data.reason ?? "Sohbet içi bilgi notu gönderildi.",
+        metadata: {
+          icon: parsedBody.data.icon,
+          title: parsedBody.data.title ?? null,
+          silent: parsedBody.data.silent
+        }
+      });
+
+      res.status(201).json({
+        data: {
+          message: result.message,
+          participantCount: result.participantIds.length
+        }
+      });
+    } catch (error) {
+      if (error instanceof Error) {
+        switch (error.message) {
+          case "chat_not_found":
+            res.status(404).json({ error: error.message });
+            return;
+          case "chat_has_no_members":
+          case "admin_notice_text_required":
+            res.status(400).json({ error: error.message });
+            return;
+        }
+      }
+
+      logError("admin chat notice failed", error);
+      res.status(500).json({ error: "failed_to_send_chat_notice" });
+    }
+  }
+);
 
 adminRouter.get("/users/:userId/media", requireAdminAuth, async (req, res) => {
   const parsedParams = userIdParamSchema.safeParse(req.params);
@@ -1448,9 +1563,14 @@ adminRouter.get("/messages", requireAdminAuth, async (req, res) => {
     messages.map(async (message: any) => ({
       id: message.id,
       chatId: message.chatId,
-      text: message.text,
-      status: message.status,
-      createdAt: message.createdAt.toISOString(),
+        text: message.text,
+        systemType: message.systemType ?? null,
+        systemPayload:
+          message.systemPayload && typeof message.systemPayload === "object"
+            ? message.systemPayload
+            : null,
+        status: message.status,
+        createdAt: message.createdAt.toISOString(),
       editedAt: message.editedAt?.toISOString?.() ?? null,
       editCount: message.editCount ?? 0,
       sender: toAdminUserSummary(req, message.sender),

@@ -98,7 +98,16 @@ const state = {
   systemHealth: null,
 
   selectedGlobalChatId: null,
-  globalChatMessages: []
+  globalChatMessages: [],
+  chatNoticeFeedback: "",
+  chatNoticeFeedbackTone: "success",
+  chatNoticeDraft: {
+    title: "",
+    text: "",
+    icon: "lock",
+    silent: true,
+    reason: ""
+  }
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -305,15 +314,39 @@ async function loadGlobalChats(query) {
   state.globalChats = payload.data || [];
   state.selectedGlobalChatId = null;
   state.globalChatMessages = [];
+  state.chatNoticeFeedback = "";
+  state.chatNoticeDraft = { title: "", text: "", icon: "lock", silent: true, reason: "" };
   if (state.currentPage === "chats") renderCurrentPage();
 }
 
-async function loadGlobalChatMessages(chatId) {
+async function loadGlobalChatMessages(chatId, options = {}) {
+  if (state.selectedGlobalChatId && state.selectedGlobalChatId !== chatId) {
+    state.chatNoticeDraft = { title: "", text: "", icon: "lock", silent: true, reason: "" };
+  }
   state.selectedGlobalChatId = chatId;
+  if (!options.preserveNoticeFeedback) {
+    state.chatNoticeFeedback = "";
+  }
   renderCurrentPage();
   const payload = await api(`/api/admin/chats/${chatId}/messages`);
   state.globalChatMessages = payload.data || [];
   renderCurrentPage();
+}
+
+async function sendGlobalChatNotice(payload) {
+  if (!state.selectedGlobalChatId) {
+    throw new Error("Sohbet secilmedi.");
+  }
+
+  await api(`/api/admin/chats/${state.selectedGlobalChatId}/notice`, {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+
+  state.chatNoticeFeedback = "Bilgi notu gonderildi.";
+  state.chatNoticeFeedbackTone = "success";
+  state.chatNoticeDraft = { title: "", text: "", icon: "lock", silent: true, reason: "" };
+  await loadGlobalChatMessages(state.selectedGlobalChatId, { preserveNoticeFeedback: true });
 }
 
 async function loadGlobalMessages(query) {
@@ -457,6 +490,32 @@ function renderCurrentPage() {
         loadGlobalChatMessages(node.dataset.globalChatId).catch(showInlineError);
       });
     });
+    const noticeForm = document.getElementById("chat-notice-form");
+    if (noticeForm) {
+      noticeForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        state.chatNoticeFeedback = "";
+        const title = document.getElementById("chat-notice-title")?.value?.trim() || "";
+        const text = document.getElementById("chat-notice-text")?.value?.trim() || "";
+        const icon = document.getElementById("chat-notice-icon")?.value || "info";
+        const silent = (document.getElementById("chat-notice-silent")?.value || "true") === "true";
+        const reason = document.getElementById("chat-notice-reason")?.value?.trim() || "";
+        state.chatNoticeDraft = { title, text, icon, silent, reason };
+        try {
+          await sendGlobalChatNotice({
+            title: title || null,
+            text,
+            icon,
+            silent,
+            reason: reason || null
+          });
+        } catch (error) {
+          state.chatNoticeFeedback = error?.message || "Bilgi notu gonderilemedi.";
+          state.chatNoticeFeedbackTone = "error";
+          renderCurrentPage();
+        }
+      });
+    }
     return;
   }
   if (state.currentPage === "messages") {
@@ -805,6 +864,7 @@ function renderReportsPage() {
 }
 
 function renderGlobalChatsPage() {
+  const selectedChat = state.globalChats.find((chat) => chat.id === state.selectedGlobalChatId) || null;
   return `
     <section class="panel page-panel">
       <div class="panel-heading">
@@ -838,11 +898,78 @@ function renderGlobalChatsPage() {
         <div>
           ${
             state.selectedGlobalChatId
-              ? renderMessagesColumn(state.globalChatMessages)
+              ? `${renderChatNoticeComposer(selectedChat)}${renderMessagesColumn(state.globalChatMessages)}`
               : '<div class="empty-note">Mesajlari gormek icin bir sohbet sec.</div>'
           }
         </div>
       </div>
+    </section>
+  `;
+}
+
+function renderChatNoticeComposer(chat) {
+  if (!chat) return "";
+  const draft = state.chatNoticeDraft || {
+    title: "",
+    text: "",
+    icon: "lock",
+    silent: true,
+    reason: ""
+  };
+
+  return `
+    <section class="panel page-panel notice-composer-panel">
+      <div class="panel-heading">
+        <div>
+          <h2>Bilgi notu gonder</h2>
+          <p>Sohbet icinde ortalanmis kart olarak gorunur. Varsayilan davranis sessizdir.</p>
+        </div>
+      </div>
+      <div class="user-subtitle notice-target-line">
+        Hedef sohbet: ${escapeHtml(chat.members.map((member) => member.displayName || member.phone || member.username || "Kullanici").join(", "))}
+      </div>
+      <form id="chat-notice-form" class="stack-form notice-composer-form">
+        <div class="field-grid">
+          <label class="field">
+            <span>Ikon</span>
+            <select id="chat-notice-icon">
+              <option value="lock" ${draft.icon === "lock" ? "selected" : ""}>Kilit</option>
+              <option value="info" ${draft.icon === "info" ? "selected" : ""}>Bilgi</option>
+              <option value="megaphone" ${draft.icon === "megaphone" ? "selected" : ""}>Duyuru</option>
+              <option value="shield" ${draft.icon === "shield" ? "selected" : ""}>Kalkan</option>
+              <option value="warning" ${draft.icon === "warning" ? "selected" : ""}>Uyari</option>
+              <option value="sparkles" ${draft.icon === "sparkles" ? "selected" : ""}>Parilti</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Davranis</span>
+            <select id="chat-notice-silent">
+              <option value="true" ${draft.silent ? "selected" : ""}>Sessiz</option>
+              <option value="false" ${draft.silent ? "" : "selected"}>Normal</option>
+            </select>
+          </label>
+        </div>
+        <label class="field">
+          <span>Baslik</span>
+          <input id="chat-notice-title" type="text" maxlength="80" placeholder="Opsiyonel baslik" value="${escapeAttribute(draft.title || "")}" />
+        </label>
+        <label class="field">
+          <span>Metin</span>
+          <textarea id="chat-notice-text" rows="4" maxlength="1000" placeholder="Sohbet icinde gosterilecek bilgi notu" required>${escapeHtml(draft.text || "")}</textarea>
+        </label>
+        <label class="field">
+          <span>Audit nedeni</span>
+          <input id="chat-notice-reason" type="text" maxlength="500" placeholder="Opsiyonel kayit notu" value="${escapeAttribute(draft.reason || "")}" />
+        </label>
+        <div class="notice-actions">
+          <button class="primary-button" type="submit">Bilgi notu gonder</button>
+          ${
+            state.chatNoticeFeedback
+              ? `<span class="inline-feedback ${state.chatNoticeFeedbackTone === "error" ? "error-text" : "success-text"}">${escapeHtml(state.chatNoticeFeedback)}</span>`
+              : ""
+          }
+        </div>
+      </form>
     </section>
   `;
 }
@@ -1236,19 +1363,28 @@ function renderMessagesColumn(messages, showChatMeta = false) {
     <div class="messages-list">
       ${messages
         .map(
-          (message) => `
-            <article class="message-card">
+          (message) => {
+            const isSystemMessage = Boolean(message.systemType);
+            const senderLabel = isSystemMessage
+              ? "Sistem"
+              : (message.sender?.displayName || "-");
+            const senderMeta = isSystemMessage
+              ? (message.systemType || "system")
+              : (message.sender?.username ? `@${message.sender.username}` : (message.sender?.phone || ""));
+            const body = resolveAdminMessageBody(message);
+            return `
+            <article class="message-card ${isSystemMessage ? "system-message-card" : ""}">
               <header>
                 <div>
-                  <strong>${escapeHtml(message.sender?.displayName || "-")}</strong>
+                  <strong>${escapeHtml(senderLabel)}</strong>
                   <div class="user-subtitle">
-                    ${escapeHtml(message.sender?.username ? `@${message.sender.username}` : (message.sender?.phone || ""))}
+                    ${escapeHtml(senderMeta)}
                   </div>
                 </div>
                 <div class="user-subtitle">${escapeHtml(formatDateTime(message.createdAt))}</div>
               </header>
               ${showChatMeta ? `<div class="user-subtitle">Chat: ${escapeHtml(message.chatId || "-")}</div>` : ""}
-              <div class="message-body">${escapeHtml(message.text || "-")}</div>
+              <div class="message-body">${escapeHtml(body)}</div>
               ${message.isEdited || message.editedAt ? '<div class="user-subtitle">Duzenlendi</div>' : ""}
               ${
                 (message.attachments || []).length
@@ -1256,11 +1392,28 @@ function renderMessagesColumn(messages, showChatMeta = false) {
                   : ""
               }
             </article>
-          `
+          `;
+          }
         )
         .join("")}
     </div>
   `;
+}
+
+function resolveAdminMessageBody(message) {
+  const payload = message.systemPayload && typeof message.systemPayload === "object"
+    ? message.systemPayload
+    : null;
+  if (!payload) {
+    return message.text || "-";
+  }
+
+  const title = String(payload.title || "").trim();
+  const text = String(payload.text || message.text || "").trim();
+  if (title && text) {
+    return `${title} - ${text}`;
+  }
+  return title || text || message.text || "-";
 }
 
 function renderMediaGallery(items, emptyLabel, includeDirections = true) {
