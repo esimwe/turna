@@ -338,6 +338,7 @@ chatRouter.get("/", requireAuth, async (req, res) => {
       chatId: chat.chatId,
       title: chat.title,
       chatType: chat.chatType,
+      memberPreviewNames: chat.memberPreviewNames,
       lastMessage: chat.lastMessage,
       lastMessageAt: chat.lastMessageAt,
       unreadCount: chat.unreadCount,

@@ -68,6 +68,7 @@ export interface ChatSummary {
   chatId: string;
   title: string;
   chatType: AppChatType;
+  memberPreviewNames: string[];
   lastMessage: string;
   lastMessageAt: string | null;
   unreadCount: number;
@@ -118,6 +119,7 @@ export interface ChatDetail {
   chatId: string;
   chatType: AppChatType;
   title: string;
+  memberPreviewNames: string[];
   description: string | null;
   avatarUrl: string | null;
   createdByUserId: string | null;

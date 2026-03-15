@@ -14,6 +14,7 @@ import {
   emitChatMessage,
   emitPresenceUpdate,
   emitChatStatus,
+  emitGroupTypingState,
   emitInboxUpdate,
   getActiveChatUserIds,
   registerUserSocket,
@@ -351,6 +352,21 @@ export function registerChatSocket(io: Server): void {
         }
         await chatService.ensureCanInteract(parsed.data.chatId, userId);
         const audience = await chatService.getTypingAudience(parsed.data.chatId, userId);
+        if (audience.chatType === "group") {
+          const current = (socket.data.groupTypingByChat ?? {}) as Record<string, unknown>;
+          const next = { ...current };
+          if (parsed.data.isTyping) {
+            next[parsed.data.chatId] = {
+              displayName: await chatService.getUserDisplayName(userId),
+              expiresAt: Date.now() + 4500
+            };
+          } else {
+            delete next[parsed.data.chatId];
+          }
+          socket.data.groupTypingByChat = next;
+          await emitGroupTypingState(parsed.data.chatId);
+          return;
+        }
         socket.to(chatRoom(parsed.data.chatId)).emit("chat:typing", {
           chatId: parsed.data.chatId,
           chatType: audience.chatType,
@@ -381,7 +397,11 @@ export function registerChatSocket(io: Server): void {
 
     socket.on("disconnect", async (reason) => {
       logInfo("socket disconnected", { socketId: socket.id, reason });
+      const activeGroupTypingChatIds = Object.keys(
+        (socket.data.groupTypingByChat ?? {}) as Record<string, unknown>
+      );
       const becameOffline = await unregisterUserSocket(userId, sessionId);
+      await Promise.all(activeGroupTypingChatIds.map((chatId) => emitGroupTypingState(chatId)));
       if (!becameOffline) return;
 
       try {

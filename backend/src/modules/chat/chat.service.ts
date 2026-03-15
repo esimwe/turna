@@ -84,6 +84,23 @@ type ChatMemberAddPolicyValue =
   typeof ChatMemberAddPolicy[keyof typeof ChatMemberAddPolicy];
 type ChatPolicyScopeValue = typeof ChatPolicyScope[keyof typeof ChatPolicyScope];
 
+function buildGroupMemberPreviewNames(
+  members: Array<{
+    userId: string;
+    user?: {
+      displayName?: string | null;
+    } | null;
+  }>,
+  currentUserId: string,
+  limit = 3
+): string[] {
+  return members
+    .filter((member) => member.userId !== currentUserId)
+    .map((member) => member.user?.displayName?.trim() ?? "")
+    .filter((name) => name.length > 0)
+    .slice(0, limit);
+}
+
 const prismaUser = (prisma as unknown as { user: any }).user;
 const prismaReportCase = (prisma as unknown as { reportCase: any }).reportCase;
 const prismaChatInviteLink = (prisma as unknown as { chatInviteLink: any }).chatInviteLink;
@@ -1212,6 +1229,10 @@ export class ChatService {
               ? chat.title?.trim() || "Yeni grup"
               : peer?.phone ?? peer?.displayName ?? "New Chat",
           chatType: (chat.type === ChatType.GROUP ? "group" : "direct") as AppChatType,
+          memberPreviewNames:
+            chat.type === ChatType.GROUP
+              ? buildGroupMemberPreviewNames(chat.members, userId)
+              : [],
           lastMessage: (() => {
             if (!visibleLast) return "Sohbet başlat";
             const summary = summarizeMessage(visibleLast);
@@ -1411,6 +1432,8 @@ export class ChatService {
         chat.type === ChatType.GROUP
           ? chat.title?.trim() || "Yeni grup"
           : peer?.phone ?? peer?.displayName ?? "New Chat",
+      memberPreviewNames:
+        chat.type === ChatType.GROUP ? buildGroupMemberPreviewNames(chat.members, userId) : [],
       description: chat.type === ChatType.GROUP ? (chat.description ?? null) : null,
       avatarUrl:
         chat.type === ChatType.GROUP
@@ -2314,6 +2337,7 @@ export class ChatService {
             chatId: input.chatId,
             chatType: "group",
             title: chat.title?.trim() || "Yeni grup",
+            memberPreviewNames: [],
             description: chat.description ?? null,
             avatarUrl: chat.avatarUrl ?? null,
             createdByUserId: chat.createdByUserId ?? null,

@@ -1,4 +1,4 @@
-import type { Server } from "socket.io";
+import type { Server, Socket } from "socket.io";
 import { redis } from "../../lib/redis.js";
 import { logInfo } from "../../lib/logger.js";
 import type { ChatMessage } from "./chat.types.js";
@@ -195,6 +195,68 @@ export function emitChatStatus(params: {
 
   const userIds = params.userIds ?? params.participantIds ?? [];
   emitUserEvent(userIds, "chat:status", payload);
+}
+
+function readGroupTypingState(
+  socket: Socket,
+  chatId: string
+): { displayName: string; expiresAt: number } | null {
+  const raw = socket.data.groupTypingByChat;
+  if (!raw || typeof raw !== "object") return null;
+  const value = (raw as Record<string, unknown>)[chatId];
+  if (!value || typeof value !== "object") return null;
+
+  const displayName =
+    typeof (value as { displayName?: unknown }).displayName === "string"
+      ? (value as { displayName: string }).displayName.trim()
+      : "";
+  const expiresAt =
+    typeof (value as { expiresAt?: unknown }).expiresAt === "number"
+      ? (value as { expiresAt: number }).expiresAt
+      : 0;
+
+  if (!displayName || expiresAt <= Date.now()) {
+    return null;
+  }
+
+  return { displayName, expiresAt };
+}
+
+function buildTypingSummaryText(names: string[]): string | null {
+  if (names.length === 0) return null;
+  if (names.length === 1) return `${names[0]} yazıyor...`;
+  if (names.length === 2) return `${names[0]} ve ${names[1]} yazıyor...`;
+  return `${names[0]} ve ${names.length - 1} kişi daha yazıyor...`;
+}
+
+export async function emitGroupTypingState(chatId: string): Promise<void> {
+  if (!chatIo) return;
+
+  const sockets = await chatIo.in(chatRoom(chatId)).fetchSockets();
+  const typingUsers = new Map<string, string>();
+
+  for (const socket of sockets) {
+    const userId = typeof socket.data.userId === "string" ? socket.data.userId : null;
+    if (!userId) continue;
+    const state = readGroupTypingState(socket as unknown as Socket, chatId);
+    if (!state) continue;
+    if (!typingUsers.has(userId)) {
+      typingUsers.set(userId, state.displayName);
+    }
+  }
+
+  const entries = [...typingUsers.entries()].map(([userId, displayName]) => ({
+    userId,
+    displayName
+  }));
+
+  chatIo.to(chatRoom(chatId)).emit("chat:typing", {
+    chatId,
+    chatType: "group",
+    isTyping: entries.length > 0,
+    typingUsers: entries,
+    summaryText: buildTypingSummaryText(entries.map((item) => item.displayName))
+  });
 }
 
 export function logRealtimeUnavailable(context: string): void {
