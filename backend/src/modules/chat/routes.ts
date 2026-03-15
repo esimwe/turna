@@ -4,7 +4,10 @@ import { logError } from "../../lib/logger.js";
 import { prisma } from "../../lib/prisma.js";
 import { sendChatMessagePush } from "../../lib/push.js";
 import {
+  createObjectReadUrl,
   createChatAttachmentUploadUrl,
+  getObjectHead,
+  isAvatarKeyOwnedByUser,
   isChatAttachmentKeyOwnedByUser,
   isStorageConfigured
 } from "../../lib/storage.js";
@@ -142,7 +145,7 @@ const createFolderSchema = z.object({
 
 const createGroupSchema = z.object({
   title: z.string().trim().min(1).max(80),
-  memberUserIds: z.array(z.string().trim().min(1).max(255)).min(1).max(255)
+  memberUserIds: z.array(z.string().trim().min(1).max(255)).min(1).max(2047)
 });
 
 const folderIdParamSchema = z.object({
@@ -150,13 +153,64 @@ const folderIdParamSchema = z.object({
 });
 
 const groupMembersBodySchema = z.object({
-  memberUserIds: z.array(z.string().trim().min(1).max(255)).min(1).max(255)
+  memberUserIds: z.array(z.string().trim().min(1).max(255)).min(1).max(2047)
 });
 
 const groupMembersQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(40),
   offset: z.coerce.number().int().min(0).default(0)
 });
+
+const updateGroupSchema = z
+  .object({
+    title: z
+      .preprocess(
+        (value) => (typeof value === "string" ? value.trim() : value),
+        z.string().min(1).max(80).nullable().optional()
+      ),
+    description: z
+      .preprocess(
+        (value) => (typeof value === "string" ? value.trim() : value),
+        z.string().max(240).nullable().optional()
+      ),
+    avatarObjectKey: z.string().trim().min(1).max(512).nullable().optional(),
+    clearAvatar: z.boolean().optional().default(false)
+  })
+  .superRefine((value, ctx) => {
+    if (
+      value.title !== undefined ||
+      value.description !== undefined ||
+      value.avatarObjectKey !== undefined ||
+      value.clearAvatar === true
+    ) {
+      return;
+    }
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "group_update_required",
+      path: ["title"]
+    });
+  });
+
+const groupMemberParamSchema = z.object({
+  chatId: z.string().trim().min(1).max(255),
+  memberUserId: z.string().trim().min(1).max(255)
+});
+
+function isAbsoluteUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value);
+}
+
+async function resolveGroupAvatarUrl(avatarUrl: string | null): Promise<string | null> {
+  if (!avatarUrl) return null;
+  if (isAbsoluteUrl(avatarUrl)) return avatarUrl;
+  try {
+    return await createObjectReadUrl(avatarUrl);
+  } catch (error) {
+    logError("group avatar read url create failed", error);
+    return null;
+  }
+}
 
 chatRouter.get("/:chatId/messages", requireAuth, async (req, res) => {
   const rawChatId = req.params.chatId;
@@ -198,8 +252,8 @@ chatRouter.get("/", requireAuth, async (req, res) => {
     chatService.getChatSummaries(userId),
     chatService.listFolders(userId)
   ]);
-  res.json({
-    data: chats.map((chat) => ({
+  const data = await Promise.all(
+    chats.map(async (chat) => ({
       chatId: chat.chatId,
       title: chat.title,
       chatType: chat.chatType,
@@ -220,11 +274,14 @@ chatRouter.get("/", requireAuth, async (req, res) => {
       folderName: chat.folderName,
       avatarUrl:
         chat.chatType === "group"
-          ? chat.groupAvatarUrl
+          ? await resolveGroupAvatarUrl(chat.groupAvatarUrl)
           : chat.peerId && chat.peerAvatarKey && chat.peerUpdatedAt
           ? buildAvatarUrl(req, chat.peerId, new Date(chat.peerUpdatedAt))
           : null
-    })),
+    }))
+  );
+  res.json({
+    data,
     folders: folders.map((folder) => ({
       id: folder.id,
       name: folder.name,
@@ -254,6 +311,7 @@ chatRouter.post("/groups", requireAuth, requireMessagingAccess, async (req, res)
         case "group_title_required":
         case "group_min_members_required":
         case "group_member_not_found":
+        case "group_member_limit_exceeded":
           res.status(400).json({ error: error.message });
           return;
       }
@@ -956,6 +1014,7 @@ chatRouter.post("/:chatId/members", requireAuth, requireMessagingAccess, async (
           res.status(404).json({ error: error.message });
           return;
         case "group_member_not_found":
+        case "group_member_limit_exceeded":
           res.status(400).json({ error: error.message });
           return;
       }
@@ -965,6 +1024,128 @@ chatRouter.post("/:chatId/members", requireAuth, requireMessagingAccess, async (
     res.status(500).json({ error: "failed_to_add_group_members" });
   }
 });
+
+chatRouter.put("/:chatId", requireAuth, requireMessagingAccess, async (req, res) => {
+  const parsedParams = chatIdParamSchema.safeParse(req.params);
+  const parsedBody = updateGroupSchema.safeParse(req.body);
+  if (!parsedParams.success) {
+    res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+    return;
+  }
+  if (!parsedBody.success) {
+    res.status(400).json({ error: "validation_error", details: parsedBody.error.flatten() });
+    return;
+  }
+
+  if (parsedBody.data.avatarObjectKey) {
+    if (!isAvatarKeyOwnedByUser(req.authUserId!, parsedBody.data.avatarObjectKey)) {
+      res.status(403).json({ error: "forbidden_avatar_key" });
+      return;
+    }
+    try {
+      const head = await getObjectHead(parsedBody.data.avatarObjectKey);
+      if (!head.contentType?.startsWith("image/")) {
+        res.status(400).json({ error: "image_content_type_required" });
+        return;
+      }
+    } catch (error) {
+      logError("group avatar head failed", error);
+      res.status(400).json({ error: "avatar_upload_missing" });
+      return;
+    }
+  }
+
+  try {
+    const result = await chatService.updateGroupDetail({
+      chatId: parsedParams.data.chatId,
+      requesterUserId: req.authUserId!,
+      title: parsedBody.data.title,
+      description: parsedBody.data.description,
+      avatarObjectKey: parsedBody.data.avatarObjectKey,
+      clearAvatar: parsedBody.data.clearAvatar
+    });
+    emitInboxUpdate(result.participantIds);
+    if (result.systemMessage) {
+      emitChatMessage(
+        parsedParams.data.chatId,
+        { ...result.systemMessage, chatType: "group" },
+        result.participantIds
+      );
+    }
+    res.json({
+      data: {
+        ...result.detail,
+        avatarUrl: await resolveGroupAvatarUrl(result.detail.avatarUrl)
+      }
+    });
+  } catch (error) {
+    if (error instanceof Error) {
+      switch (error.message) {
+        case "forbidden_chat_access":
+          res.status(403).json({ error: error.message });
+          return;
+        case "group_info_update_not_allowed":
+          res.status(403).json({ error: error.message });
+          return;
+        case "group_not_found":
+          res.status(404).json({ error: error.message });
+          return;
+      }
+    }
+
+    logError("group update failed", error);
+    res.status(500).json({ error: "failed_to_update_group" });
+  }
+});
+
+chatRouter.delete(
+  "/:chatId/members/:memberUserId",
+  requireAuth,
+  requireMessagingAccess,
+  async (req, res) => {
+    const parsedParams = groupMemberParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+      return;
+    }
+
+    try {
+      const result = await chatService.removeGroupMember({
+        chatId: parsedParams.data.chatId,
+        requesterUserId: req.authUserId!,
+        memberUserId: parsedParams.data.memberUserId
+      });
+      emitInboxUpdate(result.notifyUserIds);
+      emitChatMessage(
+        parsedParams.data.chatId,
+        { ...result.systemMessage, chatType: "group" },
+        result.remainingParticipantIds
+      );
+      res.json({ ok: true });
+    } catch (error) {
+      if (error instanceof Error) {
+        switch (error.message) {
+          case "forbidden_chat_access":
+            res.status(403).json({ error: error.message });
+            return;
+          case "group_member_remove_not_allowed":
+          case "group_member_self_remove_not_allowed":
+            res.status(403).json({ error: error.message });
+            return;
+          case "group_not_found":
+            res.status(404).json({ error: error.message });
+            return;
+          case "group_member_not_found":
+            res.status(400).json({ error: error.message });
+            return;
+        }
+      }
+
+      logError("group remove member failed", error);
+      res.status(500).json({ error: "failed_to_remove_group_member" });
+    }
+  }
+);
 
 chatRouter.post("/:chatId/leave", requireAuth, requireMessagingAccess, async (req, res) => {
   const parsedParams = chatIdParamSchema.safeParse(req.params);
@@ -1005,6 +1186,38 @@ chatRouter.post("/:chatId/leave", requireAuth, requireMessagingAccess, async (re
   }
 });
 
+chatRouter.delete("/:chatId", requireAuth, requireMessagingAccess, async (req, res) => {
+  const parsedParams = chatIdParamSchema.safeParse(req.params);
+  if (!parsedParams.success) {
+    res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+    return;
+  }
+
+  try {
+    const result = await chatService.closeGroup({
+      chatId: parsedParams.data.chatId,
+      requesterUserId: req.authUserId!
+    });
+    emitInboxUpdate(result.participantIds);
+    res.json({ ok: true });
+  } catch (error) {
+    if (error instanceof Error) {
+      switch (error.message) {
+        case "forbidden_chat_access":
+        case "group_close_not_allowed":
+          res.status(403).json({ error: error.message });
+          return;
+        case "group_not_found":
+          res.status(404).json({ error: error.message });
+          return;
+      }
+    }
+
+    logError("group close failed", error);
+    res.status(500).json({ error: "failed_to_close_group" });
+  }
+});
+
 chatRouter.get("/:chatId", requireAuth, async (req, res) => {
   const parsedParams = chatIdParamSchema.safeParse(req.params);
   if (!parsedParams.success) {
@@ -1018,7 +1231,15 @@ chatRouter.get("/:chatId", requireAuth, async (req, res) => {
       res.status(404).json({ error: "chat_not_found" });
       return;
     }
-    res.json({ data: detail });
+    res.json({
+      data: {
+        ...detail,
+        avatarUrl:
+          detail.chatType === "group"
+            ? await resolveGroupAvatarUrl(detail.avatarUrl)
+            : detail.avatarUrl
+      }
+    });
   } catch (error) {
     if (error instanceof Error && error.message === "forbidden_chat_access") {
       res.status(403).json({ error: error.message });
