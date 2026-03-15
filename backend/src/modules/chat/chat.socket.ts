@@ -278,7 +278,9 @@ export function registerChatSocket(io: Server): void {
           if (
             error.message === "account_suspended" ||
             error.message === "account_banned" ||
-            error.message === "message_sending_restricted"
+            error.message === "message_sending_restricted" ||
+            error.message === "chat_send_restricted" ||
+            error.message === "chat_rate_limited"
           ) {
             socket.emit("error:forbidden", { message: error.message });
             return;
@@ -365,7 +367,8 @@ export function registerChatSocket(io: Server): void {
           if (
             error.message === "account_suspended" ||
             error.message === "account_banned" ||
-            error.message === "message_sending_restricted"
+            error.message === "message_sending_restricted" ||
+            error.message === "chat_send_restricted"
           ) {
             socket.emit("error:forbidden", { message: error.message });
             return;

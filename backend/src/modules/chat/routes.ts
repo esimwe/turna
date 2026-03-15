@@ -201,6 +201,8 @@ const chatPolicyScopeSchema = z.enum([
 
 const updateGroupSettingsSchema = z
   .object({
+    isPublic: z.boolean().optional(),
+    joinApprovalRequired: z.boolean().optional(),
     whoCanSend: chatPolicyScopeSchema.optional(),
     whoCanEditInfo: chatPolicyScopeSchema.optional(),
     whoCanInvite: chatPolicyScopeSchema.optional(),
@@ -209,6 +211,8 @@ const updateGroupSettingsSchema = z
   })
   .superRefine((value, ctx) => {
     if (
+      value.isPublic !== undefined ||
+      value.joinApprovalRequired !== undefined ||
       value.whoCanSend !== undefined ||
       value.whoCanEditInfo !== undefined ||
       value.whoCanInvite !== undefined ||
@@ -235,6 +239,43 @@ const updateGroupMemberRoleSchema = z.object({
 
 const transferGroupOwnerSchema = z.object({
   newOwnerUserId: z.string().trim().min(1).max(255)
+});
+
+const inviteLinkDurationSchema = z.enum(["7_DAYS", "30_DAYS", "UNLIMITED"]);
+
+const createInviteLinkSchema = z.object({
+  duration: inviteLinkDurationSchema.default("7_DAYS")
+});
+
+const inviteLinkParamSchema = z.object({
+  chatId: z.string().trim().min(1).max(255),
+  inviteLinkId: z.string().trim().min(1).max(255)
+});
+
+const joinByInviteSchema = z.object({
+  token: z.string().trim().min(8).max(255)
+});
+
+const muteGroupMemberSchema = z.object({
+  duration: z.enum(["1_HOUR", "24_HOURS", "PERMANENT"]),
+  reason: z
+    .preprocess(
+      (value) => (typeof value === "string" ? value.trim() : value),
+      z.string().max(240).nullable().optional()
+    )
+});
+
+const banGroupMemberSchema = z.object({
+  reason: z
+    .preprocess(
+      (value) => (typeof value === "string" ? value.trim() : value),
+      z.string().max(240).nullable().optional()
+    )
+});
+
+const joinRequestParamSchema = z.object({
+  chatId: z.string().trim().min(1).max(255),
+  requestId: z.string().trim().min(1).max(255)
 });
 
 function isAbsoluteUrl(value: string): boolean {
@@ -974,6 +1015,9 @@ chatRouter.get("/:chatId/members", requireAuth, async (req, res) => {
         canSend: member.canSend,
         joinedAt: member.joinedAt,
         lastSeenAt: member.lastSeenAt,
+        isMuted: member.isMuted,
+        mutedUntil: member.mutedUntil,
+        muteReason: member.muteReason,
         avatarUrl:
           member.avatarKey && member.updatedAt
             ? buildAvatarUrl(req, member.userId, new Date(member.updatedAt))
@@ -1301,6 +1345,593 @@ chatRouter.post(
   }
 );
 
+chatRouter.get("/:chatId/invite-links", requireAuth, requireMessagingAccess, async (req, res) => {
+  const parsedParams = chatIdParamSchema.safeParse(req.params);
+  if (!parsedParams.success) {
+    res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+    return;
+  }
+
+  try {
+    const links = await chatService.listInviteLinks(parsedParams.data.chatId, req.authUserId!);
+    res.json({
+      data: links.map((item) => ({
+        ...item,
+        inviteUrl: `turna://join-group?token=${item.token}`
+      }))
+    });
+  } catch (error) {
+    if (error instanceof Error) {
+      switch (error.message) {
+        case "forbidden_chat_access":
+        case "group_invite_not_allowed":
+          res.status(403).json({ error: error.message });
+          return;
+        case "group_not_found":
+          res.status(404).json({ error: error.message });
+          return;
+      }
+    }
+    logError("group invite links list failed", error);
+    res.status(500).json({ error: "failed_to_list_group_invite_links" });
+  }
+});
+
+chatRouter.post("/:chatId/invite-links", requireAuth, requireMessagingAccess, async (req, res) => {
+  const parsedParams = chatIdParamSchema.safeParse(req.params);
+  const parsedBody = createInviteLinkSchema.safeParse(req.body);
+  if (!parsedParams.success) {
+    res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+    return;
+  }
+  if (!parsedBody.success) {
+    res.status(400).json({ error: "validation_error", details: parsedBody.error.flatten() });
+    return;
+  }
+
+  try {
+    const durationDays =
+      parsedBody.data.duration === "7_DAYS"
+        ? 7
+        : parsedBody.data.duration === "30_DAYS"
+        ? 30
+        : null;
+    const link = await chatService.createInviteLink({
+      chatId: parsedParams.data.chatId,
+      requesterUserId: req.authUserId!,
+      durationDays
+    });
+    res.status(201).json({
+      data: {
+        ...link,
+        inviteUrl: `turna://join-group?token=${link.token}`
+      }
+    });
+  } catch (error) {
+    if (error instanceof Error) {
+      switch (error.message) {
+        case "forbidden_chat_access":
+        case "group_invite_not_allowed":
+          res.status(403).json({ error: error.message });
+          return;
+        case "group_not_found":
+          res.status(404).json({ error: error.message });
+          return;
+      }
+    }
+    logError("group invite link create failed", error);
+    res.status(500).json({ error: "failed_to_create_group_invite_link" });
+  }
+});
+
+chatRouter.post(
+  "/:chatId/invite-links/:inviteLinkId/revoke",
+  requireAuth,
+  requireMessagingAccess,
+  async (req, res) => {
+    const parsedParams = inviteLinkParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+      return;
+    }
+
+    try {
+      await chatService.revokeInviteLink({
+        chatId: parsedParams.data.chatId,
+        inviteLinkId: parsedParams.data.inviteLinkId,
+        requesterUserId: req.authUserId!
+      });
+      res.json({ ok: true });
+    } catch (error) {
+      if (error instanceof Error) {
+        switch (error.message) {
+          case "forbidden_chat_access":
+          case "group_invite_not_allowed":
+            res.status(403).json({ error: error.message });
+            return;
+          case "group_not_found":
+          case "group_invite_not_found":
+            res.status(404).json({ error: error.message });
+            return;
+        }
+      }
+      logError("group invite link revoke failed", error);
+      res.status(500).json({ error: "failed_to_revoke_group_invite_link" });
+    }
+  }
+);
+
+chatRouter.post("/:chatId/join", requireAuth, requireMessagingAccess, async (req, res) => {
+  const parsedParams = chatIdParamSchema.safeParse(req.params);
+  if (!parsedParams.success) {
+    res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+    return;
+  }
+
+  try {
+    const result = await chatService.joinGroup({
+      chatId: parsedParams.data.chatId,
+      requesterUserId: req.authUserId!
+    });
+    if (result.systemMessage) {
+      emitChatMessage(
+        parsedParams.data.chatId,
+        { ...result.systemMessage, chatType: "group" },
+        result.participantIds
+      );
+    }
+    emitInboxUpdate(result.participantIds);
+    res.status(result.status === "requested" ? 202 : 200).json({
+      data: {
+        ...result.detail,
+        avatarUrl: await resolveGroupAvatarUrl(result.detail.avatarUrl)
+      },
+      status: result.status
+    });
+  } catch (error) {
+    if (error instanceof Error) {
+      switch (error.message) {
+        case "group_private":
+        case "group_join_banned":
+          res.status(403).json({ error: error.message });
+          return;
+        case "group_member_limit_exceeded":
+          res.status(409).json({ error: error.message });
+          return;
+        case "group_not_found":
+          res.status(404).json({ error: error.message });
+          return;
+      }
+    }
+    logError("group join failed", error);
+    res.status(500).json({ error: "failed_to_join_group" });
+  }
+});
+
+chatRouter.post("/join-by-invite", requireAuth, requireMessagingAccess, async (req, res) => {
+  const parsedBody = joinByInviteSchema.safeParse(req.body);
+  if (!parsedBody.success) {
+    res.status(400).json({ error: "validation_error", details: parsedBody.error.flatten() });
+    return;
+  }
+
+  try {
+    const result = await chatService.joinGroupByInvite({
+      token: parsedBody.data.token,
+      requesterUserId: req.authUserId!
+    });
+    if (result.systemMessage) {
+      emitChatMessage(
+        result.detail.chatId,
+        { ...result.systemMessage, chatType: "group" },
+        result.participantIds
+      );
+    }
+    emitInboxUpdate(result.participantIds);
+    res.json({
+      data: {
+        ...result.detail,
+        avatarUrl: await resolveGroupAvatarUrl(result.detail.avatarUrl)
+      }
+    });
+  } catch (error) {
+    if (error instanceof Error) {
+      switch (error.message) {
+        case "group_invite_expired":
+        case "group_join_banned":
+          res.status(403).json({ error: error.message });
+          return;
+        case "group_invite_not_found":
+        case "group_not_found":
+          res.status(404).json({ error: error.message });
+          return;
+      }
+    }
+    logError("group join by invite failed", error);
+    res.status(500).json({ error: "failed_to_join_group_by_invite" });
+  }
+});
+
+chatRouter.get("/:chatId/join-requests", requireAuth, requireMessagingAccess, async (req, res) => {
+  const parsedParams = chatIdParamSchema.safeParse(req.params);
+  if (!parsedParams.success) {
+    res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+    return;
+  }
+  try {
+    const items = await chatService.listJoinRequests(parsedParams.data.chatId, req.authUserId!);
+    res.json({
+      data: items.map((item) => ({
+        ...item,
+        avatarUrl: item.avatarKey
+          ? buildAvatarUrl(req, item.userId, new Date())
+          : null
+      }))
+    });
+  } catch (error) {
+    if (error instanceof Error) {
+      switch (error.message) {
+        case "forbidden_chat_access":
+        case "group_join_request_review_not_allowed":
+          res.status(403).json({ error: error.message });
+          return;
+        case "group_not_found":
+          res.status(404).json({ error: error.message });
+          return;
+      }
+    }
+    logError("group join requests list failed", error);
+    res.status(500).json({ error: "failed_to_list_group_join_requests" });
+  }
+});
+
+chatRouter.post(
+  "/:chatId/join-requests/:requestId/approve",
+  requireAuth,
+  requireMessagingAccess,
+  async (req, res) => {
+    const parsedParams = joinRequestParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+      return;
+    }
+    try {
+      const result = await chatService.reviewJoinRequest({
+        chatId: parsedParams.data.chatId,
+        requestId: parsedParams.data.requestId,
+        requesterUserId: req.authUserId!,
+        approve: true
+      });
+      emitInboxUpdate(result.participantIds);
+      if (result.systemMessage) {
+        emitChatMessage(
+          parsedParams.data.chatId,
+          { ...result.systemMessage, chatType: "group" },
+          result.participantIds
+        );
+      }
+      res.json({
+        ok: true,
+        data: result.detail
+          ? {
+              ...result.detail,
+              avatarUrl: await resolveGroupAvatarUrl(result.detail.avatarUrl)
+            }
+          : null
+      });
+    } catch (error) {
+      if (error instanceof Error) {
+        switch (error.message) {
+          case "forbidden_chat_access":
+          case "group_join_request_review_not_allowed":
+          case "group_join_banned":
+            res.status(403).json({ error: error.message });
+            return;
+          case "group_member_limit_exceeded":
+            res.status(409).json({ error: error.message });
+            return;
+          case "group_not_found":
+          case "group_join_request_not_found":
+            res.status(404).json({ error: error.message });
+            return;
+        }
+      }
+      logError("group join request approve failed", error);
+      res.status(500).json({ error: "failed_to_approve_group_join_request" });
+    }
+  }
+);
+
+chatRouter.post(
+  "/:chatId/join-requests/:requestId/reject",
+  requireAuth,
+  requireMessagingAccess,
+  async (req, res) => {
+    const parsedParams = joinRequestParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+      return;
+    }
+    try {
+      await chatService.reviewJoinRequest({
+        chatId: parsedParams.data.chatId,
+        requestId: parsedParams.data.requestId,
+        requesterUserId: req.authUserId!,
+        approve: false
+      });
+      res.json({ ok: true });
+    } catch (error) {
+      if (error instanceof Error) {
+        switch (error.message) {
+          case "forbidden_chat_access":
+          case "group_join_request_review_not_allowed":
+            res.status(403).json({ error: error.message });
+            return;
+          case "group_not_found":
+          case "group_join_request_not_found":
+            res.status(404).json({ error: error.message });
+            return;
+        }
+      }
+      logError("group join request reject failed", error);
+      res.status(500).json({ error: "failed_to_reject_group_join_request" });
+    }
+  }
+);
+
+chatRouter.get("/:chatId/mutes", requireAuth, requireMessagingAccess, async (req, res) => {
+  const parsedParams = chatIdParamSchema.safeParse(req.params);
+  if (!parsedParams.success) {
+    res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+    return;
+  }
+  try {
+    const items = await chatService.listGroupMutes(parsedParams.data.chatId, req.authUserId!);
+    res.json({
+      data: items.map((item) => ({
+        ...item,
+        avatarUrl: item.avatarKey
+          ? buildAvatarUrl(req, item.userId, new Date())
+          : null
+      }))
+    });
+  } catch (error) {
+    if (error instanceof Error) {
+      switch (error.message) {
+        case "forbidden_chat_access":
+        case "group_member_mute_not_allowed":
+          res.status(403).json({ error: error.message });
+          return;
+        case "group_not_found":
+          res.status(404).json({ error: error.message });
+          return;
+      }
+    }
+    logError("group mute list failed", error);
+    res.status(500).json({ error: "failed_to_list_group_mutes" });
+  }
+});
+
+chatRouter.post(
+  "/:chatId/members/:memberUserId/mute",
+  requireAuth,
+  requireMessagingAccess,
+  async (req, res) => {
+    const parsedParams = groupMemberParamSchema.safeParse(req.params);
+    const parsedBody = muteGroupMemberSchema.safeParse(req.body);
+    if (!parsedParams.success) {
+      res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+      return;
+    }
+    if (!parsedBody.success) {
+      res.status(400).json({ error: "validation_error", details: parsedBody.error.flatten() });
+      return;
+    }
+    try {
+      const result = await chatService.muteGroupMember({
+        chatId: parsedParams.data.chatId,
+        requesterUserId: req.authUserId!,
+        memberUserId: parsedParams.data.memberUserId,
+        duration: parsedBody.data.duration,
+        reason: parsedBody.data.reason ?? null
+      });
+      emitInboxUpdate(result.participantIds);
+      emitChatMessage(
+        parsedParams.data.chatId,
+        { ...result.systemMessage, chatType: "group" },
+        result.participantIds
+      );
+      res.json({ ok: true });
+    } catch (error) {
+      if (error instanceof Error) {
+        switch (error.message) {
+          case "forbidden_chat_access":
+          case "group_member_mute_not_allowed":
+            res.status(403).json({ error: error.message });
+            return;
+          case "group_not_found":
+            res.status(404).json({ error: error.message });
+            return;
+          case "group_member_not_found":
+            res.status(400).json({ error: error.message });
+            return;
+        }
+      }
+      logError("group member mute failed", error);
+      res.status(500).json({ error: "failed_to_mute_group_member" });
+    }
+  }
+);
+
+chatRouter.post(
+  "/:chatId/members/:memberUserId/unmute",
+  requireAuth,
+  requireMessagingAccess,
+  async (req, res) => {
+    const parsedParams = groupMemberParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+      return;
+    }
+    try {
+      const result = await chatService.unmuteGroupMember({
+        chatId: parsedParams.data.chatId,
+        requesterUserId: req.authUserId!,
+        memberUserId: parsedParams.data.memberUserId
+      });
+      emitInboxUpdate(result.participantIds);
+      emitChatMessage(
+        parsedParams.data.chatId,
+        { ...result.systemMessage, chatType: "group" },
+        result.participantIds
+      );
+      res.json({ ok: true });
+    } catch (error) {
+      if (error instanceof Error) {
+        switch (error.message) {
+          case "forbidden_chat_access":
+          case "group_member_mute_not_allowed":
+            res.status(403).json({ error: error.message });
+            return;
+          case "group_not_found":
+            res.status(404).json({ error: error.message });
+            return;
+          case "group_member_not_found":
+            res.status(400).json({ error: error.message });
+            return;
+        }
+      }
+      logError("group member unmute failed", error);
+      res.status(500).json({ error: "failed_to_unmute_group_member" });
+    }
+  }
+);
+
+chatRouter.get("/:chatId/bans", requireAuth, requireMessagingAccess, async (req, res) => {
+  const parsedParams = chatIdParamSchema.safeParse(req.params);
+  if (!parsedParams.success) {
+    res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+    return;
+  }
+  try {
+    const items = await chatService.listGroupBans(parsedParams.data.chatId, req.authUserId!);
+    res.json({
+      data: items.map((item) => ({
+        ...item,
+        avatarUrl: item.avatarKey
+          ? buildAvatarUrl(req, item.userId, new Date())
+          : null
+      }))
+    });
+  } catch (error) {
+    if (error instanceof Error) {
+      switch (error.message) {
+        case "forbidden_chat_access":
+        case "group_member_ban_not_allowed":
+          res.status(403).json({ error: error.message });
+          return;
+        case "group_not_found":
+          res.status(404).json({ error: error.message });
+          return;
+      }
+    }
+    logError("group ban list failed", error);
+    res.status(500).json({ error: "failed_to_list_group_bans" });
+  }
+});
+
+chatRouter.post(
+  "/:chatId/members/:memberUserId/ban",
+  requireAuth,
+  requireMessagingAccess,
+  async (req, res) => {
+    const parsedParams = groupMemberParamSchema.safeParse(req.params);
+    const parsedBody = banGroupMemberSchema.safeParse(req.body);
+    if (!parsedParams.success) {
+      res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+      return;
+    }
+    if (!parsedBody.success) {
+      res.status(400).json({ error: "validation_error", details: parsedBody.error.flatten() });
+      return;
+    }
+    try {
+      const result = await chatService.banGroupMember({
+        chatId: parsedParams.data.chatId,
+        requesterUserId: req.authUserId!,
+        memberUserId: parsedParams.data.memberUserId,
+        reason: parsedBody.data.reason ?? null
+      });
+      emitInboxUpdate(result.notifyUserIds);
+      emitChatMessage(
+        parsedParams.data.chatId,
+        { ...result.systemMessage, chatType: "group" },
+        result.remainingParticipantIds
+      );
+      res.json({ ok: true });
+    } catch (error) {
+      if (error instanceof Error) {
+        switch (error.message) {
+          case "forbidden_chat_access":
+          case "group_member_ban_not_allowed":
+            res.status(403).json({ error: error.message });
+            return;
+          case "group_not_found":
+            res.status(404).json({ error: error.message });
+            return;
+          case "group_member_not_found":
+            res.status(400).json({ error: error.message });
+            return;
+        }
+      }
+      logError("group member ban failed", error);
+      res.status(500).json({ error: "failed_to_ban_group_member" });
+    }
+  }
+);
+
+chatRouter.post(
+  "/:chatId/bans/:memberUserId/unban",
+  requireAuth,
+  requireMessagingAccess,
+  async (req, res) => {
+    const parsedParams = groupMemberParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+      return;
+    }
+    try {
+      const result = await chatService.unbanGroupMember({
+        chatId: parsedParams.data.chatId,
+        requesterUserId: req.authUserId!,
+        bannedUserId: parsedParams.data.memberUserId
+      });
+      emitInboxUpdate(result.participantIds);
+      emitChatMessage(
+        parsedParams.data.chatId,
+        { ...result.systemMessage, chatType: "group" },
+        result.participantIds
+      );
+      res.json({ ok: true });
+    } catch (error) {
+      if (error instanceof Error) {
+        switch (error.message) {
+          case "forbidden_chat_access":
+          case "group_member_ban_not_allowed":
+            res.status(403).json({ error: error.message });
+            return;
+          case "group_not_found":
+          case "group_ban_not_found":
+            res.status(404).json({ error: error.message });
+            return;
+        }
+      }
+      logError("group member unban failed", error);
+      res.status(500).json({ error: "failed_to_unban_group_member" });
+    }
+  }
+);
+
 chatRouter.delete(
   "/:chatId/members/:memberUserId",
   requireAuth,
@@ -1479,6 +2110,10 @@ chatRouter.post("/attachments/upload-url", requireAuth, requireMessagingAccess, 
       res.status(403).json({ error: "chat_blocked" });
       return;
     }
+    if (error instanceof Error && error.message === "chat_send_restricted") {
+      res.status(403).json({ error: "chat_send_restricted" });
+      return;
+    }
     logError("chat attachment access check failed", error);
     res.status(500).json({ error: "failed_to_prepare_attachment_upload" });
     return;
@@ -1596,6 +2231,14 @@ chatRouter.post("/messages", requireAuth, requireMessagingAccess, async (req, re
     }
     if (error instanceof Error && error.message === "chat_blocked") {
       res.status(403).json({ error: "chat_blocked" });
+      return;
+    }
+    if (error instanceof Error && error.message === "chat_send_restricted") {
+      res.status(403).json({ error: "chat_send_restricted" });
+      return;
+    }
+    if (error instanceof Error && error.message === "chat_rate_limited") {
+      res.status(429).json({ error: "chat_rate_limited" });
       return;
     }
 

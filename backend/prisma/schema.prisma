@@ -33,6 +33,12 @@ enum ChatPolicyScope {
   EVERYONE
 }
 
+enum ChatJoinRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 enum MessageStatus {
   sent
   delivered
@@ -230,6 +236,13 @@ model User {
   statusPreference      StatusPreference?
   submittedReports      ReportCase[]       @relation("SubmittedReports")
   reportsAgainst        ReportCase[]       @relation("ReportedUsers")
+  createdChatInviteLinks ChatInviteLink[]  @relation("ChatInviteLinkCreator")
+  chatJoinRequests      ChatJoinRequest[]  @relation("ChatJoinRequestRequester")
+  reviewedChatJoinRequests ChatJoinRequest[] @relation("ChatJoinRequestReviewer")
+  chatMutesReceived     ChatMute[]         @relation("ChatMutedUser")
+  chatMutesApplied      ChatMute[]         @relation("ChatMuteActor")
+  chatBansReceived      ChatBan[]          @relation("ChatBannedUser")
+  chatBansApplied       ChatBan[]          @relation("ChatBanActor")
   communityMemberships  CommunityMembership[]
   communityMessages     CommunityMessage[]   @relation("CommunityMessageAuthor")
   communityTopics       CommunityTopic[]     @relation("CommunityTopicAuthor")
@@ -284,6 +297,10 @@ model Chat {
   updatedAt           DateTime            @default(now()) @updatedAt
   members             ChatMember[]
   messages            Message[]
+  inviteLinks         ChatInviteLink[]
+  joinRequests        ChatJoinRequest[]
+  mutes               ChatMute[]
+  bans                ChatBan[]
 
   @@index([type, updatedAt(sort: Desc)])
   @@index([createdByUserId])
@@ -334,6 +351,80 @@ model ChatFolder {
 
   @@index([userId, sortOrder])
   @@unique([userId, name])
+}
+
+model ChatInviteLink {
+  id              String   @id @default(uuid())
+  chatId          String
+  createdByUserId String
+  token           String   @unique
+  expiresAt       DateTime?
+  revokedAt       DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  chat            Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  createdByUser   User     @relation("ChatInviteLinkCreator", fields: [createdByUserId], references: [id], onDelete: Cascade)
+
+  @@index([chatId, createdAt(sort: Desc)])
+  @@index([token])
+  @@index([createdByUserId, createdAt(sort: Desc)])
+}
+
+model ChatJoinRequest {
+  id               String                @id @default(uuid())
+  chatId           String
+  userId           String
+  status           ChatJoinRequestStatus @default(PENDING)
+  reviewedByUserId String?
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  reviewedAt       DateTime?
+
+  chat             Chat                  @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  user             User                  @relation("ChatJoinRequestRequester", fields: [userId], references: [id], onDelete: Cascade)
+  reviewedByUser   User?                 @relation("ChatJoinRequestReviewer", fields: [reviewedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([chatId, status, createdAt(sort: Desc)])
+  @@index([userId, createdAt(sort: Desc)])
+  @@unique([chatId, userId, status])
+}
+
+model ChatMute {
+  id            String   @id @default(uuid())
+  chatId        String
+  userId        String
+  mutedByUserId String
+  reason        String?
+  mutedUntil    DateTime?
+  revokedAt     DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  chat          Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  user          User     @relation("ChatMutedUser", fields: [userId], references: [id], onDelete: Cascade)
+  mutedByUser   User     @relation("ChatMuteActor", fields: [mutedByUserId], references: [id], onDelete: Cascade)
+
+  @@index([chatId, userId, revokedAt, mutedUntil])
+  @@index([userId, createdAt(sort: Desc)])
+}
+
+model ChatBan {
+  id            String   @id @default(uuid())
+  chatId        String
+  userId        String
+  bannedByUserId String
+  reason        String?
+  revokedAt     DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  chat          Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  user          User     @relation("ChatBannedUser", fields: [userId], references: [id], onDelete: Cascade)
+  bannedByUser  User     @relation("ChatBanActor", fields: [bannedByUserId], references: [id], onDelete: Cascade)
+
+  @@index([chatId, userId, revokedAt])
+  @@index([userId, createdAt(sort: Desc)])
 }
 
 model UserBlock {

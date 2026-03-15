@@ -3,6 +3,7 @@ export type ChatAttachmentKind = "image" | "video" | "file";
 export type AppChatType = "direct" | "group";
 export type ChatMemberRole = "OWNER" | "ADMIN" | "EDITOR" | "MEMBER";
 export type ChatPolicyScope = "OWNER_ONLY" | "ADMIN_ONLY" | "EDITOR_ONLY" | "EVERYONE";
+export type ChatJoinRequestStatus = "PENDING" | "APPROVED" | "REJECTED";
 
 export interface ChatAttachment {
   id: string;
@@ -108,6 +109,9 @@ export interface ChatMemberSummary {
   canSend: boolean;
   joinedAt: string;
   lastSeenAt: string | null;
+  isMuted: boolean;
+  mutedUntil: string | null;
+  muteReason: string | null;
 }
 
 export interface ChatDetail {
@@ -127,4 +131,48 @@ export interface ChatDetail {
   whoCanInvite: ChatPolicyScope;
   whoCanAddMembers: ChatPolicyScope;
   historyVisibleToNewMembers: boolean;
+  myCanSend: boolean;
+  myIsMuted: boolean;
+  myMutedUntil: string | null;
+  myMuteReason: string | null;
+}
+
+export interface ChatInviteLinkSummary {
+  id: string;
+  token: string;
+  expiresAt: string | null;
+  revokedAt: string | null;
+  createdAt: string;
+}
+
+export interface ChatJoinRequestSummary {
+  id: string;
+  userId: string;
+  displayName: string;
+  username: string | null;
+  phone: string | null;
+  avatarKey: string | null;
+  createdAt: string;
+  status: ChatJoinRequestStatus;
+}
+
+export interface ChatMuteSummary {
+  id: string;
+  userId: string;
+  displayName: string;
+  username: string | null;
+  avatarKey: string | null;
+  reason: string | null;
+  mutedUntil: string | null;
+  createdAt: string;
+}
+
+export interface ChatBanSummary {
+  id: string;
+  userId: string;
+  displayName: string;
+  username: string | null;
+  avatarKey: string | null;
+  reason: string | null;
+  createdAt: string;
 }

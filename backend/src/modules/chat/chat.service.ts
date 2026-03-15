@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { logError } from "../../lib/logger.js";
 import { prisma } from "../../lib/prisma.js";
 import { createObjectReadUrl, deleteObject, getObjectHead } from "../../lib/storage.js";
@@ -8,12 +9,16 @@ import {
 } from "../../lib/user-relationship.js";
 import type {
   AppChatType,
+  ChatBanSummary,
   ChatAttachment,
   ChatDetail,
+  ChatInviteLinkSummary,
+  ChatJoinRequestSummary,
   ChatMessage,
   ChatMessageEditHistoryEntry,
   ChatMessagePage,
   ChatMemberSummary,
+  ChatMuteSummary,
   ChatSummary,
   DirectoryUser,
   SendMessageAttachmentInput,
@@ -60,6 +65,12 @@ const GROUP_INFO_UPDATED_SYSTEM_TYPE = "group_info_updated";
 const GROUP_SETTINGS_UPDATED_SYSTEM_TYPE = "group_settings_updated";
 const GROUP_ROLE_UPDATED_SYSTEM_TYPE = "group_role_updated";
 const GROUP_OWNER_TRANSFERRED_SYSTEM_TYPE = "group_owner_transferred";
+const GROUP_JOIN_REQUEST_CREATED_SYSTEM_TYPE = "group_join_request_created";
+const GROUP_JOIN_REQUEST_APPROVED_SYSTEM_TYPE = "group_join_request_approved";
+const GROUP_MEMBER_MUTED_SYSTEM_TYPE = "group_member_muted";
+const GROUP_MEMBER_UNMUTED_SYSTEM_TYPE = "group_member_unmuted";
+const GROUP_MEMBER_BANNED_SYSTEM_TYPE = "group_member_banned";
+const GROUP_MEMBER_UNBANNED_SYSTEM_TYPE = "group_member_unbanned";
 const MessageStatus = {
   sent: "sent",
   delivered: "delivered",
@@ -75,11 +86,18 @@ type ChatPolicyScopeValue = typeof ChatPolicyScope[keyof typeof ChatPolicyScope]
 
 const prismaUser = (prisma as unknown as { user: any }).user;
 const prismaReportCase = (prisma as unknown as { reportCase: any }).reportCase;
+const prismaChatInviteLink = (prisma as unknown as { chatInviteLink: any }).chatInviteLink;
+const prismaChatJoinRequest = (prisma as unknown as { chatJoinRequest: any }).chatJoinRequest;
+const prismaChatMute = (prisma as unknown as { chatMute: any }).chatMute;
+const prismaChatBan = (prisma as unknown as { chatBan: any }).chatBan;
 const DELETE_FOR_EVERYONE_WINDOW_MS = 10 * 60 * 1000;
 const EDIT_MESSAGE_WINDOW_MS = 10 * 60 * 1000;
 const CHAT_FOLDER_LIMIT = 3;
 const GROUP_MEMBER_LIMIT = 2048;
 const GROUP_CREATED_SYSTEM_TYPE = "group_created";
+const GROUP_FLOOD_WINDOW_MS = 10 * 1000;
+const GROUP_FLOOD_LIMIT = 8;
+const groupSendRateLimit = new Map<string, number[]>();
 
 const messageInclude = {
   attachments: {
@@ -255,6 +273,70 @@ function summarizeMessage(row: {
       : "Grubun sahipliği devredildi";
   }
 
+  if (row.systemType === GROUP_JOIN_REQUEST_CREATED_SYSTEM_TYPE) {
+    return "Katılım isteği gönderildi";
+  }
+
+  if (row.systemType === GROUP_JOIN_REQUEST_APPROVED_SYSTEM_TYPE) {
+    const payload =
+      row.systemPayload && typeof row.systemPayload === "object"
+        ? (row.systemPayload as Record<string, unknown>)
+        : null;
+    const memberDisplayName =
+      typeof payload?.memberDisplayName === "string" ? payload.memberDisplayName.trim() : "";
+    return memberDisplayName.length > 0
+      ? `${memberDisplayName} gruba kabul edildi`
+      : "Katılım isteği onaylandı";
+  }
+
+  if (row.systemType === GROUP_MEMBER_MUTED_SYSTEM_TYPE) {
+    const payload =
+      row.systemPayload && typeof row.systemPayload === "object"
+        ? (row.systemPayload as Record<string, unknown>)
+        : null;
+    const memberDisplayName =
+      typeof payload?.memberDisplayName === "string" ? payload.memberDisplayName.trim() : "";
+    return memberDisplayName.length > 0
+      ? `${memberDisplayName} sessize alındı`
+      : "Bir üye sessize alındı";
+  }
+
+  if (row.systemType === GROUP_MEMBER_UNMUTED_SYSTEM_TYPE) {
+    const payload =
+      row.systemPayload && typeof row.systemPayload === "object"
+        ? (row.systemPayload as Record<string, unknown>)
+        : null;
+    const memberDisplayName =
+      typeof payload?.memberDisplayName === "string" ? payload.memberDisplayName.trim() : "";
+    return memberDisplayName.length > 0
+      ? `${memberDisplayName} tekrar konuşabilir`
+      : "Sessiz kullanıcı kaldırıldı";
+  }
+
+  if (row.systemType === GROUP_MEMBER_BANNED_SYSTEM_TYPE) {
+    const payload =
+      row.systemPayload && typeof row.systemPayload === "object"
+        ? (row.systemPayload as Record<string, unknown>)
+        : null;
+    const memberDisplayName =
+      typeof payload?.memberDisplayName === "string" ? payload.memberDisplayName.trim() : "";
+    return memberDisplayName.length > 0
+      ? `${memberDisplayName} gruptan yasaklandı`
+      : "Bir üye gruptan yasaklandı";
+  }
+
+  if (row.systemType === GROUP_MEMBER_UNBANNED_SYSTEM_TYPE) {
+    const payload =
+      row.systemPayload && typeof row.systemPayload === "object"
+        ? (row.systemPayload as Record<string, unknown>)
+        : null;
+    const memberDisplayName =
+      typeof payload?.memberDisplayName === "string" ? payload.memberDisplayName.trim() : "";
+    return memberDisplayName.length > 0
+      ? `${memberDisplayName} yasağı kaldırıldı`
+      : "Yasak kaldırıldı";
+  }
+
   if (
     row.systemType === ADMIN_NOTICE_SYSTEM_TYPE ||
     row.systemType === ADMIN_NOTICE_SILENT_SYSTEM_TYPE
@@ -422,6 +504,62 @@ export class ChatService {
         historyVisibleToNewMembers: true
       }
     });
+  }
+
+  private async getActiveMute(chatId: string, userId: string): Promise<{
+    id: string;
+    mutedUntil: Date | null;
+    reason: string | null;
+  } | null> {
+    const now = new Date();
+    return prismaChatMute.findFirst({
+      where: {
+        chatId,
+        userId,
+        revokedAt: null,
+        OR: [{ mutedUntil: null }, { mutedUntil: { gt: now } }]
+      },
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        mutedUntil: true,
+        reason: true
+      }
+    });
+  }
+
+  private async getActiveBan(chatId: string, userId: string): Promise<{ id: string } | null> {
+    return prismaChatBan.findFirst({
+      where: {
+        chatId,
+        userId,
+        revokedAt: null
+      },
+      orderBy: { createdAt: "desc" },
+      select: { id: true }
+    });
+  }
+
+  private canReviewJoinRequests(role: ChatMemberRoleValue): boolean {
+    return this.isAdminOrAbove(role);
+  }
+
+  private canBanMembers(role: ChatMemberRoleValue): boolean {
+    return this.isAdminOrAbove(role);
+  }
+
+  private assertGroupRateLimit(chatId: string, userId: string): void {
+    const now = Date.now();
+    const key = `${chatId}:${userId}`;
+    const current = (groupSendRateLimit.get(key) ?? []).filter(
+      (timestamp) => now - timestamp < GROUP_FLOOD_WINDOW_MS
+    );
+    if (current.length >= GROUP_FLOOD_LIMIT) {
+      groupSendRateLimit.set(key, current);
+      throw new Error("chat_rate_limited");
+    }
+    current.push(now);
+    groupSendRateLimit.set(key, current);
   }
 
   private canAddMembers(params: {
@@ -610,6 +748,10 @@ export class ChatService {
     const membership = await this.getMembershipState(chatId, userId);
     const chat = await this.getChatMeta(chatId);
     if (chat?.type === ChatType.GROUP && membership) {
+      const activeMute = await this.getActiveMute(chatId, userId);
+      if (activeMute) {
+        throw new Error("chat_send_restricted");
+      }
       if (
         !this.canSendInGroup({
           policy: chat.whoCanSend,
@@ -634,6 +776,9 @@ export class ChatService {
   async ensureChatAccess(chatId: string, userId: string): Promise<boolean> {
     const member = await this.getMembershipState(chatId, userId);
     if (member) {
+      if (await this.getActiveBan(chatId, userId)) {
+        return false;
+      }
       if (member.hiddenAt) {
         await prisma.chatMember.update({
           where: { chatId_userId: { chatId, userId } },
@@ -680,6 +825,10 @@ export class ChatService {
       throw new Error("forbidden_chat_access");
     }
     await this.ensureCanInteract(payload.chatId, payload.senderId);
+    const chat = await this.getChatMeta(payload.chatId);
+    if (chat?.type === ChatType.GROUP) {
+      this.assertGroupRateLimit(payload.chatId, payload.senderId);
+    }
 
     const preparedAttachments = await this.prepareAttachments(
       payload.chatId,
@@ -1232,6 +1381,7 @@ export class ChatService {
           select: {
             userId: true,
             role: true,
+            canSend: true,
             user: {
               select: {
                 id: true,
@@ -1251,6 +1401,8 @@ export class ChatService {
     const peer = chat.type === ChatType.DIRECT
       ? chat.members.find((member: any) => member.userId !== userId)?.user ?? null
       : null;
+    const activeMute =
+      chat.type === ChatType.GROUP ? await this.getActiveMute(chatId, userId) : null;
 
     return {
       chatId: chat.id,
@@ -1285,7 +1437,11 @@ export class ChatService {
           ? (chat.whoCanAddMembers ?? chat.memberAddPolicy)
           : ChatPolicyScope.ADMIN_ONLY,
       historyVisibleToNewMembers:
-        chat.type === ChatType.GROUP ? chat.historyVisibleToNewMembers !== false : true
+        chat.type === ChatType.GROUP ? chat.historyVisibleToNewMembers !== false : true,
+      myCanSend: myMembership?.canSend === true,
+      myIsMuted: activeMute != null,
+      myMutedUntil: activeMute?.mutedUntil ? activeMute.mutedUntil.toISOString() : null,
+      myMuteReason: activeMute?.reason ?? null
     };
   }
 
@@ -1355,6 +1511,18 @@ export class ChatService {
         participantIds: await this.getChatParticipantIds(input.chatId),
         systemMessage: null
       };
+    }
+
+    const bannedRows = await prismaChatBan.findMany({
+      where: {
+        chatId: input.chatId,
+        userId: { in: missingMemberIds },
+        revokedAt: null
+      },
+      select: { userId: true }
+    });
+    if (bannedRows.length > 0) {
+      throw new Error("group_join_banned");
     }
 
     const currentMemberCount = await prisma.chatMember.count({
@@ -1550,6 +1718,8 @@ export class ChatService {
   async updateGroupSettings(input: {
     chatId: string;
     requesterUserId: string;
+    isPublic?: boolean;
+    joinApprovalRequired?: boolean;
     whoCanSend?: ChatPolicyScopeValue;
     whoCanEditInfo?: ChatPolicyScopeValue;
     whoCanInvite?: ChatPolicyScopeValue;
@@ -1573,6 +1743,8 @@ export class ChatService {
       throw new Error("group_settings_update_not_allowed");
     }
 
+    const nextIsPublic = input.isPublic ?? chat.isPublic;
+    const nextJoinApprovalRequired = input.joinApprovalRequired ?? chat.joinApprovalRequired;
     const nextWhoCanSend = input.whoCanSend ?? chat.whoCanSend;
     const nextWhoCanEditInfo = input.whoCanEditInfo ?? chat.whoCanEditInfo;
     const nextWhoCanInvite = input.whoCanInvite ?? chat.whoCanInvite;
@@ -1581,6 +1753,8 @@ export class ChatService {
       input.historyVisibleToNewMembers ?? chat.historyVisibleToNewMembers;
 
     const changed =
+      nextIsPublic !== chat.isPublic ||
+      nextJoinApprovalRequired !== chat.joinApprovalRequired ||
       nextWhoCanSend !== chat.whoCanSend ||
       nextWhoCanEditInfo !== chat.whoCanEditInfo ||
       nextWhoCanInvite !== chat.whoCanInvite ||
@@ -1602,6 +1776,8 @@ export class ChatService {
     await prisma.chat.update({
       where: { id: input.chatId },
       data: {
+        isPublic: nextIsPublic,
+        joinApprovalRequired: nextJoinApprovalRequired,
         whoCanSend: nextWhoCanSend,
         whoCanEditInfo: nextWhoCanEditInfo,
         whoCanInvite: nextWhoCanInvite,
@@ -1616,6 +1792,8 @@ export class ChatService {
       senderId: input.requesterUserId,
       systemType: GROUP_SETTINGS_UPDATED_SYSTEM_TYPE,
       systemPayload: {
+        isPublic: nextIsPublic,
+        joinApprovalRequired: nextJoinApprovalRequired,
         whoCanSend: nextWhoCanSend,
         whoCanEditInfo: nextWhoCanEditInfo,
         whoCanInvite: nextWhoCanInvite,
@@ -1916,6 +2094,803 @@ export class ChatService {
     return { participantIds };
   }
 
+  async listInviteLinks(
+    chatId: string,
+    requesterUserId: string
+  ): Promise<ChatInviteLinkSummary[]> {
+    const chat = await this.getChatMeta(chatId);
+    if (!chat || chat.type !== ChatType.GROUP) {
+      throw new Error("group_not_found");
+    }
+    const membership = await this.getMembershipState(chatId, requesterUserId);
+    if (!membership) {
+      throw new Error("forbidden_chat_access");
+    }
+    if (
+      !this.canInviteMembers({
+        policy: chat.whoCanInvite,
+        role: membership.role
+      })
+    ) {
+      throw new Error("group_invite_not_allowed");
+    }
+
+    const rows = await prismaChatInviteLink.findMany({
+      where: { chatId },
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        token: true,
+        expiresAt: true,
+        revokedAt: true,
+        createdAt: true
+      }
+    });
+    return rows.map((row: any) => ({
+      id: row.id,
+      token: row.token,
+      expiresAt: row.expiresAt ? row.expiresAt.toISOString() : null,
+      revokedAt: row.revokedAt ? row.revokedAt.toISOString() : null,
+      createdAt: row.createdAt.toISOString()
+    }));
+  }
+
+  async createInviteLink(input: {
+    chatId: string;
+    requesterUserId: string;
+    durationDays: 7 | 30 | null;
+  }): Promise<ChatInviteLinkSummary> {
+    const chat = await this.getChatMeta(input.chatId);
+    if (!chat || chat.type !== ChatType.GROUP) {
+      throw new Error("group_not_found");
+    }
+    const membership = await this.getMembershipState(input.chatId, input.requesterUserId);
+    if (!membership) {
+      throw new Error("forbidden_chat_access");
+    }
+    if (
+      !this.canInviteMembers({
+        policy: chat.whoCanInvite,
+        role: membership.role
+      })
+    ) {
+      throw new Error("group_invite_not_allowed");
+    }
+
+    const created = await prismaChatInviteLink.create({
+      data: {
+        chatId: input.chatId,
+        createdByUserId: input.requesterUserId,
+        token: randomBytes(18).toString("base64url"),
+        expiresAt:
+          input.durationDays == null
+            ? null
+            : new Date(Date.now() + input.durationDays * 24 * 60 * 60 * 1000)
+      },
+      select: {
+        id: true,
+        token: true,
+        expiresAt: true,
+        revokedAt: true,
+        createdAt: true
+      }
+    });
+    return {
+      id: created.id,
+      token: created.token,
+      expiresAt: created.expiresAt ? created.expiresAt.toISOString() : null,
+      revokedAt: created.revokedAt ? created.revokedAt.toISOString() : null,
+      createdAt: created.createdAt.toISOString()
+    };
+  }
+
+  async revokeInviteLink(input: {
+    chatId: string;
+    inviteLinkId: string;
+    requesterUserId: string;
+  }): Promise<void> {
+    const chat = await this.getChatMeta(input.chatId);
+    if (!chat || chat.type !== ChatType.GROUP) {
+      throw new Error("group_not_found");
+    }
+    const membership = await this.getMembershipState(input.chatId, input.requesterUserId);
+    if (!membership) {
+      throw new Error("forbidden_chat_access");
+    }
+    if (
+      !this.canInviteMembers({
+        policy: chat.whoCanInvite,
+        role: membership.role
+      })
+    ) {
+      throw new Error("group_invite_not_allowed");
+    }
+
+    const existing = await prismaChatInviteLink.findFirst({
+      where: {
+        id: input.inviteLinkId,
+        chatId: input.chatId
+      },
+      select: { id: true }
+    });
+    if (!existing) {
+      throw new Error("group_invite_not_found");
+    }
+
+    await prismaChatInviteLink.update({
+      where: { id: input.inviteLinkId },
+      data: { revokedAt: new Date() }
+    });
+  }
+
+  async joinGroupByInvite(input: {
+    token: string;
+    requesterUserId: string;
+  }): Promise<{ detail: ChatDetail; participantIds: string[]; systemMessage: ChatMessage | null }> {
+    const invite = await prismaChatInviteLink.findUnique({
+      where: { token: input.token.trim() },
+      select: {
+        id: true,
+        chatId: true,
+        revokedAt: true,
+        expiresAt: true
+      }
+    });
+    if (!invite) {
+      throw new Error("group_invite_not_found");
+    }
+    if (invite.revokedAt) {
+      throw new Error("group_invite_not_found");
+    }
+    if (invite.expiresAt && invite.expiresAt.getTime() <= Date.now()) {
+      throw new Error("group_invite_expired");
+    }
+    return this.joinGroup({
+      chatId: invite.chatId,
+      requesterUserId: input.requesterUserId,
+      bypassApproval: true
+    });
+  }
+
+  async joinGroup(input: {
+    chatId: string;
+    requesterUserId: string;
+    bypassApproval?: boolean;
+  }): Promise<{
+    detail: ChatDetail;
+    participantIds: string[];
+    status: "joined" | "requested";
+    systemMessage: ChatMessage | null;
+  }> {
+    const chat = await this.getChatMeta(input.chatId);
+    if (!chat || chat.type !== ChatType.GROUP) {
+      throw new Error("group_not_found");
+    }
+    if (await this.getActiveBan(input.chatId, input.requesterUserId)) {
+      throw new Error("group_join_banned");
+    }
+
+    const existingMembership = await this.getMembershipState(input.chatId, input.requesterUserId);
+    if (existingMembership) {
+      const detail = await this.getGroupDetail(input.chatId, input.requesterUserId);
+      if (!detail) {
+        throw new Error("group_not_found");
+      }
+      return {
+        detail,
+        participantIds: await this.getChatParticipantIds(input.chatId),
+        status: "joined",
+        systemMessage: null
+      };
+    }
+
+    if (!chat.isPublic && input.bypassApproval !== true) {
+      throw new Error("group_private");
+    }
+
+    if (chat.joinApprovalRequired === true && input.bypassApproval !== true) {
+      const existingRequest = await prismaChatJoinRequest.findFirst({
+        where: {
+          chatId: input.chatId,
+          userId: input.requesterUserId,
+          status: "PENDING"
+        },
+        select: { id: true }
+      });
+      if (!existingRequest) {
+        await prismaChatJoinRequest.create({
+          data: {
+            chatId: input.chatId,
+            userId: input.requesterUserId,
+            status: "PENDING"
+          }
+        });
+      }
+      const detail = await this.getGroupDetail(input.chatId, input.requesterUserId).catch(() => null);
+      return {
+        detail:
+          detail ??
+          ({
+            chatId: input.chatId,
+            chatType: "group",
+            title: chat.title?.trim() || "Yeni grup",
+            description: chat.description ?? null,
+            avatarUrl: chat.avatarUrl ?? null,
+            createdByUserId: chat.createdByUserId ?? null,
+            memberCount: await prisma.chatMember.count({ where: { chatId: input.chatId } }),
+            myRole: null,
+            isPublic: chat.isPublic === true,
+            joinApprovalRequired: chat.joinApprovalRequired === true,
+            memberAddPolicy: chat.whoCanAddMembers ?? chat.memberAddPolicy,
+            whoCanSend: chat.whoCanSend,
+            whoCanEditInfo: chat.whoCanEditInfo,
+            whoCanInvite: chat.whoCanInvite,
+            whoCanAddMembers: chat.whoCanAddMembers ?? chat.memberAddPolicy,
+            historyVisibleToNewMembers: chat.historyVisibleToNewMembers !== false,
+            myCanSend: false,
+            myIsMuted: false,
+            myMutedUntil: null,
+            myMuteReason: null
+          } satisfies ChatDetail),
+        participantIds: await this.getChatParticipantIds(input.chatId),
+        status: "requested",
+        systemMessage: null
+      };
+    }
+
+    const currentMemberCount = await prisma.chatMember.count({ where: { chatId: input.chatId } });
+    if (currentMemberCount + 1 > GROUP_MEMBER_LIMIT) {
+      throw new Error("group_member_limit_exceeded");
+    }
+
+    await prisma.chatMember.create({
+      data: {
+        chatId: input.chatId,
+        userId: input.requesterUserId,
+        role: ChatMemberRole.MEMBER,
+        canSend: true,
+        addedByUserId: input.requesterUserId,
+        joinedVia: input.bypassApproval ? "invite" : "public"
+      }
+    });
+
+    await prismaChatJoinRequest.updateMany({
+      where: {
+        chatId: input.chatId,
+        userId: input.requesterUserId,
+        status: "PENDING"
+      },
+      data: {
+        status: "APPROVED",
+        reviewedAt: new Date(),
+        reviewedByUserId: input.requesterUserId
+      }
+    });
+
+    const joinedUser = await prismaUser.findUnique({
+      where: { id: input.requesterUserId },
+      select: { displayName: true }
+    });
+    const systemMessage = await this.createSystemMessage({
+      chatId: input.chatId,
+      senderId: input.requesterUserId,
+      systemType: GROUP_MEMBERS_ADDED_SYSTEM_TYPE,
+      systemPayload: {
+        memberNames: [joinedUser?.displayName?.trim() || "Yeni üye"]
+      }
+    });
+    const detail = await this.getGroupDetail(input.chatId, input.requesterUserId);
+    if (!detail) {
+      throw new Error("group_not_found");
+    }
+    return {
+      detail,
+      participantIds: await this.getChatParticipantIds(input.chatId),
+      status: "joined",
+      systemMessage
+    };
+  }
+
+  async listJoinRequests(
+    chatId: string,
+    requesterUserId: string
+  ): Promise<ChatJoinRequestSummary[]> {
+    const chat = await this.getChatMeta(chatId);
+    if (!chat || chat.type !== ChatType.GROUP) {
+      throw new Error("group_not_found");
+    }
+    const membership = await this.getMembershipState(chatId, requesterUserId);
+    if (!membership) {
+      throw new Error("forbidden_chat_access");
+    }
+    if (!this.canReviewJoinRequests(membership.role)) {
+      throw new Error("group_join_request_review_not_allowed");
+    }
+    const rows = await prismaChatJoinRequest.findMany({
+      where: { chatId, status: "PENDING" },
+      orderBy: { createdAt: "asc" },
+      select: {
+        id: true,
+        createdAt: true,
+        status: true,
+        user: {
+          select: {
+            id: true,
+            displayName: true,
+            username: true,
+            phone: true,
+            avatarUrl: true
+          }
+        }
+      }
+    });
+    return rows.map((row: any) => ({
+      id: row.id,
+      userId: row.user.id,
+      displayName: row.user.displayName,
+      username: row.user.username,
+      phone: row.user.phone,
+      avatarKey: row.user.avatarUrl,
+      createdAt: row.createdAt.toISOString(),
+      status: row.status
+    }));
+  }
+
+  async reviewJoinRequest(input: {
+    chatId: string;
+    requestId: string;
+    requesterUserId: string;
+    approve: boolean;
+  }): Promise<{
+    participantIds: string[];
+    detail: ChatDetail | null;
+    systemMessage: ChatMessage | null;
+  }> {
+    const chat = await this.getChatMeta(input.chatId);
+    if (!chat || chat.type !== ChatType.GROUP) {
+      throw new Error("group_not_found");
+    }
+    const membership = await this.getMembershipState(input.chatId, input.requesterUserId);
+    if (!membership) {
+      throw new Error("forbidden_chat_access");
+    }
+    if (!this.canReviewJoinRequests(membership.role)) {
+      throw new Error("group_join_request_review_not_allowed");
+    }
+
+    const request = await prismaChatJoinRequest.findFirst({
+      where: {
+        id: input.requestId,
+        chatId: input.chatId,
+        status: "PENDING"
+      },
+      select: {
+        id: true,
+        userId: true,
+        user: {
+          select: {
+            displayName: true
+          }
+        }
+      }
+    });
+    if (!request) {
+      throw new Error("group_join_request_not_found");
+    }
+
+    if (input.approve) {
+      if (await this.getActiveBan(input.chatId, request.userId)) {
+        throw new Error("group_join_banned");
+      }
+      const count = await prisma.chatMember.count({ where: { chatId: input.chatId } });
+      if (count + 1 > GROUP_MEMBER_LIMIT) {
+        throw new Error("group_member_limit_exceeded");
+      }
+      await prisma.$transaction([
+        prismaChatJoinRequest.update({
+          where: { id: request.id },
+          data: {
+            status: "APPROVED",
+            reviewedAt: new Date(),
+            reviewedByUserId: input.requesterUserId
+          }
+        }),
+        prisma.chatMember.create({
+          data: {
+            chatId: input.chatId,
+            userId: request.userId,
+            role: ChatMemberRole.MEMBER,
+            canSend: true,
+            addedByUserId: input.requesterUserId,
+            joinedVia: "request"
+          }
+        })
+      ]);
+      const systemMessage = await this.createSystemMessage({
+        chatId: input.chatId,
+        senderId: input.requesterUserId,
+        systemType: GROUP_JOIN_REQUEST_APPROVED_SYSTEM_TYPE,
+        systemPayload: {
+          memberDisplayName: request.user.displayName?.trim() || "Yeni üye"
+        }
+      });
+      return {
+        participantIds: await this.getChatParticipantIds(input.chatId),
+        detail: await this.getGroupDetail(input.chatId, request.userId),
+        systemMessage
+      };
+    }
+
+    await prismaChatJoinRequest.update({
+      where: { id: request.id },
+      data: {
+        status: "REJECTED",
+        reviewedAt: new Date(),
+        reviewedByUserId: input.requesterUserId
+      }
+    });
+    return {
+      participantIds: await this.getChatParticipantIds(input.chatId),
+      detail: null,
+      systemMessage: null
+    };
+  }
+
+  async muteGroupMember(input: {
+    chatId: string;
+    requesterUserId: string;
+    memberUserId: string;
+    duration: "1_HOUR" | "24_HOURS" | "PERMANENT";
+    reason?: string | null;
+  }): Promise<{
+    participantIds: string[];
+    systemMessage: ChatMessage;
+  }> {
+    if (input.requesterUserId === input.memberUserId) {
+      throw new Error("group_member_mute_not_allowed");
+    }
+    const [requesterMembership, targetMembership, targetUser] = await Promise.all([
+      this.getMembershipState(input.chatId, input.requesterUserId),
+      this.getMembershipState(input.chatId, input.memberUserId),
+      prismaUser.findUnique({
+        where: { id: input.memberUserId },
+        select: { displayName: true }
+      })
+    ]);
+    if (!requesterMembership) {
+      throw new Error("forbidden_chat_access");
+    }
+    if (!targetMembership) {
+      throw new Error("group_member_not_found");
+    }
+    if (
+      !this.canRemoveMember({
+        requesterRole: requesterMembership.role,
+        targetRole: targetMembership.role
+      })
+    ) {
+      throw new Error("group_member_mute_not_allowed");
+    }
+
+    const now = new Date();
+    const mutedUntil =
+      input.duration === "1_HOUR"
+        ? new Date(now.getTime() + 60 * 60 * 1000)
+        : input.duration === "24_HOURS"
+        ? new Date(now.getTime() + 24 * 60 * 60 * 1000)
+        : null;
+    await prismaChatMute.updateMany({
+      where: {
+        chatId: input.chatId,
+        userId: input.memberUserId,
+        revokedAt: null
+      },
+      data: { revokedAt: now }
+    });
+    await prismaChatMute.create({
+      data: {
+        chatId: input.chatId,
+        userId: input.memberUserId,
+        mutedByUserId: input.requesterUserId,
+        reason: input.reason?.trim() || null,
+        mutedUntil
+      }
+    });
+    const systemMessage = await this.createSystemMessage({
+      chatId: input.chatId,
+      senderId: input.requesterUserId,
+      systemType: GROUP_MEMBER_MUTED_SYSTEM_TYPE,
+      systemPayload: {
+        memberDisplayName: targetUser?.displayName?.trim() || "Bir üye",
+        mutedUntil: mutedUntil ? mutedUntil.toISOString() : null
+      }
+    });
+    return {
+      participantIds: await this.getChatParticipantIds(input.chatId),
+      systemMessage
+    };
+  }
+
+  async unmuteGroupMember(input: {
+    chatId: string;
+    requesterUserId: string;
+    memberUserId: string;
+  }): Promise<{
+    participantIds: string[];
+    systemMessage: ChatMessage;
+  }> {
+    const [requesterMembership, targetMembership, targetUser] = await Promise.all([
+      this.getMembershipState(input.chatId, input.requesterUserId),
+      this.getMembershipState(input.chatId, input.memberUserId),
+      prismaUser.findUnique({
+        where: { id: input.memberUserId },
+        select: { displayName: true }
+      })
+    ]);
+    if (!requesterMembership) {
+      throw new Error("forbidden_chat_access");
+    }
+    if (!targetMembership) {
+      throw new Error("group_member_not_found");
+    }
+    if (
+      !this.canRemoveMember({
+        requesterRole: requesterMembership.role,
+        targetRole: targetMembership.role
+      })
+    ) {
+      throw new Error("group_member_mute_not_allowed");
+    }
+    await prismaChatMute.updateMany({
+      where: {
+        chatId: input.chatId,
+        userId: input.memberUserId,
+        revokedAt: null
+      },
+      data: { revokedAt: new Date() }
+    });
+    const systemMessage = await this.createSystemMessage({
+      chatId: input.chatId,
+      senderId: input.requesterUserId,
+      systemType: GROUP_MEMBER_UNMUTED_SYSTEM_TYPE,
+      systemPayload: {
+        memberDisplayName: targetUser?.displayName?.trim() || "Bir üye"
+      }
+    });
+    return {
+      participantIds: await this.getChatParticipantIds(input.chatId),
+      systemMessage
+    };
+  }
+
+  async listGroupMutes(
+    chatId: string,
+    requesterUserId: string
+  ): Promise<ChatMuteSummary[]> {
+    const membership = await this.getMembershipState(chatId, requesterUserId);
+    if (!membership) {
+      throw new Error("forbidden_chat_access");
+    }
+    if (!this.isEditorOrAbove(membership.role)) {
+      throw new Error("group_member_mute_not_allowed");
+    }
+    const rows = await prismaChatMute.findMany({
+      where: {
+        chatId,
+        revokedAt: null,
+        OR: [{ mutedUntil: null }, { mutedUntil: { gt: new Date() } }]
+      },
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        reason: true,
+        mutedUntil: true,
+        createdAt: true,
+        user: {
+          select: {
+            id: true,
+            displayName: true,
+            username: true,
+            avatarUrl: true
+          }
+        }
+      }
+    });
+    return rows.map((row: any) => ({
+      id: row.id,
+      userId: row.user.id,
+      displayName: row.user.displayName,
+      username: row.user.username,
+      avatarKey: row.user.avatarUrl,
+      reason: row.reason ?? null,
+      mutedUntil: row.mutedUntil ? row.mutedUntil.toISOString() : null,
+      createdAt: row.createdAt.toISOString()
+    }));
+  }
+
+  async banGroupMember(input: {
+    chatId: string;
+    requesterUserId: string;
+    memberUserId: string;
+    reason?: string | null;
+  }): Promise<{
+    remainingParticipantIds: string[];
+    notifyUserIds: string[];
+    systemMessage: ChatMessage;
+  }> {
+    if (input.requesterUserId === input.memberUserId) {
+      throw new Error("group_member_ban_not_allowed");
+    }
+    const [requesterMembership, targetMembership, targetUser] = await Promise.all([
+      this.getMembershipState(input.chatId, input.requesterUserId),
+      this.getMembershipState(input.chatId, input.memberUserId),
+      prismaUser.findUnique({
+        where: { id: input.memberUserId },
+        select: { displayName: true }
+      })
+    ]);
+    if (!requesterMembership) {
+      throw new Error("forbidden_chat_access");
+    }
+    if (!targetMembership) {
+      throw new Error("group_member_not_found");
+    }
+    if (
+      !this.canBanMembers(requesterMembership.role) ||
+      !this.canRemoveMember({
+        requesterRole: requesterMembership.role,
+        targetRole: targetMembership.role
+      })
+    ) {
+      throw new Error("group_member_ban_not_allowed");
+    }
+
+    const participantIdsBefore = await this.getChatParticipantIds(input.chatId);
+    await prisma.$transaction([
+      prisma.chatMember.delete({
+        where: {
+          chatId_userId: {
+            chatId: input.chatId,
+            userId: input.memberUserId
+          }
+        }
+      }),
+      prismaChatMute.updateMany({
+        where: {
+          chatId: input.chatId,
+          userId: input.memberUserId,
+          revokedAt: null
+        },
+        data: { revokedAt: new Date() }
+      }),
+      prismaChatJoinRequest.updateMany({
+        where: {
+          chatId: input.chatId,
+          userId: input.memberUserId,
+          status: "PENDING"
+        },
+        data: {
+          status: "REJECTED",
+          reviewedAt: new Date(),
+          reviewedByUserId: input.requesterUserId
+        }
+      }),
+      prismaChatBan.create({
+        data: {
+          chatId: input.chatId,
+          userId: input.memberUserId,
+          bannedByUserId: input.requesterUserId,
+          reason: input.reason?.trim() || null
+        }
+      })
+    ]);
+    const systemMessage = await this.createSystemMessage({
+      chatId: input.chatId,
+      senderId: input.requesterUserId,
+      systemType: GROUP_MEMBER_BANNED_SYSTEM_TYPE,
+      systemPayload: {
+        memberDisplayName: targetUser?.displayName?.trim() || "Bir üye"
+      }
+    });
+    return {
+      remainingParticipantIds: participantIdsBefore.filter(
+        (participantId) => participantId !== input.memberUserId
+      ),
+      notifyUserIds: participantIdsBefore,
+      systemMessage
+    };
+  }
+
+  async unbanGroupMember(input: {
+    chatId: string;
+    requesterUserId: string;
+    bannedUserId: string;
+  }): Promise<{
+    participantIds: string[];
+    systemMessage: ChatMessage;
+  }> {
+    const membership = await this.getMembershipState(input.chatId, input.requesterUserId);
+    if (!membership) {
+      throw new Error("forbidden_chat_access");
+    }
+    if (!this.canBanMembers(membership.role)) {
+      throw new Error("group_member_ban_not_allowed");
+    }
+    const existing = await prismaChatBan.findFirst({
+      where: {
+        chatId: input.chatId,
+        userId: input.bannedUserId,
+        revokedAt: null
+      },
+      select: { id: true }
+    });
+    if (!existing) {
+      throw new Error("group_ban_not_found");
+    }
+    await prismaChatBan.update({
+      where: { id: existing.id },
+      data: { revokedAt: new Date() }
+    });
+    const targetUser = await prismaUser.findUnique({
+      where: { id: input.bannedUserId },
+      select: { displayName: true }
+    });
+    const systemMessage = await this.createSystemMessage({
+      chatId: input.chatId,
+      senderId: input.requesterUserId,
+      systemType: GROUP_MEMBER_UNBANNED_SYSTEM_TYPE,
+      systemPayload: {
+        memberDisplayName: targetUser?.displayName?.trim() || "Bir üye"
+      }
+    });
+    return {
+      participantIds: await this.getChatParticipantIds(input.chatId),
+      systemMessage
+    };
+  }
+
+  async listGroupBans(
+    chatId: string,
+    requesterUserId: string
+  ): Promise<ChatBanSummary[]> {
+    const membership = await this.getMembershipState(chatId, requesterUserId);
+    if (!membership) {
+      throw new Error("forbidden_chat_access");
+    }
+    if (!this.canBanMembers(membership.role)) {
+      throw new Error("group_member_ban_not_allowed");
+    }
+    const rows = await prismaChatBan.findMany({
+      where: {
+        chatId,
+        revokedAt: null
+      },
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        reason: true,
+        createdAt: true,
+        user: {
+          select: {
+            id: true,
+            displayName: true,
+            username: true,
+            avatarUrl: true
+          }
+        }
+      }
+    });
+    return rows.map((row: any) => ({
+      id: row.id,
+      userId: row.user.id,
+      displayName: row.user.displayName,
+      username: row.user.username,
+      avatarKey: row.user.avatarUrl,
+      reason: row.reason ?? null,
+      createdAt: row.createdAt.toISOString()
+    }));
+  }
+
   async listGroupMembers(
     chatId: string,
     requesterUserId: string,
@@ -1959,6 +2934,29 @@ export class ChatService {
         }
       })
     ]);
+    const muteRows = await prismaChatMute.findMany({
+      where: {
+        chatId,
+        userId: { in: members.map((member: any) => member.userId) },
+        revokedAt: null,
+        OR: [{ mutedUntil: null }, { mutedUntil: { gt: new Date() } }]
+      },
+      orderBy: { createdAt: "desc" },
+      select: {
+        userId: true,
+        mutedUntil: true,
+        reason: true
+      }
+    });
+    const muteMap = new Map<string, { mutedUntil: Date | null; reason: string | null }>();
+    for (const row of muteRows as Array<any>) {
+      if (!muteMap.has(row.userId)) {
+        muteMap.set(row.userId, {
+          mutedUntil: row.mutedUntil ?? null,
+          reason: row.reason ?? null
+        });
+      }
+    }
 
     return {
       items: members.map((member: any) => ({
@@ -1971,7 +2969,10 @@ export class ChatService {
         role: member.role,
         canSend: member.canSend === true,
         joinedAt: member.joinedAt.toISOString(),
-        lastSeenAt: member.user.lastSeenAt ? member.user.lastSeenAt.toISOString() : null
+        lastSeenAt: member.user.lastSeenAt ? member.user.lastSeenAt.toISOString() : null,
+        isMuted: muteMap.has(member.userId),
+        mutedUntil: muteMap.get(member.userId)?.mutedUntil?.toISOString() ?? null,
+        muteReason: muteMap.get(member.userId)?.reason ?? null
       })),
       totalCount,
       hasMore: offset + members.length < totalCount
