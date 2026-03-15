@@ -4367,60 +4367,76 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     final title = (payload['title'] ?? '').toString().trim();
     final text = (payload['text'] ?? msg.text).toString().trim();
     final colors = _adminNoticeColors(msg);
+    final hasTitle = title.isNotEmpty;
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.symmetric(vertical: 7),
       child: Center(
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 320),
+          constraints: const BoxConstraints(maxWidth: 304),
           child: Container(
-            width: double.infinity,
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+            padding: const EdgeInsets.fromLTRB(14, 11, 14, 11),
             decoration: BoxDecoration(
               color: colors.background,
-              borderRadius: BorderRadius.circular(18),
+              borderRadius: BorderRadius.circular(16),
               border: Border.all(color: colors.border),
             ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
+            child: Row(
+              crossAxisAlignment: hasTitle
+                  ? CrossAxisAlignment.start
+                  : CrossAxisAlignment.center,
               children: [
                 Container(
-                  width: 34,
-                  height: 34,
+                  width: 26,
+                  height: 26,
                   decoration: BoxDecoration(
                     color: colors.foreground.withValues(alpha: 0.12),
                     shape: BoxShape.circle,
                   ),
                   child: Icon(
                     _adminNoticeIcon(msg),
-                    size: 18,
+                    size: 14,
                     color: colors.foreground,
                   ),
                 ),
-                if (title.isNotEmpty) ...[
-                  const SizedBox(height: 10),
-                  Text(
-                    title,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 13.5,
-                      fontWeight: FontWeight.w700,
-                      color: colors.foreground,
-                    ),
-                  ),
-                ],
-                if (text.isNotEmpty) ...[
-                  SizedBox(height: title.isNotEmpty ? 6 : 10),
-                  Text(
-                    text,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 12.8,
-                      height: 1.35,
-                      fontWeight: FontWeight.w500,
-                      color: colors.foreground,
-                    ),
-                  ),
-                ],
+                const SizedBox(width: 9),
+                Expanded(
+                  child: hasTitle
+                      ? Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              title,
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                                color: colors.foreground,
+                              ),
+                            ),
+                            if (text.isNotEmpty) ...[
+                              const SizedBox(height: 2),
+                              Text(
+                                text,
+                                style: TextStyle(
+                                  fontSize: 12.35,
+                                  height: 1.3,
+                                  fontWeight: FontWeight.w500,
+                                  color: colors.foreground,
+                                ),
+                              ),
+                            ],
+                          ],
+                        )
+                      : Text(
+                          text.isNotEmpty ? text : 'Bilgi notu',
+                          style: TextStyle(
+                            fontSize: 12.35,
+                            height: 1.28,
+                            fontWeight: FontWeight.w600,
+                            color: colors.foreground,
+                          ),
+                        ),
+                ),
               ],
             ),
           ),
