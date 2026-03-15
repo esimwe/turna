@@ -260,6 +260,8 @@ model ChatMember {
   clearedAt DateTime?
   archivedAt DateTime?
   muted     Boolean  @default(false)
+  favorited Boolean  @default(false)
+  locked    Boolean  @default(false)
   folderId  String?
 
   chat      Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
@@ -271,6 +273,8 @@ model ChatMember {
   @@index([userId, hiddenAt])
   @@index([userId, clearedAt])
   @@index([userId, archivedAt])
+  @@index([userId, favorited])
+  @@index([userId, locked])
   @@index([userId, folderId])
 }
 
