@@ -294,34 +294,70 @@ TurnaUserProfile buildTurnaSelfProfileFromSession(
   );
 }
 
+String? normalizeTurnaCommunityAccessRole(String? value) {
+  final normalized = value?.trim();
+  if (normalized == null || normalized.isEmpty) return null;
+  return normalized;
+}
+
+bool hasTurnaCommunityInternalAccess({TurnaUserProfile? profile}) {
+  return normalizeTurnaCommunityAccessRole(profile?.communityRole) != null;
+}
+
 class TurnaProfileLocalCache {
   static const String _selfProfileKey = 'turna_profile_me_v1';
+  static TurnaUserProfile? _warmSelfProfile;
+
+  static TurnaUserProfile? peekSelfProfile(AuthSession session) {
+    final warm = _warmSelfProfile;
+    if (warm != null && warm.id == session.userId) {
+      return buildTurnaSelfProfileFromSession(session, previous: warm);
+    }
+    final userWarm = TurnaUserProfileLocalCache.peek(session.userId);
+    if (userWarm != null && userWarm.id == session.userId) {
+      return buildTurnaSelfProfileFromSession(session, previous: userWarm);
+    }
+    return buildTurnaSelfProfileFromSession(session);
+  }
 
   static Future<TurnaUserProfile?> loadSelfProfile(AuthSession session) async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_selfProfileKey);
     if (raw == null || raw.trim().isEmpty) {
-      return buildTurnaSelfProfileFromSession(session);
+      final fallback = buildTurnaSelfProfileFromSession(session);
+      _warmSelfProfile = fallback;
+      return fallback;
     }
     try {
       final decoded = jsonDecode(raw) as Map<String, dynamic>;
       final cached = TurnaUserProfile.fromMap(decoded);
       if (cached.id != session.userId) {
-        return buildTurnaSelfProfileFromSession(session);
+        final fallback = buildTurnaSelfProfileFromSession(session);
+        _warmSelfProfile = fallback;
+        return fallback;
       }
-      return buildTurnaSelfProfileFromSession(session, previous: cached);
+      final merged = buildTurnaSelfProfileFromSession(
+        session,
+        previous: cached,
+      );
+      _warmSelfProfile = merged;
+      return merged;
     } catch (_) {
-      return buildTurnaSelfProfileFromSession(session);
+      final fallback = buildTurnaSelfProfileFromSession(session);
+      _warmSelfProfile = fallback;
+      return fallback;
     }
   }
 
   static Future<void> saveSelfProfile(TurnaUserProfile profile) async {
     final prefs = await SharedPreferences.getInstance();
+    _warmSelfProfile = profile;
     await prefs.setString(_selfProfileKey, jsonEncode(profile.toMap()));
   }
 
   static Future<void> clearSelfProfile() async {
     final prefs = await SharedPreferences.getInstance();
+    _warmSelfProfile = null;
     await prefs.remove(_selfProfileKey);
   }
 }

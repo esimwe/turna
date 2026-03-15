@@ -131,18 +131,24 @@ class _TurnaShellHostState extends State<TurnaShellHost>
   final GlobalKey<_MainTabsState> _mainTabsKey = GlobalKey<_MainTabsState>();
   TurnaShellMode _mode = TurnaShellMode.turna;
   DateTime? _communityTapLockedUntil;
+  TurnaUserProfile? _communityAccessProfile;
   bool _appLockEnabled = false;
   bool _appLockReady = false;
   bool _appLockBusy = false;
   bool _appUnlocked = true;
   bool _needsAppRelock = false;
+  bool _communityPreviewModalOpen = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     kTurnaAppLockEnabledNotifier.addListener(_handleAppLockPreferenceChanged);
+    _communityAccessProfile = TurnaProfileLocalCache.peekSelfProfile(
+      widget.session,
+    );
     unawaited(_loadAppLockPreference());
+    unawaited(_loadCommunityAccessProfile());
   }
 
   @override
@@ -152,6 +158,18 @@ class _TurnaShellHostState extends State<TurnaShellHost>
       _handleAppLockPreferenceChanged,
     );
     super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant TurnaShellHost oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.session.userId != widget.session.userId ||
+        oldWidget.session.username != widget.session.username) {
+      _communityAccessProfile = TurnaProfileLocalCache.peekSelfProfile(
+        widget.session,
+      );
+      unawaited(_loadCommunityAccessProfile());
+    }
   }
 
   Future<void> _loadAppLockPreference() async {
@@ -166,6 +184,107 @@ class _TurnaShellHostState extends State<TurnaShellHost>
     if (enabled) {
       unawaited(_promptAppUnlock());
     }
+  }
+
+  Future<void> _loadCommunityAccessProfile() async {
+    final profile = await TurnaProfileLocalCache.loadSelfProfile(
+      widget.session,
+    );
+    if (!mounted || profile == null) return;
+    setState(() {
+      _communityAccessProfile = profile;
+    });
+  }
+
+  TurnaUserProfile? get _communityEntryProfile {
+    return TurnaProfileLocalCache.peekSelfProfile(widget.session) ??
+        _communityAccessProfile;
+  }
+
+  bool get _canEnterCommunity {
+    return hasTurnaCommunityInternalAccess(profile: _communityEntryProfile);
+  }
+
+  Future<void> _showCommunityPreviewModal() async {
+    if (!mounted || _communityPreviewModalOpen) return;
+    _communityPreviewModalOpen = true;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return PopScope(
+          canPop: false,
+          child: Dialog(
+            backgroundColor: const Color(0xFFF6EBDD),
+            surfaceTintColor: Colors.transparent,
+            insetPadding: const EdgeInsets.symmetric(
+              horizontal: 24,
+              vertical: 24,
+            ),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(28),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(24, 24, 24, 20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 54,
+                    height: 54,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEBD9C2),
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    alignment: Alignment.center,
+                    child: const Text('🌿', style: TextStyle(fontSize: 24)),
+                  ),
+                  const SizedBox(height: 18),
+                  const Text(
+                    'Community hazirlaniyor',
+                    style: TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF2A241C),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  const Text(
+                    'Community su an duzenleme ve test asamasinda. Cok yakinda kullanima sunulacak.',
+                    style: TextStyle(
+                      fontSize: 14,
+                      height: 1.5,
+                      color: Color(0xFF5F5446),
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton(
+                      onPressed: () => Navigator.of(dialogContext).pop(),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: const Color(0xFF2E261F),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 15),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(18),
+                        ),
+                      ),
+                      child: const Text('Tamam'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+    _communityPreviewModalOpen = false;
+    if (!mounted) return;
+    _mainTabsKey.currentState?.focusChatsTab();
+    _openTurna();
   }
 
   void _handleAppLockPreferenceChanged() {
@@ -246,8 +365,17 @@ class _TurnaShellHostState extends State<TurnaShellHost>
       turnaLog('shell community ignored', {'reason': 'already_community'});
       return;
     }
-    turnaLog('shell open community', {'from': _mode.name});
+    turnaLog('shell open community', {
+      'from': _mode.name,
+      'hasPreviewAccess': _canEnterCommunity,
+      'communityRole': _communityEntryProfile?.communityRole,
+    });
     setState(() => _mode = TurnaShellMode.community);
+    if (!_canEnterCommunity) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        unawaited(_showCommunityPreviewModal());
+      });
+    }
   }
 
   void _openTurna() {
@@ -639,6 +767,15 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
     } finally {
       _openingProfileFromCommunity = false;
     }
+  }
+
+  void focusChatsTab() {
+    if (!mounted) return;
+    if (_index == 3 && _visitedTabs.contains(3)) return;
+    setState(() {
+      _index = 3;
+      _visitedTabs.add(3);
+    });
   }
 
   @override
