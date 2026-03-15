@@ -4246,8 +4246,21 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     return systemType.isNotEmpty;
   }
 
+  bool _isAdminNoticeMessage(ChatMessage msg) {
+    final systemType = (msg.systemType ?? '').trim();
+    return systemType == 'admin_notice' || systemType == 'admin_notice_silent';
+  }
+
   String _systemMessageText(ChatMessage msg) {
     switch ((msg.systemType ?? '').trim()) {
+      case 'admin_notice':
+      case 'admin_notice_silent':
+        final payload = msg.systemPayload ?? const <String, dynamic>{};
+        final title = (payload['title'] ?? '').toString().trim();
+        final text = (payload['text'] ?? msg.text).toString().trim();
+        return title.isNotEmpty
+            ? title
+            : (text.isNotEmpty ? text : 'Bilgi notu');
       case 'group_created':
         final creator = (msg.systemPayload?['createdByDisplayName'] ?? '')
             .toString()
@@ -4279,6 +4292,141 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       default:
         return msg.text.trim().isEmpty ? 'Sistem mesajı' : msg.text.trim();
     }
+  }
+
+  IconData _adminNoticeIcon(ChatMessage msg) {
+    final icon = (msg.systemPayload?['icon'] ?? '')
+        .toString()
+        .trim()
+        .toLowerCase();
+    switch (icon) {
+      case 'lock':
+        return Icons.lock_rounded;
+      case 'megaphone':
+        return Icons.campaign_rounded;
+      case 'shield':
+        return Icons.shield_moon_rounded;
+      case 'warning':
+        return Icons.warning_amber_rounded;
+      case 'sparkles':
+        return Icons.auto_awesome_rounded;
+      default:
+        return Icons.info_rounded;
+    }
+  }
+
+  ({Color background, Color border, Color foreground}) _adminNoticeColors(
+    ChatMessage msg,
+  ) {
+    final icon = (msg.systemPayload?['icon'] ?? '')
+        .toString()
+        .trim()
+        .toLowerCase();
+    switch (icon) {
+      case 'lock':
+        return (
+          background: const Color(0xFFFFF3D6),
+          border: const Color(0xFFF1D493),
+          foreground: const Color(0xFF6E5617),
+        );
+      case 'megaphone':
+        return (
+          background: const Color(0xFFEAF4FF),
+          border: const Color(0xFFB9D8FF),
+          foreground: const Color(0xFF245E9C),
+        );
+      case 'shield':
+        return (
+          background: const Color(0xFFEAF5EF),
+          border: const Color(0xFFB9DEC8),
+          foreground: const Color(0xFF2A6B47),
+        );
+      case 'warning':
+        return (
+          background: const Color(0xFFFFEFE5),
+          border: const Color(0xFFF5C9AF),
+          foreground: const Color(0xFF9B4A19),
+        );
+      case 'sparkles':
+        return (
+          background: const Color(0xFFF6EEFF),
+          border: const Color(0xFFD8C5F4),
+          foreground: const Color(0xFF69469D),
+        );
+      default:
+        return (
+          background: const Color(0xFFF1F4F8),
+          border: const Color(0xFFD6DEE8),
+          foreground: const Color(0xFF526271),
+        );
+    }
+  }
+
+  Widget _buildAdminNoticeBubble(ChatMessage msg) {
+    final payload = msg.systemPayload ?? const <String, dynamic>{};
+    final title = (payload['title'] ?? '').toString().trim();
+    final text = (payload['text'] ?? msg.text).toString().trim();
+    final colors = _adminNoticeColors(msg);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 320),
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+            decoration: BoxDecoration(
+              color: colors.background,
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: colors.border),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 34,
+                  height: 34,
+                  decoration: BoxDecoration(
+                    color: colors.foreground.withValues(alpha: 0.12),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    _adminNoticeIcon(msg),
+                    size: 18,
+                    color: colors.foreground,
+                  ),
+                ),
+                if (title.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  Text(
+                    title,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w700,
+                      color: colors.foreground,
+                    ),
+                  ),
+                ],
+                if (text.isNotEmpty) ...[
+                  SizedBox(height: title.isNotEmpty ? 6 : 10),
+                  Text(
+                    text,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 12.8,
+                      height: 1.35,
+                      fontWeight: FontWeight.w500,
+                      color: colors.foreground,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   String _displaySenderNameFor(ChatMessage msg) {
@@ -5344,6 +5492,10 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   }
 
   Widget _buildSystemMessageBubble(ChatMessage msg) {
+    if (_isAdminNoticeMessage(msg)) {
+      return _buildAdminNoticeBubble(msg);
+    }
+
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Center(
