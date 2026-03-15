@@ -68,6 +68,8 @@ export interface ChatSummary {
   isMuted: boolean;
   isBlockedByMe: boolean;
   isArchived: boolean;
+  isFavorited: boolean;
+  isLocked: boolean;
   folderId: string | null;
   folderName: string | null;
 }

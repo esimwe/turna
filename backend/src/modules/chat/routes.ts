@@ -123,6 +123,14 @@ const setChatArchivedSchema = z.object({
   archived: z.boolean()
 });
 
+const setChatFavoritedSchema = z.object({
+  favorited: z.boolean()
+});
+
+const setChatLockedSchema = z.object({
+  locked: z.boolean()
+});
+
 const setChatFolderSchema = z.object({
   folderId: z.string().trim().min(1).max(255).nullable()
 });
@@ -186,6 +194,8 @@ chatRouter.get("/", requireAuth, async (req, res) => {
       isMuted: chat.isMuted,
       isBlockedByMe: chat.isBlockedByMe,
       isArchived: chat.isArchived,
+      isFavorited: chat.isFavorited,
+      isLocked: chat.isLocked,
       folderId: chat.folderId,
       folderName: chat.folderName,
       avatarUrl:
@@ -437,6 +447,78 @@ chatRouter.post("/:chatId/archive", requireAuth, async (req, res) => {
     }
     logError("chat archive update failed", error);
     res.status(500).json({ error: "failed_to_update_chat_archive" });
+  }
+});
+
+chatRouter.post("/:chatId/favorite", requireAuth, async (req, res) => {
+  const parsedParams = chatIdParamSchema.safeParse(req.params);
+  const parsedBody = setChatFavoritedSchema.safeParse(req.body);
+  if (!parsedParams.success) {
+    res.status(400).json({
+      error: "validation_error",
+      details: parsedParams.error.flatten()
+    });
+    return;
+  }
+  if (!parsedBody.success) {
+    res.status(400).json({
+      error: "validation_error",
+      details: parsedBody.error.flatten()
+    });
+    return;
+  }
+
+  try {
+    const favorited = await chatService.setChatFavorited(
+      parsedParams.data.chatId,
+      req.authUserId!,
+      parsedBody.data.favorited
+    );
+    emitInboxUpdate([req.authUserId!]);
+    res.json({ data: { favorited } });
+  } catch (error) {
+    if (error instanceof Error && error.message === "forbidden_chat_access") {
+      res.status(403).json({ error: error.message });
+      return;
+    }
+    logError("chat favorite update failed", error);
+    res.status(500).json({ error: "failed_to_update_chat_favorite" });
+  }
+});
+
+chatRouter.post("/:chatId/lock", requireAuth, async (req, res) => {
+  const parsedParams = chatIdParamSchema.safeParse(req.params);
+  const parsedBody = setChatLockedSchema.safeParse(req.body);
+  if (!parsedParams.success) {
+    res.status(400).json({
+      error: "validation_error",
+      details: parsedParams.error.flatten()
+    });
+    return;
+  }
+  if (!parsedBody.success) {
+    res.status(400).json({
+      error: "validation_error",
+      details: parsedBody.error.flatten()
+    });
+    return;
+  }
+
+  try {
+    const locked = await chatService.setChatLocked(
+      parsedParams.data.chatId,
+      req.authUserId!,
+      parsedBody.data.locked
+    );
+    emitInboxUpdate([req.authUserId!]);
+    res.json({ data: { locked } });
+  } catch (error) {
+    if (error instanceof Error && error.message === "forbidden_chat_access") {
+      res.status(403).json({ error: error.message });
+      return;
+    }
+    logError("chat lock update failed", error);
+    res.status(500).json({ error: "failed_to_update_chat_lock" });
   }
 });
 

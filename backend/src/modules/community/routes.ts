@@ -1083,13 +1083,10 @@ async function toCommunityAttachmentDto(attachment: CommunityMessageAttachment) 
   try {
     url = await createCommunityObjectReadUrl(attachment.objectKey);
   } catch (error) {
-    if (
-      !(error instanceof Error) ||
-      (error.message !== "community_storage_not_configured" &&
-        error.message !== "storage_not_configured")
-    ) {
-      throw error;
-    }
+    logError("community attachment read url failed", {
+      objectKey: attachment.objectKey,
+      message: error instanceof Error ? error.message : String(error)
+    });
   }
 
   return {

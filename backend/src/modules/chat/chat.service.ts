@@ -200,6 +200,8 @@ export class ChatService {
     clearedAt: Date | null;
     archivedAt: Date | null;
     muted: boolean;
+    favorited: boolean;
+    locked: boolean;
     folderId: string | null;
   } | null> {
     return prisma.chatMember.findUnique({
@@ -209,6 +211,8 @@ export class ChatService {
         clearedAt: true,
         archivedAt: true,
         muted: true,
+        favorited: true,
+        locked: true,
         folderId: true
       }
     });
@@ -611,6 +615,8 @@ export class ChatService {
         clearedAt: true,
         archivedAt: true,
         muted: true,
+        favorited: true,
+        locked: true,
         folderId: true,
         folder: {
           select: {
@@ -681,6 +687,8 @@ export class ChatService {
           isMuted: membership.muted,
           isBlockedByMe: peer ? blockedPeerIds.has(peer.id) : false,
           isArchived: membership.archivedAt != null,
+          isFavorited: membership.favorited === true,
+          isLocked: membership.locked === true,
           folderId: membership.folderId,
           folderName: membership.folder?.name ?? null,
           joinedAt: membership.joinedAt
@@ -693,6 +701,9 @@ export class ChatService {
     );
 
     visibleItems.sort((a, b) => {
+      if (a.isFavorited != b.isFavorited) {
+        return a.isFavorited ? -1 : 1;
+      }
       const aTime = a.lastMessageAt ? new Date(a.lastMessageAt).getTime() : a.joinedAt.getTime();
       const bTime = b.lastMessageAt ? new Date(b.lastMessageAt).getTime() : b.joinedAt.getTime();
       return bTime - aTime;
@@ -919,6 +930,36 @@ export class ChatService {
       data: { muted }
     });
     return muted;
+  }
+
+  async setChatFavorited(chatId: string, userId: string, favorited: boolean): Promise<boolean> {
+    const hasAccess = await this.ensureChatAccess(chatId, userId);
+    if (!hasAccess) {
+      throw new Error("forbidden_chat_access");
+    }
+
+    await prisma.chatMember.update({
+      where: {
+        chatId_userId: { chatId, userId }
+      },
+      data: { favorited }
+    });
+    return favorited;
+  }
+
+  async setChatLocked(chatId: string, userId: string, locked: boolean): Promise<boolean> {
+    const hasAccess = await this.ensureChatAccess(chatId, userId);
+    if (!hasAccess) {
+      throw new Error("forbidden_chat_access");
+    }
+
+    await prisma.chatMember.update({
+      where: {
+        chatId_userId: { chatId, userId }
+      },
+      data: { locked }
+    });
+    return locked;
   }
 
   async setDirectChatBlocked(chatId: string, userId: string, blocked: boolean): Promise<boolean> {
