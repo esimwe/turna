@@ -132,6 +132,7 @@ class _TurnaShellHostState extends State<TurnaShellHost>
   TurnaShellMode _mode = TurnaShellMode.turna;
   DateTime? _communityTapLockedUntil;
   TurnaUserProfile? _communityAccessProfile;
+  bool _communityAccessRefreshBusy = false;
   bool _appLockEnabled = false;
   bool _appLockReady = false;
   bool _appLockBusy = false;
@@ -205,6 +206,32 @@ class _TurnaShellHostState extends State<TurnaShellHost>
     return hasTurnaCommunityInternalAccess(profile: _communityEntryProfile);
   }
 
+  Future<bool> _refreshCommunityAccessFromBackend() async {
+    if (_communityAccessRefreshBusy) {
+      return _canEnterCommunity;
+    }
+    _communityAccessRefreshBusy = true;
+    try {
+      final profile = await ProfileApi.fetchMe(widget.session);
+      if (!mounted) {
+        return hasTurnaCommunityInternalAccess(profile: profile);
+      }
+      setState(() {
+        _communityAccessProfile = profile;
+      });
+      return hasTurnaCommunityInternalAccess(profile: profile);
+    } on TurnaUnauthorizedException {
+      if (mounted) {
+        widget.onLogout();
+      }
+      return false;
+    } catch (_) {
+      return _canEnterCommunity;
+    } finally {
+      _communityAccessRefreshBusy = false;
+    }
+  }
+
   Future<void> _showCommunityPreviewModal() async {
     if (!mounted || _communityPreviewModalOpen) return;
     _communityPreviewModalOpen = true;
@@ -242,7 +269,7 @@ class _TurnaShellHostState extends State<TurnaShellHost>
                   ),
                   const SizedBox(height: 18),
                   const Text(
-                    'Community hazirlaniyor',
+                    'Community hazırlanıyor',
                     style: TextStyle(
                       fontSize: 22,
                       fontWeight: FontWeight.w700,
@@ -251,7 +278,7 @@ class _TurnaShellHostState extends State<TurnaShellHost>
                   ),
                   const SizedBox(height: 10),
                   const Text(
-                    'Community su an duzenleme ve test asamasinda. Cok yakinda kullanima sunulacak.',
+                    'Community şu an düzenleme ve test aşamasında. Çok yakında kullanıma sunulacak.',
                     style: TextStyle(
                       fontSize: 14,
                       height: 1.5,
@@ -350,7 +377,7 @@ class _TurnaShellHostState extends State<TurnaShellHost>
     }
   }
 
-  void _openCommunity() {
+  Future<void> _openCommunity() async {
     final now = DateTime.now();
     final lockedUntil = _communityTapLockedUntil;
     if (lockedUntil != null && now.isBefore(lockedUntil)) {
@@ -365,17 +392,27 @@ class _TurnaShellHostState extends State<TurnaShellHost>
       turnaLog('shell community ignored', {'reason': 'already_community'});
       return;
     }
+    if (!_canEnterCommunity) {
+      final refreshedAccess = await _refreshCommunityAccessFromBackend();
+      if (!mounted) return;
+      if (!refreshedAccess) {
+        turnaLog('shell community blocked by preview gate', {
+          'from': _mode.name,
+          'communityRole': _communityEntryProfile?.communityRole,
+        });
+        setState(() => _mode = TurnaShellMode.community);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          unawaited(_showCommunityPreviewModal());
+        });
+        return;
+      }
+    }
     turnaLog('shell open community', {
       'from': _mode.name,
       'hasPreviewAccess': _canEnterCommunity,
       'communityRole': _communityEntryProfile?.communityRole,
     });
     setState(() => _mode = TurnaShellMode.community);
-    if (!_canEnterCommunity) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        unawaited(_showCommunityPreviewModal());
-      });
-    }
   }
 
   void _openTurna() {
