@@ -127,6 +127,32 @@ class TurnaChatDetail {
   final bool joinApprovalRequired;
   final String memberAddPolicy;
 
+  TurnaChatDetail copyWith({
+    String? title,
+    String? description,
+    String? avatarUrl,
+    bool clearAvatarUrl = false,
+    int? memberCount,
+    String? myRole,
+    bool? isPublic,
+    bool? joinApprovalRequired,
+    String? memberAddPolicy,
+  }) {
+    return TurnaChatDetail(
+      chatId: chatId,
+      chatType: chatType,
+      title: title ?? this.title,
+      description: description ?? this.description,
+      avatarUrl: clearAvatarUrl ? null : (avatarUrl ?? this.avatarUrl),
+      createdByUserId: createdByUserId,
+      memberCount: memberCount ?? this.memberCount,
+      myRole: myRole ?? this.myRole,
+      isPublic: isPublic ?? this.isPublic,
+      joinApprovalRequired: joinApprovalRequired ?? this.joinApprovalRequired,
+      memberAddPolicy: memberAddPolicy ?? this.memberAddPolicy,
+    );
+  }
+
   factory TurnaChatDetail.fromMap(Map<String, dynamic> map) {
     return TurnaChatDetail(
       chatId: (map['chatId'] ?? '').toString(),
@@ -2968,6 +2994,95 @@ class ChatApi {
     }
   }
 
+  static Future<TurnaChatDetail> updateGroupDetail(
+    AuthSession session, {
+    required String chatId,
+    String? title,
+    String? description,
+    String? avatarObjectKey,
+    bool clearAvatar = false,
+  }) async {
+    try {
+      final res = await http.put(
+        Uri.parse('$kBackendBaseUrl/api/chats/$chatId'),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          ...?title == null ? null : {'title': title.trim()},
+          ...?description == null ? null : {'description': description.trim()},
+          ...?avatarObjectKey == null
+              ? null
+              : {'avatarObjectKey': avatarObjectKey},
+          if (clearAvatar) 'clearAvatar': true,
+        }),
+      );
+      _throwIfApiError(res);
+
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = map['data'] as Map<String, dynamic>? ?? const {};
+      final detail = TurnaChatDetail.fromMap(data);
+      await TurnaChatDetailLocalCache.save(session.userId, detail);
+      return detail;
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Grup bilgileri güncellenemedi.');
+    }
+  }
+
+  static Future<List<TurnaGroupMember>> addGroupMembers(
+    AuthSession session, {
+    required String chatId,
+    required List<String> memberUserIds,
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse('$kBackendBaseUrl/api/chats/$chatId/members'),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'memberUserIds': memberUserIds.map((item) => item.trim()).toList(),
+        }),
+      );
+      _throwIfApiError(res);
+
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = (map['data'] as List<dynamic>? ?? const []);
+      return data
+          .whereType<Map>()
+          .map(
+            (item) => TurnaGroupMember.fromMap(Map<String, dynamic>.from(item)),
+          )
+          .toList();
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Üyeler eklenemedi.');
+    }
+  }
+
+  static Future<void> removeGroupMember(
+    AuthSession session, {
+    required String chatId,
+    required String memberUserId,
+  }) async {
+    try {
+      final res = await http.delete(
+        Uri.parse('$kBackendBaseUrl/api/chats/$chatId/members/$memberUserId'),
+        headers: {'Authorization': 'Bearer ${session.token}'},
+      );
+      _throwIfApiError(res);
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Üye gruptan çıkarılamadı.');
+    }
+  }
+
   static Future<TurnaChatDetail> createGroup(
     AuthSession session, {
     required String title,
@@ -3013,6 +3128,20 @@ class ChatApi {
       rethrow;
     } catch (_) {
       throw TurnaApiException('Gruptan ayrılınamadı.');
+    }
+  }
+
+  static Future<void> closeGroup(AuthSession session, String chatId) async {
+    try {
+      final res = await http.delete(
+        Uri.parse('$kBackendBaseUrl/api/chats/$chatId'),
+        headers: {'Authorization': 'Bearer ${session.token}'},
+      );
+      _throwIfApiError(res);
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Grup kapatılamadı.');
     }
   }
 
