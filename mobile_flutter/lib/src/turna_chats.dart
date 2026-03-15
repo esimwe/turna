@@ -3186,6 +3186,60 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   String get _deletedMessagesKey =>
       'turna_deleted_messages_${widget.chat.chatId}';
 
+  bool _policyAllowsForCurrentUser(String policy, String role) {
+    final normalizedPolicy = policy.trim().toUpperCase();
+    final normalizedRole = role.trim().toUpperCase();
+    if (normalizedRole == 'OWNER') return true;
+    switch (normalizedPolicy) {
+      case 'EVERYONE':
+        return true;
+      case 'EDITOR_ONLY':
+        return normalizedRole == 'ADMIN' || normalizedRole == 'EDITOR';
+      case 'ADMIN_ONLY':
+        return normalizedRole == 'ADMIN';
+      default:
+        return false;
+    }
+  }
+
+  bool get _canCurrentUserSendInGroup {
+    if (!_isGroupChat) return true;
+    final detail = _cachedGroupDetail;
+    if (detail == null) return true;
+    if (detail.myIsMuted) return false;
+    if (detail.myCanSend != true) return false;
+    return _policyAllowsForCurrentUser(detail.whoCanSend, detail.myRole ?? '');
+  }
+
+  String? get _groupSendRestrictionText {
+    if (!_isGroupChat) return null;
+    final detail = _cachedGroupDetail;
+    if (detail == null || _canCurrentUserSendInGroup) return null;
+    if (detail.myIsMuted) {
+      if ((detail.myMutedUntil ?? '').trim().isNotEmpty) {
+        final until = parseTurnaLocalDateTime(detail.myMutedUntil!);
+        if (until != null) {
+          final hh = until.hour.toString().padLeft(2, '0');
+          final mm = until.minute.toString().padLeft(2, '0');
+          return 'Sessize alındın. ${until.day.toString().padLeft(2, '0')}.${until.month.toString().padLeft(2, '0')} $hh:$mm sonrasına kadar yazamazsın.';
+        }
+      }
+      return (detail.myMuteReason ?? '').trim().isNotEmpty
+          ? 'Sessize alındın. ${detail.myMuteReason!.trim()}'
+          : 'Sessize alındın. Bu grupta şu an mesaj gönderemezsin.';
+    }
+    switch ((detail.whoCanSend).trim().toUpperCase()) {
+      case 'OWNER_ONLY':
+        return 'Bu grupta şu an sadece sahip mesaj gönderebilir.';
+      case 'ADMIN_ONLY':
+        return 'Bu grupta şu an sadece adminler mesaj gönderebilir.';
+      case 'EDITOR_ONLY':
+        return 'Bu grupta şu an sadece editör ve üstü mesaj gönderebilir.';
+      default:
+        return 'Bu grupta mesaj gönderme iznin kapalı.';
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -3212,6 +3266,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     _loadPinnedMessage();
     _loadLocalMessageState();
     unawaited(_loadSecurityBannerState());
+    if (_isGroupChat) {
+      unawaited(_loadGroupDetail());
+    }
     if (!_isGroupChat) {
       _restorePeerCallHistoryFromWarmCache();
     }
@@ -3360,8 +3417,23 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     if (mounted) {
       setState(() {});
     }
+    if (mounted && _isGroupChat) {
+      unawaited(_loadGroupDetail());
+    }
     if (!mounted || shouldCloseRoom != true) return;
     Navigator.of(context).pop(true);
+  }
+
+  Future<void> _loadGroupDetail() async {
+    if (!_isGroupChat) return;
+    try {
+      await ChatApi.fetchChatDetail(widget.session, widget.chat.chatId);
+      if (!mounted) return;
+      setState(() {});
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (_) {}
   }
 
   Future<void> _startCall(TurnaCallType type) async {
@@ -4313,6 +4385,67 @@ class _ChatRoomPageState extends State<ChatRoomPage>
             : '$member gruptan çıkarıldı';
       case 'group_info_updated':
         return 'Grup bilgileri güncellendi';
+      case 'group_settings_updated':
+        return 'Grup ayarları güncellendi';
+      case 'group_role_updated':
+        final member = (msg.systemPayload?['memberDisplayName'] ?? '')
+            .toString()
+            .trim();
+        final role = (msg.systemPayload?['roleLabel'] ?? '').toString().trim();
+        if (member.isEmpty && role.isEmpty) {
+          return 'Üye rolü güncellendi';
+        }
+        if (member.isEmpty) {
+          return 'Rol $role olarak güncellendi';
+        }
+        if (role.isEmpty) {
+          return '$member rolü güncellendi';
+        }
+        return '$member artık $role';
+      case 'group_owner_transferred':
+        final member = (msg.systemPayload?['newOwnerDisplayName'] ?? '')
+            .toString()
+            .trim();
+        return member.isEmpty
+            ? 'Grup sahipliği devredildi'
+            : 'Grup sahipliği $member kişisine devredildi';
+      case 'group_join_request_created':
+        return 'Katılım isteği gönderildi';
+      case 'group_join_request_approved':
+        final member = (msg.systemPayload?['memberDisplayName'] ?? '')
+            .toString()
+            .trim();
+        return member.isEmpty
+            ? 'Katılım isteği onaylandı'
+            : '$member gruba kabul edildi';
+      case 'group_member_muted':
+        final member = (msg.systemPayload?['memberDisplayName'] ?? '')
+            .toString()
+            .trim();
+        return member.isEmpty
+            ? 'Bir üye sessize alındı'
+            : '$member sessize alındı';
+      case 'group_member_unmuted':
+        final member = (msg.systemPayload?['memberDisplayName'] ?? '')
+            .toString()
+            .trim();
+        return member.isEmpty
+            ? 'Sessiz kullanıcı kaldırıldı'
+            : '$member tekrar konuşabilir';
+      case 'group_member_banned':
+        final member = (msg.systemPayload?['memberDisplayName'] ?? '')
+            .toString()
+            .trim();
+        return member.isEmpty
+            ? 'Bir üye gruptan yasaklandı'
+            : '$member gruptan yasaklandı';
+      case 'group_member_unbanned':
+        final member = (msg.systemPayload?['memberDisplayName'] ?? '')
+            .toString()
+            .trim();
+        return member.isEmpty
+            ? 'Yasak kaldırıldı'
+            : '$member yasağı kaldırıldı';
       default:
         return msg.text.trim().isEmpty ? 'Sistem mesajı' : msg.text.trim();
     }
@@ -5973,144 +6106,176 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                         onClose: () => setState(() => _replyDraft = null),
                       ),
                     ),
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      IconButton(
-                        onPressed: _attachmentBusy
-                            ? null
-                            : _showAttachmentSheet,
-                        icon: _attachmentBusy
-                            ? const SizedBox(
-                                width: 18,
-                                height: 18,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : const Icon(Icons.add, size: 28),
-                        color: TurnaColors.textSoft,
+                  if (_groupSendRestrictionText != null)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 12,
                       ),
-                      Expanded(
-                        child: Container(
-                          constraints: const BoxConstraints(minHeight: 52),
-                          padding: const EdgeInsets.symmetric(horizontal: 8),
-                          decoration: BoxDecoration(
-                            color: TurnaColors.backgroundSoft,
-                            borderRadius: BorderRadius.circular(28),
-                            border: Border.all(
-                              color: focused
-                                  ? TurnaColors.primary
-                                  : TurnaColors.border,
-                              width: focused ? 1.4 : 1,
-                            ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: TurnaColors.primary.withValues(
-                                  alpha: focused ? 0.08 : 0.03,
-                                ),
-                                blurRadius: focused ? 16 : 8,
-                                offset: const Offset(0, 1.5),
-                              ),
-                            ],
+                      decoration: BoxDecoration(
+                        color: TurnaColors.backgroundMuted,
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(color: TurnaColors.border),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.lock_outline_rounded,
+                            color: TurnaColors.textMuted,
                           ),
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.end,
-                            children: [
-                              Expanded(
-                                child: TextField(
-                                  controller: _controller,
-                                  focusNode: _composerFocusNode,
-                                  minLines: 1,
-                                  maxLines: 5,
-                                  textCapitalization:
-                                      TextCapitalization.sentences,
-                                  decoration: InputDecoration(
-                                    hintText: _editingDraft == null
-                                        ? 'Mesaj'
-                                        : 'Duzenlenmis mesaji yaz',
-                                    border: InputBorder.none,
-                                    contentPadding: const EdgeInsets.symmetric(
-                                      horizontal: 8,
-                                      vertical: 14,
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              _groupSendRestrictionText!,
+                              style: const TextStyle(
+                                color: TurnaColors.textSoft,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  else
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        IconButton(
+                          onPressed: _attachmentBusy
+                              ? null
+                              : _showAttachmentSheet,
+                          icon: _attachmentBusy
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.add, size: 28),
+                          color: TurnaColors.textSoft,
+                        ),
+                        Expanded(
+                          child: Container(
+                            constraints: const BoxConstraints(minHeight: 52),
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                            decoration: BoxDecoration(
+                              color: TurnaColors.backgroundSoft,
+                              borderRadius: BorderRadius.circular(28),
+                              border: Border.all(
+                                color: focused
+                                    ? TurnaColors.primary
+                                    : TurnaColors.border,
+                                width: focused ? 1.4 : 1,
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: TurnaColors.primary.withValues(
+                                    alpha: focused ? 0.08 : 0.03,
+                                  ),
+                                  blurRadius: focused ? 16 : 8,
+                                  offset: const Offset(0, 1.5),
+                                ),
+                              ],
+                            ),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                Expanded(
+                                  child: TextField(
+                                    controller: _controller,
+                                    focusNode: _composerFocusNode,
+                                    minLines: 1,
+                                    maxLines: 5,
+                                    textCapitalization:
+                                        TextCapitalization.sentences,
+                                    decoration: InputDecoration(
+                                      hintText: _editingDraft == null
+                                          ? 'Mesaj'
+                                          : 'Duzenlenmis mesaji yaz',
+                                      border: InputBorder.none,
+                                      contentPadding:
+                                          const EdgeInsets.symmetric(
+                                            horizontal: 8,
+                                            vertical: 14,
+                                          ),
                                     ),
                                   ),
                                 ),
-                              ),
-                              if (!_hasComposerText && _editingDraft == null)
-                                IconButton(
-                                  onPressed: _attachmentBusy
-                                      ? null
-                                      : _pickCameraImage,
-                                  icon: const Icon(Icons.camera_alt_outlined),
-                                  color: TurnaColors.textSoft,
-                                ),
-                            ],
+                                if (!_hasComposerText && _editingDraft == null)
+                                  IconButton(
+                                    onPressed: _attachmentBusy
+                                        ? null
+                                        : _pickCameraImage,
+                                    icon: const Icon(Icons.camera_alt_outlined),
+                                    color: TurnaColors.textSoft,
+                                  ),
+                              ],
+                            ),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 8),
-                      AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 160),
-                        child: _hasComposerText
-                            ? Container(
-                                key: const ValueKey('send'),
-                                width: 46,
-                                height: 46,
-                                decoration: const BoxDecoration(
-                                  color: TurnaColors.primary,
-                                  shape: BoxShape.circle,
-                                ),
-                                child: IconButton(
-                                  onPressed: _attachmentBusy
-                                      ? null
-                                      : _handleSendPressed,
-                                  icon: const Icon(Icons.send_rounded),
-                                  color: TurnaColors.surface,
-                                ),
-                              )
-                            : SizedBox(
-                                key: const ValueKey('mic'),
-                                width: 46,
-                                height: 46,
-                                child: GestureDetector(
-                                  behavior: HitTestBehavior.opaque,
-                                  onTap: _attachmentBusy
-                                      ? null
-                                      : _showVoiceMessageHint,
-                                  onLongPressStart: _attachmentBusy
-                                      ? null
-                                      : (_) =>
-                                            unawaited(_startVoiceRecording()),
-                                  child: Container(
-                                    key: _voiceMicKey,
-                                    width: 46,
-                                    height: 46,
-                                    decoration: BoxDecoration(
-                                      color: Colors.white,
-                                      shape: BoxShape.circle,
-                                      boxShadow: [
-                                        BoxShadow(
-                                          color: Colors.black.withValues(
-                                            alpha: 0.05,
+                        const SizedBox(width: 8),
+                        AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 160),
+                          child: _hasComposerText
+                              ? Container(
+                                  key: const ValueKey('send'),
+                                  width: 46,
+                                  height: 46,
+                                  decoration: const BoxDecoration(
+                                    color: TurnaColors.primary,
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: IconButton(
+                                    onPressed: _attachmentBusy
+                                        ? null
+                                        : _handleSendPressed,
+                                    icon: const Icon(Icons.send_rounded),
+                                    color: TurnaColors.surface,
+                                  ),
+                                )
+                              : SizedBox(
+                                  key: const ValueKey('mic'),
+                                  width: 46,
+                                  height: 46,
+                                  child: GestureDetector(
+                                    behavior: HitTestBehavior.opaque,
+                                    onTap: _attachmentBusy
+                                        ? null
+                                        : _showVoiceMessageHint,
+                                    onLongPressStart: _attachmentBusy
+                                        ? null
+                                        : (_) =>
+                                              unawaited(_startVoiceRecording()),
+                                    child: Container(
+                                      key: _voiceMicKey,
+                                      width: 46,
+                                      height: 46,
+                                      decoration: BoxDecoration(
+                                        color: Colors.white,
+                                        shape: BoxShape.circle,
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: Colors.black.withValues(
+                                              alpha: 0.05,
+                                            ),
+                                            blurRadius: 8,
+                                            offset: const Offset(0, 1),
                                           ),
-                                          blurRadius: 8,
-                                          offset: const Offset(0, 1),
-                                        ),
-                                      ],
-                                    ),
-                                    child: Icon(
-                                      Icons.mic_none_rounded,
-                                      color: _voiceRecorderBusy
-                                          ? TurnaColors.textMuted
-                                          : TurnaColors.textSoft,
+                                        ],
+                                      ),
+                                      child: Icon(
+                                        Icons.mic_none_rounded,
+                                        color: _voiceRecorderBusy
+                                            ? TurnaColors.textMuted
+                                            : TurnaColors.textSoft,
+                                      ),
                                     ),
                                   ),
                                 ),
-                              ),
-                      ),
-                    ],
-                  ),
+                        ),
+                      ],
+                    ),
                 ],
               ),
             ),
@@ -13128,23 +13293,44 @@ class _TurnaGroupInfoPageState extends State<_TurnaGroupInfoPage> {
   bool get _isOwner => _myRole == 'OWNER';
   bool get _isAdmin => _myRole == 'ADMIN';
   bool get _isEditor => _myRole == 'EDITOR';
-  bool get _canEditInfo => _isOwner || _isAdmin || _isEditor;
+  bool get _canOpenSettings => _isOwner || _isAdmin;
+  bool get _canManageRoles => _isOwner || _isAdmin;
+  bool get _canEditInfo =>
+      _policyAllows(_detail?.whoCanEditInfo ?? 'EDITOR_ONLY', _myRole);
   bool get _canCloseGroup => _isOwner;
-  bool get _canAddMembers {
-    if (_isOwner) return true;
-    final policy = (_detail?.memberAddPolicy ?? 'ADMIN_ONLY')
-        .trim()
-        .toUpperCase();
-    switch (policy) {
+  bool get _canAddMembers =>
+      _policyAllows(_detail?.whoCanAddMembers ?? 'ADMIN_ONLY', _myRole);
+
+  bool _policyAllows(String policy, String role) {
+    final normalizedPolicy = policy.trim().toUpperCase();
+    final normalizedRole = role.trim().toUpperCase();
+    if (normalizedRole == 'OWNER') return true;
+    switch (normalizedPolicy) {
       case 'EVERYONE':
         return true;
       case 'EDITOR_ONLY':
-        return _isAdmin || _isEditor;
+        return normalizedRole == 'ADMIN' || normalizedRole == 'EDITOR';
       case 'ADMIN_ONLY':
-        return _isAdmin;
+        return normalizedRole == 'ADMIN';
       default:
         return false;
     }
+  }
+
+  List<String> _availableRoleOptionsFor(TurnaGroupMember member) {
+    if (!_canManageRoles) return const <String>[];
+    final targetRole = member.role.trim().toUpperCase();
+    if (_isOwner) {
+      if (targetRole == 'OWNER') return const <String>[];
+      return const <String>['ADMIN', 'EDITOR', 'MEMBER'];
+    }
+    if (_isAdmin) {
+      if (targetRole == 'OWNER' || targetRole == 'ADMIN') {
+        return const <String>[];
+      }
+      return const <String>['EDITOR', 'MEMBER'];
+    }
+    return const <String>[];
   }
 
   String _formatLastSeen(String? iso) {
@@ -13182,6 +13368,26 @@ class _TurnaGroupInfoPageState extends State<_TurnaGroupInfoPage> {
     if (_isAdmin) return targetRole == 'EDITOR' || targetRole == 'MEMBER';
     if (_isEditor) return targetRole == 'MEMBER';
     return false;
+  }
+
+  bool _canBanMember(TurnaGroupMember member) {
+    if (member.userId == widget.session.userId) return false;
+    final targetRole = member.role.trim().toUpperCase();
+    if (_isOwner) return targetRole != 'OWNER';
+    if (_isAdmin) return targetRole == 'EDITOR' || targetRole == 'MEMBER';
+    return false;
+  }
+
+  String _formatMuteLabel(TurnaGroupMember member) {
+    if (!member.isMuted) return 'Sessize al';
+    if ((member.mutedUntil ?? '').trim().isEmpty) {
+      return 'Kalıcı sessizde';
+    }
+    final until = parseTurnaLocalDateTime(member.mutedUntil!);
+    if (until == null) return 'Sessizde';
+    final hh = until.hour.toString().padLeft(2, '0');
+    final mm = until.minute.toString().padLeft(2, '0');
+    return 'Sessizde • ${until.day.toString().padLeft(2, '0')}.${until.month.toString().padLeft(2, '0')} $hh:$mm';
   }
 
   Future<String?> _promptForText({
@@ -13473,6 +13679,272 @@ class _TurnaGroupInfoPageState extends State<_TurnaGroupInfoPage> {
       if (!mounted) return;
       setState(() => _error = error.toString());
     }
+  }
+
+  Future<void> _changeMemberRole(TurnaGroupMember member) async {
+    final options = _availableRoleOptionsFor(member);
+    if (options.isEmpty) return;
+    final nextRole = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (final role in options)
+                ListTile(
+                  leading: Icon(
+                    member.role.trim().toUpperCase() == role
+                        ? Icons.check_circle_rounded
+                        : Icons.shield_outlined,
+                  ),
+                  title: Text(_roleLabel(role)),
+                  onTap: () => Navigator.of(context).pop(role),
+                ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+    if (nextRole == null || nextRole == member.role.trim().toUpperCase()) {
+      return;
+    }
+
+    setState(() => _error = null);
+    try {
+      await ChatApi.updateGroupMemberRole(
+        widget.session,
+        chatId: widget.chat.chatId,
+        memberUserId: member.userId,
+        role: nextRole,
+      );
+      if (!mounted) return;
+      await _load(showLoading: false);
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = error.toString());
+    }
+  }
+
+  Future<void> _muteMember(TurnaGroupMember member) async {
+    if (!_canRemoveMember(member)) return;
+    final duration = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const ListTile(
+                title: Text(
+                  'Süreli mute seç',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.timelapse_rounded),
+                title: const Text('1 Saat'),
+                onTap: () => Navigator.of(context).pop('1_HOUR'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.today_outlined),
+                title: const Text('24 Saat'),
+                onTap: () => Navigator.of(context).pop('24_HOURS'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.block_outlined),
+                title: const Text('Kalıcı'),
+                onTap: () => Navigator.of(context).pop('PERMANENT'),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+    if (duration == null) return;
+    setState(() => _error = null);
+    try {
+      await ChatApi.muteGroupMember(
+        widget.session,
+        chatId: widget.chat.chatId,
+        memberUserId: member.userId,
+        duration: duration,
+      );
+      if (!mounted) return;
+      await _load(showLoading: false);
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = error.toString());
+    }
+  }
+
+  Future<void> _unmuteMember(TurnaGroupMember member) async {
+    if (!_canRemoveMember(member)) return;
+    setState(() => _error = null);
+    try {
+      await ChatApi.unmuteGroupMember(
+        widget.session,
+        chatId: widget.chat.chatId,
+        memberUserId: member.userId,
+      );
+      if (!mounted) return;
+      await _load(showLoading: false);
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = error.toString());
+    }
+  }
+
+  Future<void> _banMember(TurnaGroupMember member) async {
+    if (!_canBanMember(member)) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Üyeyi yasakla'),
+          content: Text(
+            '${member.displayName} kişisini gruptan yasaklamak istediğinize emin misiniz?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Vazgeç'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: TurnaColors.error,
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Yasakla'),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true) return;
+    setState(() => _error = null);
+    try {
+      await ChatApi.banGroupMember(
+        widget.session,
+        chatId: widget.chat.chatId,
+        memberUserId: member.userId,
+      );
+      if (!mounted) return;
+      await _load(showLoading: false);
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = error.toString());
+    }
+  }
+
+  Future<void> _openMemberModeration(TurnaGroupMember member) async {
+    final canRole = _availableRoleOptionsFor(member).isNotEmpty;
+    final canMute = _canRemoveMember(member);
+    final canBan = _canBanMember(member);
+    final canRemove = _canRemoveMember(member);
+    if (!canRole && !canMute && !canBan && !canRemove) return;
+
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (canRole)
+                ListTile(
+                  leading: const Icon(Icons.shield_outlined),
+                  title: const Text('Rolü değiştir'),
+                  onTap: () => Navigator.of(context).pop('role'),
+                ),
+              if (canMute)
+                ListTile(
+                  leading: Icon(
+                    member.isMuted
+                        ? Icons.volume_up_rounded
+                        : Icons.volume_off_rounded,
+                  ),
+                  title: Text(
+                    member.isMuted ? 'Sessizden çıkar' : 'Sessize al',
+                  ),
+                  subtitle: member.isMuted
+                      ? Text(_formatMuteLabel(member))
+                      : null,
+                  onTap: () => Navigator.of(
+                    context,
+                  ).pop(member.isMuted ? 'unmute' : 'mute'),
+                ),
+              if (canBan)
+                ListTile(
+                  leading: const Icon(Icons.gpp_bad_outlined),
+                  title: const Text('Yasakla'),
+                  onTap: () => Navigator.of(context).pop('ban'),
+                ),
+              if (canRemove)
+                ListTile(
+                  leading: const Icon(Icons.person_remove_alt_1_outlined),
+                  title: const Text('Gruptan çıkar'),
+                  onTap: () => Navigator.of(context).pop('remove'),
+                ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+    if (!mounted || action == null) return;
+    switch (action) {
+      case 'role':
+        await _changeMemberRole(member);
+        return;
+      case 'mute':
+        await _muteMember(member);
+        return;
+      case 'unmute':
+        await _unmuteMember(member);
+        return;
+      case 'ban':
+        await _banMember(member);
+        return;
+      case 'remove':
+        await _removeMember(member);
+        return;
+    }
+  }
+
+  Future<void> _openSettings() async {
+    if (!_canOpenSettings || _detail == null) return;
+    final changed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => _TurnaGroupSettingsPage(
+          session: widget.session,
+          chatId: widget.chat.chatId,
+          detail: _detail!,
+          members: _members,
+          onSessionExpired: widget.onSessionExpired,
+        ),
+      ),
+    );
+    if (!mounted || changed != true) return;
+    await _load(showLoading: false);
   }
 
   Future<void> _closeGroup() async {
@@ -13885,34 +14357,67 @@ class _TurnaGroupInfoPageState extends State<_TurnaGroupInfoPage> {
                             color: TurnaColors.textMuted,
                           ),
                         ),
+                        if (member.isMuted) ...[
+                          const SizedBox(height: 3),
+                          Text(
+                            _formatMuteLabel(member),
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: TurnaColors.error,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   ),
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 6,
-                        ),
-                        decoration: BoxDecoration(
-                          color: TurnaColors.backgroundMuted,
-                          borderRadius: BorderRadius.circular(999),
-                        ),
-                        child: Text(
-                          _roleLabel(member.role),
-                          style: const TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                            color: TurnaColors.textSoft,
+                      InkWell(
+                        onTap: _availableRoleOptionsFor(member).isEmpty
+                            ? null
+                            : () => _changeMemberRole(member),
+                        borderRadius: BorderRadius.circular(999),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: TurnaColors.backgroundMuted,
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                _roleLabel(member.role),
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                  color: TurnaColors.textSoft,
+                                ),
+                              ),
+                              if (_availableRoleOptionsFor(
+                                member,
+                              ).isNotEmpty) ...[
+                                const SizedBox(width: 4),
+                                const Icon(
+                                  Icons.expand_more_rounded,
+                                  size: 14,
+                                  color: TurnaColors.textMuted,
+                                ),
+                              ],
+                            ],
                           ),
                         ),
                       ),
-                      if (_canRemoveMember(member)) ...[
+                      if (_canRemoveMember(member) ||
+                          _canBanMember(member)) ...[
                         const SizedBox(height: 8),
                         InkWell(
-                          onTap: () => _removeMember(member),
+                          onTap: () => _openMemberModeration(member),
                           borderRadius: BorderRadius.circular(999),
                           child: const Padding(
                             padding: EdgeInsets.symmetric(
@@ -13920,9 +14425,9 @@ class _TurnaGroupInfoPageState extends State<_TurnaGroupInfoPage> {
                               vertical: 2,
                             ),
                             child: Text(
-                              'Çıkar',
+                              'Yönet',
                               style: TextStyle(
-                                color: TurnaColors.error,
+                                color: TurnaColors.primary,
                                 fontWeight: FontWeight.w700,
                               ),
                             ),
@@ -13967,7 +14472,17 @@ class _TurnaGroupInfoPageState extends State<_TurnaGroupInfoPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Grup Bilgisi')),
+      appBar: AppBar(
+        title: const Text('Grup Bilgisi'),
+        actions: [
+          if (_canOpenSettings)
+            IconButton(
+              tooltip: 'Grup ayarları',
+              onPressed: _openSettings,
+              icon: const Icon(Icons.settings_outlined),
+            ),
+        ],
+      ),
       body: _loading && _detail == null
           ? const Center(child: CircularProgressIndicator())
           : DefaultTabController(
@@ -14009,6 +14524,1268 @@ class _TurnaGroupInfoPageState extends State<_TurnaGroupInfoPage> {
                   ),
                 ],
               ),
+            ),
+    );
+  }
+}
+
+class _TurnaGroupSettingsPage extends StatefulWidget {
+  const _TurnaGroupSettingsPage({
+    required this.session,
+    required this.chatId,
+    required this.detail,
+    required this.members,
+    required this.onSessionExpired,
+  });
+
+  final AuthSession session;
+  final String chatId;
+  final TurnaChatDetail detail;
+  final List<TurnaGroupMember> members;
+  final VoidCallback onSessionExpired;
+
+  @override
+  State<_TurnaGroupSettingsPage> createState() =>
+      _TurnaGroupSettingsPageState();
+}
+
+class _TurnaGroupSettingsPageState extends State<_TurnaGroupSettingsPage> {
+  late TurnaChatDetail _detail;
+  late List<TurnaGroupMember> _members;
+  bool _saving = false;
+  bool _changed = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _detail = widget.detail;
+    _members = widget.members;
+  }
+
+  String get _myRole => (_detail.myRole ?? '').trim().toUpperCase();
+  bool get _isOwner => _myRole == 'OWNER';
+  bool get _isAdmin => _myRole == 'ADMIN';
+  bool get _canReviewRequests => _isOwner || _isAdmin;
+  bool get _canManageModeration => _isOwner || _isAdmin || _myRole == 'EDITOR';
+
+  void _closePage() {
+    Navigator.of(context).pop(_changed);
+  }
+
+  bool _policyAllows(String policy) {
+    switch (policy.trim().toUpperCase()) {
+      case 'EVERYONE':
+        return true;
+      case 'EDITOR_ONLY':
+        return _isOwner || _isAdmin || _myRole == 'EDITOR';
+      case 'ADMIN_ONLY':
+        return _isOwner || _isAdmin;
+      default:
+        return _isOwner;
+    }
+  }
+
+  String _policyLabel(String policy) {
+    switch (policy.trim().toUpperCase()) {
+      case 'OWNER_ONLY':
+        return 'Sadece sahip';
+      case 'ADMIN_ONLY':
+        return 'Sadece adminler';
+      case 'EDITOR_ONLY':
+        return 'Editör ve üstü';
+      default:
+        return 'Herkes';
+    }
+  }
+
+  Future<void> _applySettings({
+    bool? isPublic,
+    bool? joinApprovalRequired,
+    String? whoCanSend,
+    String? whoCanEditInfo,
+    String? whoCanInvite,
+    String? whoCanAddMembers,
+    bool? historyVisibleToNewMembers,
+  }) async {
+    if (_saving) return;
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      final detail = await ChatApi.updateGroupSettings(
+        widget.session,
+        chatId: widget.chatId,
+        isPublic: isPublic,
+        joinApprovalRequired: joinApprovalRequired,
+        whoCanSend: whoCanSend,
+        whoCanEditInfo: whoCanEditInfo,
+        whoCanInvite: whoCanInvite,
+        whoCanAddMembers: whoCanAddMembers,
+        historyVisibleToNewMembers: historyVisibleToNewMembers,
+      );
+      if (!mounted) return;
+      setState(() {
+        _detail = detail;
+        _saving = false;
+        _changed = true;
+      });
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _error = error.toString();
+      });
+    }
+  }
+
+  Future<void> _pickPrivacyMode() async {
+    final value = await showModalBottomSheet<bool>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: Icon(
+                  _detail.isPublic
+                      ? Icons.radio_button_checked_rounded
+                      : Icons.radio_button_unchecked_rounded,
+                ),
+                title: const Text('Açık grup'),
+                subtitle: const Text('Bağlantı veya katılım isteği ile büyür.'),
+                onTap: () => Navigator.of(context).pop(true),
+              ),
+              ListTile(
+                leading: Icon(
+                  !_detail.isPublic
+                      ? Icons.radio_button_checked_rounded
+                      : Icons.radio_button_unchecked_rounded,
+                ),
+                title: const Text('Özel grup'),
+                subtitle: const Text(
+                  'Sadece davet bağlantısı veya doğrudan ekleme ile girilir.',
+                ),
+                onTap: () => Navigator.of(context).pop(false),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+    if (value == null || value == _detail.isPublic) return;
+    await _applySettings(
+      isPublic: value,
+      joinApprovalRequired: value ? _detail.joinApprovalRequired : false,
+    );
+  }
+
+  Future<void> _openInviteLinks() async {
+    final changed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => _TurnaGroupInviteLinksPage(
+          session: widget.session,
+          chatId: widget.chatId,
+          onSessionExpired: widget.onSessionExpired,
+        ),
+      ),
+    );
+    if (changed == true && mounted) {
+      setState(() => _changed = true);
+    }
+  }
+
+  Future<void> _openJoinRequests() async {
+    final changed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => _TurnaGroupJoinRequestsPage(
+          session: widget.session,
+          chatId: widget.chatId,
+          onSessionExpired: widget.onSessionExpired,
+        ),
+      ),
+    );
+    if (changed == true && mounted) {
+      setState(() => _changed = true);
+    }
+  }
+
+  Future<void> _openMuteList() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => _TurnaGroupMuteListPage(
+          session: widget.session,
+          chatId: widget.chatId,
+          onSessionExpired: widget.onSessionExpired,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openBanList() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => _TurnaGroupBanListPage(
+          session: widget.session,
+          chatId: widget.chatId,
+          onSessionExpired: widget.onSessionExpired,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _pickPolicy({
+    required String title,
+    required String currentValue,
+    required ValueChanged<String> onSelected,
+  }) async {
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) {
+        const options = <String>[
+          'OWNER_ONLY',
+          'ADMIN_ONLY',
+          'EDITOR_ONLY',
+          'EVERYONE',
+        ];
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(18, 8, 18, 4),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    title,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ),
+              for (final option in options)
+                ListTile(
+                  leading: Icon(
+                    currentValue.trim().toUpperCase() == option
+                        ? Icons.check_circle_rounded
+                        : Icons.tune_rounded,
+                  ),
+                  title: Text(_policyLabel(option)),
+                  onTap: () => Navigator.of(context).pop(option),
+                ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+    if (selected == null || selected == currentValue.trim().toUpperCase()) {
+      return;
+    }
+    onSelected(selected);
+  }
+
+  Future<void> _transferOwnership() async {
+    if (!_isOwner || _saving) return;
+    final candidates = _members
+        .where((member) => member.userId != widget.session.userId)
+        .toList(growable: false);
+    if (candidates.isEmpty) {
+      setState(() => _error = 'Sahiplik devri için başka bir üye gerekli.');
+      return;
+    }
+
+    final nextOwner = await showModalBottomSheet<TurnaGroupMember>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) {
+        return SafeArea(
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(18, 8, 18, 4),
+                child: Text(
+                  'Sahipliği devret',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                ),
+              ),
+              for (final member in candidates)
+                ListTile(
+                  leading: _ProfileAvatar(
+                    label: member.displayName,
+                    avatarUrl: member.avatarUrl,
+                    authToken: widget.session.token,
+                    radius: 20,
+                  ),
+                  title: Text(member.displayName),
+                  subtitle: Text(
+                    member.role.trim().toUpperCase() == 'ADMIN'
+                        ? 'Admin'
+                        : member.role.trim().toUpperCase() == 'EDITOR'
+                        ? 'Editör'
+                        : 'Üye',
+                  ),
+                  onTap: () => Navigator.of(context).pop(member),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+    if (nextOwner == null) return;
+    if (!mounted) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Sahipliği devret'),
+          content: Text(
+            'Grubun sahipliğini ${nextOwner.displayName} kişisine devretmek istediğinize emin misiniz?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Vazgeç'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Devret'),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true) return;
+
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await ChatApi.transferGroupOwnership(
+        widget.session,
+        chatId: widget.chatId,
+        newOwnerUserId: nextOwner.userId,
+      );
+      if (!mounted) return;
+      Navigator.of(context).pop(true);
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _error = error.toString();
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        leading: IconButton(
+          onPressed: _closePage,
+          icon: const Icon(Icons.arrow_back_rounded),
+        ),
+        title: const Text('Grup Ayarları'),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+        children: [
+          if (_error != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Text(
+                _error!,
+                style: const TextStyle(color: TurnaColors.error),
+              ),
+            ),
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: TurnaColors.divider),
+            ),
+            child: Column(
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.public_rounded),
+                  title: const Text('Grup tipi'),
+                  subtitle: Text(_detail.isPublic ? 'Açık grup' : 'Özel grup'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: _saving ? null : _pickPrivacyMode,
+                ),
+                const Divider(height: 1),
+                SwitchListTile.adaptive(
+                  secondary: const Icon(Icons.approval_outlined),
+                  title: const Text('Katılım onayı'),
+                  subtitle: Text(
+                    _detail.isPublic
+                        ? 'Açık gruba katılmak isteyenler onay bekler.'
+                        : 'Özel gruplarda yalnızca davet bağlantısı çalışır.',
+                  ),
+                  value: _detail.isPublic && _detail.joinApprovalRequired,
+                  onChanged: !_detail.isPublic || _saving
+                      ? null
+                      : (value) => _applySettings(joinApprovalRequired: value),
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  leading: const Icon(Icons.chat_bubble_outline_rounded),
+                  title: const Text('Kim mesaj gönderebilir?'),
+                  subtitle: Text(_policyLabel(_detail.whoCanSend)),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: _saving
+                      ? null
+                      : () => _pickPolicy(
+                          title: 'Kim mesaj gönderebilir?',
+                          currentValue: _detail.whoCanSend,
+                          onSelected: (value) =>
+                              _applySettings(whoCanSend: value),
+                        ),
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  leading: const Icon(Icons.edit_outlined),
+                  title: const Text('Kim grup bilgisini düzenleyebilir?'),
+                  subtitle: Text(_policyLabel(_detail.whoCanEditInfo)),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: _saving
+                      ? null
+                      : () => _pickPolicy(
+                          title: 'Kim grup bilgisini düzenleyebilir?',
+                          currentValue: _detail.whoCanEditInfo,
+                          onSelected: (value) =>
+                              _applySettings(whoCanEditInfo: value),
+                        ),
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  leading: const Icon(Icons.link_rounded),
+                  title: const Text('Kim davet edebilir?'),
+                  subtitle: Text(_policyLabel(_detail.whoCanInvite)),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: _saving
+                      ? null
+                      : () => _pickPolicy(
+                          title: 'Kim davet edebilir?',
+                          currentValue: _detail.whoCanInvite,
+                          onSelected: (value) =>
+                              _applySettings(whoCanInvite: value),
+                        ),
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  leading: const Icon(Icons.person_add_alt_1_rounded),
+                  title: const Text('Kim üye ekleyebilir?'),
+                  subtitle: Text(_policyLabel(_detail.whoCanAddMembers)),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: _saving
+                      ? null
+                      : () => _pickPolicy(
+                          title: 'Kim üye ekleyebilir?',
+                          currentValue: _detail.whoCanAddMembers,
+                          onSelected: (value) =>
+                              _applySettings(whoCanAddMembers: value),
+                        ),
+                ),
+                const Divider(height: 1),
+                SwitchListTile.adaptive(
+                  secondary: const Icon(Icons.history_toggle_off_rounded),
+                  title: const Text('Yeni üyeler eski mesajları görsün'),
+                  subtitle: Text(
+                    _detail.historyVisibleToNewMembers
+                        ? 'Yeni katılanlar önceki mesaj geçmişini görebilir.'
+                        : 'Yeni katılanlar yalnızca katıldıktan sonraki mesajları görür.',
+                  ),
+                  value: _detail.historyVisibleToNewMembers,
+                  onChanged: _saving
+                      ? null
+                      : (value) =>
+                            _applySettings(historyVisibleToNewMembers: value),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: TurnaColors.divider),
+            ),
+            child: Column(
+              children: [
+                if (_policyAllows(_detail.whoCanInvite))
+                  ListTile(
+                    leading: const Icon(Icons.link_rounded),
+                    title: const Text('Davet bağlantıları'),
+                    subtitle: const Text(
+                      '7 gün, 30 gün veya sınırsız bağlantı oluştur.',
+                    ),
+                    trailing: const Icon(Icons.chevron_right_rounded),
+                    onTap: _openInviteLinks,
+                  ),
+                if (_policyAllows(_detail.whoCanInvite))
+                  const Divider(height: 1),
+                if (_canReviewRequests)
+                  ListTile(
+                    leading: const Icon(Icons.fact_check_outlined),
+                    title: const Text('Katılım istekleri'),
+                    subtitle: const Text(
+                      'Bekleyen katılım isteklerini onayla veya reddet.',
+                    ),
+                    trailing: const Icon(Icons.chevron_right_rounded),
+                    onTap: _openJoinRequests,
+                  ),
+                if (_canReviewRequests) const Divider(height: 1),
+                if (_canManageModeration)
+                  ListTile(
+                    leading: const Icon(Icons.volume_off_outlined),
+                    title: const Text('Sessize alınanlar'),
+                    subtitle: const Text('Aktif mute listesini gör ve yönet.'),
+                    trailing: const Icon(Icons.chevron_right_rounded),
+                    onTap: _openMuteList,
+                  ),
+                if (_canManageModeration) const Divider(height: 1),
+                if (_isOwner || _isAdmin)
+                  ListTile(
+                    leading: const Icon(Icons.gpp_bad_outlined),
+                    title: const Text('Yasaklananlar'),
+                    subtitle: const Text('Ban listesini gör ve yasak kaldır.'),
+                    trailing: const Icon(Icons.chevron_right_rounded),
+                    onTap: _openBanList,
+                  ),
+              ],
+            ),
+          ),
+          if (_isOwner) ...[
+            const SizedBox(height: 14),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: _saving ? null : _transferOwnership,
+                icon: const Icon(Icons.swap_horiz_rounded),
+                label: const Text('Sahipliği Devret'),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _TurnaGroupInviteLinksPage extends StatefulWidget {
+  const _TurnaGroupInviteLinksPage({
+    required this.session,
+    required this.chatId,
+    required this.onSessionExpired,
+  });
+
+  final AuthSession session;
+  final String chatId;
+  final VoidCallback onSessionExpired;
+
+  @override
+  State<_TurnaGroupInviteLinksPage> createState() =>
+      _TurnaGroupInviteLinksPageState();
+}
+
+class _TurnaGroupInviteLinksPageState
+    extends State<_TurnaGroupInviteLinksPage> {
+  List<TurnaGroupInviteLink> _items = const <TurnaGroupInviteLink>[];
+  bool _loading = true;
+  bool _changed = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_load());
+  }
+
+  void _closePage() => Navigator.of(context).pop(_changed);
+
+  String _formatInviteExpiry(TurnaGroupInviteLink item) {
+    if ((item.revokedAt ?? '').trim().isNotEmpty) return 'İptal edildi';
+    if ((item.expiresAt ?? '').trim().isEmpty) return 'Sınırsız';
+    final dt = parseTurnaLocalDateTime(item.expiresAt!);
+    if (dt == null) return 'Süre bilgisi yok';
+    return '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}.${dt.year}';
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final items = await ChatApi.fetchGroupInviteLinks(
+        widget.session,
+        chatId: widget.chatId,
+      );
+      if (!mounted) return;
+      setState(() {
+        _items = items;
+        _loading = false;
+      });
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = error.toString();
+      });
+    }
+  }
+
+  Future<void> _createInvite() async {
+    final duration = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.calendar_today_outlined),
+                title: const Text('7 Gün'),
+                onTap: () => Navigator.of(context).pop('7_DAYS'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.date_range_outlined),
+                title: const Text('30 Gün'),
+                onTap: () => Navigator.of(context).pop('30_DAYS'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.all_inclusive_rounded),
+                title: const Text('Sınırsız'),
+                onTap: () => Navigator.of(context).pop('UNLIMITED'),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+    if (duration == null) return;
+    try {
+      final created = await ChatApi.createGroupInviteLink(
+        widget.session,
+        chatId: widget.chatId,
+        duration: duration,
+      );
+      if (!mounted) return;
+      setState(() {
+        _items = [created, ..._items];
+        _changed = true;
+      });
+      await Clipboard.setData(ClipboardData(text: created.inviteUrl));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Davet bağlantısı kopyalandı.')),
+      );
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = error.toString());
+    }
+  }
+
+  Future<void> _revokeInvite(TurnaGroupInviteLink item) async {
+    try {
+      await ChatApi.revokeGroupInviteLink(
+        widget.session,
+        chatId: widget.chatId,
+        inviteLinkId: item.id,
+      );
+      if (!mounted) return;
+      setState(() {
+        _items = _items
+            .map(
+              (entry) => entry.id == item.id
+                  ? TurnaGroupInviteLink(
+                      id: entry.id,
+                      token: entry.token,
+                      inviteUrl: entry.inviteUrl,
+                      expiresAt: entry.expiresAt,
+                      revokedAt: DateTime.now().toIso8601String(),
+                      createdAt: entry.createdAt,
+                    )
+                  : entry,
+            )
+            .toList(growable: false);
+        _changed = true;
+      });
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = error.toString());
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        leading: IconButton(
+          onPressed: _closePage,
+          icon: const Icon(Icons.arrow_back_rounded),
+        ),
+        title: const Text('Davet Bağlantıları'),
+        actions: [
+          IconButton(
+            onPressed: _createInvite,
+            icon: const Icon(Icons.add_link_rounded),
+          ),
+        ],
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+              children: [
+                if (_error != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Text(
+                      _error!,
+                      style: const TextStyle(color: TurnaColors.error),
+                    ),
+                  ),
+                ..._items.map(
+                  (item) => Container(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(color: TurnaColors.divider),
+                    ),
+                    child: ListTile(
+                      leading: const Icon(Icons.link_rounded),
+                      title: Text(
+                        item.inviteUrl,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      subtitle: Text(_formatInviteExpiry(item)),
+                      trailing: PopupMenuButton<String>(
+                        onSelected: (value) async {
+                          final messenger = ScaffoldMessenger.of(context);
+                          if (value == 'copy') {
+                            await Clipboard.setData(
+                              ClipboardData(text: item.inviteUrl),
+                            );
+                            if (!mounted) return;
+                            messenger.showSnackBar(
+                              const SnackBar(
+                                content: Text('Bağlantı kopyalandı.'),
+                              ),
+                            );
+                            return;
+                          }
+                          if (value == 'revoke') {
+                            await _revokeInvite(item);
+                          }
+                        },
+                        itemBuilder: (context) => [
+                          const PopupMenuItem(
+                            value: 'copy',
+                            child: Text('Kopyala'),
+                          ),
+                          if ((item.revokedAt ?? '').trim().isEmpty)
+                            const PopupMenuItem(
+                              value: 'revoke',
+                              child: Text('İptal et'),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                if (_items.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 24),
+                    child: Center(
+                      child: Text(
+                        'Henüz davet bağlantısı oluşturulmadı.',
+                        style: TextStyle(color: TurnaColors.textMuted),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+    );
+  }
+}
+
+class _TurnaGroupJoinRequestsPage extends StatefulWidget {
+  const _TurnaGroupJoinRequestsPage({
+    required this.session,
+    required this.chatId,
+    required this.onSessionExpired,
+  });
+
+  final AuthSession session;
+  final String chatId;
+  final VoidCallback onSessionExpired;
+
+  @override
+  State<_TurnaGroupJoinRequestsPage> createState() =>
+      _TurnaGroupJoinRequestsPageState();
+}
+
+class _TurnaGroupJoinRequestsPageState
+    extends State<_TurnaGroupJoinRequestsPage> {
+  List<TurnaGroupJoinRequest> _items = const <TurnaGroupJoinRequest>[];
+  bool _loading = true;
+  bool _changed = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_load());
+  }
+
+  void _closePage() => Navigator.of(context).pop(_changed);
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final items = await ChatApi.fetchGroupJoinRequests(
+        widget.session,
+        chatId: widget.chatId,
+      );
+      if (!mounted) return;
+      setState(() {
+        _items = items;
+        _loading = false;
+      });
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = error.toString();
+      });
+    }
+  }
+
+  Future<void> _approve(TurnaGroupJoinRequest request) async {
+    try {
+      await ChatApi.approveGroupJoinRequest(
+        widget.session,
+        chatId: widget.chatId,
+        requestId: request.id,
+      );
+      if (!mounted) return;
+      setState(() {
+        _items = _items.where((item) => item.id != request.id).toList();
+        _changed = true;
+      });
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = error.toString());
+    }
+  }
+
+  Future<void> _reject(TurnaGroupJoinRequest request) async {
+    try {
+      await ChatApi.rejectGroupJoinRequest(
+        widget.session,
+        chatId: widget.chatId,
+        requestId: request.id,
+      );
+      if (!mounted) return;
+      setState(() {
+        _items = _items.where((item) => item.id != request.id).toList();
+        _changed = true;
+      });
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = error.toString());
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        leading: IconButton(
+          onPressed: _closePage,
+          icon: const Icon(Icons.arrow_back_rounded),
+        ),
+        title: const Text('Katılım İstekleri'),
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+              children: [
+                if (_error != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Text(
+                      _error!,
+                      style: const TextStyle(color: TurnaColors.error),
+                    ),
+                  ),
+                ..._items.map(
+                  (item) => Container(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(color: TurnaColors.divider),
+                    ),
+                    child: Row(
+                      children: [
+                        _ProfileAvatar(
+                          label: item.displayName,
+                          avatarUrl: item.avatarUrl,
+                          authToken: widget.session.token,
+                          radius: 22,
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                item.displayName,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              if ((item.username ?? '').trim().isNotEmpty)
+                                Text(
+                                  '@${item.username!.trim()}',
+                                  style: const TextStyle(
+                                    color: TurnaColors.textMuted,
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: () => _reject(item),
+                          child: const Text('Reddet'),
+                        ),
+                        FilledButton(
+                          onPressed: () => _approve(item),
+                          child: const Text('Onayla'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                if (_items.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 24),
+                    child: Center(
+                      child: Text(
+                        'Bekleyen katılım isteği yok.',
+                        style: TextStyle(color: TurnaColors.textMuted),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+    );
+  }
+}
+
+class _TurnaGroupMuteListPage extends StatefulWidget {
+  const _TurnaGroupMuteListPage({
+    required this.session,
+    required this.chatId,
+    required this.onSessionExpired,
+  });
+
+  final AuthSession session;
+  final String chatId;
+  final VoidCallback onSessionExpired;
+
+  @override
+  State<_TurnaGroupMuteListPage> createState() =>
+      _TurnaGroupMuteListPageState();
+}
+
+class _TurnaGroupMuteListPageState extends State<_TurnaGroupMuteListPage> {
+  List<TurnaGroupMuteEntry> _items = const <TurnaGroupMuteEntry>[];
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_load());
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final items = await ChatApi.fetchGroupMutes(
+        widget.session,
+        chatId: widget.chatId,
+      );
+      if (!mounted) return;
+      setState(() {
+        _items = items;
+        _loading = false;
+      });
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = error.toString();
+      });
+    }
+  }
+
+  Future<void> _unmute(TurnaGroupMuteEntry entry) async {
+    try {
+      await ChatApi.unmuteGroupMember(
+        widget.session,
+        chatId: widget.chatId,
+        memberUserId: entry.userId,
+      );
+      if (!mounted) return;
+      setState(() {
+        _items = _items.where((item) => item.id != entry.id).toList();
+      });
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = error.toString());
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Sessize Alınanlar')),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+              children: [
+                if (_error != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Text(
+                      _error!,
+                      style: const TextStyle(color: TurnaColors.error),
+                    ),
+                  ),
+                ..._items.map(
+                  (item) => ListTile(
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 0,
+                      vertical: 4,
+                    ),
+                    leading: _ProfileAvatar(
+                      label: item.displayName,
+                      avatarUrl: item.avatarUrl,
+                      authToken: widget.session.token,
+                      radius: 22,
+                    ),
+                    title: Text(item.displayName),
+                    subtitle: Text(
+                      (item.mutedUntil ?? '').trim().isEmpty
+                          ? 'Kalıcı sessizde'
+                          : 'Süre: ${item.mutedUntil}',
+                    ),
+                    trailing: TextButton(
+                      onPressed: () => _unmute(item),
+                      child: const Text('Kaldır'),
+                    ),
+                  ),
+                ),
+                if (_items.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 24),
+                    child: Center(
+                      child: Text(
+                        'Aktif mute kaydı yok.',
+                        style: TextStyle(color: TurnaColors.textMuted),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+    );
+  }
+}
+
+class _TurnaGroupBanListPage extends StatefulWidget {
+  const _TurnaGroupBanListPage({
+    required this.session,
+    required this.chatId,
+    required this.onSessionExpired,
+  });
+
+  final AuthSession session;
+  final String chatId;
+  final VoidCallback onSessionExpired;
+
+  @override
+  State<_TurnaGroupBanListPage> createState() => _TurnaGroupBanListPageState();
+}
+
+class _TurnaGroupBanListPageState extends State<_TurnaGroupBanListPage> {
+  List<TurnaGroupBanEntry> _items = const <TurnaGroupBanEntry>[];
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_load());
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final items = await ChatApi.fetchGroupBans(
+        widget.session,
+        chatId: widget.chatId,
+      );
+      if (!mounted) return;
+      setState(() {
+        _items = items;
+        _loading = false;
+      });
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = error.toString();
+      });
+    }
+  }
+
+  Future<void> _unban(TurnaGroupBanEntry entry) async {
+    try {
+      await ChatApi.unbanGroupMember(
+        widget.session,
+        chatId: widget.chatId,
+        memberUserId: entry.userId,
+      );
+      if (!mounted) return;
+      setState(() {
+        _items = _items.where((item) => item.id != entry.id).toList();
+      });
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = error.toString());
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Yasaklananlar')),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+              children: [
+                if (_error != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Text(
+                      _error!,
+                      style: const TextStyle(color: TurnaColors.error),
+                    ),
+                  ),
+                ..._items.map(
+                  (item) => ListTile(
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 0,
+                      vertical: 4,
+                    ),
+                    leading: _ProfileAvatar(
+                      label: item.displayName,
+                      avatarUrl: item.avatarUrl,
+                      authToken: widget.session.token,
+                      radius: 22,
+                    ),
+                    title: Text(item.displayName),
+                    subtitle: Text(
+                      item.reason?.trim().isNotEmpty == true
+                          ? item.reason!.trim()
+                          : 'Aktif yasak',
+                    ),
+                    trailing: TextButton(
+                      onPressed: () => _unban(item),
+                      child: const Text('Kaldır'),
+                    ),
+                  ),
+                ),
+                if (_items.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 24),
+                    child: Center(
+                      child: Text(
+                        'Aktif yasak kaydı yok.',
+                        style: TextStyle(color: TurnaColors.textMuted),
+                      ),
+                    ),
+                  ),
+              ],
             ),
     );
   }

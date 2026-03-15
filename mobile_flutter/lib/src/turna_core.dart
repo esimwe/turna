@@ -113,6 +113,15 @@ class TurnaChatDetail {
     this.isPublic = false,
     this.joinApprovalRequired = false,
     this.memberAddPolicy = 'ADMIN_ONLY',
+    this.whoCanSend = 'EVERYONE',
+    this.whoCanEditInfo = 'EDITOR_ONLY',
+    this.whoCanInvite = 'ADMIN_ONLY',
+    this.whoCanAddMembers = 'ADMIN_ONLY',
+    this.historyVisibleToNewMembers = true,
+    this.myCanSend = true,
+    this.myIsMuted = false,
+    this.myMutedUntil,
+    this.myMuteReason,
   });
 
   final String chatId;
@@ -126,6 +135,15 @@ class TurnaChatDetail {
   final bool isPublic;
   final bool joinApprovalRequired;
   final String memberAddPolicy;
+  final String whoCanSend;
+  final String whoCanEditInfo;
+  final String whoCanInvite;
+  final String whoCanAddMembers;
+  final bool historyVisibleToNewMembers;
+  final bool myCanSend;
+  final bool myIsMuted;
+  final String? myMutedUntil;
+  final String? myMuteReason;
 
   TurnaChatDetail copyWith({
     String? title,
@@ -137,6 +155,15 @@ class TurnaChatDetail {
     bool? isPublic,
     bool? joinApprovalRequired,
     String? memberAddPolicy,
+    String? whoCanSend,
+    String? whoCanEditInfo,
+    String? whoCanInvite,
+    String? whoCanAddMembers,
+    bool? historyVisibleToNewMembers,
+    bool? myCanSend,
+    bool? myIsMuted,
+    String? myMutedUntil,
+    String? myMuteReason,
   }) {
     return TurnaChatDetail(
       chatId: chatId,
@@ -150,6 +177,16 @@ class TurnaChatDetail {
       isPublic: isPublic ?? this.isPublic,
       joinApprovalRequired: joinApprovalRequired ?? this.joinApprovalRequired,
       memberAddPolicy: memberAddPolicy ?? this.memberAddPolicy,
+      whoCanSend: whoCanSend ?? this.whoCanSend,
+      whoCanEditInfo: whoCanEditInfo ?? this.whoCanEditInfo,
+      whoCanInvite: whoCanInvite ?? this.whoCanInvite,
+      whoCanAddMembers: whoCanAddMembers ?? this.whoCanAddMembers,
+      historyVisibleToNewMembers:
+          historyVisibleToNewMembers ?? this.historyVisibleToNewMembers,
+      myCanSend: myCanSend ?? this.myCanSend,
+      myIsMuted: myIsMuted ?? this.myIsMuted,
+      myMutedUntil: myMutedUntil ?? this.myMutedUntil,
+      myMuteReason: myMuteReason ?? this.myMuteReason,
     );
   }
 
@@ -170,6 +207,22 @@ class TurnaChatDetail {
       memberAddPolicy:
           TurnaUserProfile._nullableString(map['memberAddPolicy']) ??
           'ADMIN_ONLY',
+      whoCanSend:
+          TurnaUserProfile._nullableString(map['whoCanSend']) ?? 'EVERYONE',
+      whoCanEditInfo:
+          TurnaUserProfile._nullableString(map['whoCanEditInfo']) ??
+          'EDITOR_ONLY',
+      whoCanInvite:
+          TurnaUserProfile._nullableString(map['whoCanInvite']) ?? 'ADMIN_ONLY',
+      whoCanAddMembers:
+          TurnaUserProfile._nullableString(map['whoCanAddMembers']) ??
+          TurnaUserProfile._nullableString(map['memberAddPolicy']) ??
+          'ADMIN_ONLY',
+      historyVisibleToNewMembers: map['historyVisibleToNewMembers'] != false,
+      myCanSend: map['myCanSend'] != false,
+      myIsMuted: map['myIsMuted'] == true,
+      myMutedUntil: TurnaUserProfile._nullableString(map['myMutedUntil']),
+      myMuteReason: TurnaUserProfile._nullableString(map['myMuteReason']),
     );
   }
 
@@ -186,6 +239,15 @@ class TurnaChatDetail {
       'isPublic': isPublic,
       'joinApprovalRequired': joinApprovalRequired,
       'memberAddPolicy': memberAddPolicy,
+      'whoCanSend': whoCanSend,
+      'whoCanEditInfo': whoCanEditInfo,
+      'whoCanInvite': whoCanInvite,
+      'whoCanAddMembers': whoCanAddMembers,
+      'historyVisibleToNewMembers': historyVisibleToNewMembers,
+      'myCanSend': myCanSend,
+      'myIsMuted': myIsMuted,
+      'myMutedUntil': myMutedUntil,
+      'myMuteReason': myMuteReason,
     };
   }
 }
@@ -200,6 +262,9 @@ class TurnaGroupMember {
     this.canSend = true,
     this.joinedAt,
     this.lastSeenAt,
+    this.isMuted = false,
+    this.mutedUntil,
+    this.muteReason,
     this.avatarUrl,
   });
 
@@ -211,6 +276,9 @@ class TurnaGroupMember {
   final bool canSend;
   final String? joinedAt;
   final String? lastSeenAt;
+  final bool isMuted;
+  final String? mutedUntil;
+  final String? muteReason;
   final String? avatarUrl;
 
   factory TurnaGroupMember.fromMap(Map<String, dynamic> map) {
@@ -223,6 +291,9 @@ class TurnaGroupMember {
       canSend: map['canSend'] != false,
       joinedAt: TurnaUserProfile._nullableString(map['joinedAt']),
       lastSeenAt: TurnaUserProfile._nullableString(map['lastSeenAt']),
+      isMuted: map['isMuted'] == true,
+      mutedUntil: TurnaUserProfile._nullableString(map['mutedUntil']),
+      muteReason: TurnaUserProfile._nullableString(map['muteReason']),
       avatarUrl: TurnaUserProfile._nullableString(map['avatarUrl']),
     );
   }
@@ -238,6 +309,145 @@ class TurnaGroupMembersPage {
   final List<TurnaGroupMember> items;
   final int totalCount;
   final bool hasMore;
+}
+
+class TurnaGroupInviteLink {
+  TurnaGroupInviteLink({
+    required this.id,
+    required this.token,
+    required this.inviteUrl,
+    this.expiresAt,
+    this.revokedAt,
+    this.createdAt,
+  });
+
+  final String id;
+  final String token;
+  final String inviteUrl;
+  final String? expiresAt;
+  final String? revokedAt;
+  final String? createdAt;
+
+  factory TurnaGroupInviteLink.fromMap(Map<String, dynamic> map) {
+    return TurnaGroupInviteLink(
+      id: (map['id'] ?? '').toString(),
+      token: (map['token'] ?? '').toString(),
+      inviteUrl:
+          TurnaUserProfile._nullableString(map['inviteUrl']) ??
+          'turna://join-group?token=${(map['token'] ?? '').toString()}',
+      expiresAt: TurnaUserProfile._nullableString(map['expiresAt']),
+      revokedAt: TurnaUserProfile._nullableString(map['revokedAt']),
+      createdAt: TurnaUserProfile._nullableString(map['createdAt']),
+    );
+  }
+}
+
+class TurnaGroupJoinRequest {
+  TurnaGroupJoinRequest({
+    required this.id,
+    required this.userId,
+    required this.displayName,
+    this.username,
+    this.phone,
+    this.avatarUrl,
+    this.createdAt,
+    this.status = 'PENDING',
+  });
+
+  final String id;
+  final String userId;
+  final String displayName;
+  final String? username;
+  final String? phone;
+  final String? avatarUrl;
+  final String? createdAt;
+  final String status;
+
+  factory TurnaGroupJoinRequest.fromMap(Map<String, dynamic> map) {
+    return TurnaGroupJoinRequest(
+      id: (map['id'] ?? '').toString(),
+      userId: (map['userId'] ?? '').toString(),
+      displayName: (map['displayName'] ?? '').toString(),
+      username: TurnaUserProfile._nullableString(map['username']),
+      phone: TurnaUserProfile._nullableString(map['phone']),
+      avatarUrl:
+          TurnaUserProfile._nullableString(map['avatarUrl']) ??
+          TurnaUserProfile._nullableString(map['avatarKey']),
+      createdAt: TurnaUserProfile._nullableString(map['createdAt']),
+      status: TurnaUserProfile._nullableString(map['status']) ?? 'PENDING',
+    );
+  }
+}
+
+class TurnaGroupMuteEntry {
+  TurnaGroupMuteEntry({
+    required this.id,
+    required this.userId,
+    required this.displayName,
+    this.username,
+    this.avatarUrl,
+    this.reason,
+    this.mutedUntil,
+    this.createdAt,
+  });
+
+  final String id;
+  final String userId;
+  final String displayName;
+  final String? username;
+  final String? avatarUrl;
+  final String? reason;
+  final String? mutedUntil;
+  final String? createdAt;
+
+  factory TurnaGroupMuteEntry.fromMap(Map<String, dynamic> map) {
+    return TurnaGroupMuteEntry(
+      id: (map['id'] ?? '').toString(),
+      userId: (map['userId'] ?? '').toString(),
+      displayName: (map['displayName'] ?? '').toString(),
+      username: TurnaUserProfile._nullableString(map['username']),
+      avatarUrl:
+          TurnaUserProfile._nullableString(map['avatarUrl']) ??
+          TurnaUserProfile._nullableString(map['avatarKey']),
+      reason: TurnaUserProfile._nullableString(map['reason']),
+      mutedUntil: TurnaUserProfile._nullableString(map['mutedUntil']),
+      createdAt: TurnaUserProfile._nullableString(map['createdAt']),
+    );
+  }
+}
+
+class TurnaGroupBanEntry {
+  TurnaGroupBanEntry({
+    required this.id,
+    required this.userId,
+    required this.displayName,
+    this.username,
+    this.avatarUrl,
+    this.reason,
+    this.createdAt,
+  });
+
+  final String id;
+  final String userId;
+  final String displayName;
+  final String? username;
+  final String? avatarUrl;
+  final String? reason;
+  final String? createdAt;
+
+  factory TurnaGroupBanEntry.fromMap(Map<String, dynamic> map) {
+    return TurnaGroupBanEntry(
+      id: (map['id'] ?? '').toString(),
+      userId: (map['userId'] ?? '').toString(),
+      displayName: (map['displayName'] ?? '').toString(),
+      username: TurnaUserProfile._nullableString(map['username']),
+      avatarUrl:
+          TurnaUserProfile._nullableString(map['avatarUrl']) ??
+          TurnaUserProfile._nullableString(map['avatarKey']),
+      reason: TurnaUserProfile._nullableString(map['reason']),
+      createdAt: TurnaUserProfile._nullableString(map['createdAt']),
+    );
+  }
 }
 
 class ChatFolder {
@@ -2798,16 +3008,40 @@ class ProfileApi {
           return 'Grup adı gerekli.';
         case 'group_min_members_required':
           return 'Bir grup oluşturmak için en az bir kişi daha seçmelisin.';
+        case 'group_member_limit_exceeded':
+          return 'Bu grup 2048 üye sınırına ulaştı.';
         case 'group_member_not_found':
           return 'Seçilen üyelerden biri bulunamadı.';
         case 'group_member_add_not_allowed':
           return 'Bu gruba üye ekleme yetkin yok.';
+        case 'group_invite_not_allowed':
+          return 'Bu grupta davet bağlantısı yönetme yetkin yok.';
+        case 'group_invite_not_found':
+          return 'Davet bağlantısı bulunamadı.';
+        case 'group_invite_expired':
+          return 'Bu davet bağlantısının süresi dolmuş.';
+        case 'group_private':
+          return 'Bu grup özel. Katılmak için davet bağlantısı gerekli.';
+        case 'group_join_request_review_not_allowed':
+          return 'Katılım isteklerini yönetme yetkin yok.';
+        case 'group_join_request_not_found':
+          return 'Katılım isteği bulunamadı.';
+        case 'group_join_banned':
+          return 'Bu gruba katılman engellenmiş.';
         case 'group_not_found':
           return 'Grup bulunamadı.';
         case 'group_owner_leave_not_allowed':
           return 'Grup sahibi önce sahipliği devretmeli.';
+        case 'group_member_mute_not_allowed':
+          return 'Bu üyeyi sessize alma yetkin yok.';
+        case 'group_member_ban_not_allowed':
+          return 'Bu üyeyi yasaklama yetkin yok.';
+        case 'group_ban_not_found':
+          return 'Aktif yasak kaydı bulunamadı.';
         case 'chat_send_restricted':
           return 'Bu grupta mesaj gönderme iznin kapalı.';
+        case 'chat_rate_limited':
+          return 'Çok hızlı mesaj gönderiyorsun. Biraz bekleyip tekrar dene.';
         case 'text_or_attachment_required':
           return 'Mesaj veya ek seçmelisin.';
         case 'call_provider_not_configured':
@@ -3062,6 +3296,394 @@ class ChatApi {
       rethrow;
     } catch (_) {
       throw TurnaApiException('Üyeler eklenemedi.');
+    }
+  }
+
+  static Future<TurnaChatDetail> updateGroupSettings(
+    AuthSession session, {
+    required String chatId,
+    bool? isPublic,
+    bool? joinApprovalRequired,
+    String? whoCanSend,
+    String? whoCanEditInfo,
+    String? whoCanInvite,
+    String? whoCanAddMembers,
+    bool? historyVisibleToNewMembers,
+  }) async {
+    try {
+      final res = await http.put(
+        Uri.parse('$kBackendBaseUrl/api/chats/$chatId/settings'),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          ...?isPublic == null ? null : {'isPublic': isPublic},
+          ...?joinApprovalRequired == null
+              ? null
+              : {'joinApprovalRequired': joinApprovalRequired},
+          ...?whoCanSend == null ? null : {'whoCanSend': whoCanSend},
+          ...?whoCanEditInfo == null
+              ? null
+              : {'whoCanEditInfo': whoCanEditInfo},
+          ...?whoCanInvite == null ? null : {'whoCanInvite': whoCanInvite},
+          ...?whoCanAddMembers == null
+              ? null
+              : {'whoCanAddMembers': whoCanAddMembers},
+          ...?historyVisibleToNewMembers == null
+              ? null
+              : {'historyVisibleToNewMembers': historyVisibleToNewMembers},
+        }),
+      );
+      _throwIfApiError(res);
+
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = map['data'] as Map<String, dynamic>? ?? const {};
+      final detail = TurnaChatDetail.fromMap(data);
+      await TurnaChatDetailLocalCache.save(session.userId, detail);
+      return detail;
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Grup ayarları güncellenemedi.');
+    }
+  }
+
+  static Future<void> updateGroupMemberRole(
+    AuthSession session, {
+    required String chatId,
+    required String memberUserId,
+    required String role,
+  }) async {
+    try {
+      final res = await http.put(
+        Uri.parse(
+          '$kBackendBaseUrl/api/chats/$chatId/members/$memberUserId/role',
+        ),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'role': role}),
+      );
+      _throwIfApiError(res);
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Üye rolü güncellenemedi.');
+    }
+  }
+
+  static Future<TurnaChatDetail> transferGroupOwnership(
+    AuthSession session, {
+    required String chatId,
+    required String newOwnerUserId,
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse('$kBackendBaseUrl/api/chats/$chatId/owner-transfer'),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'newOwnerUserId': newOwnerUserId}),
+      );
+      _throwIfApiError(res);
+
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = map['data'] as Map<String, dynamic>? ?? const {};
+      final detail = TurnaChatDetail.fromMap(data);
+      await TurnaChatDetailLocalCache.save(session.userId, detail);
+      return detail;
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Sahiplik devredilemedi.');
+    }
+  }
+
+  static Future<List<TurnaGroupInviteLink>> fetchGroupInviteLinks(
+    AuthSession session, {
+    required String chatId,
+  }) async {
+    try {
+      final res = await http.get(
+        Uri.parse('$kBackendBaseUrl/api/chats/$chatId/invite-links'),
+        headers: {'Authorization': 'Bearer ${session.token}'},
+      );
+      _throwIfApiError(res);
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = (map['data'] as List<dynamic>? ?? const []);
+      return data
+          .whereType<Map>()
+          .map(
+            (item) =>
+                TurnaGroupInviteLink.fromMap(Map<String, dynamic>.from(item)),
+          )
+          .toList();
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Davet bağlantıları yüklenemedi.');
+    }
+  }
+
+  static Future<TurnaGroupInviteLink> createGroupInviteLink(
+    AuthSession session, {
+    required String chatId,
+    required String duration,
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse('$kBackendBaseUrl/api/chats/$chatId/invite-links'),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'duration': duration}),
+      );
+      _throwIfApiError(res);
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = map['data'] as Map<String, dynamic>? ?? const {};
+      return TurnaGroupInviteLink.fromMap(data);
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Davet bağlantısı oluşturulamadı.');
+    }
+  }
+
+  static Future<void> revokeGroupInviteLink(
+    AuthSession session, {
+    required String chatId,
+    required String inviteLinkId,
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse(
+          '$kBackendBaseUrl/api/chats/$chatId/invite-links/$inviteLinkId/revoke',
+        ),
+        headers: {'Authorization': 'Bearer ${session.token}'},
+      );
+      _throwIfApiError(res);
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Davet bağlantısı iptal edilemedi.');
+    }
+  }
+
+  static Future<List<TurnaGroupJoinRequest>> fetchGroupJoinRequests(
+    AuthSession session, {
+    required String chatId,
+  }) async {
+    try {
+      final res = await http.get(
+        Uri.parse('$kBackendBaseUrl/api/chats/$chatId/join-requests'),
+        headers: {'Authorization': 'Bearer ${session.token}'},
+      );
+      _throwIfApiError(res);
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = (map['data'] as List<dynamic>? ?? const []);
+      return data
+          .whereType<Map>()
+          .map(
+            (item) =>
+                TurnaGroupJoinRequest.fromMap(Map<String, dynamic>.from(item)),
+          )
+          .toList();
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Katılım istekleri yüklenemedi.');
+    }
+  }
+
+  static Future<void> approveGroupJoinRequest(
+    AuthSession session, {
+    required String chatId,
+    required String requestId,
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse(
+          '$kBackendBaseUrl/api/chats/$chatId/join-requests/$requestId/approve',
+        ),
+        headers: {'Authorization': 'Bearer ${session.token}'},
+      );
+      _throwIfApiError(res);
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Katılım isteği onaylanamadı.');
+    }
+  }
+
+  static Future<void> rejectGroupJoinRequest(
+    AuthSession session, {
+    required String chatId,
+    required String requestId,
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse(
+          '$kBackendBaseUrl/api/chats/$chatId/join-requests/$requestId/reject',
+        ),
+        headers: {'Authorization': 'Bearer ${session.token}'},
+      );
+      _throwIfApiError(res);
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Katılım isteği reddedilemedi.');
+    }
+  }
+
+  static Future<List<TurnaGroupMuteEntry>> fetchGroupMutes(
+    AuthSession session, {
+    required String chatId,
+  }) async {
+    try {
+      final res = await http.get(
+        Uri.parse('$kBackendBaseUrl/api/chats/$chatId/mutes'),
+        headers: {'Authorization': 'Bearer ${session.token}'},
+      );
+      _throwIfApiError(res);
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = (map['data'] as List<dynamic>? ?? const []);
+      return data
+          .whereType<Map>()
+          .map(
+            (item) =>
+                TurnaGroupMuteEntry.fromMap(Map<String, dynamic>.from(item)),
+          )
+          .toList();
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Sessize alınan üyeler yüklenemedi.');
+    }
+  }
+
+  static Future<void> muteGroupMember(
+    AuthSession session, {
+    required String chatId,
+    required String memberUserId,
+    required String duration,
+    String? reason,
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse(
+          '$kBackendBaseUrl/api/chats/$chatId/members/$memberUserId/mute',
+        ),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'duration': duration,
+          ...?reason == null ? null : {'reason': reason.trim()},
+        }),
+      );
+      _throwIfApiError(res);
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Üye sessize alınamadı.');
+    }
+  }
+
+  static Future<void> unmuteGroupMember(
+    AuthSession session, {
+    required String chatId,
+    required String memberUserId,
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse(
+          '$kBackendBaseUrl/api/chats/$chatId/members/$memberUserId/unmute',
+        ),
+        headers: {'Authorization': 'Bearer ${session.token}'},
+      );
+      _throwIfApiError(res);
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Üye sessizden çıkarılamadı.');
+    }
+  }
+
+  static Future<List<TurnaGroupBanEntry>> fetchGroupBans(
+    AuthSession session, {
+    required String chatId,
+  }) async {
+    try {
+      final res = await http.get(
+        Uri.parse('$kBackendBaseUrl/api/chats/$chatId/bans'),
+        headers: {'Authorization': 'Bearer ${session.token}'},
+      );
+      _throwIfApiError(res);
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = (map['data'] as List<dynamic>? ?? const []);
+      return data
+          .whereType<Map>()
+          .map(
+            (item) =>
+                TurnaGroupBanEntry.fromMap(Map<String, dynamic>.from(item)),
+          )
+          .toList();
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Yasaklı üyeler yüklenemedi.');
+    }
+  }
+
+  static Future<void> banGroupMember(
+    AuthSession session, {
+    required String chatId,
+    required String memberUserId,
+    String? reason,
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse(
+          '$kBackendBaseUrl/api/chats/$chatId/members/$memberUserId/ban',
+        ),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          ...?reason == null ? null : {'reason': reason.trim()},
+        }),
+      );
+      _throwIfApiError(res);
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Üye yasaklanamadı.');
+    }
+  }
+
+  static Future<void> unbanGroupMember(
+    AuthSession session, {
+    required String chatId,
+    required String memberUserId,
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse(
+          '$kBackendBaseUrl/api/chats/$chatId/bans/$memberUserId/unban',
+        ),
+        headers: {'Authorization': 'Bearer ${session.token}'},
+      );
+      _throwIfApiError(res);
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Üye yasağı kaldırılamadı.');
     }
   }
 
