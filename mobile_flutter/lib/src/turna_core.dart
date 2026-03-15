@@ -1000,6 +1000,103 @@ class ChatAttachment {
   }
 }
 
+class ChatMessageMention {
+  const ChatMessageMention({
+    required this.userId,
+    this.username,
+    this.displayName,
+  });
+
+  final String userId;
+  final String? username;
+  final String? displayName;
+
+  factory ChatMessageMention.fromMap(Map<String, dynamic> map) {
+    return ChatMessageMention(
+      userId: (map['userId'] ?? '').toString(),
+      username: TurnaUserProfile._nullableString(map['username']),
+      displayName: TurnaUserProfile._nullableString(map['displayName']),
+    );
+  }
+
+  Map<String, dynamic> toMap() => {
+    'userId': userId,
+    'username': username,
+    'displayName': displayName,
+  };
+}
+
+class ChatMessageReaction {
+  const ChatMessageReaction({
+    required this.emoji,
+    required this.count,
+    this.userIds = const <String>[],
+  });
+
+  final String emoji;
+  final int count;
+  final List<String> userIds;
+
+  factory ChatMessageReaction.fromMap(Map<String, dynamic> map) {
+    return ChatMessageReaction(
+      emoji: (map['emoji'] ?? '').toString(),
+      count: (map['count'] as num?)?.toInt() ?? 0,
+      userIds: (map['userIds'] as List<dynamic>? ?? const [])
+          .map((item) => item.toString())
+          .where((item) => item.isNotEmpty)
+          .toList(),
+    );
+  }
+
+  Map<String, dynamic> toMap() => {
+    'emoji': emoji,
+    'count': count,
+    'userIds': userIds,
+  };
+}
+
+class TurnaPinnedMessageSummary {
+  const TurnaPinnedMessageSummary({
+    required this.messageId,
+    required this.chatId,
+    required this.senderId,
+    required this.previewText,
+    required this.pinnedAt,
+    required this.pinnedByUserId,
+    required this.messageCreatedAt,
+    this.senderDisplayName,
+    this.pinnedByDisplayName,
+  });
+
+  final String messageId;
+  final String chatId;
+  final String senderId;
+  final String previewText;
+  final String pinnedAt;
+  final String pinnedByUserId;
+  final String messageCreatedAt;
+  final String? senderDisplayName;
+  final String? pinnedByDisplayName;
+
+  factory TurnaPinnedMessageSummary.fromMap(Map<String, dynamic> map) {
+    return TurnaPinnedMessageSummary(
+      messageId: (map['messageId'] ?? '').toString(),
+      chatId: (map['chatId'] ?? '').toString(),
+      senderId: (map['senderId'] ?? '').toString(),
+      previewText: (map['previewText'] ?? '').toString(),
+      pinnedAt: (map['pinnedAt'] ?? '').toString(),
+      pinnedByUserId: (map['pinnedByUserId'] ?? '').toString(),
+      messageCreatedAt: (map['messageCreatedAt'] ?? '').toString(),
+      senderDisplayName: TurnaUserProfile._nullableString(
+        map['senderDisplayName'],
+      ),
+      pinnedByDisplayName: TurnaUserProfile._nullableString(
+        map['pinnedByDisplayName'],
+      ),
+    );
+  }
+}
+
 class ChatMessage {
   ChatMessage({
     required this.id,
@@ -1014,6 +1111,9 @@ class ChatMessage {
     this.editedAt,
     this.isEdited = false,
     this.editHistory = const [],
+    this.mentions = const [],
+    this.reactions = const [],
+    this.isPinned = false,
     this.attachments = const [],
     this.errorText,
   });
@@ -1030,6 +1130,9 @@ class ChatMessage {
   final String? editedAt;
   final bool isEdited;
   final List<ChatMessageEditHistoryEntry> editHistory;
+  final List<ChatMessageMention> mentions;
+  final List<ChatMessageReaction> reactions;
+  final bool isPinned;
   final List<ChatAttachment> attachments;
   final String? errorText;
 
@@ -1046,6 +1149,9 @@ class ChatMessage {
     String? editedAt,
     bool? isEdited,
     List<ChatMessageEditHistoryEntry>? editHistory,
+    List<ChatMessageMention>? mentions,
+    List<ChatMessageReaction>? reactions,
+    bool? isPinned,
     List<ChatAttachment>? attachments,
     String? errorText,
     bool clearErrorText = false,
@@ -1063,6 +1169,9 @@ class ChatMessage {
       editedAt: editedAt ?? this.editedAt,
       isEdited: isEdited ?? this.isEdited,
       editHistory: editHistory ?? this.editHistory,
+      mentions: mentions ?? this.mentions,
+      reactions: reactions ?? this.reactions,
+      isPinned: isPinned ?? this.isPinned,
       attachments: attachments ?? this.attachments,
       errorText: clearErrorText ? null : (errorText ?? this.errorText),
     );
@@ -1097,6 +1206,21 @@ class ChatMessage {
             ),
           )
           .toList(),
+      mentions: (map['mentions'] as List<dynamic>? ?? const [])
+          .whereType<Map>()
+          .map(
+            (item) =>
+                ChatMessageMention.fromMap(Map<String, dynamic>.from(item)),
+          )
+          .toList(),
+      reactions: (map['reactions'] as List<dynamic>? ?? const [])
+          .whereType<Map>()
+          .map(
+            (item) =>
+                ChatMessageReaction.fromMap(Map<String, dynamic>.from(item)),
+          )
+          .toList(),
+      isPinned: map['isPinned'] == true,
       attachments: (map['attachments'] as List<dynamic>? ?? const [])
           .whereType<Map>()
           .map(
@@ -1120,6 +1244,9 @@ class ChatMessage {
       'editedAt': editedAt,
       'isEdited': isEdited,
       'editHistory': editHistory.map((entry) => entry.toMap()).toList(),
+      'mentions': mentions.map((item) => item.toMap()).toList(),
+      'reactions': reactions.map((item) => item.toMap()).toList(),
+      'isPinned': isPinned,
       'attachments': attachments
           .map((attachment) => attachment.toMap())
           .toList(),
@@ -1156,6 +1283,21 @@ class ChatMessage {
             ),
           )
           .toList(),
+      mentions: (map['mentions'] as List<dynamic>? ?? const [])
+          .whereType<Map>()
+          .map(
+            (item) =>
+                ChatMessageMention.fromMap(Map<String, dynamic>.from(item)),
+          )
+          .toList(),
+      reactions: (map['reactions'] as List<dynamic>? ?? const [])
+          .whereType<Map>()
+          .map(
+            (item) =>
+                ChatMessageReaction.fromMap(Map<String, dynamic>.from(item)),
+          )
+          .toList(),
+      isPinned: map['isPinned'] == true,
       attachments: (map['attachments'] as List<dynamic>? ?? const [])
           .whereType<Map>()
           .map(
@@ -1249,6 +1391,8 @@ class TurnaSocketClient extends ChangeNotifier {
   static final Map<String, List<Map<String, dynamic>>> _warmMessageCache =
       <String, List<Map<String, dynamic>>>{};
   final List<ChatMessage> messages = [];
+  final List<TurnaPinnedMessageSummary> _pinnedMessages =
+      <TurnaPinnedMessageSummary>[];
   final Map<String, Timer> _messageTimeouts = {};
   final Map<String, ChatMessageStatus> _pendingStatusByMessageId = {};
   final Map<String, Timer> _groupTypingTimeouts = <String, Timer>{};
@@ -1271,6 +1415,8 @@ class TurnaSocketClient extends ChangeNotifier {
   String? nextBefore;
   String? error;
   String? peerLastSeenAt;
+  List<TurnaPinnedMessageSummary> get pinnedMessages =>
+      List<TurnaPinnedMessageSummary>.unmodifiable(_pinnedMessages);
 
   String? get groupTypingSummary {
     if (chatType != TurnaChatType.group || _typingNamesByUserId.isEmpty) {
@@ -1586,6 +1732,23 @@ class TurnaSocketClient extends ChangeNotifier {
       _setPeerTyping(payload['isTyping'] == true);
     });
 
+    _socket!.on('chat:pin:update', (data) {
+      final payload = _asMap(data);
+      if (payload == null) return;
+      if ((payload['chatId'] ?? '').toString() != chatId) return;
+
+      final pinned =
+          (payload['pinnedMessages'] as List<dynamic>? ?? const [])
+              .whereType<Map>()
+              .map(
+                (item) => TurnaPinnedMessageSummary.fromMap(
+                  Map<String, dynamic>.from(item),
+                ),
+              )
+              .toList();
+      setPinnedMessages(pinned);
+    });
+
     _socket!.onDisconnect((reason) {
       isConnected = false;
       _cancelPeerTypingTimeout();
@@ -1728,6 +1891,38 @@ class TurnaSocketClient extends ChangeNotifier {
     }
     _sortMessages();
     _persistMessageCaches();
+    notifyListeners();
+  }
+
+  void setPinnedMessages(List<TurnaPinnedMessageSummary> items) {
+    final normalized = List<TurnaPinnedMessageSummary>.from(items)
+      ..sort((a, b) => compareTurnaTimestamps(b.pinnedAt, a.pinnedAt));
+    final nextPinnedIds = normalized
+        .map((item) => item.messageId)
+        .where((item) => item.isNotEmpty)
+        .toSet();
+
+    var changed = !_samePinnedMessages(normalized);
+    if (changed) {
+      _pinnedMessages
+        ..clear()
+        ..addAll(normalized);
+    }
+
+    var messageChanged = false;
+    for (var index = 0; index < messages.length; index++) {
+      final current = messages[index];
+      final shouldBePinned = nextPinnedIds.contains(current.id);
+      if (current.isPinned == shouldBePinned) continue;
+      messages[index] = current.copyWith(isPinned: shouldBePinned);
+      messageChanged = true;
+    }
+
+    if (!changed && !messageChanged) return;
+    if (messageChanged) {
+      _sortMessages();
+      unawaited(_persistMessageCaches());
+    }
     notifyListeners();
   }
 
@@ -2061,6 +2256,19 @@ class TurnaSocketClient extends ChangeNotifier {
 
   void _sortMessages() {
     messages.sort((a, b) => compareTurnaTimestamps(a.createdAt, b.createdAt));
+  }
+
+  bool _samePinnedMessages(List<TurnaPinnedMessageSummary> next) {
+    if (_pinnedMessages.length != next.length) return false;
+    for (var index = 0; index < next.length; index++) {
+      final current = _pinnedMessages[index];
+      final incoming = next[index];
+      if (current.messageId != incoming.messageId) return false;
+      if (current.pinnedAt != incoming.pinnedAt) return false;
+      if (current.previewText != incoming.previewText) return false;
+      if (current.pinnedByUserId != incoming.pinnedByUserId) return false;
+    }
+    return true;
   }
 
   @override
@@ -3048,6 +3256,8 @@ class ProfileApi {
           return 'Mesaj düzenleme süresi doldu. 10 dakika sınırı doldu.';
         case 'message_edit_text_required':
           return 'Düzenlenecek mesaj boş olamaz.';
+        case 'message_reaction_not_allowed':
+          return 'Bu mesaja tepki eklenemez.';
         case 'chat_folder_limit_reached':
           return 'En fazla 3 kategori oluşturabilirsin.';
         case 'chat_folder_exists':
@@ -3092,6 +3302,8 @@ class ProfileApi {
           return 'Bu üyeyi sessize alma yetkin yok.';
         case 'group_member_ban_not_allowed':
           return 'Bu üyeyi yasaklama yetkin yok.';
+        case 'group_pin_not_allowed':
+          return 'Bu grupta sabit mesaj yönetme yetkin yok.';
         case 'group_ban_not_found':
           return 'Aktif yasak kaydı bulunamadı.';
         case 'chat_send_restricted':
@@ -4281,6 +4493,33 @@ class ChatApi {
     }
   }
 
+  static Future<List<TurnaPinnedMessageSummary>> fetchPinnedMessages(
+    AuthSession session, {
+    required String chatId,
+  }) async {
+    try {
+      final res = await http.get(
+        Uri.parse('$kBackendBaseUrl/api/chats/$chatId/pins'),
+        headers: {'Authorization': 'Bearer ${session.token}'},
+      );
+      _throwIfApiError(res);
+
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      return (map['data'] as List<dynamic>? ?? const [])
+          .whereType<Map>()
+          .map(
+            (item) => TurnaPinnedMessageSummary.fromMap(
+              Map<String, dynamic>.from(item),
+            ),
+          )
+          .toList();
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Sabit mesajlar yüklenemedi.');
+    }
+  }
+
   static Future<ChatAttachmentUploadTicket> createAttachmentUpload(
     AuthSession session, {
     required String chatId,
@@ -4396,6 +4635,102 @@ class ChatApi {
       rethrow;
     } catch (_) {
       throw TurnaApiException('Mesaj duzenlenemedi.');
+    }
+  }
+
+  static Future<ChatMessage> addReaction(
+    AuthSession session, {
+    required String messageId,
+    required String emoji,
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse('$kBackendBaseUrl/api/chats/messages/$messageId/reactions'),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'emoji': emoji}),
+      );
+      _throwIfApiError(res);
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = map['data'] as Map<String, dynamic>? ?? const {};
+      return ChatMessage.fromMap(data);
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Tepki eklenemedi.');
+    }
+  }
+
+  static Future<ChatMessage> removeReaction(
+    AuthSession session, {
+    required String messageId,
+    required String emoji,
+  }) async {
+    try {
+      final request = http.Request(
+        'DELETE',
+        Uri.parse('$kBackendBaseUrl/api/chats/messages/$messageId/reactions'),
+      );
+      request.headers.addAll({
+        'Authorization': 'Bearer ${session.token}',
+        'Content-Type': 'application/json',
+      });
+      request.body = jsonEncode({'emoji': emoji});
+      final streamed = await request.send();
+      final res = await http.Response.fromStream(streamed);
+      _throwIfApiError(res);
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = map['data'] as Map<String, dynamic>? ?? const {};
+      return ChatMessage.fromMap(data);
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Tepki kaldırılamadı.');
+    }
+  }
+
+  static Future<TurnaPinnedMessageSummary> pinMessage(
+    AuthSession session, {
+    required String messageId,
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse('$kBackendBaseUrl/api/chats/messages/$messageId/pin'),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+      );
+      _throwIfApiError(res);
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = map['data'] as Map<String, dynamic>? ?? const {};
+      return TurnaPinnedMessageSummary.fromMap(data);
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Mesaj sabitlenemedi.');
+    }
+  }
+
+  static Future<void> unpinMessage(
+    AuthSession session, {
+    required String messageId,
+  }) async {
+    try {
+      final res = await http.delete(
+        Uri.parse('$kBackendBaseUrl/api/chats/messages/$messageId/pin'),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+      );
+      _throwIfApiError(res);
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Mesaj sabitlemesi kaldırılamadı.');
     }
   }
 

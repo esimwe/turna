@@ -3156,7 +3156,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   bool _showSecurityBanner = false;
   TurnaReplyPayload? _replyDraft;
   _ComposerEditDraft? _editingDraft;
-  _PinnedMessageDraft? _pinnedMessage;
+  List<TurnaGroupMember> _mentionCandidates = const [];
+  List<TurnaGroupMember> _mentionSuggestions = const [];
+  String? _activeMentionQuery;
   List<TurnaCallHistoryItem> _peerCalls = const [];
   Set<String> _starredMessageIds = <String>{};
   Set<String> _softDeletedMessageIds = <String>{};
@@ -3194,8 +3196,18 @@ class _ChatRoomPageState extends State<ChatRoomPage>
           phone: widget.chat.phone,
           fallbackName: widget.chat.name,
         );
+  TurnaPinnedMessageSummary? get _activePinnedMessage =>
+      _client.pinnedMessages.isEmpty ? null : _client.pinnedMessages.first;
+  bool get _canManagePinnedMessages {
+    if (!_isGroupChat) return false;
+    final detail = _cachedGroupDetail;
+    if (detail == null) return true;
+    return _policyAllowsForCurrentUser(
+      detail.whoCanEditInfo,
+      detail.myRole ?? '',
+    );
+  }
 
-  String get _pinnedMessageKey => 'turna_pinned_message_${widget.chat.chatId}';
   String get _securityBannerSeenKey =>
       'turna_security_banner_seen_${widget.session.userId}_${widget.chat.chatId}';
   String get _starredMessagesKey =>
@@ -3279,14 +3291,15 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     _client.addListener(_refresh);
     widget.callCoordinator.addListener(_handleCallCoordinatorChanged);
     _controller.addListener(_handleComposerChanged);
-    _composerFocusNode.addListener(_refresh);
+    _composerFocusNode.addListener(_handleComposerFocusChanged);
     _scrollController.addListener(_handleScroll);
     TurnaContactsDirectory.revision.addListener(_refresh);
-    _loadPinnedMessage();
     _loadLocalMessageState();
     unawaited(_loadSecurityBannerState());
     if (_isGroupChat) {
+      unawaited(_loadPinnedMessages());
       unawaited(_loadGroupDetail());
+      unawaited(_loadMentionCandidates());
     }
     if (!_isGroupChat) {
       _restorePeerCallHistoryFromWarmCache();
@@ -3359,17 +3372,23 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   void _handleComposerChanged() {
     final text = _controller.text;
     _client.updateComposerText(text);
+    _updateMentionSuggestions(text);
     final hasComposerText = text.trim().isNotEmpty;
     if (hasComposerText != _hasComposerText && mounted) {
       setState(() => _hasComposerText = hasComposerText);
     }
   }
 
+  void _handleComposerFocusChanged() {
+    _refresh();
+    _updateMentionSuggestions(_controller.text);
+  }
+
   String? _buildPeerStatusText() {
     if (_isGroupChat) {
       final typingSummary = _client.groupTypingSummary;
       if (typingSummary != null) return typingSummary;
-      final previewNames = (_detail?.memberPreviewNames ??
+      final previewNames = (_cachedGroupDetail?.memberPreviewNames ??
               widget.chat.memberPreviewNames)
           .map((item) => item.trim())
           .where((item) => item.isNotEmpty)
@@ -4152,18 +4171,51 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     } catch (_) {}
   }
 
-  Future<void> _loadPinnedMessage() async {
+  Future<void> _loadPinnedMessages() async {
+    if (!_isGroupChat) return;
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getString(_pinnedMessageKey);
-      if (raw == null || raw.trim().isEmpty) return;
-      final map = jsonDecode(raw) as Map<String, dynamic>;
+      final items = await ChatApi.fetchPinnedMessages(
+        widget.session,
+        chatId: widget.chat.chatId,
+      );
+      if (!mounted) return;
+      _client.setPinnedMessages(items);
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      turnaLog('chat pinned messages load failed', error);
+    }
+  }
+
+  Future<void> _refreshPinnedMessagesIfAffected(String messageId) async {
+    if (!_isGroupChat) return;
+    if (!_client.pinnedMessages.any((item) => item.messageId == messageId)) {
+      return;
+    }
+    await _loadPinnedMessages();
+  }
+
+  Future<void> _loadMentionCandidates() async {
+    if (!_isGroupChat) return;
+    try {
+      final page = await ChatApi.fetchGroupMembers(
+        widget.session,
+        chatId: widget.chat.chatId,
+        limit: 120,
+      );
       if (!mounted) return;
       setState(() {
-        _pinnedMessage = _PinnedMessageDraft.fromMap(map);
+        _mentionCandidates = page.items
+            .where((item) => item.userId != widget.session.userId)
+            .toList();
       });
+      _updateMentionSuggestions(_controller.text);
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
     } catch (error) {
-      turnaLog('chat pinned message load failed', error);
+      turnaLog('chat mention candidates load failed', error);
     }
   }
 
@@ -4173,15 +4225,6 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     if (!mounted || alreadySeen) return;
     setState(() => _showSecurityBanner = true);
     await prefs.setBool(_securityBannerSeenKey, true);
-  }
-
-  Future<void> _persistPinnedMessage(_PinnedMessageDraft? draft) async {
-    final prefs = await SharedPreferences.getInstance();
-    if (draft == null) {
-      await prefs.remove(_pinnedMessageKey);
-      return;
-    }
-    await prefs.setString(_pinnedMessageKey, jsonEncode(draft.toMap()));
   }
 
   Future<void> _loadLocalMessageState() async {
@@ -4271,21 +4314,95 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     return approved == true;
   }
 
-  Future<void> _setPinnedPreviewIfNeeded(
-    String messageId,
-    String previewText,
-  ) async {
-    final current = _pinnedMessage;
-    if (current == null || current.messageId != messageId) return;
-    final next = _PinnedMessageDraft(
-      messageId: current.messageId,
-      senderLabel: current.senderLabel,
-      previewText: previewText,
-    );
-    if (mounted) {
-      setState(() => _pinnedMessage = next);
+  void _updateMentionSuggestions(String text) {
+    if (!_isGroupChat || !_composerFocusNode.hasFocus) {
+      if (_activeMentionQuery != null || _mentionSuggestions.isNotEmpty) {
+        setState(() {
+          _activeMentionQuery = null;
+          _mentionSuggestions = const [];
+        });
+      }
+      return;
     }
-    await _persistPinnedMessage(next);
+
+    final selection = _controller.selection;
+    final safeCursor = selection.isValid
+        ? selection.baseOffset.clamp(0, text.length).toInt()
+        : text.length;
+    final prefix = text.substring(0, safeCursor);
+    final match = RegExp(
+      r'(?:^|\s)@([a-z0-9._]{0,24})$',
+      caseSensitive: false,
+    ).firstMatch(prefix);
+
+    if (match == null) {
+      if (_activeMentionQuery != null || _mentionSuggestions.isNotEmpty) {
+        setState(() {
+          _activeMentionQuery = null;
+          _mentionSuggestions = const [];
+        });
+      }
+      return;
+    }
+
+    final query = (match.group(1) ?? '').trim().toLowerCase();
+    final suggestions = _mentionCandidates.where((member) {
+      final username = (member.username ?? '').trim().toLowerCase();
+      final displayName = member.displayName.trim().toLowerCase();
+      if (query.isEmpty) return true;
+      return username.startsWith(query) ||
+          displayName.startsWith(query) ||
+          displayName.contains(query);
+    }).take(6).toList();
+
+    final sameQuery = _activeMentionQuery == query;
+    final sameSuggestions =
+        _mentionSuggestions.length == suggestions.length &&
+        _mentionSuggestions.asMap().entries.every(
+          (entry) => entry.value.userId == suggestions[entry.key].userId,
+        );
+    if (sameQuery && sameSuggestions) return;
+    if (!mounted) return;
+    setState(() {
+      _activeMentionQuery = query;
+      _mentionSuggestions = suggestions;
+    });
+  }
+
+  String _mentionInsertTextFor(TurnaGroupMember member) {
+    final username = member.username?.trim();
+    if (username != null && username.isNotEmpty) {
+      return '@$username ';
+    }
+    final fallback = member.displayName.trim().split(RegExp(r'\s+')).first;
+    return '@$fallback ';
+  }
+
+  void _insertMentionCandidate(TurnaGroupMember member) {
+    final text = _controller.text;
+    final selection = _controller.selection;
+    final safeCursor = selection.isValid
+        ? selection.baseOffset.clamp(0, text.length).toInt()
+        : text.length;
+
+    var tokenStart = safeCursor - 1;
+    while (tokenStart >= 0 &&
+        !RegExp(r'\s').hasMatch(text[tokenStart])) {
+      tokenStart -= 1;
+    }
+    tokenStart += 1;
+    if (tokenStart >= text.length || text[tokenStart] != '@') return;
+
+    final replacement = _mentionInsertTextFor(member);
+    final nextText =
+        '${text.substring(0, tokenStart)}$replacement${text.substring(safeCursor)}';
+    final nextCursor = tokenStart + replacement.length;
+    _controller.value = TextEditingValue(
+      text: nextText,
+      selection: TextSelection.collapsed(offset: nextCursor),
+    );
+    _composerFocusNode.requestFocus();
+    _updateMentionSuggestions(nextText);
   }
 
   String _previewSnippetForMessage(ChatMessage msg) {
@@ -4330,6 +4447,21 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       }
     }
     return null;
+  }
+
+  ChatMessage _messageForPinnedSummary(TurnaPinnedMessageSummary summary) {
+    return _client.messages.firstWhere(
+      (message) => message.id == summary.messageId,
+      orElse: () => ChatMessage(
+        id: summary.messageId,
+        senderId: summary.senderId,
+        text: summary.previewText,
+        status: ChatMessageStatus.sent,
+        createdAt: summary.messageCreatedAt,
+        senderDisplayName: summary.senderDisplayName,
+        isPinned: true,
+      ),
+    );
   }
 
   ChatAttachment? _replyVisualAttachmentForMessage(ChatMessage? message) {
@@ -4838,7 +4970,6 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   }
 
   Future<void> _deleteMessageLocally(ChatMessage msg) async {
-    final wasPinned = _pinnedMessage?.messageId == msg.id;
     final next = Set<String>.from(_deletedMessageIds)..add(msg.id);
     final nextStarred = Set<String>.from(_starredMessageIds)..remove(msg.id);
     final nextSoftDeleted = Set<String>.from(_softDeletedMessageIds)
@@ -4851,16 +4982,11 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         _editingDraft = null;
         _controller.clear();
       }
-      if (wasPinned) {
-        _pinnedMessage = null;
-      }
     });
     await _persistSoftDeletedMessages();
     await _persistDeletedMessages();
     await _persistStarredMessages();
-    if (wasPinned) {
-      await _persistPinnedMessage(null);
-    }
+    await _refreshPinnedMessagesIfAffected(msg.id);
     if (!mounted) return;
     ScaffoldMessenger.of(
       context,
@@ -4881,7 +5007,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     });
     await _persistSoftDeletedMessages();
     await _persistStarredMessages();
-    await _setPinnedPreviewIfNeeded(msg.id, 'Silindi.');
+    await _refreshPinnedMessagesIfAffected(msg.id);
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
@@ -4908,7 +5034,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         });
       }
       await _persistSoftDeletedMessages();
-      await _setPinnedPreviewIfNeeded(msg.id, 'Silindi.');
+      await _refreshPinnedMessagesIfAffected(msg.id);
       _client.mergeServerMessage(updated);
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -5140,13 +5266,214 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     );
   }
 
+  static const List<String> _reactionOptions = <String>[
+    '👍',
+    '❤️',
+    '😂',
+    '🔥',
+    '👏',
+    '😮',
+    '😢',
+    '🙏',
+  ];
+
+  bool _messageHasMyReaction(ChatMessage msg, String emoji) {
+    return msg.reactions.any(
+      (reaction) =>
+          reaction.emoji == emoji &&
+          reaction.userIds.contains(widget.session.userId),
+    );
+  }
+
+  Future<void> _toggleReaction(ChatMessage msg, String emoji) async {
+    try {
+      final updated = _messageHasMyReaction(msg, emoji)
+          ? await ChatApi.removeReaction(
+              widget.session,
+              messageId: msg.id,
+              emoji: emoji,
+            )
+          : await ChatApi.addReaction(
+              widget.session,
+              messageId: msg.id,
+              emoji: emoji,
+            );
+      _client.mergeServerMessage(updated);
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
+  Future<void> _showReactionPicker(ChatMessage msg) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 18, 16, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Tepki sec',
+                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 14),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  children: _reactionOptions.map((emoji) {
+                    final selected = _messageHasMyReaction(msg, emoji);
+                    return InkWell(
+                      borderRadius: BorderRadius.circular(18),
+                      onTap: () async {
+                        Navigator.pop(sheetContext);
+                        await _toggleReaction(msg, emoji);
+                      },
+                      child: Container(
+                        width: 52,
+                        height: 52,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: selected
+                              ? TurnaColors.primary50
+                              : TurnaColors.backgroundMuted,
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(
+                            color: selected
+                                ? TurnaColors.primary
+                                : TurnaColors.border,
+                          ),
+                        ),
+                        child: Text(
+                          emoji,
+                          style: const TextStyle(fontSize: 24),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _togglePinnedMessage(ChatMessage msg) async {
+    if (!_isGroupChat) return;
+    final isPinned = msg.isPinned ||
+        _client.pinnedMessages.any((item) => item.messageId == msg.id);
+    try {
+      if (isPinned) {
+        await ChatApi.unpinMessage(widget.session, messageId: msg.id);
+      } else {
+        await ChatApi.pinMessage(widget.session, messageId: msg.id);
+      }
+      await _loadPinnedMessages();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            isPinned ? 'Sabit mesaj kaldırıldı.' : 'Mesaj sabitlendi.',
+          ),
+        ),
+      );
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
+  Future<void> _openPinnedMessagesSheet() async {
+    final pinnedMessages = _client.pinnedMessages;
+    if (pinnedMessages.isEmpty) return;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 18),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Sabit mesajlar',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  height: math.min(
+                    MediaQuery.of(sheetContext).size.height * 0.48,
+                    math.max(88, pinnedMessages.length * 78).toDouble(),
+                  ),
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: pinnedMessages.length,
+                    separatorBuilder: (_, _) =>
+                        const Divider(height: 1, color: TurnaColors.divider),
+                    itemBuilder: (context, index) {
+                      final item = pinnedMessages[index];
+                      final pinnedBy =
+                          (item.pinnedByDisplayName ?? '').trim().isNotEmpty
+                          ? item.pinnedByDisplayName!.trim()
+                          : 'Birisi';
+                      return ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(
+                          Icons.push_pin_rounded,
+                          color: TurnaColors.primary,
+                        ),
+                        title: Text(
+                          item.previewText.trim().isEmpty
+                              ? 'Sabit mesaj'
+                              : item.previewText,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        subtitle: Text(
+                          '$pinnedBy · ${_formatMessageTime(item.pinnedAt)}',
+                        ),
+                        onTap: () async {
+                          Navigator.pop(sheetContext);
+                          await _scrollToReplyTarget(item.messageId);
+                        },
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   Future<void> _showMoreMessageActions(ChatMessage msg) async {
     final parsed = parseTurnaMessageText(msg.text);
     if (_isMessageDeletedPlaceholder(msg, parsed: parsed)) {
       await _confirmRemoveDeletedPlaceholder(msg);
       return;
     }
-    final isPinned = _pinnedMessage?.messageId == msg.id;
+    final isPinned = msg.isPinned ||
+        _client.pinnedMessages.any((item) => item.messageId == msg.id);
     await showModalBottomSheet<void>(
       context: context,
       builder: (sheetContext) {
@@ -5154,23 +5481,25 @@ class _ChatRoomPageState extends State<ChatRoomPage>
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              ListTile(
-                leading: Icon(
-                  isPinned ? Icons.push_pin_outlined : Icons.push_pin_rounded,
-                ),
-                title: Text(isPinned ? 'Sabitlemeyi kaldır' : 'Sabitle'),
-                onTap: () async {
-                  Navigator.pop(sheetContext);
-                  final next = isPinned
+              if (_isGroupChat)
+                ListTile(
+                  leading: Icon(
+                    isPinned ? Icons.push_pin_outlined : Icons.push_pin_rounded,
+                  ),
+                  title: Text(isPinned ? 'Sabitlemeyi kaldır' : 'Sabitle'),
+                  onTap: !_canManagePinnedMessages
                       ? null
-                      : _PinnedMessageDraft(
-                          messageId: msg.id,
-                          senderLabel: _replyPayloadForMessage(msg).senderLabel,
-                          previewText: _previewSnippetForMessage(msg),
-                        );
-                  if (!mounted) return;
-                  setState(() => _pinnedMessage = next);
-                  await _persistPinnedMessage(next);
+                      : () async {
+                          Navigator.pop(sheetContext);
+                          await _togglePinnedMessage(msg);
+                        },
+                ),
+              ListTile(
+                leading: const Icon(Icons.emoji_emotions_outlined),
+                title: const Text('Tepki ver'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _showReactionPicker(msg);
                 },
               ),
               ListTile(
@@ -5241,6 +5570,14 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                   spacing: 18,
                   runSpacing: 18,
                   children: [
+                    _MessageQuickAction(
+                      icon: Icons.emoji_emotions_outlined,
+                      label: 'Tepki',
+                      onTap: () {
+                        Navigator.pop(sheetContext);
+                        _showReactionPicker(msg);
+                      },
+                    ),
                     _MessageQuickAction(
                       icon: Icons.reply_rounded,
                       label: 'Cevapla',
@@ -5502,10 +5839,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
           text: outboundText,
         );
         _client.mergeServerMessage(updated);
-        await _setPinnedPreviewIfNeeded(
-          updated.id,
-          _previewSnippetForMessage(updated),
-        );
+        await _refreshPinnedMessagesIfAffected(updated.id);
         if (!mounted) return;
         setState(() => _editingDraft = null);
         _controller.clear();
@@ -5771,6 +6105,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       msg,
       parsed: parsed,
     );
+    final isPinnedMessage = msg.isPinned ||
+        _client.pinnedMessages.any((item) => item.messageId == msg.id);
     final displayText = isDeletedPlaceholder ? 'Silindi.' : parsed.text.trim();
     final locationPayload = isDeletedPlaceholder ? null : parsed.location;
     final contactPayload = isDeletedPlaceholder ? null : parsed.contact;
@@ -5933,6 +6269,29 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                   ),
                 ),
               ],
+              if (isPinnedMessage)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: const [
+                      Icon(
+                        Icons.push_pin_rounded,
+                        size: 12,
+                        color: TurnaColors.primary,
+                      ),
+                      SizedBox(width: 4),
+                      Text(
+                        'Sabitlendi',
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w700,
+                          color: TurnaColors.primary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               if (hasError)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 6),
@@ -6060,6 +6419,49 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                       visibleAttachments.isNotEmpty ||
                       hasError))
                 Align(alignment: Alignment.bottomRight, child: footer),
+              if (msg.reactions.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: msg.reactions.map((reaction) {
+                    final selected = reaction.userIds.contains(
+                      widget.session.userId,
+                    );
+                    return InkWell(
+                      borderRadius: BorderRadius.circular(999),
+                      onTap: () => _toggleReaction(msg, reaction.emoji),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 5,
+                        ),
+                        decoration: BoxDecoration(
+                          color: selected
+                              ? TurnaColors.primary50
+                              : Colors.white.withValues(alpha: mine ? 0.54 : 0.9),
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(
+                            color: selected
+                                ? TurnaColors.primary
+                                : TurnaColors.border,
+                          ),
+                        ),
+                        child: Text(
+                          '${reaction.emoji} ${reaction.count}',
+                          style: TextStyle(
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w600,
+                            color: selected
+                                ? TurnaColors.primaryStrong
+                                : TurnaColors.text,
+                          ),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ],
             ],
           ),
         ),
@@ -6131,6 +6533,66 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                       child: _ComposerReplyBanner(
                         reply: _replyDraft!,
                         onClose: () => setState(() => _replyDraft = null),
+                      ),
+                    ),
+                  if (_mentionSuggestions.isNotEmpty)
+                    Container(
+                      margin: const EdgeInsets.only(
+                        left: 48,
+                        right: 54,
+                        bottom: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(color: TurnaColors.border),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.05),
+                            blurRadius: 10,
+                            offset: const Offset(0, 1),
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: _mentionSuggestions.map((member) {
+                          final username = (member.username ?? '').trim();
+                          return ListTile(
+                            dense: true,
+                            leading: CircleAvatar(
+                              radius: 18,
+                              backgroundColor: TurnaColors.primary50,
+                              backgroundImage:
+                                  (member.avatarUrl ?? '').trim().isNotEmpty
+                                  ? NetworkImage(member.avatarUrl!.trim())
+                                  : null,
+                              child: (member.avatarUrl ?? '').trim().isEmpty
+                                  ? Text(
+                                      member.displayName.trim().isEmpty
+                                          ? '?'
+                                          : member.displayName.trim()[0]
+                                                .toUpperCase(),
+                                      style: const TextStyle(
+                                        color: TurnaColors.primary,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    )
+                                  : null,
+                            ),
+                            title: Text(
+                              member.displayName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            subtitle: Text(
+                              username.isEmpty ? 'Uye' : '@$username',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            onTap: () => _insertMentionCandidate(member),
+                          );
+                        }).toList(),
                       ),
                     ),
                   if (_groupSendRestrictionText != null)
@@ -6943,7 +7405,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     widget.callCoordinator.removeListener(_handleCallCoordinatorChanged);
     _controller.removeListener(_handleComposerChanged);
     _controller.dispose();
-    _composerFocusNode.removeListener(_refresh);
+    _composerFocusNode.removeListener(_handleComposerFocusChanged);
     _composerFocusNode.dispose();
     _scrollController.removeListener(_handleScroll);
     _scrollController.dispose();
@@ -7081,13 +7543,16 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                 style: TextStyle(color: TurnaColors.primaryStrong),
               ),
             ),
-          if (_pinnedMessage != null)
+          if (_activePinnedMessage != null)
             _PinnedMessageBar(
-              pinned: _pinnedMessage!,
-              onClear: () async {
-                setState(() => _pinnedMessage = null);
-                await _persistPinnedMessage(null);
-              },
+              pinned: _activePinnedMessage!,
+              onTap: _openPinnedMessagesSheet,
+              onClear: _canManagePinnedMessages
+                  ? () =>
+                        _togglePinnedMessage(
+                          _messageForPinnedSummary(_activePinnedMessage!),
+                        )
+                  : null,
             ),
           if (_showSecurityBanner) _buildSecurityBanner(),
           Expanded(
@@ -7914,60 +8379,81 @@ class _ComposerEditBanner extends StatelessWidget {
 }
 
 class _PinnedMessageBar extends StatelessWidget {
-  const _PinnedMessageBar({required this.pinned, required this.onClear});
+  const _PinnedMessageBar({
+    required this.pinned,
+    required this.onTap,
+    this.onClear,
+  });
 
-  final _PinnedMessageDraft pinned;
-  final VoidCallback onClear;
+  final TurnaPinnedMessageSummary pinned;
+  final VoidCallback onTap;
+  final VoidCallback? onClear;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
-      decoration: const BoxDecoration(
-        color: TurnaColors.surface,
-        border: Border(bottom: BorderSide(color: TurnaColors.divider)),
-      ),
-      child: Row(
-        children: [
-          const Icon(
-            Icons.push_pin_rounded,
-            size: 17,
-            color: TurnaColors.primary,
+    final senderLabel =
+        (pinned.senderDisplayName ?? '').trim().isNotEmpty
+        ? pinned.senderDisplayName!.trim()
+        : 'Mesaj';
+    return Material(
+      color: TurnaColors.surface,
+      child: InkWell(
+        onTap: onTap,
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
+          decoration: const BoxDecoration(
+            border: Border(bottom: BorderSide(color: TurnaColors.divider)),
           ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Sabitlenen mesaj',
-                  style: TextStyle(
-                    color: TurnaColors.primary,
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w700,
-                  ),
+          child: Row(
+            children: [
+              const Icon(
+                Icons.push_pin_rounded,
+                size: 17,
+                color: TurnaColors.primary,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Sabitlenen mesaj',
+                      style: TextStyle(
+                        color: TurnaColors.primary,
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '$senderLabel: ${pinned.previewText}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: TurnaColors.textSoft,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  '${pinned.senderLabel}: ${pinned.previewText}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: TurnaColors.textSoft,
-                    fontSize: 13,
-                  ),
+              ),
+              IconButton(
+                onPressed: onTap,
+                visualDensity: VisualDensity.compact,
+                icon: const Icon(Icons.format_list_bulleted_rounded, size: 18),
+                color: TurnaColors.textMuted,
+              ),
+              if (onClear != null)
+                IconButton(
+                  onPressed: onClear,
+                  visualDensity: VisualDensity.compact,
+                  icon: const Icon(Icons.close_rounded, size: 18),
+                  color: TurnaColors.textMuted,
                 ),
-              ],
-            ),
+            ],
           ),
-          IconButton(
-            onPressed: onClear,
-            visualDensity: VisualDensity.compact,
-            icon: const Icon(Icons.close_rounded, size: 18),
-            color: TurnaColors.textMuted,
-          ),
-        ],
+        ),
       ),
     );
   }
