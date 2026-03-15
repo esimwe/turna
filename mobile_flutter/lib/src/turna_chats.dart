@@ -11851,10 +11851,45 @@ class NewChatPage extends StatefulWidget {
 }
 
 class _NewChatPageState extends State<NewChatPage> {
+  static const List<String> _alphabetIndex = <String>[
+    'A',
+    'B',
+    'C',
+    'Ç',
+    'D',
+    'E',
+    'F',
+    'G',
+    'Ğ',
+    'H',
+    'I',
+    'İ',
+    'J',
+    'K',
+    'L',
+    'M',
+    'N',
+    'O',
+    'Ö',
+    'P',
+    'R',
+    'S',
+    'Ş',
+    'T',
+    'U',
+    'Ü',
+    'V',
+    'Y',
+    'Z',
+  ];
+  static const double _sectionHeaderHeight = 28;
+  static const double _contactRowHeight = 74;
   final TextEditingController _lookupController = TextEditingController();
+  final ScrollController _contactsScrollController = ScrollController();
   TurnaUserProfile? _foundUser;
   List<TurnaRegisteredContact> _registeredContacts =
       const <TurnaRegisteredContact>[];
+  Timer? _lookupDebounce;
   bool _loading = false;
   bool _syncingContacts = false;
   String? _lookupError;
@@ -11870,13 +11905,16 @@ class _NewChatPageState extends State<NewChatPage> {
 
   @override
   void dispose() {
+    _lookupDebounce?.cancel();
     TurnaContactsDirectory.revision.removeListener(_handleContactsChanged);
     _lookupController.removeListener(_handleLookupChanged);
     _lookupController.dispose();
+    _contactsScrollController.dispose();
     super.dispose();
   }
 
   void _handleLookupChanged() {
+    _lookupDebounce?.cancel();
     if (!mounted) return;
     setState(() {
       if (_lookupError != null) {
@@ -11885,6 +11923,16 @@ class _NewChatPageState extends State<NewChatPage> {
       if (_foundUser != null) {
         _foundUser = null;
       }
+    });
+
+    final query = _lookupController.text.trim();
+    if (!_shouldTriggerExactLookup(query)) {
+      return;
+    }
+
+    _lookupDebounce = Timer(const Duration(milliseconds: 320), () {
+      if (!mounted) return;
+      unawaited(_searchUser(overrideQuery: query));
     });
   }
 
@@ -11933,8 +11981,28 @@ class _NewChatPageState extends State<NewChatPage> {
   }
 
   List<TurnaRegisteredContact> get _filteredRegisteredContacts {
-    final query = _lookupController.text.trim().toLowerCase();
+    final rawQuery = _lookupController.text.trim();
+    final query = rawQuery.toLowerCase();
     if (query.isEmpty) return _registeredContacts;
+    final exactUsername = _normalizeUsernameLookup(rawQuery);
+    if (exactUsername != null) {
+      return _registeredContacts.where((contact) {
+        return ((contact.username ?? '').trim().toLowerCase() == exactUsername);
+      }).toList();
+    }
+
+    final exactPhone = _normalizeLookupPhoneQuery(rawQuery);
+    if (exactPhone != null) {
+      final exactDigits = exactPhone.replaceAll(RegExp(r'\D+'), '');
+      return _registeredContacts.where((contact) {
+        final phoneDigits = (contact.phone ?? '').replaceAll(
+          RegExp(r'\D+'),
+          '',
+        );
+        return phoneDigits == exactDigits;
+      }).toList();
+    }
+
     final digitsQuery = query.replaceAll(RegExp(r'\D+'), '');
     return _registeredContacts.where((contact) {
       final title = contact.resolvedTitle.toLowerCase();
@@ -11948,8 +12016,45 @@ class _NewChatPageState extends State<NewChatPage> {
     }).toList();
   }
 
-  Future<void> _searchUser() async {
-    final query = _lookupController.text.trim();
+  String? _normalizeUsernameLookup(String query) {
+    final trimmed = query.trim();
+    if (!trimmed.startsWith('@')) return null;
+    final normalized = trimmed
+        .replaceFirst(RegExp(r'^@+'), '')
+        .trim()
+        .toLowerCase();
+    return normalized.isEmpty ? null : normalized;
+  }
+
+  String? _normalizeLookupPhoneQuery(String query) {
+    final trimmed = query.trim();
+    if (trimmed.isEmpty) return null;
+    final digits = trimmed.replaceAll(RegExp(r'\D+'), '');
+    if (trimmed.startsWith('+')) {
+      if (digits.length < 8 || digits.length > 15) return null;
+      return '+$digits';
+    }
+    if (RegExp(r'^05\d{9}$').hasMatch(digits)) {
+      return '+90${digits.substring(1)}';
+    }
+    if (RegExp(r'^5\d{9}$').hasMatch(digits)) {
+      return '+90$digits';
+    }
+    return null;
+  }
+
+  bool _shouldTriggerExactLookup(String query) {
+    if (_normalizeUsernameLookup(query) != null) return true;
+    return _normalizeLookupPhoneQuery(query) != null;
+  }
+
+  Future<void> _searchUser({String? overrideQuery}) async {
+    final rawQuery = (overrideQuery ?? _lookupController.text).trim();
+    final query =
+        _normalizeLookupPhoneQuery(rawQuery) ??
+        (_normalizeUsernameLookup(rawQuery) != null
+            ? '@${_normalizeUsernameLookup(rawQuery)!}'
+            : rawQuery);
     if (query.isEmpty) {
       setState(() {
         _lookupError = 'Telefon numarası veya kullanıcı adı gir.';
@@ -11985,6 +12090,49 @@ class _NewChatPageState extends State<NewChatPage> {
         _lookupError = error.toString();
       });
     }
+  }
+
+  Future<void> _openCreateContact() async {
+    try {
+      final queryPhone = _normalizeLookupPhoneQuery(_lookupController.text);
+      final contact = Contact(
+        displayName: '',
+        phones: queryPhone == null
+            ? const <Phone>[]
+            : <Phone>[Phone(queryPhone)],
+      );
+      await FlutterContacts.openExternalInsert(contact);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Kişi kartı açılamadı: $error')));
+    }
+  }
+
+  Future<void> _openCreateGroup() async {
+    final navigator = Navigator.of(context);
+    final createdChat = await Navigator.push<ChatPreview>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => _CreateGroupPage(
+          session: widget.session,
+          registeredContacts: _registeredContacts,
+          onSessionExpired: widget.onSessionExpired,
+        ),
+      ),
+    );
+    if (!mounted || createdChat == null) return;
+    await navigator.push(
+      buildChatRoomRoute(
+        chat: createdChat,
+        session: widget.session,
+        callCoordinator: widget.callCoordinator,
+        onSessionExpired: widget.onSessionExpired,
+      ),
+    );
+    if (!mounted) return;
+    navigator.pop(true);
   }
 
   Future<void> _openChat(TurnaUserProfile user) async {
@@ -12061,58 +12209,248 @@ class _NewChatPageState extends State<NewChatPage> {
       );
     }
 
-    return ListView.separated(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-      itemCount: contacts.length,
-      separatorBuilder: (context, index) => const Divider(height: 1),
-      itemBuilder: (context, index) {
-        final contact = contacts[index];
-        final subtitleParts = <String>[
-          if ((contact.username ?? '').trim().isNotEmpty)
-            '@${contact.username!.trim()}',
-          if ((contact.phone ?? '').trim().isNotEmpty)
-            formatTurnaDisplayPhone(contact.phone!),
-        ];
-        return ListTile(
-          contentPadding: const EdgeInsets.symmetric(
-            horizontal: 4,
-            vertical: 6,
-          ),
-          leading: _ProfileAvatar(
-            label: contact.resolvedTitle,
-            avatarUrl: contact.avatarUrl,
-            authToken: widget.session.token,
-            radius: 24,
-          ),
-          title: Text(
-            contact.resolvedTitle,
-            style: const TextStyle(fontWeight: FontWeight.w600),
-          ),
-          subtitle: subtitleParts.isEmpty
-              ? null
-              : Text(
-                  subtitleParts.join('  •  '),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-          onTap: () => _openChat(contact.toUserProfile()),
-          onLongPress: () async {
-            await Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => UserProfilePage(
-                  session: widget.session,
-                  userId: contact.id,
-                  fallbackName: contact.resolvedTitle,
-                  fallbackAvatarUrl: contact.avatarUrl,
-                  callCoordinator: widget.callCoordinator,
-                  onSessionExpired: widget.onSessionExpired,
+    final grouped = <String, List<TurnaRegisteredContact>>{};
+    for (final contact in contacts) {
+      final letter = _sectionLetter(contact.resolvedTitle);
+      grouped
+          .putIfAbsent(letter, () => <TurnaRegisteredContact>[])
+          .add(contact);
+    }
+    final visibleLetters = _alphabetIndex
+        .where((letter) => grouped.containsKey(letter))
+        .toList(growable: false);
+    final offsets = <String, double>{};
+    var runningOffset = 0.0;
+    for (final letter in visibleLetters) {
+      offsets[letter] = runningOffset;
+      runningOffset +=
+          _sectionHeaderHeight + (grouped[letter]!.length * _contactRowHeight);
+    }
+
+    return Stack(
+      children: [
+        ListView(
+          controller: _contactsScrollController,
+          padding: const EdgeInsets.fromLTRB(16, 0, 30, 24),
+          children: [
+            for (final letter in visibleLetters) ...[
+              SizedBox(
+                height: _sectionHeaderHeight,
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    letter,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: TurnaColors.textMuted,
+                    ),
+                  ),
                 ),
               ),
-            );
-          },
-        );
-      },
+              ...grouped[letter]!.map((contact) {
+                final subtitleParts = <String>[
+                  if ((contact.username ?? '').trim().isNotEmpty)
+                    '@${contact.username!.trim()}',
+                  if ((contact.phone ?? '').trim().isNotEmpty)
+                    formatTurnaDisplayPhone(contact.phone!),
+                ];
+                return SizedBox(
+                  height: _contactRowHeight,
+                  child: Column(
+                    children: [
+                      Expanded(
+                        child: ListTile(
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 4,
+                            vertical: 6,
+                          ),
+                          leading: _ProfileAvatar(
+                            label: contact.resolvedTitle,
+                            avatarUrl: contact.avatarUrl,
+                            authToken: widget.session.token,
+                            radius: 24,
+                          ),
+                          title: Text(
+                            contact.resolvedTitle,
+                            style: const TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                          subtitle: subtitleParts.isEmpty
+                              ? null
+                              : Text(
+                                  subtitleParts.join('  •  '),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                          onTap: () => _openChat(contact.toUserProfile()),
+                          onLongPress: () async {
+                            await Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => UserProfilePage(
+                                  session: widget.session,
+                                  userId: contact.id,
+                                  fallbackName: contact.resolvedTitle,
+                                  fallbackAvatarUrl: contact.avatarUrl,
+                                  callCoordinator: widget.callCoordinator,
+                                  onSessionExpired: widget.onSessionExpired,
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                      const Divider(height: 1),
+                    ],
+                  ),
+                );
+              }),
+            ],
+          ],
+        ),
+        Positioned(
+          top: 6,
+          right: 4,
+          bottom: 10,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: _alphabetIndex.map((letter) {
+              final enabled = offsets.containsKey(letter);
+              return Expanded(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: !enabled
+                      ? null
+                      : () {
+                          _contactsScrollController.animateTo(
+                            offsets[letter]!,
+                            duration: const Duration(milliseconds: 180),
+                            curve: Curves.easeOut,
+                          );
+                        },
+                  child: SizedBox(
+                    width: 20,
+                    child: Center(
+                      child: Text(
+                        letter,
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          color: enabled
+                              ? TurnaColors.primary
+                              : TurnaColors.textMuted.withValues(alpha: 0.35),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+        ),
+      ],
+    );
+  }
+
+  String _sectionLetter(String value) {
+    final trimmed = value.trimLeft();
+    if (trimmed.isEmpty) return '#';
+    final first = trimmed.substring(0, 1);
+    switch (first.toLowerCase()) {
+      case 'ç':
+        return 'Ç';
+      case 'ğ':
+        return 'Ğ';
+      case 'ı':
+        return 'I';
+      case 'i':
+        return 'İ';
+      case 'ö':
+        return 'Ö';
+      case 'ş':
+        return 'Ş';
+      case 'ü':
+        return 'Ü';
+      default:
+        final upper = first.toUpperCase();
+        return _alphabetIndex.contains(upper) ? upper : '#';
+    }
+  }
+
+  Widget _buildQuickActionTile({
+    required IconData icon,
+    required String title,
+    required VoidCallback onTap,
+  }) {
+    return ListTile(
+      onTap: onTap,
+      leading: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          color: TurnaColors.primary50,
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Icon(icon, color: TurnaColors.primary),
+      ),
+      title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+      trailing: const Icon(
+        Icons.chevron_right_rounded,
+        color: TurnaColors.textMuted,
+      ),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14),
+      minLeadingWidth: 0,
+    );
+  }
+
+  Widget _buildLookupResultCard(String? foundUserName) {
+    if (_foundUser == null) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(color: TurnaColors.divider),
+        ),
+        child: Row(
+          children: [
+            _ProfileAvatar(
+              label: foundUserName ?? _foundUser!.displayName,
+              avatarUrl: _foundUser!.avatarUrl,
+              authToken: widget.session.token,
+              radius: 24,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    foundUserName ?? _foundUser!.displayName,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    (_foundUser!.username ?? '').trim().isNotEmpty
+                        ? '@${_foundUser!.username!.trim()}'
+                        : formatTurnaDisplayPhone(_foundUser!.phone ?? ''),
+                    style: const TextStyle(
+                      fontSize: 12.5,
+                      color: TurnaColors.textMuted,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            TextButton(
+              onPressed: () => _openChat(_foundUser!),
+              child: const Text('Sohbet'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -12127,53 +12465,7 @@ class _NewChatPageState extends State<NewChatPage> {
           );
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Yeni sohbet'),
-        actions: [
-          PopupMenuButton<String>(
-            onSelected: (value) async {
-              if (value == 'refresh_contacts') {
-                unawaited(_refreshRegisteredContacts(forceContactReload: true));
-                return;
-              }
-              if (value == 'new_group') {
-                final navigator = Navigator.of(context);
-                final createdChat = await Navigator.push<ChatPreview>(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => _CreateGroupPage(
-                      session: widget.session,
-                      registeredContacts: _registeredContacts,
-                      onSessionExpired: widget.onSessionExpired,
-                    ),
-                  ),
-                );
-                if (!mounted || createdChat == null) return;
-                await navigator.push(
-                  buildChatRoomRoute(
-                    chat: createdChat,
-                    session: widget.session,
-                    callCoordinator: widget.callCoordinator,
-                    onSessionExpired: widget.onSessionExpired,
-                  ),
-                );
-                if (!mounted) return;
-                navigator.pop(true);
-              }
-            },
-            itemBuilder: (context) => const [
-              PopupMenuItem<String>(
-                value: 'new_group',
-                child: Text('Yeni Grup'),
-              ),
-              PopupMenuItem<String>(
-                value: 'refresh_contacts',
-                child: Text('Kişileri Yenile'),
-              ),
-            ],
-          ),
-        ],
-      ),
+      appBar: AppBar(title: const Text('Yeni sohbet')),
       body: Column(
         children: [
           Padding(
@@ -12181,21 +12473,12 @@ class _NewChatPageState extends State<NewChatPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  'Rehberinde kayıtlı ve Turna kullanan kişiler aşağıda listelenir. İstersen telefon numarası veya kullanıcı adı ile de arayabilirsin.',
-                  style: TextStyle(
-                    fontSize: 13,
-                    height: 1.4,
-                    color: TurnaColors.textMuted,
-                  ),
-                ),
-                const SizedBox(height: 12),
                 TextField(
                   controller: _lookupController,
                   keyboardType: TextInputType.text,
                   decoration: InputDecoration(
-                    hintText: '+905413432140 veya @kullanıcıadı',
-                    prefixIcon: const Icon(Icons.person_search_outlined),
+                    hintText: 'Bir ad, numara veya kullanıcı adı aratın',
+                    prefixIcon: const Icon(Icons.search_rounded),
                     suffixIcon: lookupInput.isEmpty
                         ? null
                         : IconButton(
@@ -12217,20 +12500,6 @@ class _NewChatPageState extends State<NewChatPage> {
                   ),
                   onSubmitted: (_) => _searchUser(),
                 ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton(
-                    onPressed: _loading ? null : _searchUser,
-                    child: Text(
-                      _loading
-                          ? 'Aranıyor...'
-                          : _syncingContacts
-                          ? 'Kişiler yenileniyor...'
-                          : 'Kişiyi bul',
-                    ),
-                  ),
-                ),
                 if (_lookupError != null) ...[
                   const SizedBox(height: 10),
                   Text(
@@ -12245,104 +12514,71 @@ class _NewChatPageState extends State<NewChatPage> {
             ),
           ),
           Expanded(
-            child: _loading
+            child: _loading && _foundUser == null
                 ? const Center(child: CircularProgressIndicator())
-                : Column(
+                : ListView(
+                    padding: const EdgeInsets.fromLTRB(0, 0, 0, 24),
                     children: [
-                      if (_foundUser != null)
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-                          child: Container(
-                            padding: const EdgeInsets.all(18),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(24),
-                              border: Border.all(color: TurnaColors.divider),
-                            ),
-                            child: Column(
-                              children: [
-                                _ProfileAvatar(
-                                  label:
-                                      foundUserName ?? _foundUser!.displayName,
-                                  avatarUrl: _foundUser!.avatarUrl,
-                                  authToken: widget.session.token,
-                                  radius: 34,
-                                ),
-                                const SizedBox(height: 12),
-                                Text(
-                                  foundUserName ?? _foundUser!.displayName,
-                                  style: const TextStyle(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                                if ((_foundUser!.username ?? '')
-                                    .trim()
-                                    .isNotEmpty) ...[
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    '@${_foundUser!.username!.trim()}',
-                                    style: const TextStyle(
-                                      color: TurnaColors.textMuted,
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
-                                ],
-                                if ((_foundUser!.about ?? '')
-                                    .trim()
-                                    .isNotEmpty) ...[
-                                  const SizedBox(height: 10),
-                                  Text(
-                                    _foundUser!.about!.trim(),
-                                    textAlign: TextAlign.center,
-                                    style: const TextStyle(
-                                      color: TurnaColors.textSoft,
-                                      height: 1.4,
-                                    ),
-                                  ),
-                                ],
-                                const SizedBox(height: 18),
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: OutlinedButton(
-                                        onPressed: () async {
-                                          await Navigator.push(
-                                            context,
-                                            MaterialPageRoute(
-                                              builder: (_) => UserProfilePage(
-                                                session: widget.session,
-                                                userId: _foundUser!.id,
-                                                fallbackName:
-                                                    foundUserName ??
-                                                    _foundUser!.displayName,
-                                                fallbackAvatarUrl:
-                                                    _foundUser!.avatarUrl,
-                                                callCoordinator:
-                                                    widget.callCoordinator,
-                                                onSessionExpired:
-                                                    widget.onSessionExpired,
-                                              ),
-                                            ),
-                                          );
-                                        },
-                                        child: const Text('Profili aç'),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 10),
-                                    Expanded(
-                                      child: FilledButton(
-                                        onPressed: () => _openChat(_foundUser!),
-                                        child: const Text('Sohbet başlat'),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(22),
+                            border: Border.all(color: TurnaColors.divider),
+                          ),
+                          child: Column(
+                            children: [
+                              _buildQuickActionTile(
+                                icon: Icons.groups_rounded,
+                                title: 'Yeni grup',
+                                onTap: _openCreateGroup,
+                              ),
+                              const Divider(height: 1),
+                              _buildQuickActionTile(
+                                icon: Icons.person_add_alt_1_rounded,
+                                title: 'Yeni kişi',
+                                onTap: _openCreateContact,
+                              ),
+                            ],
                           ),
                         ),
-                      Expanded(child: _buildRegisteredContactsSection()),
+                      ),
+                      _buildLookupResultCard(foundUserName),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 2, 16, 10),
+                        child: Row(
+                          children: [
+                            const Text(
+                              'Turna\'daki kişiler',
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const Spacer(),
+                            if (_syncingContacts)
+                              const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            else
+                              TextButton(
+                                onPressed: () => _refreshRegisteredContacts(
+                                  forceContactReload: true,
+                                ),
+                                child: const Text('Yenile'),
+                              ),
+                          ],
+                        ),
+                      ),
+                      SizedBox(
+                        height: MediaQuery.of(context).size.height * 0.62,
+                        child: _buildRegisteredContactsSection(),
+                      ),
                     ],
                   ),
           ),
