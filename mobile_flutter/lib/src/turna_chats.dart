@@ -3134,6 +3134,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   bool _voiceRecordingPaused = false;
   bool _voiceRecorderBusy = false;
   bool _voiceSlideCancelArmed = false;
+  bool _showSecurityBanner = false;
   TurnaReplyPayload? _replyDraft;
   _ComposerEditDraft? _editingDraft;
   _PinnedMessageDraft? _pinnedMessage;
@@ -3164,6 +3165,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         );
 
   String get _pinnedMessageKey => 'turna_pinned_message_${widget.chat.chatId}';
+  String get _securityBannerSeenKey =>
+      'turna_security_banner_seen_${widget.session.userId}_${widget.chat.chatId}';
   String get _starredMessagesKey =>
       'turna_starred_messages_${widget.chat.chatId}';
   String get _softDeletedMessagesKey =>
@@ -3196,6 +3199,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     TurnaContactsDirectory.revision.addListener(_refresh);
     _loadPinnedMessage();
     _loadLocalMessageState();
+    unawaited(_loadSecurityBannerState());
     if (!_isGroupChat) {
       _restorePeerCallHistoryFromWarmCache();
     }
@@ -4047,6 +4051,14 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     } catch (error) {
       turnaLog('chat pinned message load failed', error);
     }
+  }
+
+  Future<void> _loadSecurityBannerState() async {
+    final prefs = await SharedPreferences.getInstance();
+    final alreadySeen = prefs.getBool(_securityBannerSeenKey) == true;
+    if (!mounted || alreadySeen) return;
+    setState(() => _showSecurityBanner = true);
+    await prefs.setBool(_securityBannerSeenKey, true);
   }
 
   Future<void> _persistPinnedMessage(_PinnedMessageDraft? draft) async {
@@ -5356,6 +5368,43 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     );
   }
 
+  Widget _buildSecurityBanner() {
+    final message = _isGroupChat
+        ? 'Mesajlar ve aramalar uçtan uca şifrelidir. Yalnızca bu gruptaki kişiler bu içerikleri okuyabilir, dinleyebilir veya paylaşabilir.'
+        : 'Mesajlar ve aramalar uçtan uca şifrelidir. Yalnızca bu sohbetteki kişiler bu içerikleri okuyabilir, dinleyebilir veya paylaşabilir.';
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF3D6),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFFF1D493)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: EdgeInsets.only(top: 1),
+            child: Icon(Icons.lock_rounded, size: 16, color: Color(0xFF6E5617)),
+          ),
+          SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              message,
+              style: TextStyle(
+                fontSize: 12.5,
+                height: 1.35,
+                color: Color(0xFF6E5617),
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildMessageBubble(
     List<_ChatTimelineEntry> displayEntries,
     int index,
@@ -6654,6 +6703,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                 await _persistPinnedMessage(null);
               },
             ),
+          if (_showSecurityBanner) _buildSecurityBanner(),
           Expanded(
             child: Stack(
               children: [
