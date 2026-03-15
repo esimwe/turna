@@ -700,7 +700,9 @@ class _ChatsPageState extends State<ChatsPage> {
   @override
   void initState() {
     super.initState();
+    _cachedInbox = TurnaChatInboxLocalCache.peek(widget.session.userId);
     _inboxFuture = _fetchInbox();
+    unawaited(_loadCachedInbox());
     widget.inboxUpdateNotifier?.addListener(_onInboxUpdate);
     _searchController.addListener(_onSearchChanged);
     TurnaContactsDirectory.revision.addListener(_onContactsChanged);
@@ -720,6 +722,14 @@ class _ChatsPageState extends State<ChatsPage> {
 
   Future<ChatInboxData> _fetchInbox() {
     return ChatApi.fetchChats(widget.session, refreshTick: _refreshTick);
+  }
+
+  Future<void> _loadCachedInbox() async {
+    final cached = await TurnaChatInboxLocalCache.load(widget.session.userId);
+    if (!mounted || cached == null) return;
+    setState(() {
+      _cachedInbox = cached;
+    });
   }
 
   void _scheduleInboxReload() {
@@ -1940,10 +1950,13 @@ class ArchivedChatsPage extends StatefulWidget {
 class _ArchivedChatsPageState extends State<ArchivedChatsPage> {
   int _refreshTick = 0;
   bool _actionBusy = false;
+  ChatInboxData? _cachedInbox;
 
   @override
   void initState() {
     super.initState();
+    _cachedInbox = TurnaChatInboxLocalCache.peek(widget.session.userId);
+    unawaited(_loadCachedInbox());
     TurnaContactsDirectory.revision.addListener(_onContactsChanged);
     unawaited(TurnaContactsDirectory.ensureLoaded());
   }
@@ -1961,6 +1974,12 @@ class _ArchivedChatsPageState extends State<ArchivedChatsPage> {
 
   void _scheduleRefresh() {
     _refreshTick++;
+  }
+
+  Future<void> _loadCachedInbox() async {
+    final cached = await TurnaChatInboxLocalCache.load(widget.session.userId);
+    if (!mounted || cached == null) return;
+    setState(() => _cachedInbox = cached);
   }
 
   void _handleActionError(Object error) {
@@ -2309,8 +2328,14 @@ class _ArchivedChatsPageState extends State<ArchivedChatsPage> {
       ),
       body: FutureBuilder<ChatInboxData>(
         future: ChatApi.fetchChats(widget.session, refreshTick: _refreshTick),
+        initialData: _cachedInbox,
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
+          if (snapshot.hasData) {
+            _cachedInbox = snapshot.data;
+          }
+          if (snapshot.connectionState == ConnectionState.waiting &&
+              snapshot.data == null &&
+              _cachedInbox == null) {
             return const Center(child: CircularProgressIndicator());
           }
 
@@ -2330,6 +2355,7 @@ class _ArchivedChatsPageState extends State<ArchivedChatsPage> {
 
           final inbox =
               snapshot.data ??
+              _cachedInbox ??
               ChatInboxData(chats: const [], folders: const []);
           final archivedChats = _prioritizeFavoritedChats(
             inbox.chats.where((chat) => chat.isArchived),
@@ -7629,12 +7655,21 @@ class ForwardMessagePickerPage extends StatefulWidget {
 class _ForwardMessagePickerPageState extends State<ForwardMessagePickerPage> {
   final TextEditingController _searchController = TextEditingController();
   late Future<ChatInboxData> _chatsFuture;
+  ChatInboxData? _cachedInbox;
 
   @override
   void initState() {
     super.initState();
+    _cachedInbox = TurnaChatInboxLocalCache.peek(widget.session.userId);
     _chatsFuture = ChatApi.fetchChats(widget.session);
+    unawaited(_loadCachedInbox());
     _searchController.addListener(_refresh);
+  }
+
+  Future<void> _loadCachedInbox() async {
+    final cached = await TurnaChatInboxLocalCache.load(widget.session.userId);
+    if (!mounted || cached == null) return;
+    setState(() => _cachedInbox = cached);
   }
 
   void _refresh() {
@@ -7656,8 +7691,14 @@ class _ForwardMessagePickerPageState extends State<ForwardMessagePickerPage> {
       appBar: AppBar(title: const Text('Ilet')),
       body: FutureBuilder<ChatInboxData>(
         future: _chatsFuture,
+        initialData: _cachedInbox,
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
+          if (snapshot.hasData) {
+            _cachedInbox = snapshot.data;
+          }
+          if (snapshot.connectionState == ConnectionState.waiting &&
+              snapshot.data == null &&
+              _cachedInbox == null) {
             return const Center(child: CircularProgressIndicator());
           }
           if (snapshot.hasError) {
@@ -7668,15 +7709,16 @@ class _ForwardMessagePickerPageState extends State<ForwardMessagePickerPage> {
             );
           }
 
-          final chats = (snapshot.data?.chats ?? const <ChatPreview>[])
-              .where((chat) => !chat.isArchived)
-              .where((chat) => chat.chatId != widget.currentChatId)
-              .where((chat) {
-                if (query.isEmpty) return true;
-                return chat.name.toLowerCase().contains(query) ||
-                    chat.message.toLowerCase().contains(query);
-              })
-              .toList();
+          final chats =
+              ((snapshot.data ?? _cachedInbox)?.chats ?? const <ChatPreview>[])
+                  .where((chat) => !chat.isArchived)
+                  .where((chat) => chat.chatId != widget.currentChatId)
+                  .where((chat) {
+                    if (query.isEmpty) return true;
+                    return chat.name.toLowerCase().contains(query) ||
+                        chat.message.toLowerCase().contains(query);
+                  })
+                  .toList();
 
           return Column(
             children: [

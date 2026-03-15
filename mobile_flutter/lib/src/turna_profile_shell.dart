@@ -2084,6 +2084,7 @@ class _ProfilePageState extends State<ProfilePage> {
     );
     await updatedSession.save();
     await TurnaProfileLocalCache.saveSelfProfile(updatedProfile);
+    await TurnaUserProfileLocalCache.save(updatedProfile);
     widget.onProfileUpdated(updatedSession);
     await TurnaAnalytics.logEvent('profile_updated', {
       'user_id': updatedSession.userId,
@@ -2107,6 +2108,10 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   Future<void> _pickAvatar() async {
+    final previousAvatarUrl = resolveTurnaSessionAvatarUrl(
+      widget.session,
+      overrideAvatarUrl: _profile?.avatarUrl,
+    );
     final file = await _imagePicker.pickImage(
       source: ImageSource.gallery,
       imageQuality: 88,
@@ -2146,6 +2151,11 @@ class _ProfilePageState extends State<ProfilePage> {
         widget.session,
         objectKey: upload.objectKey,
       );
+      if (previousAvatarUrl != null && previousAvatarUrl.trim().isNotEmpty) {
+        await TurnaLocalMediaCache.remove(
+          _buildAvatarCacheKey(previousAvatarUrl),
+        );
+      }
       if (!mounted) return;
       await _commitProfile(
         updatedProfile,
@@ -2165,6 +2175,10 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   Future<void> _removeAvatar() async {
+    final previousAvatarUrl = resolveTurnaSessionAvatarUrl(
+      widget.session,
+      overrideAvatarUrl: _profile?.avatarUrl,
+    );
     setState(() {
       _avatarBusy = true;
       _error = null;
@@ -2172,6 +2186,11 @@ class _ProfilePageState extends State<ProfilePage> {
 
     try {
       final updatedProfile = await ProfileApi.deleteAvatar(widget.session);
+      if (previousAvatarUrl != null && previousAvatarUrl.trim().isNotEmpty) {
+        await TurnaLocalMediaCache.remove(
+          _buildAvatarCacheKey(previousAvatarUrl),
+        );
+      }
       if (!mounted) return;
       await _commitProfile(
         updatedProfile,
@@ -3141,24 +3160,53 @@ class UserProfilePage extends StatefulWidget {
 class _UserProfilePageState extends State<UserProfilePage> {
   TurnaUserProfile? _profile;
   _UserConversationStats? _conversationStats;
-  bool _loading = true;
+  bool _loading = false;
   bool _statsLoading = true;
   bool _chatLockEnabled = false;
   String? _error;
 
+  String get _conversationChatId =>
+      ChatApi.buildDirectChatId(widget.session.userId, widget.userId);
+
   @override
   void initState() {
     super.initState();
-    _refreshData();
+    _profile =
+        TurnaUserProfileLocalCache.peek(widget.userId) ??
+        TurnaUserProfile(
+          id: widget.userId,
+          displayName: widget.fallbackName,
+          avatarUrl: widget.fallbackAvatarUrl,
+        );
+    unawaited(_loadCachedState());
+    unawaited(_refreshData());
   }
 
   Future<void> _refreshData() async {
     await Future.wait([_loadProfile(), _loadConversationStats()]);
   }
 
+  Future<void> _loadCachedState() async {
+    final cachedProfile = await TurnaUserProfileLocalCache.load(widget.userId);
+    final cachedMessages = await TurnaChatHistoryLocalCache.load(
+      widget.session.userId,
+      _conversationChatId,
+    );
+    if (!mounted) return;
+    setState(() {
+      if (cachedProfile != null) {
+        _profile = cachedProfile;
+      }
+      if (cachedMessages.isNotEmpty) {
+        _conversationStats = _buildConversationStats(cachedMessages);
+        _statsLoading = false;
+      }
+    });
+  }
+
   Future<void> _loadProfile() async {
     setState(() {
-      _loading = true;
+      _loading = _profile == null;
       _error = null;
     });
 
@@ -3173,19 +3221,17 @@ class _UserProfilePageState extends State<UserProfilePage> {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _error = error.toString();
+        if (_profile == null) {
+          _error = error.toString();
+        }
       });
     }
   }
 
   Future<void> _loadConversationStats() async {
-    final chatId = ChatApi.buildDirectChatId(
-      widget.session.userId,
-      widget.userId,
-    );
     if (mounted) {
       setState(() {
-        _statsLoading = true;
+        _statsLoading = _conversationStats == null;
       });
     }
 
@@ -3197,7 +3243,8 @@ class _UserProfilePageState extends State<UserProfilePage> {
       while (hasMore) {
         final page = await ChatApi.fetchMessagesPage(
           widget.session.token,
-          chatId,
+          _conversationChatId,
+          cacheOwnerId: widget.session.userId,
           before: before,
           limit: 100,
         );
@@ -3207,22 +3254,9 @@ class _UserProfilePageState extends State<UserProfilePage> {
         if (page.items.isEmpty) break;
       }
 
-      var attachmentCount = 0;
-      var totalBytes = 0;
-      for (final message in allMessages) {
-        totalBytes += utf8.encode(message.text).length;
-        for (final attachment in message.attachments) {
-          attachmentCount += 1;
-          totalBytes += attachment.sizeBytes;
-        }
-      }
-
       if (!mounted) return;
       setState(() {
-        _conversationStats = _UserConversationStats(
-          attachmentCount: attachmentCount,
-          totalBytes: totalBytes,
-        );
+        _conversationStats = _buildConversationStats(allMessages);
         _statsLoading = false;
       });
     } catch (error) {
@@ -3235,6 +3269,22 @@ class _UserProfilePageState extends State<UserProfilePage> {
         _statsLoading = false;
       });
     }
+  }
+
+  _UserConversationStats _buildConversationStats(List<ChatMessage> messages) {
+    var attachmentCount = 0;
+    var totalBytes = 0;
+    for (final message in messages) {
+      totalBytes += utf8.encode(message.text).length;
+      for (final attachment in message.attachments) {
+        attachmentCount += 1;
+        totalBytes += attachment.sizeBytes;
+      }
+    }
+    return _UserConversationStats(
+      attachmentCount: attachmentCount,
+      totalBytes: totalBytes,
+    );
   }
 
   Future<void> _startCall(TurnaCallType type) async {
@@ -3631,88 +3681,40 @@ class _ConversationMediaPageState extends State<ConversationMediaPage> {
   @override
   void initState() {
     super.initState();
-    _loadContent();
+    unawaited(_loadCachedContent());
+    unawaited(_loadContent());
+  }
+
+  Future<void> _loadCachedContent() async {
+    final messages = await TurnaChatHistoryLocalCache.load(
+      widget.session.userId,
+      widget.chatId,
+    );
+    if (!mounted || messages.isEmpty) return;
+    _applyMessages(messages, fromCache: true);
   }
 
   Future<void> _loadContent() async {
     setState(() {
-      _loading = true;
+      _loading =
+          _mediaItems.isEmpty &&
+          _linkSections.isEmpty &&
+          _documentSections.isEmpty;
       _error = null;
     });
 
     try {
       final messages = await _fetchAllMessages();
-      messages.sort(
-        (a, b) => _messageTimestamp(b).compareTo(_messageTimestamp(a)),
-      );
-
-      final mediaItems = <_ConversationMediaItem>[];
-      final linkItems = <_ConversationLinkItem>[];
-      final documentItems = <_ConversationDocumentItem>[];
-      final seenLinks = <String>{};
-
-      for (final message in messages) {
-        final parsed = parseTurnaMessageText(message.text);
-        if (parsed.deletedForEveryone) continue;
-        final createdAt = _messageTimestamp(message);
-
-        for (final attachment in message.attachments) {
-          if (_isImageAttachment(attachment) ||
-              _isVideoAttachment(attachment)) {
-            mediaItems.add(
-              _ConversationMediaItem(
-                message: message,
-                attachment: attachment,
-                createdAt: createdAt,
-              ),
-            );
-            continue;
-          }
-          if (!_isAudioAttachment(attachment)) {
-            documentItems.add(
-              _ConversationDocumentItem(
-                message: message,
-                attachment: attachment,
-                createdAt: createdAt,
-              ),
-            );
-          }
-        }
-
-        final normalizedText = parsed.text.trim();
-        if (normalizedText.isEmpty) continue;
-        for (final uri in extractTurnaUrls(normalizedText)) {
-          final key = '${message.id}|${uri.toString()}';
-          if (!seenLinks.add(key)) continue;
-          linkItems.add(
-            _ConversationLinkItem(
-              message: message,
-              uri: uri,
-              createdAt: createdAt,
-              messageText: normalizedText,
-            ),
-          );
-        }
-      }
-
-      if (!mounted) return;
-      setState(() {
-        _mediaItems = mediaItems;
-        _linkSections = _buildMonthSections(
-          linkItems,
-          (item) => item.createdAt,
-        );
-        _documentSections = _buildMonthSections(
-          documentItems,
-          (item) => item.createdAt,
-        );
-        _loading = false;
-      });
+      _applyMessages(messages, fromCache: false);
     } catch (error) {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _error = error.toString();
+        if (_mediaItems.isEmpty &&
+            _linkSections.isEmpty &&
+            _documentSections.isEmpty) {
+          _error = error.toString();
+        }
       });
     }
   }
@@ -3726,6 +3728,7 @@ class _ConversationMediaPageState extends State<ConversationMediaPage> {
       final page = await ChatApi.fetchMessagesPage(
         widget.session.token,
         widget.chatId,
+        cacheOwnerId: widget.session.userId,
         before: before,
         limit: 100,
       );
@@ -3736,6 +3739,74 @@ class _ConversationMediaPageState extends State<ConversationMediaPage> {
     }
 
     return items;
+  }
+
+  void _applyMessages(List<ChatMessage> messages, {required bool fromCache}) {
+    messages.sort(
+      (a, b) => _messageTimestamp(b).compareTo(_messageTimestamp(a)),
+    );
+
+    final mediaItems = <_ConversationMediaItem>[];
+    final linkItems = <_ConversationLinkItem>[];
+    final documentItems = <_ConversationDocumentItem>[];
+    final seenLinks = <String>{};
+
+    for (final message in messages) {
+      final parsed = parseTurnaMessageText(message.text);
+      if (parsed.deletedForEveryone) continue;
+      final createdAt = _messageTimestamp(message);
+
+      for (final attachment in message.attachments) {
+        if (_isImageAttachment(attachment) || _isVideoAttachment(attachment)) {
+          mediaItems.add(
+            _ConversationMediaItem(
+              message: message,
+              attachment: attachment,
+              createdAt: createdAt,
+            ),
+          );
+          continue;
+        }
+        if (!_isAudioAttachment(attachment)) {
+          documentItems.add(
+            _ConversationDocumentItem(
+              message: message,
+              attachment: attachment,
+              createdAt: createdAt,
+            ),
+          );
+        }
+      }
+
+      final normalizedText = parsed.text.trim();
+      if (normalizedText.isEmpty) continue;
+      for (final uri in extractTurnaUrls(normalizedText)) {
+        final key = '${message.id}|${uri.toString()}';
+        if (!seenLinks.add(key)) continue;
+        linkItems.add(
+          _ConversationLinkItem(
+            message: message,
+            uri: uri,
+            createdAt: createdAt,
+            messageText: normalizedText,
+          ),
+        );
+      }
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _mediaItems = mediaItems;
+      _linkSections = _buildMonthSections(linkItems, (item) => item.createdAt);
+      _documentSections = _buildMonthSections(
+        documentItems,
+        (item) => item.createdAt,
+      );
+      _loading = false;
+      if (!fromCache) {
+        _error = null;
+      }
+    });
   }
 
   DateTime _messageTimestamp(ChatMessage message) {
@@ -3937,7 +4008,11 @@ class _ConversationMediaPageState extends State<ConversationMediaPage> {
 
   Widget _buildBody() {
     if (_loading) {
-      return const Center(child: CircularProgressIndicator());
+      return const _CenteredState(
+        icon: Icons.photo_library_outlined,
+        title: 'İçerik hazırlanıyor',
+        message: 'Son bilinen medya ve bağlantılar getiriliyor.',
+      );
     }
     if (_error != null) {
       return _CenteredState(

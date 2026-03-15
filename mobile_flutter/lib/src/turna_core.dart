@@ -34,6 +34,46 @@ class ChatPreview {
   final bool isLocked;
   final String? folderId;
   final String? folderName;
+
+  factory ChatPreview.fromCacheMap(Map<String, dynamic> map) {
+    return ChatPreview(
+      chatId: (map['chatId'] ?? '').toString(),
+      name: (map['name'] ?? '').toString(),
+      message: (map['message'] ?? '').toString(),
+      time: (map['time'] ?? '').toString(),
+      phone: TurnaUserProfile._nullableString(map['phone']),
+      avatarUrl: TurnaUserProfile._nullableString(map['avatarUrl']),
+      peerId: TurnaUserProfile._nullableString(map['peerId']),
+      unreadCount: (map['unreadCount'] as num?)?.toInt() ?? 0,
+      isMuted: map['isMuted'] == true,
+      isBlockedByMe: map['isBlockedByMe'] == true,
+      isArchived: map['isArchived'] == true,
+      isFavorited: map['isFavorited'] == true,
+      isLocked: map['isLocked'] == true,
+      folderId: TurnaUserProfile._nullableString(map['folderId']),
+      folderName: TurnaUserProfile._nullableString(map['folderName']),
+    );
+  }
+
+  Map<String, dynamic> toCacheMap() {
+    return {
+      'chatId': chatId,
+      'name': name,
+      'message': message,
+      'time': time,
+      'phone': phone,
+      'avatarUrl': avatarUrl,
+      'peerId': peerId,
+      'unreadCount': unreadCount,
+      'isMuted': isMuted,
+      'isBlockedByMe': isBlockedByMe,
+      'isArchived': isArchived,
+      'isFavorited': isFavorited,
+      'isLocked': isLocked,
+      'folderId': folderId,
+      'folderName': folderName,
+    };
+  }
 }
 
 class ChatFolder {
@@ -50,6 +90,10 @@ class ChatFolder {
       sortOrder: (map['sortOrder'] as num?)?.toInt() ?? 0,
     );
   }
+
+  Map<String, dynamic> toMap() {
+    return {'id': id, 'name': name, 'sortOrder': sortOrder};
+  }
 }
 
 class ChatInboxData {
@@ -57,6 +101,30 @@ class ChatInboxData {
 
   final List<ChatPreview> chats;
   final List<ChatFolder> folders;
+
+  factory ChatInboxData.fromCacheMap(Map<String, dynamic> map) {
+    final chatsData = map['chats'] as List<dynamic>? ?? const [];
+    final foldersData = map['folders'] as List<dynamic>? ?? const [];
+    return ChatInboxData(
+      chats: chatsData
+          .whereType<Map>()
+          .map(
+            (item) => ChatPreview.fromCacheMap(Map<String, dynamic>.from(item)),
+          )
+          .toList(),
+      folders: foldersData
+          .whereType<Map>()
+          .map((item) => ChatFolder.fromMap(Map<String, dynamic>.from(item)))
+          .toList(),
+    );
+  }
+
+  Map<String, dynamic> toCacheMap() {
+    return {
+      'chats': chats.map((chat) => chat.toCacheMap()).toList(),
+      'folders': folders.map((folder) => folder.toMap()).toList(),
+    };
+  }
 }
 
 class ChatUser {
@@ -255,6 +323,145 @@ class TurnaProfileLocalCache {
   static Future<void> clearSelfProfile() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_selfProfileKey);
+  }
+}
+
+class TurnaUserProfileLocalCache {
+  static const String _prefix = 'turna_profile_user_v1_';
+  static final Map<String, TurnaUserProfile> _warmProfiles =
+      <String, TurnaUserProfile>{};
+
+  static String _key(String userId) => '$_prefix$userId';
+
+  static TurnaUserProfile? peek(String userId) => _warmProfiles[userId];
+
+  static Future<TurnaUserProfile?> load(String userId) async {
+    final warm = _warmProfiles[userId];
+    if (warm != null) return warm;
+
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_key(userId));
+    if (raw == null || raw.trim().isEmpty) return null;
+    try {
+      final decoded = jsonDecode(raw) as Map<String, dynamic>;
+      final profile = TurnaUserProfile.fromMap(decoded);
+      _warmProfiles[userId] = profile;
+      return profile;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<void> save(TurnaUserProfile profile) async {
+    _warmProfiles[profile.id] = profile;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_key(profile.id), jsonEncode(profile.toMap()));
+  }
+}
+
+class TurnaChatInboxLocalCache {
+  static const String _prefix = 'turna_chat_inbox_v1_';
+  static final Map<String, ChatInboxData> _warmInboxes =
+      <String, ChatInboxData>{};
+
+  static String _key(String userId) => '$_prefix$userId';
+
+  static ChatInboxData? peek(String userId) => _warmInboxes[userId];
+
+  static Future<ChatInboxData?> load(String userId) async {
+    final warm = _warmInboxes[userId];
+    if (warm != null) return warm;
+
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_key(userId));
+    if (raw == null || raw.trim().isEmpty) return null;
+    try {
+      final decoded = jsonDecode(raw) as Map<String, dynamic>;
+      final inbox = ChatInboxData.fromCacheMap(decoded);
+      _warmInboxes[userId] = inbox;
+      return inbox;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<void> save(String userId, ChatInboxData inbox) async {
+    _warmInboxes[userId] = inbox;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_key(userId), jsonEncode(inbox.toCacheMap()));
+  }
+}
+
+class TurnaChatHistoryLocalCache {
+  static const int _messageLimit = 320;
+  static const String _prefix = 'turna_chat_history_v1_';
+  static final Map<String, List<ChatMessage>> _warm =
+      <String, List<ChatMessage>>{};
+
+  static String _cacheId(String userId, String chatId) => '$userId::$chatId';
+
+  static String _key(String userId, String chatId) {
+    final raw = utf8.encode('$userId|$chatId');
+    return '$_prefix${base64UrlEncode(raw)}';
+  }
+
+  static List<ChatMessage>? peek(String userId, String chatId) {
+    final cached = _warm[_cacheId(userId, chatId)];
+    if (cached == null) return null;
+    return List<ChatMessage>.from(cached);
+  }
+
+  static Future<List<ChatMessage>> load(String userId, String chatId) async {
+    final warm = peek(userId, chatId);
+    if (warm != null) return warm;
+
+    final prefs = await SharedPreferences.getInstance();
+    final rawList = prefs.getStringList(_key(userId, chatId)) ?? const [];
+    final items = <ChatMessage>[];
+    for (final raw in rawList) {
+      try {
+        final decoded = jsonDecode(raw) as Map<String, dynamic>;
+        items.add(ChatMessage.fromPendingMap(decoded));
+      } catch (_) {}
+    }
+    items.sort((a, b) => compareTurnaTimestamps(a.createdAt, b.createdAt));
+    _warm[_cacheId(userId, chatId)] = List<ChatMessage>.from(items);
+    return items;
+  }
+
+  static Future<void> saveMessages(
+    String userId,
+    String chatId,
+    Iterable<ChatMessage> messages,
+  ) async {
+    final merged = messages.toList()
+      ..sort((a, b) => compareTurnaTimestamps(a.createdAt, b.createdAt));
+    final trimmed = merged.length <= _messageLimit
+        ? merged
+        : merged.sublist(merged.length - _messageLimit);
+    _warm[_cacheId(userId, chatId)] = List<ChatMessage>.from(trimmed);
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(
+      _key(userId, chatId),
+      trimmed.map((message) => jsonEncode(message.toPendingMap())).toList(),
+    );
+  }
+
+  static Future<void> mergePage(
+    String userId,
+    String chatId,
+    Iterable<ChatMessage> pageItems,
+  ) async {
+    final existing = await load(userId, chatId);
+    final byId = <String, ChatMessage>{};
+    for (final item in existing) {
+      byId[item.id] = item;
+    }
+    for (final item in pageItems) {
+      byId[item.id] = item;
+    }
+    await saveMessages(userId, chatId, byId.values);
   }
 }
 
@@ -821,6 +1028,7 @@ class TurnaSocketClient extends ChangeNotifier {
       final page = await ChatApi.fetchMessagesPage(
         token,
         chatId,
+        cacheOwnerId: senderId,
         limit: _pageSize,
       );
 
@@ -870,6 +1078,7 @@ class TurnaSocketClient extends ChangeNotifier {
       final page = await ChatApi.fetchMessagesPage(
         token,
         chatId,
+        cacheOwnerId: senderId,
         before: nextBefore ?? messages.first.createdAt,
         limit: _pageSize,
       );
@@ -1115,6 +1324,7 @@ class TurnaSocketClient extends ChangeNotifier {
   Future<void> _persistMessageCaches() async {
     await _persistPendingMessages();
     await _persistRecentMessages();
+    await TurnaChatHistoryLocalCache.saveMessages(senderId, chatId, messages);
   }
 
   void _emitQueuedMessage(String localId) {
@@ -1942,30 +2152,51 @@ class OutgoingAttachmentDraft {
 
 class ProfileApi {
   static Future<TurnaUserProfile> fetchMe(AuthSession session) async {
-    final res = await http.get(
-      Uri.parse('$kBackendBaseUrl/api/profile/me'),
-      headers: {'Authorization': 'Bearer ${session.token}'},
-    );
-    _throwIfApiError(res, label: 'fetchMe');
+    try {
+      final res = await http.get(
+        Uri.parse('$kBackendBaseUrl/api/profile/me'),
+        headers: {'Authorization': 'Bearer ${session.token}'},
+      );
+      _throwIfApiError(res, label: 'fetchMe');
 
-    final map = jsonDecode(res.body) as Map<String, dynamic>;
-    final data = map['data'] as Map<String, dynamic>? ?? const {};
-    return TurnaUserProfile.fromMap(data);
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = map['data'] as Map<String, dynamic>? ?? const {};
+      final profile = TurnaUserProfile.fromMap(data);
+      await TurnaProfileLocalCache.saveSelfProfile(profile);
+      await TurnaUserProfileLocalCache.save(profile);
+      return profile;
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      final cached = await TurnaProfileLocalCache.loadSelfProfile(session);
+      if (cached != null) return cached;
+      throw TurnaApiException('Profil yuklenemedi.');
+    }
   }
 
   static Future<TurnaUserProfile> fetchUser(
     AuthSession session,
     String userId,
   ) async {
-    final res = await http.get(
-      Uri.parse('$kBackendBaseUrl/api/profile/users/$userId'),
-      headers: {'Authorization': 'Bearer ${session.token}'},
-    );
-    _throwIfApiError(res, label: 'fetchUser');
+    try {
+      final res = await http.get(
+        Uri.parse('$kBackendBaseUrl/api/profile/users/$userId'),
+        headers: {'Authorization': 'Bearer ${session.token}'},
+      );
+      _throwIfApiError(res, label: 'fetchUser');
 
-    final map = jsonDecode(res.body) as Map<String, dynamic>;
-    final data = map['data'] as Map<String, dynamic>? ?? const {};
-    return TurnaUserProfile.fromMap(data);
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = map['data'] as Map<String, dynamic>? ?? const {};
+      final profile = TurnaUserProfile.fromMap(data);
+      await TurnaUserProfileLocalCache.save(profile);
+      return profile;
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      final cached = await TurnaUserProfileLocalCache.load(userId);
+      if (cached != null) return cached;
+      throw TurnaApiException('Kullanici profili yuklenemedi.');
+    }
   }
 
   static Future<bool> checkUsernameAvailability(
@@ -2309,10 +2540,14 @@ class ChatApi {
           .whereType<Map>()
           .map((item) => ChatFolder.fromMap(Map<String, dynamic>.from(item)))
           .toList();
-      return ChatInboxData(chats: chats, folders: folders);
+      final inbox = ChatInboxData(chats: chats, folders: folders);
+      await TurnaChatInboxLocalCache.save(session.userId, inbox);
+      return inbox;
     } on TurnaApiException {
       rethrow;
     } catch (_) {
+      final cached = await TurnaChatInboxLocalCache.load(session.userId);
+      if (cached != null) return cached;
       throw TurnaApiException('Sunucuya baglanilamadi.');
     }
   }
@@ -2703,6 +2938,7 @@ class ChatApi {
   static Future<ChatMessagesPage> fetchMessagesPage(
     String token,
     String chatId, {
+    String? cacheOwnerId,
     String? before,
     int limit = 30,
   }) async {
@@ -2727,6 +2963,9 @@ class ChatApi {
           .map((e) => ChatMessage.fromMap(Map<String, dynamic>.from(e)))
           .toList();
       final pageInfo = map['pageInfo'] as Map<String, dynamic>? ?? const {};
+      if (cacheOwnerId != null && cacheOwnerId.trim().isNotEmpty) {
+        await TurnaChatHistoryLocalCache.mergePage(cacheOwnerId, chatId, items);
+      }
 
       return ChatMessagesPage(
         items: items,
@@ -2736,6 +2975,32 @@ class ChatApi {
     } on TurnaApiException {
       rethrow;
     } catch (_) {
+      if (cacheOwnerId != null && cacheOwnerId.trim().isNotEmpty) {
+        final cached = await TurnaChatHistoryLocalCache.load(
+          cacheOwnerId,
+          chatId,
+        );
+        if (cached.isNotEmpty) {
+          final sorted = List<ChatMessage>.from(cached)
+            ..sort((a, b) => compareTurnaTimestamps(a.createdAt, b.createdAt));
+          final window = before == null || before.isEmpty
+              ? sorted
+              : sorted
+                    .where(
+                      (message) =>
+                          compareTurnaTimestamps(message.createdAt, before) < 0,
+                    )
+                    .toList();
+          final limited = window.length <= limit
+              ? window
+              : window.sublist(window.length - limit);
+          return ChatMessagesPage(
+            items: limited,
+            hasMore: window.length > limit,
+            nextBefore: limited.isEmpty ? null : limited.first.createdAt,
+          );
+        }
+      }
       throw TurnaApiException('Mesajlar yüklenemedi.');
     }
   }
