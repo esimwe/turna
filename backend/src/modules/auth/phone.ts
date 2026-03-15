@@ -56,6 +56,23 @@ export function normalizeE164Phone(phone: string): string {
   return normalized;
 }
 
+export function normalizeLookupPhone(phone: string): string {
+  const trimmed = phone.trim();
+  if (trimmed.startsWith("+")) {
+    return normalizeE164Phone(trimmed);
+  }
+
+  const digits = onlyDigits(trimmed);
+  if (/^05\d{9}$/.test(digits)) {
+    return `+90${digits.slice(1)}`;
+  }
+  if (/^5\d{9}$/.test(digits)) {
+    return `+90${digits}`;
+  }
+
+  throw new Error("invalid_phone");
+}
+
 export function buildDefaultDisplayName(phone: string): string {
   const digits = onlyDigits(phone);
   return `user_${digits.slice(-6) || digits}`;

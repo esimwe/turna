@@ -12,7 +12,7 @@ import { requireAuth, requireMessagingAccess } from "../../middleware/auth.js";
 import { buildAvatarUrl } from "../profile/avatar-url.js";
 import { findLookupDisplayName } from "../profile/contact-lookup.js";
 import { normalizeUsername } from "../profile/username.js";
-import { normalizeE164Phone } from "../auth/phone.js";
+import { normalizeLookupPhone } from "../auth/phone.js";
 import {
   emitChatMessage,
   emitChatStatus,
@@ -759,7 +759,30 @@ chatRouter.get("/directory/lookup", requireAuth, async (req, res) => {
 
   if (query.startsWith("+")) {
     try {
-      const phone = normalizeE164Phone(query);
+      const phone = normalizeLookupPhone(query);
+      user = await prisma.user.findFirst({
+        where: {
+          phone,
+          id: { not: req.authUserId! },
+          accountStatus: "ACTIVE"
+        },
+        select: {
+          id: true,
+          displayName: true,
+          username: true,
+          phone: true,
+          about: true,
+          avatarUrl: true,
+          updatedAt: true
+        }
+      });
+    } catch (_error) {
+      res.status(400).json({ error: "invalid_phone" });
+      return;
+    }
+  } else if (/^[\d\s()+-]+$/.test(query)) {
+    try {
+      const phone = normalizeLookupPhone(query);
       user = await prisma.user.findFirst({
         where: {
           phone,
