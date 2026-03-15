@@ -309,7 +309,7 @@ type CommunityUserRow = {
   country?: string | null;
   expertise?: string | null;
   communityRole?: string | null;
-  memberships?: Array<{
+  communityMemberships?: Array<{
     communityRole?: string | null;
   }>;
   updatedAt: Date;
@@ -565,7 +565,7 @@ function communityUserSelectForContext(communityId: string | null | undefined) {
     updatedAt: true,
     ...(communityId
       ? {
-          memberships: {
+          communityMemberships: {
             where: { communityId },
             take: 1,
             select: {
@@ -1064,7 +1064,11 @@ function toCommunityUserDto(
     communityRole?: string | null;
   }
 ) {
-  const membershipRole = options?.communityRole ?? user.memberships?.[0]?.communityRole ?? user.communityRole ?? null;
+  const membershipRole =
+    options?.communityRole ??
+    user.communityMemberships?.[0]?.communityRole ??
+    user.communityRole ??
+    null;
   return {
     id: user.id,
     displayName: user.displayName,
