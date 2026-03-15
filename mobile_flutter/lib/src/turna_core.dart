@@ -9,6 +9,7 @@ class ChatPreview {
     required this.message,
     required this.time,
     this.chatType = TurnaChatType.direct,
+    this.memberPreviewNames = const <String>[],
     this.phone,
     this.avatarUrl,
     this.peerId,
@@ -31,6 +32,7 @@ class ChatPreview {
   final String message;
   final String time;
   final TurnaChatType chatType;
+  final List<String> memberPreviewNames;
   final String? phone;
   final String? avatarUrl;
   final String? peerId;
@@ -56,6 +58,11 @@ class ChatPreview {
       chatType: ((map['chatType'] ?? '').toString().toLowerCase() == 'group')
           ? TurnaChatType.group
           : TurnaChatType.direct,
+      memberPreviewNames:
+          (map['memberPreviewNames'] as List<dynamic>? ?? const [])
+              .map((item) => item.toString().trim())
+              .where((item) => item.isNotEmpty)
+              .toList(),
       phone: TurnaUserProfile._nullableString(map['phone']),
       avatarUrl: TurnaUserProfile._nullableString(map['avatarUrl']),
       peerId: TurnaUserProfile._nullableString(map['peerId']),
@@ -81,6 +88,7 @@ class ChatPreview {
       'message': message,
       'time': time,
       'chatType': chatType.name,
+      'memberPreviewNames': memberPreviewNames,
       'phone': phone,
       'avatarUrl': avatarUrl,
       'peerId': peerId,
@@ -105,6 +113,7 @@ class TurnaChatDetail {
     required this.chatId,
     required this.chatType,
     required this.title,
+    this.memberPreviewNames = const <String>[],
     this.description,
     this.avatarUrl,
     this.createdByUserId,
@@ -127,6 +136,7 @@ class TurnaChatDetail {
   final String chatId;
   final TurnaChatType chatType;
   final String title;
+  final List<String> memberPreviewNames;
   final String? description;
   final String? avatarUrl;
   final String? createdByUserId;
@@ -147,6 +157,7 @@ class TurnaChatDetail {
 
   TurnaChatDetail copyWith({
     String? title,
+    List<String>? memberPreviewNames,
     String? description,
     String? avatarUrl,
     bool clearAvatarUrl = false,
@@ -169,6 +180,7 @@ class TurnaChatDetail {
       chatId: chatId,
       chatType: chatType,
       title: title ?? this.title,
+      memberPreviewNames: memberPreviewNames ?? this.memberPreviewNames,
       description: description ?? this.description,
       avatarUrl: clearAvatarUrl ? null : (avatarUrl ?? this.avatarUrl),
       createdByUserId: createdByUserId,
@@ -197,6 +209,11 @@ class TurnaChatDetail {
           ? TurnaChatType.group
           : TurnaChatType.direct,
       title: (map['title'] ?? '').toString(),
+      memberPreviewNames:
+          (map['memberPreviewNames'] as List<dynamic>? ?? const [])
+              .map((item) => item.toString().trim())
+              .where((item) => item.isNotEmpty)
+              .toList(),
       description: TurnaUserProfile._nullableString(map['description']),
       avatarUrl: TurnaUserProfile._nullableString(map['avatarUrl']),
       createdByUserId: TurnaUserProfile._nullableString(map['createdByUserId']),
@@ -231,6 +248,7 @@ class TurnaChatDetail {
       'chatId': chatId,
       'chatType': chatType.name,
       'title': title,
+      'memberPreviewNames': memberPreviewNames,
       'description': description,
       'avatarUrl': avatarUrl,
       'createdByUserId': createdByUserId,
@@ -1268,6 +1286,34 @@ class TurnaSocketClient extends ChangeNotifier {
     return '${names.first} ve ${names.length - 1} kişi daha yazıyor...';
   }
 
+  void _replaceGroupTypingUsers(List<Map<String, dynamic>> items) {
+    final before = groupTypingSummary;
+    for (final timer in _groupTypingTimeouts.values) {
+      timer.cancel();
+    }
+    _groupTypingTimeouts.clear();
+    _typingNamesByUserId.clear();
+
+    for (final item in items) {
+      final userId = (item['userId'] ?? '').toString();
+      final displayName = _nullableString(item['displayName']) ?? 'Birisi';
+      if (userId.isEmpty || userId == senderId) continue;
+      _typingNamesByUserId[userId] = displayName;
+      _groupTypingTimeouts[userId] = Timer(const Duration(seconds: 4), () {
+        _groupTypingTimeouts.remove(userId)?.cancel();
+        _setGroupTyping(
+          userId: userId,
+          isTyping: false,
+          displayName: displayName,
+        );
+      });
+    }
+
+    if (before != groupTypingSummary) {
+      notifyListeners();
+    }
+  }
+
   Map<String, dynamic>? _asMap(Object? data) {
     if (data is Map) {
       return Map<String, dynamic>.from(data);
@@ -1516,8 +1562,17 @@ class TurnaSocketClient extends ChangeNotifier {
       if ((payload['chatId'] ?? '').toString() != chatId) return;
 
       final userId = (payload['userId'] ?? '').toString();
-      if (userId.isEmpty || userId == senderId) return;
       if (chatType == TurnaChatType.group) {
+        final typingUsers =
+            (payload['typingUsers'] as List<dynamic>? ?? const [])
+                .whereType<Map>()
+                .map((item) => Map<String, dynamic>.from(item))
+                .toList();
+        if (typingUsers.isNotEmpty || payload['isTyping'] == false) {
+          _replaceGroupTypingUsers(typingUsers);
+          return;
+        }
+        if (userId.isEmpty || userId == senderId) return;
         _setGroupTyping(
           userId: userId,
           isTyping: payload['isTyping'] == true,
@@ -1525,6 +1580,7 @@ class TurnaSocketClient extends ChangeNotifier {
         );
         return;
       }
+      if (userId.isEmpty || userId == senderId) return;
       if (peerUserId != null && userId != peerUserId) return;
 
       _setPeerTyping(payload['isTyping'] == true);
@@ -3126,6 +3182,11 @@ class ChatApi {
             phone: phone,
             fallbackName: fallbackName,
           ),
+          memberPreviewNames:
+              (map['memberPreviewNames'] as List<dynamic>? ?? const [])
+                  .map((item) => item.toString().trim())
+                  .where((item) => item.isNotEmpty)
+                  .toList(),
           message: sanitizeTurnaChatPreviewText(
             map['lastMessage']?.toString() ?? '',
           ),

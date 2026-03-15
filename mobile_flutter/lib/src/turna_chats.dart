@@ -2624,7 +2624,26 @@ class _ChatPreviewListTile extends StatelessWidget {
         : chat.unreadCount > 0
         ? TurnaColors.chatUnreadBg
         : Colors.transparent;
-    final subtitleText = chat.isLocked ? 'Sohbet kilitli' : chat.message;
+    final groupPreview = chat.memberPreviewNames
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty)
+        .toList();
+    final groupMetaText = () {
+      if (chat.chatType != TurnaChatType.group) return null;
+      final parts = <String>[];
+      if (groupPreview.isNotEmpty) {
+        parts.add(groupPreview.join(', '));
+      }
+      if (chat.memberCount > 0) {
+        parts.add('${chat.memberCount} üye');
+      }
+      return parts.isEmpty ? null : parts.join(' · ');
+    }();
+    final subtitleText = chat.isLocked
+        ? 'Sohbet kilitli'
+        : (groupMetaText != null && chat.message.trim() == 'Grup oluşturuldu'
+              ? groupMetaText
+              : chat.message);
     return Material(
       color: tileColor,
       child: InkWell(
@@ -3350,6 +3369,14 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     if (_isGroupChat) {
       final typingSummary = _client.groupTypingSummary;
       if (typingSummary != null) return typingSummary;
+      final previewNames = (_detail?.memberPreviewNames ??
+              widget.chat.memberPreviewNames)
+          .map((item) => item.trim())
+          .where((item) => item.isNotEmpty)
+          .toList();
+      if (previewNames.isNotEmpty) {
+        return '${previewNames.join(', ')} · $_groupMemberCount üye';
+      }
       if (_groupMemberCount > 0) {
         return '$_groupMemberCount üye';
       }
@@ -13061,6 +13088,7 @@ class _CreateGroupPageState extends State<_CreateGroupPage> {
           message: 'Grup oluşturuldu',
           time: '',
           chatType: TurnaChatType.group,
+          memberPreviewNames: detail.memberPreviewNames,
           avatarUrl: detail.avatarUrl,
           memberCount: detail.memberCount,
           myRole: detail.myRole,
