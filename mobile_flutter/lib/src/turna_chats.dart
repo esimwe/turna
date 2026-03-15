@@ -2697,6 +2697,14 @@ class _ChatPreviewListTile extends StatelessWidget {
                                       ),
                                     ),
                                   ),
+                                  if (chat.chatType == TurnaChatType.group) ...[
+                                    const SizedBox(width: 6),
+                                    const Icon(
+                                      Icons.group_outlined,
+                                      size: 15,
+                                      color: TurnaColors.textSoft,
+                                    ),
+                                  ],
                                   if (chat.isFavorited) ...[
                                     const SizedBox(width: 6),
                                     const Icon(
@@ -3145,12 +3153,15 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   int? _voicePointerId;
   Offset? _voicePointerOriginGlobal;
 
+  bool get _isGroupChat => widget.chat.chatType == TurnaChatType.group;
   String? get _peerUserId =>
       ChatApi.extractPeerUserId(widget.chat.chatId, widget.session.userId);
-  String get _chatDisplayName => TurnaContactsDirectory.resolveDisplayLabel(
-    phone: widget.chat.phone,
-    fallbackName: widget.chat.name,
-  );
+  String get _chatDisplayName => _isGroupChat
+      ? widget.chat.name
+      : TurnaContactsDirectory.resolveDisplayLabel(
+          phone: widget.chat.phone,
+          fallbackName: widget.chat.name,
+        );
 
   String get _pinnedMessageKey => 'turna_pinned_message_${widget.chat.chatId}';
   String get _starredMessagesKey =>
@@ -3173,6 +3184,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       chatId: widget.chat.chatId,
       senderId: widget.session.userId,
       peerUserId: _peerUserId,
+      chatType: widget.chat.chatType,
       token: widget.session.token,
       onSessionExpired: widget.onSessionExpired,
     )..connect();
@@ -3184,10 +3196,14 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     TurnaContactsDirectory.revision.addListener(_refresh);
     _loadPinnedMessage();
     _loadLocalMessageState();
-    _restorePeerCallHistoryFromWarmCache();
+    if (!_isGroupChat) {
+      _restorePeerCallHistoryFromWarmCache();
+    }
     unawaited(TurnaContactsDirectory.ensureLoaded());
-    unawaited(_restorePeerCallHistoryFromDiskCache());
-    unawaited(_loadPeerCallHistory());
+    if (!_isGroupChat) {
+      unawaited(_restorePeerCallHistoryFromDiskCache());
+      unawaited(_loadPeerCallHistory());
+    }
   }
 
   @override
@@ -3205,13 +3221,17 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   @override
   void didPush() {
     kTurnaActiveChatRegistry.setCurrent(widget.chat);
-    unawaited(_loadPeerCallHistory());
+    if (!_isGroupChat) {
+      unawaited(_loadPeerCallHistory());
+    }
   }
 
   @override
   void didPopNext() {
     kTurnaActiveChatRegistry.setCurrent(widget.chat);
-    unawaited(_loadPeerCallHistory());
+    if (!_isGroupChat) {
+      unawaited(_loadPeerCallHistory());
+    }
   }
 
   @override
@@ -3240,6 +3260,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   }
 
   void _handleCallCoordinatorChanged() {
+    if (_isGroupChat) return;
     unawaited(_loadPeerCallHistory());
   }
 
@@ -3253,6 +3274,14 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   }
 
   String? _buildPeerStatusText() {
+    if (_isGroupChat) {
+      final typingSummary = _client.groupTypingSummary;
+      if (typingSummary != null) return typingSummary;
+      if (widget.chat.memberCount > 0) {
+        return '${widget.chat.memberCount} üye';
+      }
+      return 'Grup sohbeti';
+    }
     if (_peerUserId == null) return null;
     if (_client.peerTyping) return 'yazıyor...';
     if (_client.peerOnline) return 'online';
@@ -3297,6 +3326,23 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         ),
       ),
     );
+  }
+
+  Future<void> _openGroupInfo() async {
+    if (!_isGroupChat) return;
+
+    final shouldCloseRoom = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => _TurnaGroupInfoPage(
+          session: widget.session,
+          chat: widget.chat,
+          onSessionExpired: widget.onSessionExpired,
+        ),
+      ),
+    );
+    if (!mounted || shouldCloseRoom != true) return;
+    Navigator.of(context).pop(true);
   }
 
   Future<void> _startCall(TurnaCallType type) async {
@@ -4117,6 +4163,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   }
 
   String _previewSnippetForMessage(ChatMessage msg) {
+    if (_isSystemMessage(msg)) {
+      return _systemMessageText(msg);
+    }
     final parsed = parseTurnaMessageText(msg.text);
     if (_isMessageDeletedPlaceholder(msg, parsed: parsed)) {
       return 'Silindi.';
@@ -4143,7 +4192,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     final mine = msg.senderId == widget.session.userId;
     return TurnaReplyPayload(
       messageId: msg.id,
-      senderLabel: mine ? 'Siz' : _chatDisplayName,
+      senderLabel: mine ? 'Siz' : _displaySenderNameFor(msg),
       previewText: _previewSnippetForMessage(msg),
     );
   }
@@ -4174,10 +4223,57 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     if (targetMessage != null) {
       return targetMessage.senderId == widget.session.userId
           ? 'Siz'
-          : _chatDisplayName;
+          : _displaySenderNameFor(targetMessage);
     }
     final label = reply.senderLabel.trim();
     return label == 'Sen' ? 'Siz' : label;
+  }
+
+  bool _isSystemMessage(ChatMessage msg) {
+    final systemType = msg.systemType?.trim() ?? '';
+    return systemType.isNotEmpty;
+  }
+
+  String _systemMessageText(ChatMessage msg) {
+    switch ((msg.systemType ?? '').trim()) {
+      case 'group_created':
+        final creator = (msg.systemPayload?['createdByDisplayName'] ?? '')
+            .toString()
+            .trim();
+        return creator.isEmpty
+            ? 'Grup oluşturuldu'
+            : 'Grup oluşturuldu - $creator tarafından';
+      case 'group_members_added':
+        final raw = msg.systemPayload?['memberNames'];
+        final names = raw is List
+            ? raw
+                  .map((item) => item.toString().trim())
+                  .where((item) => item.isNotEmpty)
+                  .toList()
+            : const <String>[];
+        if (names.isEmpty) return 'Yeni üyeler eklendi';
+        if (names.length == 1) return '${names.first} gruba eklendi';
+        if (names.length == 2) {
+          return '${names.first} ve ${names.last} gruba eklendi';
+        }
+        return '${names.first} ve ${names.length - 1} kişi daha gruba eklendi';
+      case 'group_member_left':
+        final member = (msg.systemPayload?['leftByDisplayName'] ?? '')
+            .toString()
+            .trim();
+        return member.isEmpty
+            ? 'Bir üye gruptan ayrıldı'
+            : '$member gruptan ayrıldı';
+      default:
+        return msg.text.trim().isEmpty ? 'Sistem mesajı' : msg.text.trim();
+    }
+  }
+
+  String _displaySenderNameFor(ChatMessage msg) {
+    final raw = (msg.senderDisplayName ?? '').trim();
+    if (raw.isNotEmpty) return raw;
+    if (msg.senderId == widget.session.userId) return 'Siz';
+    return _chatDisplayName;
   }
 
   bool _canEditMessage(ChatMessage msg, {ParsedTurnaMessageText? parsed}) {
@@ -4274,8 +4370,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
             message: message,
             attachment: attachment,
             senderLabel: message.senderId == widget.session.userId
-                ? 'Sen'
-                : _chatDisplayName,
+                ? 'Siz'
+                : _displaySenderNameFor(message),
             cacheKey: 'attachment:${attachment.objectKey}',
             url: url,
           ),
@@ -5235,12 +5331,40 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     );
   }
 
+  Widget _buildSystemMessageBubble(ChatMessage msg) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+          decoration: BoxDecoration(
+            color: TurnaColors.backgroundMuted,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: TurnaColors.divider),
+          ),
+          child: Text(
+            _systemMessageText(msg),
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w600,
+              color: TurnaColors.textMuted,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildMessageBubble(
     List<_ChatTimelineEntry> displayEntries,
     int index,
     ChatMessage msg,
     bool mine,
   ) {
+    if (_isSystemMessage(msg)) {
+      return _buildSystemMessageBubble(msg);
+    }
     final parsed = parseTurnaMessageText(msg.text);
     final isDeletedPlaceholder = _isMessageDeletedPlaceholder(
       msg,
@@ -5314,7 +5438,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       showOverlayBackground: false,
     );
     final bubbleColor = mine
-        ? TurnaColors.chatOutgoing
+        ? (_isGroupChat ? const Color(0xFFD7F3E0) : TurnaColors.chatOutgoing)
         : TurnaColors.chatIncoming;
     final resolvedBubbleColor = isHighlighted
         ? Color.alphaBlend(
@@ -5395,6 +5519,19 @@ class _ChatRoomPageState extends State<ChatRoomPage>
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              if (_isGroupChat && !mine) ...[
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Text(
+                    _displaySenderNameFor(msg),
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: TurnaColors.primary,
+                    ),
+                  ),
+                ),
+              ],
               if (hasError)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 6),
@@ -6323,8 +6460,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
               message: sourceMessage,
               attachment: attachment,
               senderLabel: sourceMessage.senderId == widget.session.userId
-                  ? 'Sen'
-                  : _chatDisplayName,
+                  ? 'Siz'
+                  : _displaySenderNameFor(sourceMessage),
               cacheKey: 'attachment:${attachment.objectKey}',
               url: url,
             ),
@@ -6415,7 +6552,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         elevation: 0,
         titleSpacing: 4,
         title: GestureDetector(
-          onTap: _peerUserId == null ? null : _openPeerProfile,
+          onTap: _isGroupChat
+              ? _openGroupInfo
+              : (_peerUserId == null ? null : _openPeerProfile),
           child: Row(
             children: [
               _ProfileAvatar(
@@ -6461,20 +6600,28 @@ class _ChatRoomPageState extends State<ChatRoomPage>
           ),
         ),
         actions: [
-          IconButton(
-            tooltip: 'Görüntülü ara',
-            onPressed: _peerUserId == null
-                ? null
-                : () => _startCall(TurnaCallType.video),
-            icon: const Icon(Icons.videocam_outlined),
-          ),
-          IconButton(
-            tooltip: 'Sesli ara',
-            onPressed: _peerUserId == null
-                ? null
-                : () => _startCall(TurnaCallType.audio),
-            icon: const Icon(Icons.call_outlined),
-          ),
+          if (_isGroupChat)
+            IconButton(
+              tooltip: 'Grup bilgisi',
+              onPressed: _openGroupInfo,
+              icon: const Icon(Icons.info_outline_rounded),
+            ),
+          if (!_isGroupChat) ...[
+            IconButton(
+              tooltip: 'Görüntülü ara',
+              onPressed: _peerUserId == null
+                  ? null
+                  : () => _startCall(TurnaCallType.video),
+              icon: const Icon(Icons.videocam_outlined),
+            ),
+            IconButton(
+              tooltip: 'Sesli ara',
+              onPressed: _peerUserId == null
+                  ? null
+                  : () => _startCall(TurnaCallType.audio),
+              icon: const Icon(Icons.call_outlined),
+            ),
+          ],
         ],
       ),
       body: Column(
@@ -11984,12 +12131,41 @@ class _NewChatPageState extends State<NewChatPage> {
         title: const Text('Yeni sohbet'),
         actions: [
           PopupMenuButton<String>(
-            onSelected: (value) {
+            onSelected: (value) async {
               if (value == 'refresh_contacts') {
                 unawaited(_refreshRegisteredContacts(forceContactReload: true));
+                return;
+              }
+              if (value == 'new_group') {
+                final navigator = Navigator.of(context);
+                final createdChat = await Navigator.push<ChatPreview>(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => _CreateGroupPage(
+                      session: widget.session,
+                      registeredContacts: _registeredContacts,
+                      onSessionExpired: widget.onSessionExpired,
+                    ),
+                  ),
+                );
+                if (!mounted || createdChat == null) return;
+                await navigator.push(
+                  buildChatRoomRoute(
+                    chat: createdChat,
+                    session: widget.session,
+                    callCoordinator: widget.callCoordinator,
+                    onSessionExpired: widget.onSessionExpired,
+                  ),
+                );
+                if (!mounted) return;
+                navigator.pop(true);
               }
             },
             itemBuilder: (context) => const [
+              PopupMenuItem<String>(
+                value: 'new_group',
+                child: Text('Yeni Grup'),
+              ),
               PopupMenuItem<String>(
                 value: 'refresh_contacts',
                 child: Text('Kişileri Yenile'),
@@ -12172,6 +12348,578 @@ class _NewChatPageState extends State<NewChatPage> {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _CreateGroupPage extends StatefulWidget {
+  const _CreateGroupPage({
+    required this.session,
+    required this.registeredContacts,
+    required this.onSessionExpired,
+  });
+
+  final AuthSession session;
+  final List<TurnaRegisteredContact> registeredContacts;
+  final VoidCallback onSessionExpired;
+
+  @override
+  State<_CreateGroupPage> createState() => _CreateGroupPageState();
+}
+
+class _CreateGroupPageState extends State<_CreateGroupPage> {
+  final TextEditingController _titleController = TextEditingController();
+  final TextEditingController _searchController = TextEditingController();
+  final Set<String> _selectedIds = <String>{};
+  bool _creating = false;
+
+  List<TurnaRegisteredContact> get _filteredContacts {
+    final query = _searchController.text.trim().toLowerCase();
+    if (query.isEmpty) return widget.registeredContacts;
+    return widget.registeredContacts.where((contact) {
+      final title = contact.resolvedTitle.toLowerCase();
+      final username = (contact.username ?? '').toLowerCase();
+      final phone = (contact.phone ?? '').toLowerCase();
+      return title.contains(query) ||
+          username.contains(query.replaceAll('@', '')) ||
+          phone.contains(query);
+    }).toList();
+  }
+
+  Future<void> _createGroup() async {
+    final title = _titleController.text.trim();
+    if (title.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Grup adı gerekli.')));
+      return;
+    }
+    if (_selectedIds.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('En az bir kişi daha seçmelisin.')),
+      );
+      return;
+    }
+
+    setState(() => _creating = true);
+    try {
+      final detail = await ChatApi.createGroup(
+        widget.session,
+        title: title,
+        memberUserIds: _selectedIds.toList(),
+      );
+      if (!mounted) return;
+      Navigator.of(context).pop(
+        ChatPreview(
+          chatId: detail.chatId,
+          name: detail.title,
+          message: 'Grup oluşturuldu',
+          time: '',
+          chatType: TurnaChatType.group,
+          avatarUrl: detail.avatarUrl,
+          memberCount: detail.memberCount,
+          myRole: detail.myRole,
+          description: detail.description,
+          isPublic: detail.isPublic,
+        ),
+      );
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    } finally {
+      if (mounted) {
+        setState(() => _creating = false);
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final contacts = _filteredContacts;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Yeni Grup')),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
+            child: Column(
+              children: [
+                TextField(
+                  controller: _titleController,
+                  textCapitalization: TextCapitalization.words,
+                  decoration: InputDecoration(
+                    hintText: 'Grup adı',
+                    prefixIcon: const Icon(Icons.groups_rounded),
+                    filled: true,
+                    fillColor: TurnaColors.backgroundMuted,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(22),
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _searchController,
+                  onChanged: (_) => setState(() {}),
+                  decoration: InputDecoration(
+                    hintText: 'Kişi ara',
+                    prefixIcon: const Icon(Icons.search_rounded),
+                    filled: true,
+                    fillColor: TurnaColors.backgroundMuted,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(22),
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Text(
+                      '${_selectedIds.length} kişi seçildi',
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: TurnaColors.textMuted,
+                      ),
+                    ),
+                    const Spacer(),
+                    FilledButton(
+                      onPressed: _creating ? null : _createGroup,
+                      child: Text(
+                        _creating ? 'Oluşturuluyor...' : 'Grubu oluştur',
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: contacts.isEmpty
+                ? const Center(
+                    child: Text(
+                      'Seçilebilir kişi bulunamadı.',
+                      style: TextStyle(color: TurnaColors.textMuted),
+                    ),
+                  )
+                : ListView.separated(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                    itemCount: contacts.length,
+                    separatorBuilder: (context, index) =>
+                        const Divider(height: 1),
+                    itemBuilder: (context, index) {
+                      final contact = contacts[index];
+                      final selected = _selectedIds.contains(contact.id);
+                      return ListTile(
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 4,
+                          vertical: 4,
+                        ),
+                        onTap: () {
+                          setState(() {
+                            if (selected) {
+                              _selectedIds.remove(contact.id);
+                            } else {
+                              _selectedIds.add(contact.id);
+                            }
+                          });
+                        },
+                        leading: _ProfileAvatar(
+                          label: contact.resolvedTitle,
+                          avatarUrl: contact.avatarUrl,
+                          authToken: widget.session.token,
+                          radius: 24,
+                        ),
+                        title: Text(
+                          contact.resolvedTitle,
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                        subtitle: Text(
+                          [
+                            if ((contact.username ?? '').trim().isNotEmpty)
+                              '@${contact.username!.trim()}',
+                            if ((contact.phone ?? '').trim().isNotEmpty)
+                              formatTurnaDisplayPhone(contact.phone!),
+                          ].join('  •  '),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        trailing: Checkbox(
+                          value: selected,
+                          onChanged: (_) {
+                            setState(() {
+                              if (selected) {
+                                _selectedIds.remove(contact.id);
+                              } else {
+                                _selectedIds.add(contact.id);
+                              }
+                            });
+                          },
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TurnaGroupInfoPage extends StatefulWidget {
+  const _TurnaGroupInfoPage({
+    required this.session,
+    required this.chat,
+    required this.onSessionExpired,
+  });
+
+  final AuthSession session;
+  final ChatPreview chat;
+  final VoidCallback onSessionExpired;
+
+  @override
+  State<_TurnaGroupInfoPage> createState() => _TurnaGroupInfoPageState();
+}
+
+class _TurnaGroupInfoPageState extends State<_TurnaGroupInfoPage> {
+  TurnaChatDetail? _detail;
+  List<TurnaGroupMember> _members = const <TurnaGroupMember>[];
+  bool _loading = true;
+  bool _leaving = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _detail = TurnaChatDetailLocalCache.peek(
+      widget.session.userId,
+      widget.chat.chatId,
+    );
+    unawaited(_load());
+  }
+
+  String _formatLastSeen(String? iso) {
+    if (iso == null || iso.trim().isEmpty) return 'son görülme bilinmiyor';
+    final dt = parseTurnaLocalDateTime(iso);
+    if (dt == null) return 'son görülme bilinmiyor';
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final day = DateTime(dt.year, dt.month, dt.day);
+    final diff = today.difference(day).inDays;
+    final hh = dt.hour.toString().padLeft(2, '0');
+    final mm = dt.minute.toString().padLeft(2, '0');
+    if (diff == 0) return 'bugün $hh:$mm';
+    if (diff == 1) return 'dün $hh:$mm';
+    return '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}.${dt.year}';
+  }
+
+  String _roleLabel(String? role) {
+    switch ((role ?? '').trim().toUpperCase()) {
+      case 'OWNER':
+        return 'Sahip';
+      case 'ADMIN':
+        return 'Admin';
+      case 'EDITOR':
+        return 'Editör';
+      default:
+        return 'Üye';
+    }
+  }
+
+  Future<void> _leaveGroup() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Gruptan ayrıl'),
+          content: const Text('Gruptan ayrılmak istediğinize emin misiniz?'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Vazgeç'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Ayrıl'),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true || _leaving) return;
+
+    setState(() {
+      _leaving = true;
+      _error = null;
+    });
+    try {
+      await ChatApi.leaveGroup(widget.session, widget.chat.chatId);
+      if (!mounted) return;
+      Navigator.of(context).pop(true);
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _leaving = false;
+        _error = error.toString();
+      });
+    }
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final detail = await ChatApi.fetchChatDetail(
+        widget.session,
+        widget.chat.chatId,
+      );
+      final members = await ChatApi.fetchGroupMembers(
+        widget.session,
+        chatId: widget.chat.chatId,
+      );
+      if (!mounted) return;
+      setState(() {
+        _detail = detail;
+        _members = members.items;
+        _loading = false;
+      });
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = error.toString();
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final detail = _detail;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Grup Bilgisi')),
+      body: _loading && detail == null
+          ? const Center(child: CircularProgressIndicator())
+          : RefreshIndicator(
+              onRefresh: _load,
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(18),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(24),
+                      border: Border.all(color: TurnaColors.divider),
+                    ),
+                    child: Column(
+                      children: [
+                        _ProfileAvatar(
+                          label: detail?.title ?? widget.chat.name,
+                          avatarUrl: detail?.avatarUrl ?? widget.chat.avatarUrl,
+                          authToken: widget.session.token,
+                          radius: 36,
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          detail?.title ?? widget.chat.name,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          '${detail?.memberCount ?? widget.chat.memberCount} üye',
+                          style: const TextStyle(
+                            color: TurnaColors.textMuted,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        if ((detail?.description ??
+                                widget.chat.description ??
+                                '')
+                            .trim()
+                            .isNotEmpty) ...[
+                          const SizedBox(height: 10),
+                          Text(
+                            (detail?.description ?? widget.chat.description!)
+                                .trim(),
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              color: TurnaColors.textSoft,
+                              height: 1.4,
+                            ),
+                          ),
+                        ],
+                        if ((detail?.myRole ?? widget.chat.myRole ?? '')
+                            .trim()
+                            .isNotEmpty) ...[
+                          const SizedBox(height: 12),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 7,
+                            ),
+                            decoration: BoxDecoration(
+                              color: TurnaColors.primary50,
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Text(
+                              'Rolün: ${_roleLabel(detail?.myRole ?? widget.chat.myRole)}',
+                              style: const TextStyle(
+                                color: TurnaColors.primary,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 14),
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            onPressed: _leaving ? null : _leaveGroup,
+                            icon: _leaving
+                                ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Icon(Icons.logout_rounded),
+                            label: const Text('Gruptan Ayrıl'),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: TurnaColors.error,
+                              side: const BorderSide(color: TurnaColors.error),
+                              padding: const EdgeInsets.symmetric(vertical: 13),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  Row(
+                    children: [
+                      const Text(
+                        'Üyeler',
+                        style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const Spacer(),
+                      Text(
+                        '${_members.length}',
+                        style: const TextStyle(
+                          color: TurnaColors.textMuted,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  if (_error != null)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: Text(
+                        _error!,
+                        style: const TextStyle(color: TurnaColors.error),
+                      ),
+                    ),
+                  ..._members.map(
+                    (member) => Container(
+                      margin: const EdgeInsets.only(bottom: 10),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 12,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(color: TurnaColors.divider),
+                      ),
+                      child: Row(
+                        children: [
+                          _ProfileAvatar(
+                            label: member.displayName,
+                            avatarUrl: member.avatarUrl,
+                            authToken: widget.session.token,
+                            radius: 22,
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  member.displayName,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  _formatLastSeen(member.lastSeenAt),
+                                  style: const TextStyle(
+                                    fontSize: 12.5,
+                                    color: TurnaColors.textMuted,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: TurnaColors.backgroundMuted,
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Text(
+                              _roleLabel(member.role),
+                              style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                color: TurnaColors.textSoft,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
     );
   }
 }

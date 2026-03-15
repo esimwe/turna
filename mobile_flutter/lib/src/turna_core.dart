@@ -1,14 +1,21 @@
 part of '../main.dart';
 
+enum TurnaChatType { direct, group }
+
 class ChatPreview {
   ChatPreview({
     required this.chatId,
     required this.name,
     required this.message,
     required this.time,
+    this.chatType = TurnaChatType.direct,
     this.phone,
     this.avatarUrl,
     this.peerId,
+    this.memberCount = 0,
+    this.myRole,
+    this.description,
+    this.isPublic = false,
     this.unreadCount = 0,
     this.isMuted = false,
     this.isBlockedByMe = false,
@@ -23,9 +30,14 @@ class ChatPreview {
   final String name;
   final String message;
   final String time;
+  final TurnaChatType chatType;
   final String? phone;
   final String? avatarUrl;
   final String? peerId;
+  final int memberCount;
+  final String? myRole;
+  final String? description;
+  final bool isPublic;
   final int unreadCount;
   final bool isMuted;
   final bool isBlockedByMe;
@@ -41,9 +53,16 @@ class ChatPreview {
       name: (map['name'] ?? '').toString(),
       message: (map['message'] ?? '').toString(),
       time: (map['time'] ?? '').toString(),
+      chatType: ((map['chatType'] ?? '').toString().toLowerCase() == 'group')
+          ? TurnaChatType.group
+          : TurnaChatType.direct,
       phone: TurnaUserProfile._nullableString(map['phone']),
       avatarUrl: TurnaUserProfile._nullableString(map['avatarUrl']),
       peerId: TurnaUserProfile._nullableString(map['peerId']),
+      memberCount: (map['memberCount'] as num?)?.toInt() ?? 0,
+      myRole: TurnaUserProfile._nullableString(map['myRole']),
+      description: TurnaUserProfile._nullableString(map['description']),
+      isPublic: map['isPublic'] == true,
       unreadCount: (map['unreadCount'] as num?)?.toInt() ?? 0,
       isMuted: map['isMuted'] == true,
       isBlockedByMe: map['isBlockedByMe'] == true,
@@ -61,9 +80,14 @@ class ChatPreview {
       'name': name,
       'message': message,
       'time': time,
+      'chatType': chatType.name,
       'phone': phone,
       'avatarUrl': avatarUrl,
       'peerId': peerId,
+      'memberCount': memberCount,
+      'myRole': myRole,
+      'description': description,
+      'isPublic': isPublic,
       'unreadCount': unreadCount,
       'isMuted': isMuted,
       'isBlockedByMe': isBlockedByMe,
@@ -74,6 +98,120 @@ class ChatPreview {
       'folderName': folderName,
     };
   }
+}
+
+class TurnaChatDetail {
+  TurnaChatDetail({
+    required this.chatId,
+    required this.chatType,
+    required this.title,
+    this.description,
+    this.avatarUrl,
+    this.createdByUserId,
+    this.memberCount = 0,
+    this.myRole,
+    this.isPublic = false,
+    this.joinApprovalRequired = false,
+    this.memberAddPolicy = 'ADMIN_ONLY',
+  });
+
+  final String chatId;
+  final TurnaChatType chatType;
+  final String title;
+  final String? description;
+  final String? avatarUrl;
+  final String? createdByUserId;
+  final int memberCount;
+  final String? myRole;
+  final bool isPublic;
+  final bool joinApprovalRequired;
+  final String memberAddPolicy;
+
+  factory TurnaChatDetail.fromMap(Map<String, dynamic> map) {
+    return TurnaChatDetail(
+      chatId: (map['chatId'] ?? '').toString(),
+      chatType: ((map['chatType'] ?? '').toString().toLowerCase() == 'group')
+          ? TurnaChatType.group
+          : TurnaChatType.direct,
+      title: (map['title'] ?? '').toString(),
+      description: TurnaUserProfile._nullableString(map['description']),
+      avatarUrl: TurnaUserProfile._nullableString(map['avatarUrl']),
+      createdByUserId: TurnaUserProfile._nullableString(map['createdByUserId']),
+      memberCount: (map['memberCount'] as num?)?.toInt() ?? 0,
+      myRole: TurnaUserProfile._nullableString(map['myRole']),
+      isPublic: map['isPublic'] == true,
+      joinApprovalRequired: map['joinApprovalRequired'] == true,
+      memberAddPolicy:
+          TurnaUserProfile._nullableString(map['memberAddPolicy']) ??
+          'ADMIN_ONLY',
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'chatId': chatId,
+      'chatType': chatType.name,
+      'title': title,
+      'description': description,
+      'avatarUrl': avatarUrl,
+      'createdByUserId': createdByUserId,
+      'memberCount': memberCount,
+      'myRole': myRole,
+      'isPublic': isPublic,
+      'joinApprovalRequired': joinApprovalRequired,
+      'memberAddPolicy': memberAddPolicy,
+    };
+  }
+}
+
+class TurnaGroupMember {
+  TurnaGroupMember({
+    required this.userId,
+    required this.displayName,
+    this.username,
+    this.phone,
+    this.role = 'MEMBER',
+    this.canSend = true,
+    this.joinedAt,
+    this.lastSeenAt,
+    this.avatarUrl,
+  });
+
+  final String userId;
+  final String displayName;
+  final String? username;
+  final String? phone;
+  final String role;
+  final bool canSend;
+  final String? joinedAt;
+  final String? lastSeenAt;
+  final String? avatarUrl;
+
+  factory TurnaGroupMember.fromMap(Map<String, dynamic> map) {
+    return TurnaGroupMember(
+      userId: (map['userId'] ?? '').toString(),
+      displayName: (map['displayName'] ?? '').toString(),
+      username: TurnaUserProfile._nullableString(map['username']),
+      phone: TurnaUserProfile._nullableString(map['phone']),
+      role: TurnaUserProfile._nullableString(map['role']) ?? 'MEMBER',
+      canSend: map['canSend'] != false,
+      joinedAt: TurnaUserProfile._nullableString(map['joinedAt']),
+      lastSeenAt: TurnaUserProfile._nullableString(map['lastSeenAt']),
+      avatarUrl: TurnaUserProfile._nullableString(map['avatarUrl']),
+    );
+  }
+}
+
+class TurnaGroupMembersPage {
+  TurnaGroupMembersPage({
+    required this.items,
+    required this.totalCount,
+    required this.hasMore,
+  });
+
+  final List<TurnaGroupMember> items;
+  final int totalCount;
+  final bool hasMore;
 }
 
 class ChatFolder {
@@ -428,6 +566,48 @@ class TurnaChatInboxLocalCache {
   }
 }
 
+class TurnaChatDetailLocalCache {
+  static const String _prefix = 'turna_chat_detail_v1_';
+  static final Map<String, TurnaChatDetail> _warm = <String, TurnaChatDetail>{};
+
+  static String _cacheId(String userId, String chatId) => '$userId::$chatId';
+
+  static String _key(String userId, String chatId) {
+    final raw = utf8.encode('$userId|$chatId');
+    return '$_prefix${base64UrlEncode(raw)}';
+  }
+
+  static TurnaChatDetail? peek(String userId, String chatId) {
+    return _warm[_cacheId(userId, chatId)];
+  }
+
+  static Future<TurnaChatDetail?> load(String userId, String chatId) async {
+    final warm = peek(userId, chatId);
+    if (warm != null) return warm;
+
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_key(userId, chatId));
+    if (raw == null || raw.trim().isEmpty) return null;
+    try {
+      final decoded = jsonDecode(raw) as Map<String, dynamic>;
+      final detail = TurnaChatDetail.fromMap(decoded);
+      _warm[_cacheId(userId, chatId)] = detail;
+      return detail;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<void> save(String userId, TurnaChatDetail detail) async {
+    _warm[_cacheId(userId, detail.chatId)] = detail;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _key(userId, detail.chatId),
+      jsonEncode(detail.toMap()),
+    );
+  }
+}
+
 class TurnaChatHistoryLocalCache {
   static const int _messageLimit = 320;
   static const String _prefix = 'turna_chat_history_v1_';
@@ -573,6 +753,9 @@ class ChatMessage {
     required this.text,
     required this.status,
     required this.createdAt,
+    this.senderDisplayName,
+    this.systemType,
+    this.systemPayload,
     this.editedAt,
     this.isEdited = false,
     this.editHistory = const [],
@@ -585,6 +768,9 @@ class ChatMessage {
   final String text;
   final ChatMessageStatus status;
   final String createdAt;
+  final String? senderDisplayName;
+  final String? systemType;
+  final Map<String, dynamic>? systemPayload;
   final String? editedAt;
   final bool isEdited;
   final List<ChatMessageEditHistoryEntry> editHistory;
@@ -597,6 +783,9 @@ class ChatMessage {
     String? text,
     ChatMessageStatus? status,
     String? createdAt,
+    String? senderDisplayName,
+    String? systemType,
+    Map<String, dynamic>? systemPayload,
     String? editedAt,
     bool? isEdited,
     List<ChatMessageEditHistoryEntry>? editHistory,
@@ -610,6 +799,9 @@ class ChatMessage {
       text: text ?? this.text,
       status: status ?? this.status,
       createdAt: createdAt ?? this.createdAt,
+      senderDisplayName: senderDisplayName ?? this.senderDisplayName,
+      systemType: systemType ?? this.systemType,
+      systemPayload: systemPayload ?? this.systemPayload,
       editedAt: editedAt ?? this.editedAt,
       isEdited: isEdited ?? this.isEdited,
       editHistory: editHistory ?? this.editHistory,
@@ -625,6 +817,13 @@ class ChatMessage {
       text: (map['text'] ?? '').toString(),
       status: ChatMessageStatusX.fromWire((map['status'] ?? '').toString()),
       createdAt: (map['createdAt'] ?? '').toString(),
+      senderDisplayName: TurnaUserProfile._nullableString(
+        map['senderDisplayName'],
+      ),
+      systemType: TurnaUserProfile._nullableString(map['systemType']),
+      systemPayload: map['systemPayload'] is Map
+          ? Map<String, dynamic>.from(map['systemPayload'] as Map)
+          : null,
       editedAt: TurnaUserProfile._nullableString(map['editedAt']),
       isEdited: map['isEdited'] == true,
       editHistory: (map['editHistory'] as List<dynamic>? ?? const [])
@@ -651,6 +850,9 @@ class ChatMessage {
       'text': text,
       'status': status.name,
       'createdAt': createdAt,
+      'senderDisplayName': senderDisplayName,
+      'systemType': systemType,
+      'systemPayload': systemPayload,
       'editedAt': editedAt,
       'isEdited': isEdited,
       'editHistory': editHistory.map((entry) => entry.toMap()).toList(),
@@ -668,6 +870,13 @@ class ChatMessage {
       text: (map['text'] ?? '').toString(),
       status: ChatMessageStatusX.fromLocal((map['status'] ?? '').toString()),
       createdAt: (map['createdAt'] ?? '').toString(),
+      senderDisplayName: TurnaUserProfile._nullableString(
+        map['senderDisplayName'],
+      ),
+      systemType: TurnaUserProfile._nullableString(map['systemType']),
+      systemPayload: map['systemPayload'] is Map
+          ? Map<String, dynamic>.from(map['systemPayload'] as Map)
+          : null,
       editedAt: TurnaUserProfile._nullableString(map['editedAt']),
       isEdited: map['isEdited'] == true,
       editHistory: (map['editHistory'] as List<dynamic>? ?? const [])
@@ -754,6 +963,7 @@ class TurnaSocketClient extends ChangeNotifier {
     required this.chatId,
     required this.senderId,
     this.peerUserId,
+    this.chatType = TurnaChatType.direct,
     required this.token,
     this.onSessionExpired,
   });
@@ -761,6 +971,7 @@ class TurnaSocketClient extends ChangeNotifier {
   final String chatId;
   final String senderId;
   final String? peerUserId;
+  final TurnaChatType chatType;
   final String token;
   final VoidCallback? onSessionExpired;
 
@@ -771,6 +982,8 @@ class TurnaSocketClient extends ChangeNotifier {
   final List<ChatMessage> messages = [];
   final Map<String, Timer> _messageTimeouts = {};
   final Map<String, ChatMessageStatus> _pendingStatusByMessageId = {};
+  final Map<String, Timer> _groupTypingTimeouts = <String, Timer>{};
+  final Map<String, String> _typingNamesByUserId = <String, String>{};
   io.Socket? _socket;
   Timer? _typingPauseTimer;
   Timer? _peerTypingTimeout;
@@ -789,6 +1002,20 @@ class TurnaSocketClient extends ChangeNotifier {
   String? nextBefore;
   String? error;
   String? peerLastSeenAt;
+
+  String? get groupTypingSummary {
+    if (chatType != TurnaChatType.group || _typingNamesByUserId.isEmpty) {
+      return null;
+    }
+    final names = _typingNamesByUserId.values
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty)
+        .toList();
+    if (names.isEmpty) return 'Birisi yazıyor...';
+    if (names.length == 1) return '${names.first} yazıyor...';
+    if (names.length == 2) return '${names[0]} ve ${names[1]} yazıyor...';
+    return '${names.first} ve ${names.length - 1} kişi daha yazıyor...';
+  }
 
   Map<String, dynamic>? _asMap(Object? data) {
     if (data is Map) {
@@ -1039,6 +1266,14 @@ class TurnaSocketClient extends ChangeNotifier {
 
       final userId = (payload['userId'] ?? '').toString();
       if (userId.isEmpty || userId == senderId) return;
+      if (chatType == TurnaChatType.group) {
+        _setGroupTyping(
+          userId: userId,
+          isTyping: payload['isTyping'] == true,
+          displayName: _nullableString(payload['displayName']) ?? 'Birisi',
+        );
+        return;
+      }
       if (peerUserId != null && userId != peerUserId) return;
 
       _setPeerTyping(payload['isTyping'] == true);
@@ -1048,6 +1283,11 @@ class TurnaSocketClient extends ChangeNotifier {
       isConnected = false;
       _cancelPeerTypingTimeout();
       peerTyping = false;
+      for (final timer in _groupTypingTimeouts.values) {
+        timer.cancel();
+      }
+      _groupTypingTimeouts.clear();
+      _typingNamesByUserId.clear();
       turnaLog('socket disconnected', {'reason': reason, 'chatId': chatId});
       notifyListeners();
     });
@@ -1219,6 +1459,11 @@ class TurnaSocketClient extends ChangeNotifier {
       isConnected = false;
       _cancelPeerTypingTimeout();
       peerTyping = false;
+      for (final timer in _groupTypingTimeouts.values) {
+        timer.cancel();
+      }
+      _groupTypingTimeouts.clear();
+      _typingNamesByUserId.clear();
       notifyListeners();
     }
   }
@@ -1450,6 +1695,31 @@ class TurnaSocketClient extends ChangeNotifier {
     });
   }
 
+  void _setGroupTyping({
+    required String userId,
+    required bool isTyping,
+    required String displayName,
+  }) {
+    final before = groupTypingSummary;
+    _groupTypingTimeouts.remove(userId)?.cancel();
+    if (isTyping) {
+      _typingNamesByUserId[userId] = displayName;
+      _groupTypingTimeouts[userId] = Timer(const Duration(seconds: 4), () {
+        _groupTypingTimeouts.remove(userId)?.cancel();
+        _setGroupTyping(
+          userId: userId,
+          isTyping: false,
+          displayName: displayName,
+        );
+      });
+    } else {
+      _typingNamesByUserId.remove(userId);
+    }
+    if (before != groupTypingSummary) {
+      notifyListeners();
+    }
+  }
+
   ChatMessage _applyPendingStatus(ChatMessage message) {
     final pendingStatus = _pendingStatusByMessageId.remove(message.id);
     if (pendingStatus == null) return message;
@@ -1496,6 +1766,10 @@ class TurnaSocketClient extends ChangeNotifier {
       timer.cancel();
     }
     _messageTimeouts.clear();
+    for (final timer in _groupTypingTimeouts.values) {
+      timer.cancel();
+    }
+    _groupTypingTimeouts.clear();
     _typingPauseTimer?.cancel();
     _cancelPeerTypingTimeout();
     _persistWarmCacheSnapshot();
@@ -2479,6 +2753,20 @@ class ProfileApi {
           return 'Yüklenen dosya bulunamadı.';
         case 'avatar_not_found':
           return 'Avatar bulunamadı.';
+        case 'group_title_required':
+          return 'Grup adı gerekli.';
+        case 'group_min_members_required':
+          return 'Bir grup oluşturmak için en az bir kişi daha seçmelisin.';
+        case 'group_member_not_found':
+          return 'Seçilen üyelerden biri bulunamadı.';
+        case 'group_member_add_not_allowed':
+          return 'Bu gruba üye ekleme yetkin yok.';
+        case 'group_not_found':
+          return 'Grup bulunamadı.';
+        case 'group_owner_leave_not_allowed':
+          return 'Grup sahibi önce sahipliği devretmeli.';
+        case 'chat_send_restricted':
+          return 'Bu grupta mesaj gönderme iznin kapalı.';
         case 'text_or_attachment_required':
           return 'Mesaj veya ek seçmelisin.';
         case 'call_provider_not_configured':
@@ -2544,13 +2832,21 @@ class ChatApi {
       final foldersData = (chatsMap['folders'] as List<dynamic>? ?? []);
       final chats = chatsData.map((item) {
         final map = item as Map<String, dynamic>;
+        final chatType =
+            ((map['chatType'] ?? '').toString().toLowerCase() == 'group')
+            ? TurnaChatType.group
+            : TurnaChatType.direct;
         final rawTitle = map['title']?.toString() ?? 'Chat';
-        final phone = rawTitle.trim().startsWith('+') ? rawTitle.trim() : null;
+        final phone =
+            chatType == TurnaChatType.direct && rawTitle.trim().startsWith('+')
+            ? rawTitle.trim()
+            : null;
         final fallbackName = phone == null
             ? rawTitle
             : formatTurnaDisplayPhone(phone);
         return ChatPreview(
           chatId: map['chatId'].toString(),
+          chatType: chatType,
           name: TurnaContactsDirectory.resolveDisplayLabel(
             phone: phone,
             fallbackName: fallbackName,
@@ -2562,6 +2858,10 @@ class ChatApi {
           phone: phone,
           avatarUrl: _nullableString(map['avatarUrl']),
           peerId: _nullableString(map['peerId']),
+          memberCount: (map['memberCount'] as num?)?.toInt() ?? 0,
+          myRole: _nullableString(map['myRole']),
+          description: _nullableString(map['description']),
+          isPublic: map['isPublic'] == true,
           unreadCount: (map['unreadCount'] as num?)?.toInt() ?? 0,
           isMuted: map['isMuted'] == true,
           isBlockedByMe: map['isBlockedByMe'] == true,
@@ -2585,6 +2885,119 @@ class ChatApi {
       final cached = await TurnaChatInboxLocalCache.load(session.userId);
       if (cached != null) return cached;
       throw TurnaApiException('Sunucuya baglanilamadi.');
+    }
+  }
+
+  static Future<TurnaChatDetail> fetchChatDetail(
+    AuthSession session,
+    String chatId,
+  ) async {
+    try {
+      final res = await http.get(
+        Uri.parse('$kBackendBaseUrl/api/chats/$chatId'),
+        headers: {'Authorization': 'Bearer ${session.token}'},
+      );
+      _throwIfApiError(res);
+
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = map['data'] as Map<String, dynamic>? ?? const {};
+      final detail = TurnaChatDetail.fromMap(data);
+      await TurnaChatDetailLocalCache.save(session.userId, detail);
+      return detail;
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      final cached = await TurnaChatDetailLocalCache.load(
+        session.userId,
+        chatId,
+      );
+      if (cached != null) return cached;
+      throw TurnaApiException('Sohbet detayları yüklenemedi.');
+    }
+  }
+
+  static Future<TurnaGroupMembersPage> fetchGroupMembers(
+    AuthSession session, {
+    required String chatId,
+    int limit = 40,
+    int offset = 0,
+  }) async {
+    try {
+      final uri = Uri.parse(
+        '$kBackendBaseUrl/api/chats/$chatId/members',
+      ).replace(queryParameters: {'limit': '$limit', 'offset': '$offset'});
+      final res = await http.get(
+        uri,
+        headers: {'Authorization': 'Bearer ${session.token}'},
+      );
+      _throwIfApiError(res);
+
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = (map['data'] as List<dynamic>? ?? const []);
+      final pageInfo = map['pageInfo'] as Map<String, dynamic>? ?? const {};
+      return TurnaGroupMembersPage(
+        items: data
+            .whereType<Map>()
+            .map(
+              (item) =>
+                  TurnaGroupMember.fromMap(Map<String, dynamic>.from(item)),
+            )
+            .toList(),
+        totalCount: (pageInfo['totalCount'] as num?)?.toInt() ?? data.length,
+        hasMore: pageInfo['hasMore'] == true,
+      );
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Grup üyeleri yüklenemedi.');
+    }
+  }
+
+  static Future<TurnaChatDetail> createGroup(
+    AuthSession session, {
+    required String title,
+    required List<String> memberUserIds,
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse('$kBackendBaseUrl/api/chats/groups'),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'title': title.trim(),
+          'memberUserIds': memberUserIds.map((item) => item.trim()).toList(),
+        }),
+      );
+      _throwIfApiError(res);
+
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = map['data'] as Map<String, dynamic>? ?? const {};
+      final detail = TurnaChatDetail.fromMap(data);
+      await TurnaChatDetailLocalCache.save(session.userId, detail);
+      return detail;
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Grup oluşturulamadı.');
+    }
+  }
+
+  static Future<void> leaveGroup(AuthSession session, String chatId) async {
+    try {
+      final res = await http.post(
+        Uri.parse('$kBackendBaseUrl/api/chats/$chatId/leave'),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+      );
+      _throwIfApiError(res);
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Gruptan ayrılınamadı.');
     }
   }
 
