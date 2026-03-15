@@ -3184,7 +3184,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     TurnaContactsDirectory.revision.addListener(_refresh);
     _loadPinnedMessage();
     _loadLocalMessageState();
+    _restorePeerCallHistoryFromWarmCache();
     unawaited(TurnaContactsDirectory.ensureLoaded());
+    unawaited(_restorePeerCallHistoryFromDiskCache());
     unawaited(_loadPeerCallHistory());
   }
 
@@ -3466,6 +3468,52 @@ class _ChatRoomPageState extends State<ChatRoomPage>
 
   String _formatFileSize(int bytes) => formatBytesLabel(bytes);
 
+  List<TurnaCallHistoryItem> _filterPeerCalls(
+    Iterable<TurnaCallHistoryItem> calls,
+  ) {
+    final peerUserId = _peerUserId;
+    if (peerUserId == null) return const <TurnaCallHistoryItem>[];
+
+    final filtered = calls.where((item) => item.peer.id == peerUserId).toList()
+      ..sort((a, b) {
+        final aTime = a.createdAt ?? a.endedAt ?? a.acceptedAt ?? '';
+        final bTime = b.createdAt ?? b.endedAt ?? b.acceptedAt ?? '';
+        return compareTurnaTimestamps(aTime, bTime);
+      });
+    return filtered;
+  }
+
+  bool _sameCallHistory(
+    List<TurnaCallHistoryItem> a,
+    List<TurnaCallHistoryItem> b,
+  ) {
+    if (identical(a, b)) return true;
+    if (a.length != b.length) return false;
+    for (var index = 0; index < a.length; index++) {
+      if (a[index].id != b[index].id) return false;
+      if (a[index].status != b[index].status) return false;
+      if (a[index].createdAt != b[index].createdAt) return false;
+      if (a[index].acceptedAt != b[index].acceptedAt) return false;
+      if (a[index].endedAt != b[index].endedAt) return false;
+      if (a[index].durationSeconds != b[index].durationSeconds) return false;
+    }
+    return true;
+  }
+
+  void _restorePeerCallHistoryFromWarmCache() {
+    final cached = TurnaCallHistoryLocalCache.peek(widget.session.userId);
+    if (cached == null || cached.isEmpty) return;
+    _peerCalls = _filterPeerCalls(cached);
+  }
+
+  Future<void> _restorePeerCallHistoryFromDiskCache() async {
+    final cached = await TurnaCallHistoryLocalCache.load(widget.session.userId);
+    if (!mounted || cached.isEmpty) return;
+    final filtered = _filterPeerCalls(cached);
+    if (filtered.isEmpty || _sameCallHistory(filtered, _peerCalls)) return;
+    setState(() => _peerCalls = filtered);
+  }
+
   Future<void> _loadPeerCallHistory() async {
     final peerUserId = _peerUserId;
     if (peerUserId == null || _loadingPeerCalls) return;
@@ -3477,13 +3525,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     try {
       final calls = await CallApi.fetchCalls(widget.session);
       if (!mounted) return;
-      final filtered =
-          calls.where((item) => item.peer.id == peerUserId).toList()
-            ..sort((a, b) {
-              final aTime = a.createdAt ?? a.endedAt ?? a.acceptedAt ?? '';
-              final bTime = b.createdAt ?? b.endedAt ?? b.acceptedAt ?? '';
-              return compareTurnaTimestamps(aTime, bTime);
-            });
+      final filtered = _filterPeerCalls(calls);
       setState(() => _peerCalls = filtered);
       final nextCount = _buildTimelineEntries().length;
       _lastRenderedTimelineCount = nextCount;

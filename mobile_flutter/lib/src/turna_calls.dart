@@ -18,6 +18,10 @@ class TurnaCallPeer {
       avatarUrl: TurnaUserProfile._nullableString(map['avatarUrl']),
     );
   }
+
+  Map<String, dynamic> toMap() {
+    return {'id': id, 'displayName': displayName, 'avatarUrl': avatarUrl};
+  }
 }
 
 class TurnaCallSummary {
@@ -159,6 +163,66 @@ class TurnaCallHistoryItem {
       peer: TurnaCallPeer.fromMap(
         Map<String, dynamic>.from(map['peer'] as Map? ?? const {}),
       ),
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'type': type.name,
+      'status': status.name,
+      'direction': direction,
+      'createdAt': createdAt,
+      'acceptedAt': acceptedAt,
+      'endedAt': endedAt,
+      'durationSeconds': durationSeconds,
+      'peer': peer.toMap(),
+    };
+  }
+}
+
+class TurnaCallHistoryLocalCache {
+  static const int _historyLimit = 240;
+  static const String _prefix = 'turna_call_history_v1_';
+  static final Map<String, List<TurnaCallHistoryItem>> _warm =
+      <String, List<TurnaCallHistoryItem>>{};
+
+  static String _key(String userId) => '$_prefix$userId';
+
+  static List<TurnaCallHistoryItem>? peek(String userId) {
+    final cached = _warm[userId];
+    if (cached == null) return null;
+    return List<TurnaCallHistoryItem>.from(cached);
+  }
+
+  static Future<List<TurnaCallHistoryItem>> load(String userId) async {
+    final warm = peek(userId);
+    if (warm != null) return warm;
+
+    final prefs = await SharedPreferences.getInstance();
+    final rawList = prefs.getStringList(_key(userId)) ?? const [];
+    final items = <TurnaCallHistoryItem>[];
+    for (final raw in rawList) {
+      try {
+        final decoded = jsonDecode(raw) as Map<String, dynamic>;
+        items.add(TurnaCallHistoryItem.fromMap(decoded));
+      } catch (_) {}
+    }
+    _warm[userId] = List<TurnaCallHistoryItem>.from(items);
+    return items;
+  }
+
+  static Future<void> save(
+    String userId,
+    Iterable<TurnaCallHistoryItem> calls,
+  ) async {
+    final trimmed = calls.take(_historyLimit).toList();
+    _warm[userId] = List<TurnaCallHistoryItem>.from(trimmed);
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(
+      _key(userId),
+      trimmed.map((item) => jsonEncode(item.toMap())).toList(),
     );
   }
 }
@@ -413,10 +477,15 @@ class CallApi {
                 TurnaCallHistoryItem.fromMap(Map<String, dynamic>.from(item)),
           )
           .toList();
+      await TurnaCallHistoryLocalCache.save(session.userId, items);
       return items;
     } on TurnaApiException {
       rethrow;
     } catch (_) {
+      final cached = await TurnaCallHistoryLocalCache.load(session.userId);
+      if (cached.isNotEmpty) {
+        return cached;
+      }
       throw TurnaApiException('Arama geçmişi yüklenemedi.');
     }
   }
