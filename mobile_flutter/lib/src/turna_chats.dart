@@ -12692,19 +12692,39 @@ class _CreateGroupPageState extends State<_CreateGroupPage> {
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
             child: Column(
               children: [
-                TextField(
-                  controller: _titleController,
-                  textCapitalization: TextCapitalization.words,
-                  decoration: InputDecoration(
-                    hintText: 'Grup adı',
-                    prefixIcon: const Icon(Icons.groups_rounded),
-                    filled: true,
-                    fillColor: TurnaColors.backgroundMuted,
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(22),
-                      borderSide: BorderSide.none,
+                Row(
+                  children: [
+                    Container(
+                      width: 58,
+                      height: 58,
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: TurnaColors.divider),
+                      ),
+                      child: const Icon(
+                        Icons.camera_alt_outlined,
+                        color: TurnaColors.primary,
+                        size: 24,
+                      ),
                     ),
-                  ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextField(
+                        controller: _titleController,
+                        textCapitalization: TextCapitalization.words,
+                        decoration: InputDecoration(
+                          hintText: 'Grup adı',
+                          filled: true,
+                          fillColor: TurnaColors.backgroundMuted,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(22),
+                            borderSide: BorderSide.none,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 12),
                 TextField(
