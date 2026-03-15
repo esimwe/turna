@@ -753,6 +753,7 @@ class ChatMessage {
     required this.text,
     required this.status,
     required this.createdAt,
+    this.chatType,
     this.senderDisplayName,
     this.systemType,
     this.systemPayload,
@@ -768,6 +769,7 @@ class ChatMessage {
   final String text;
   final ChatMessageStatus status;
   final String createdAt;
+  final TurnaChatType? chatType;
   final String? senderDisplayName;
   final String? systemType;
   final Map<String, dynamic>? systemPayload;
@@ -783,6 +785,7 @@ class ChatMessage {
     String? text,
     ChatMessageStatus? status,
     String? createdAt,
+    TurnaChatType? chatType,
     String? senderDisplayName,
     String? systemType,
     Map<String, dynamic>? systemPayload,
@@ -799,6 +802,7 @@ class ChatMessage {
       text: text ?? this.text,
       status: status ?? this.status,
       createdAt: createdAt ?? this.createdAt,
+      chatType: chatType ?? this.chatType,
       senderDisplayName: senderDisplayName ?? this.senderDisplayName,
       systemType: systemType ?? this.systemType,
       systemPayload: systemPayload ?? this.systemPayload,
@@ -817,6 +821,11 @@ class ChatMessage {
       text: (map['text'] ?? '').toString(),
       status: ChatMessageStatusX.fromWire((map['status'] ?? '').toString()),
       createdAt: (map['createdAt'] ?? '').toString(),
+      chatType: ((map['chatType'] ?? '').toString().toLowerCase() == 'group')
+          ? TurnaChatType.group
+          : ((map['chatType'] ?? '').toString().toLowerCase() == 'direct')
+          ? TurnaChatType.direct
+          : null,
       senderDisplayName: TurnaUserProfile._nullableString(
         map['senderDisplayName'],
       ),
@@ -850,6 +859,7 @@ class ChatMessage {
       'text': text,
       'status': status.name,
       'createdAt': createdAt,
+      'chatType': chatType?.name,
       'senderDisplayName': senderDisplayName,
       'systemType': systemType,
       'systemPayload': systemPayload,
@@ -870,6 +880,11 @@ class ChatMessage {
       text: (map['text'] ?? '').toString(),
       status: ChatMessageStatusX.fromLocal((map['status'] ?? '').toString()),
       createdAt: (map['createdAt'] ?? '').toString(),
+      chatType: ((map['chatType'] ?? '').toString().toLowerCase() == 'group')
+          ? TurnaChatType.group
+          : ((map['chatType'] ?? '').toString().toLowerCase() == 'direct')
+          ? TurnaChatType.direct
+          : null,
       senderDisplayName: TurnaUserProfile._nullableString(
         map['senderDisplayName'],
       ),
