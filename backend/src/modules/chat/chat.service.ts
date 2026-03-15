@@ -87,6 +87,7 @@ type ChatMemberRoleValue = typeof ChatMemberRole[keyof typeof ChatMemberRole];
 type ChatMemberAddPolicyValue =
   typeof ChatMemberAddPolicy[keyof typeof ChatMemberAddPolicy];
 type ChatPolicyScopeValue = typeof ChatPolicyScope[keyof typeof ChatPolicyScope];
+type ChatCollectionFilter = "media" | "docs" | "links";
 
 function buildGroupMemberPreviewNames(
   members: Array<{
@@ -1517,6 +1518,8 @@ export class ChatService {
       before?: string | null;
       limit?: number;
       userId?: string | null;
+      searchQuery?: string | null;
+      collectionFilter?: ChatCollectionFilter | null;
     } = {}
   ): Promise<ChatMessagePage> {
     const limit = Math.min(Math.max(options.limit ?? 30, 1), 100);
@@ -1536,15 +1539,58 @@ export class ChatService {
         ? membership.joinedAt
         : null;
     const clearedAt = latestDate(membership?.clearedAt ?? null, visibleFrom);
+    const trimmedSearchQuery = options.searchQuery?.trim() ?? "";
+
+    const where: Record<string, unknown> = {
+      chatId,
+      createdAt: {
+        ...(beforeDate ? { lt: beforeDate } : {}),
+        ...(clearedAt ? { gt: clearedAt } : {})
+      }
+    };
+
+    if (trimmedSearchQuery.length > 0 || options.collectionFilter) {
+      where.systemType = null;
+    }
+
+    if (trimmedSearchQuery.length > 0) {
+      where.OR = [
+        { text: { contains: trimmedSearchQuery, mode: "insensitive" } },
+        { sender: { displayName: { contains: trimmedSearchQuery, mode: "insensitive" } } },
+        {
+          attachments: {
+            some: {
+              fileName: { contains: trimmedSearchQuery, mode: "insensitive" }
+            }
+          }
+        }
+      ];
+    }
+
+    if (options.collectionFilter === "media") {
+      where.attachments = {
+        some: {
+          kind: {
+            in: [AttachmentKind.IMAGE, AttachmentKind.VIDEO]
+          }
+        }
+      };
+    } else if (options.collectionFilter === "docs") {
+      where.attachments = {
+        some: {
+          kind: AttachmentKind.FILE
+        }
+      };
+    } else if (options.collectionFilter === "links") {
+      where.OR = [
+        { text: { contains: "http://" } },
+        { text: { contains: "https://" } },
+        { text: { contains: "www." } }
+      ];
+    }
 
     const rows = await prisma.message.findMany({
-      where: {
-        chatId,
-        createdAt: {
-          ...(beforeDate ? { lt: beforeDate } : {}),
-          ...(clearedAt ? { gt: clearedAt } : {})
-        }
-      },
+      where,
       include: messageInclude,
       orderBy: { createdAt: "desc" },
       take: limit + 1
@@ -1558,6 +1604,53 @@ export class ChatService {
       hasMore,
       nextBefore: hasMore && pageRows.length > 0 ? pageRows[0].createdAt.toISOString() : null
     };
+  }
+
+  async searchMessagePage(
+    chatId: string,
+    userId: string,
+    query: string,
+    options: {
+      before?: string | null;
+      limit?: number;
+    } = {}
+  ): Promise<ChatMessagePage> {
+    const hasAccess = await this.ensureChatAccess(chatId, userId);
+    if (!hasAccess) {
+      throw new Error("forbidden_chat_access");
+    }
+    if (!query.trim()) {
+      throw new Error("chat_search_query_required");
+    }
+
+    return this.getMessagePage(chatId, {
+      userId,
+      before: options.before,
+      limit: options.limit,
+      searchQuery: query
+    });
+  }
+
+  async getCollectionMessagePage(
+    chatId: string,
+    userId: string,
+    collectionFilter: ChatCollectionFilter,
+    options: {
+      before?: string | null;
+      limit?: number;
+    } = {}
+  ): Promise<ChatMessagePage> {
+    const hasAccess = await this.ensureChatAccess(chatId, userId);
+    if (!hasAccess) {
+      throw new Error("forbidden_chat_access");
+    }
+
+    return this.getMessagePage(chatId, {
+      userId,
+      before: options.before,
+      limit: options.limit,
+      collectionFilter
+    });
   }
 
   async getChatSummaries(userId: string): Promise<ChatSummary[]> {

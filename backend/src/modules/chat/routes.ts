@@ -87,6 +87,18 @@ const listMessagesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(30)
 });
 
+const chatSearchQuerySchema = listMessagesQuerySchema.extend({
+  q: z
+    .preprocess(
+      (value) => (typeof value === "string" ? value.trim() : value),
+      z.string().min(1).max(120)
+    )
+});
+
+const chatCollectionQuerySchema = listMessagesQuerySchema.extend({
+  type: z.enum(["media", "docs", "links"])
+});
+
 const messageIdParamSchema = z.object({
   messageId: z.string().trim().min(1).max(255)
 });
@@ -334,6 +346,92 @@ chatRouter.get("/:chatId/messages", requireAuth, async (req, res) => {
       nextBefore: page.nextBefore
     }
   });
+});
+
+chatRouter.get("/:chatId/search", requireAuth, async (req, res) => {
+  const parsedParams = chatIdParamSchema.safeParse(req.params);
+  const parsedQuery = chatSearchQuerySchema.safeParse(req.query);
+  if (!parsedParams.success) {
+    res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+    return;
+  }
+  if (!parsedQuery.success) {
+    res.status(400).json({ error: "validation_error", details: parsedQuery.error.flatten() });
+    return;
+  }
+
+  try {
+    const page = await chatService.searchMessagePage(
+      parsedParams.data.chatId,
+      req.authUserId!,
+      parsedQuery.data.q,
+      {
+        before: parsedQuery.data.before ?? null,
+        limit: parsedQuery.data.limit
+      }
+    );
+    res.json({
+      data: page.items,
+      pageInfo: {
+        hasMore: page.hasMore,
+        nextBefore: page.nextBefore
+      }
+    });
+  } catch (error) {
+    if (error instanceof Error) {
+      switch (error.message) {
+        case "forbidden_chat_access":
+          res.status(403).json({ error: error.message });
+          return;
+        case "chat_search_query_required":
+          res.status(400).json({ error: error.message });
+          return;
+      }
+    }
+
+    logError("chat search failed", error);
+    res.status(500).json({ error: "failed_to_search_chat_messages" });
+  }
+});
+
+chatRouter.get("/:chatId/media-items", requireAuth, async (req, res) => {
+  const parsedParams = chatIdParamSchema.safeParse(req.params);
+  const parsedQuery = chatCollectionQuerySchema.safeParse(req.query);
+  if (!parsedParams.success) {
+    res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+    return;
+  }
+  if (!parsedQuery.success) {
+    res.status(400).json({ error: "validation_error", details: parsedQuery.error.flatten() });
+    return;
+  }
+
+  try {
+    const page = await chatService.getCollectionMessagePage(
+      parsedParams.data.chatId,
+      req.authUserId!,
+      parsedQuery.data.type,
+      {
+        before: parsedQuery.data.before ?? null,
+        limit: parsedQuery.data.limit
+      }
+    );
+    res.json({
+      data: page.items,
+      pageInfo: {
+        hasMore: page.hasMore,
+        nextBefore: page.nextBefore
+      }
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message === "forbidden_chat_access") {
+      res.status(403).json({ error: error.message });
+      return;
+    }
+
+    logError("chat media items failed", error);
+    res.status(500).json({ error: "failed_to_get_chat_media_items" });
+  }
 });
 
 chatRouter.get("/", requireAuth, async (req, res) => {
