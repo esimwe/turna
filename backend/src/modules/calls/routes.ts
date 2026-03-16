@@ -51,6 +51,23 @@ const leaveGroupCallSchema = z.object({
   roomName: z.string().trim().min(1).max(255)
 });
 
+const groupCallMicPolicySchema = z.enum(["EVERYONE", "ADMINS_ONLY", "LISTEN_ONLY"]);
+const groupCallCameraPolicySchema = z.enum(["EVERYONE", "ADMINS_ONLY", "DISABLED"]);
+
+const updateGroupCallModerationSchema = z
+  .object({
+    microphonePolicy: groupCallMicPolicySchema.optional(),
+    cameraPolicy: groupCallCameraPolicySchema.optional()
+  })
+  .superRefine((value, ctx) => {
+    if (value.microphonePolicy || value.cameraPolicy) return;
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "group_call_moderation_required",
+      path: ["microphonePolicy"]
+    });
+  });
+
 const GROUP_CALL_TTL_SECONDS = 60 * 60 * 6;
 const GROUP_CALL_EMPTY_TIMEOUT_SECONDS = 60 * 10;
 const GROUP_CALL_MAX_PARTICIPANTS = 64;
@@ -60,6 +77,8 @@ interface GroupCallStateRecord {
   roomName: string;
   sessionId: string;
   type: "audio" | "video";
+  microphonePolicy: "EVERYONE" | "ADMINS_ONLY" | "LISTEN_ONLY";
+  cameraPolicy: "EVERYONE" | "ADMINS_ONLY" | "DISABLED";
   startedByUserId: string;
   startedByDisplayName: string | null;
   startedAt: string;
@@ -94,6 +113,14 @@ async function loadGroupCallState(chatId: string): Promise<GroupCallStateRecord 
       roomName: parsed.roomName,
       sessionId: parsed.sessionId,
       type: parsed.type,
+      microphonePolicy:
+        parsed.microphonePolicy === "ADMINS_ONLY" || parsed.microphonePolicy === "LISTEN_ONLY"
+          ? parsed.microphonePolicy
+          : "EVERYONE",
+      cameraPolicy:
+        parsed.cameraPolicy === "ADMINS_ONLY" || parsed.cameraPolicy === "DISABLED"
+          ? parsed.cameraPolicy
+          : "EVERYONE",
       startedByUserId: parsed.startedByUserId,
       startedByDisplayName: parsed.startedByDisplayName ?? null,
       startedAt: parsed.startedAt
@@ -140,6 +167,10 @@ function policyAllows(policy: string, role: string | null | undefined): boolean 
   }
 }
 
+function canModerateGroupCall(role: string | null | undefined): boolean {
+  return policyAllows("EDITOR_ONLY", role);
+}
+
 async function syncGroupCallState(
   chatId: string
 ): Promise<{ state: GroupCallStateRecord | null; participantCount: number }> {
@@ -174,6 +205,8 @@ async function emitGroupCallStateUpdate(origin: string, chatId: string): Promise
           chatId,
           roomName: state.roomName,
           type: state.type,
+          microphonePolicy: state.microphonePolicy,
+          cameraPolicy: state.cameraPolicy,
           startedByUserId: state.startedByUserId,
           startedByDisplayName: state.startedByDisplayName,
           startedAt: state.startedAt,
@@ -191,6 +224,8 @@ async function serializeGroupCallStateForViewer(params: {
   chatId: string;
   roomName: string;
   type: "audio" | "video";
+  microphonePolicy: "EVERYONE" | "ADMINS_ONLY" | "LISTEN_ONLY";
+  cameraPolicy: "EVERYONE" | "ADMINS_ONLY" | "DISABLED";
   startedByUserId: string;
   startedByDisplayName: string | null;
   startedAt: string;
@@ -209,6 +244,8 @@ async function serializeGroupCallStateForViewer(params: {
     chatId: state.chatId,
     roomName: state.roomName,
     type: state.type,
+    microphonePolicy: state.microphonePolicy,
+    cameraPolicy: state.cameraPolicy,
     startedByUserId: state.startedByUserId,
     startedByDisplayName: state.startedByDisplayName,
     startedAt: state.startedAt,
@@ -624,6 +661,8 @@ callRouter.post(
           roomName: createdRoom.roomName,
           sessionId: createdRoom.sessionId,
           type: requestedType,
+          microphonePolicy: "EVERYONE",
+          cameraPolicy: requestedType === "video" ? "EVERYONE" : "DISABLED",
           startedByUserId: userId,
           startedByDisplayName,
           startedAt: new Date().toISOString()
@@ -660,6 +699,74 @@ callRouter.post(
       }
       logError("group call join failed", error);
       res.status(500).json({ error: "failed_to_join_group_call" });
+    }
+  }
+);
+
+callRouter.put(
+  "/group-chat/:chatId/moderation",
+  requireAuth,
+  async (req, res) => {
+    const parsedParams = groupChatCallParamSchema.safeParse(req.params);
+    const parsedBody = updateGroupCallModerationSchema.safeParse(req.body);
+    if (!parsedParams.success) {
+      res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+      return;
+    }
+    if (!parsedBody.success) {
+      res.status(400).json({ error: "validation_error", details: parsedBody.error.flatten() });
+      return;
+    }
+    if (!canUseGroupCallState()) {
+      res.status(503).json({ error: "group_call_state_unavailable" });
+      return;
+    }
+
+    try {
+      const chatId = parsedParams.data.chatId;
+      const userId = req.authUserId!;
+      const detail = await chatService.getGroupDetail(chatId, userId);
+      if (!detail || detail.chatType !== "group") {
+        res.status(404).json({ error: "group_not_found" });
+        return;
+      }
+      if (!canModerateGroupCall(detail.myRole)) {
+        res.status(403).json({ error: "group_call_moderation_not_allowed" });
+        return;
+      }
+
+      const activeState = await loadGroupCallState(chatId);
+      if (!activeState) {
+        res.status(409).json({ error: "group_call_not_active" });
+        return;
+      }
+
+      const nextState: GroupCallStateRecord = {
+        ...activeState,
+        microphonePolicy:
+          parsedBody.data.microphonePolicy ?? activeState.microphonePolicy,
+        cameraPolicy:
+          activeState.type === "audio"
+            ? "DISABLED"
+            : (parsedBody.data.cameraPolicy ?? activeState.cameraPolicy)
+      };
+      await saveGroupCallState(nextState);
+      await emitGroupCallStateUpdate("moderation", chatId);
+      const state = await serializeGroupCallStateForViewer({ chatId, userId });
+      res.json({ data: { state } });
+    } catch (error) {
+      if (error instanceof Error) {
+        if (error.message === "forbidden_chat_access") {
+          res.status(403).json({ error: error.message });
+          return;
+        }
+        if (error.message === "group_not_found") {
+          res.status(404).json({ error: error.message });
+          return;
+        }
+      }
+      logError("group call moderation failed", error);
+      res.status(500).json({ error: "failed_to_update_group_call_moderation" });
     }
   }
 );
