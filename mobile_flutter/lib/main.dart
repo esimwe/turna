@@ -97,6 +97,7 @@ const bool kTurnaDebugLogs = true;
 const String kChatRoomRouteName = 'chat-room';
 const int kComposerMediaLimit = 30;
 const int kInlineAttachmentSoftLimitBytes = 64 * 1024 * 1024;
+const int kDocumentAttachmentMaxBytes = 2 * 1024 * 1024 * 1024;
 const int kStatusMaxVideoDurationSeconds = 60;
 const int kInlineImagePickerQuality = 82;
 const double kInlineImagePickerMaxDimension = 2200;
@@ -516,6 +517,8 @@ class TurnaLinkPreviewCache {
     dotAll: true,
   );
 
+  static TurnaLinkPreviewMetadata? peek(Uri uri) => _resolved[uri.toString()];
+
   static Future<TurnaLinkPreviewMetadata> resolve(Uri uri) async {
     final normalized = uri.toString();
     final cached = _resolved[normalized];
@@ -610,6 +613,40 @@ class TurnaMediaBridge {
       'path': path,
       'mimeType': mimeType,
     });
+  }
+
+  static Future<TurnaDocumentScanResult?> scanDocument() async {
+    final payload = await _channel.invokeMapMethod<String, dynamic>(
+      'scanDocument',
+    );
+    if (payload == null) return null;
+    return TurnaDocumentScanResult.fromMap(Map<String, dynamic>.from(payload));
+  }
+}
+
+class TurnaDocumentScanResult {
+  const TurnaDocumentScanResult({
+    required this.path,
+    required this.fileName,
+    required this.mimeType,
+    required this.sizeBytes,
+    this.pageCount,
+  });
+
+  final String path;
+  final String fileName;
+  final String mimeType;
+  final int sizeBytes;
+  final int? pageCount;
+
+  factory TurnaDocumentScanResult.fromMap(Map<String, dynamic> map) {
+    return TurnaDocumentScanResult(
+      path: (map['path'] ?? '').toString(),
+      fileName: (map['fileName'] ?? '').toString(),
+      mimeType: (map['mimeType'] ?? 'application/pdf').toString(),
+      sizeBytes: (map['sizeBytes'] as num?)?.toInt() ?? 0,
+      pageCount: (map['pageCount'] as num?)?.toInt(),
+    );
   }
 }
 
@@ -1447,6 +1484,7 @@ bool _isAudioAttachment(ChatAttachment attachment) {
 }
 
 bool _isImageAttachment(ChatAttachment attachment) {
+  if (attachment.kind == ChatAttachmentKind.file) return false;
   if (attachment.kind == ChatAttachmentKind.image) return true;
   final contentType = attachment.contentType.toLowerCase();
   if (contentType.startsWith('image/')) return true;
@@ -1461,6 +1499,7 @@ bool _isImageAttachment(ChatAttachment attachment) {
 }
 
 bool _isVideoAttachment(ChatAttachment attachment) {
+  if (attachment.kind == ChatAttachmentKind.file) return false;
   if (attachment.kind == ChatAttachmentKind.video) return true;
   final contentType = attachment.contentType.toLowerCase();
   if (contentType.startsWith('video/')) return true;

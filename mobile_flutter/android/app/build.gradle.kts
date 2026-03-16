@@ -56,4 +56,5 @@ flutter {
 
 dependencies {
     implementation("me.leolin:ShortcutBadger:1.1.22@aar")
+    implementation("com.google.android.gms:play-services-mlkit-document-scanner:16.0.0")
 }

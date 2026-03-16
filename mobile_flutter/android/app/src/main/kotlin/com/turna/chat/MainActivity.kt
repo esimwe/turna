@@ -1,25 +1,38 @@
 package com.turna.chat
 
+import android.app.Activity
 import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
-import android.os.Environment
 import android.os.Build
+import android.os.Environment
 import android.os.PowerManager
 import android.provider.MediaStore
+import android.provider.OpenableColumns
 import android.telephony.TelephonyManager
 import android.view.WindowManager
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.FileProvider
+import com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions
+import com.google.mlkit.vision.documentscanner.GmsDocumentScanning
+import com.google.mlkit.vision.documentscanner.GmsDocumentScanningResult
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import me.leolin.shortcutbadger.ShortcutBadger
 import java.io.File
+import java.io.FileOutputStream
 import java.util.Locale
 
 class MainActivity : FlutterFragmentActivity() {
     private var proximityWakeLock: PowerManager.WakeLock? = null
+    private var pendingDocumentScanResult: MethodChannel.Result? = null
+    private val documentScanLauncher =
+        registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { activityResult ->
+            handleDocumentScanResult(activityResult.resultCode, activityResult.data)
+        }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -122,6 +135,12 @@ class MainActivity : FlutterFragmentActivity() {
                         result.error("invalid_args", "Dosya yolu gerekli.", null)
                     } else {
                         saveToGallery(path, mimeType, result)
+                    }
+                }
+
+                "scanDocument" -> {
+                    runOnUiThread {
+                        presentDocumentScanner(result)
                     }
                 }
 
@@ -259,6 +278,118 @@ class MainActivity : FlutterFragmentActivity() {
         } catch (error: Throwable) {
             contentResolver.delete(uri, null, null)
             result.error("save_failed", error.message, null)
+        }
+    }
+
+    private fun presentDocumentScanner(result: MethodChannel.Result) {
+        if (pendingDocumentScanResult != null) {
+            result.error("busy", "Belge tarayıcı zaten açık.", null)
+            return
+        }
+
+        val options =
+            GmsDocumentScannerOptions.Builder()
+                .setGalleryImportAllowed(false)
+                .setScannerMode(GmsDocumentScannerOptions.SCANNER_MODE_FULL)
+                .setResultFormats(GmsDocumentScannerOptions.RESULT_FORMAT_PDF)
+                .build()
+
+        GmsDocumentScanning.getClient(options)
+            .getStartScanIntent(this)
+            .addOnSuccessListener { intentSender ->
+                pendingDocumentScanResult = result
+                try {
+                    documentScanLauncher.launch(IntentSenderRequest.Builder(intentSender).build())
+                } catch (error: Throwable) {
+                    pendingDocumentScanResult = null
+                    result.error("scan_failed", error.message, null)
+                }
+            }
+            .addOnFailureListener { error ->
+                result.error(
+                    "scan_failed",
+                    error.message ?: "Belge tarayıcı açılamadı.",
+                    null
+                )
+            }
+    }
+
+    private fun handleDocumentScanResult(resultCode: Int, data: Intent?) {
+        val pending = pendingDocumentScanResult ?: return
+        pendingDocumentScanResult = null
+
+        if (resultCode != Activity.RESULT_OK) {
+            pending.success(null)
+            return
+        }
+
+        try {
+            val scanResult = GmsDocumentScanningResult.fromActivityResultIntent(data)
+            val pdf = scanResult?.pdf
+            if (pdf == null) {
+                pending.error("scan_failed", "Tarama PDF olarak alınamadı.", null)
+                return
+            }
+
+            val fileName = resolveDocumentDisplayName(pdf.uri) ?: buildScannedDocumentFileName()
+            val cachedFile = copyDocumentUriToCache(pdf.uri, fileName)
+            pending.success(
+                mapOf(
+                    "path" to cachedFile.absolutePath,
+                    "fileName" to cachedFile.name,
+                    "mimeType" to (contentResolver.getType(pdf.uri) ?: "application/pdf"),
+                    "sizeBytes" to cachedFile.length(),
+                    "pageCount" to pdf.pageCount,
+                )
+            )
+        } catch (error: Throwable) {
+            pending.error("scan_failed", error.message, null)
+        }
+    }
+
+    private fun copyDocumentUriToCache(uri: android.net.Uri, fileName: String): File {
+        val safeName = sanitizeDocumentFileName(fileName)
+        val scansDir = File(cacheDir, "document-scans").apply { mkdirs() }
+        val target = File(scansDir, "${System.currentTimeMillis()}_$safeName")
+
+        val input =
+            contentResolver.openInputStream(uri)
+                ?: throw IllegalStateException("Tarama dosyası okunamadı.")
+        input.use { stream ->
+            FileOutputStream(target).use { output ->
+                stream.copyTo(output)
+            }
+        }
+        return target
+    }
+
+    private fun resolveDocumentDisplayName(uri: android.net.Uri): String? {
+        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+            val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            if (nameIndex >= 0 && cursor.moveToFirst()) {
+                val rawName = cursor.getString(nameIndex)?.trim().orEmpty()
+                if (rawName.isNotEmpty()) {
+                    return rawName
+                }
+            }
+        }
+        return null
+    }
+
+    private fun buildScannedDocumentFileName(): String {
+        return "scan_${System.currentTimeMillis()}.pdf"
+    }
+
+    private fun sanitizeDocumentFileName(fileName: String): String {
+        val normalized =
+            fileName
+                .trim()
+                .replace(Regex("[\\\\/:*?\"<>|]"), "-")
+                .ifEmpty { buildScannedDocumentFileName() }
+        return if (normalized.lowercase(Locale.US).endsWith(".pdf")) {
+            normalized
+        } else {
+            "$normalized.pdf"
         }
     }
 

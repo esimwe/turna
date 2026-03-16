@@ -148,6 +148,24 @@ class _ChatTimelineEntry {
   bool get isMessage => message != null;
 }
 
+class _ResolvedChatMessageText {
+  const _ResolvedChatMessageText({
+    required this.rawText,
+    required this.parsed,
+    required this.trimmedText,
+    required this.sharedLinks,
+    required this.primaryLinkUri,
+    required this.linkCaptionText,
+  });
+
+  final String rawText;
+  final ParsedTurnaMessageText parsed;
+  final String trimmedText;
+  final List<Uri> sharedLinks;
+  final Uri? primaryLinkUri;
+  final String linkCaptionText;
+}
+
 class _ChatRoomPageState extends State<ChatRoomPage>
     with WidgetsBindingObserver, RouteAware {
   static const Duration _voiceRecordTick = Duration(milliseconds: 140);
@@ -156,6 +174,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   static const double _voiceLockThreshold = 84;
 
   late final TurnaSocketClient _client;
+  late final Listenable _headerListenable;
+  late final Listenable _contentListenable;
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   final ImagePicker _mediaPicker = ImagePicker();
@@ -181,7 +201,19 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   Set<String> _starredMessageIds = <String>{};
   Set<String> _softDeletedMessageIds = <String>{};
   Set<String> _deletedMessageIds = <String>{};
+  final Map<String, _ResolvedChatMessageText> _resolvedMessageTextCache =
+      <String, _ResolvedChatMessageText>{};
   final Map<String, GlobalKey> _messageKeys = <String, GlobalKey>{};
+  final List<String> _trackedMessageKeyOrder = <String>[];
+  final Set<String> _trackedMessageIds = <String>{};
+  List<ChatMessage> _cachedDisplayMessages = const <ChatMessage>[];
+  List<_ChatTimelineEntry> _cachedTimelineEntries =
+      const <_ChatTimelineEntry>[];
+  int _cachedMessagesRevision = -1;
+  Object? _cachedDeletedMessageIdsRef;
+  Object? _cachedPeerCallsRef;
+  bool _hasCachedDisplayMessages = false;
+  bool _hasCachedTimelineEntries = false;
   int _lastRenderedTimelineCount = 0;
   Timer? _messageHighlightTimer;
   String? _highlightedMessageId;
@@ -192,6 +224,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   final GlobalKey _voiceMicKey = GlobalKey();
   int? _voicePointerId;
   Offset? _voicePointerOriginGlobal;
+  static const int _trackedMessageKeyLimit = 32;
+  static const int _resolvedMessageTextCacheLimit = 256;
 
   bool get _isGroupChat => widget.chat.chatType == TurnaChatType.group;
   TurnaChatDetail? get _cachedGroupDetail => _isGroupChat
@@ -317,13 +351,23 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       chatType: widget.chat.chatType,
       token: widget.session.token,
       onSessionExpired: widget.onSessionExpired,
-    )..connect();
-    _client.addListener(_refresh);
+    );
+    _headerListenable = Listenable.merge(<Listenable>[
+      _client.headerRevisionListenable,
+      TurnaContactsDirectory.revision,
+    ]);
+    _contentListenable = Listenable.merge(<Listenable>[
+      _client.contentRevisionListenable,
+      TurnaContactsDirectory.revision,
+    ]);
+    _client.messagesRevisionListenable.addListener(
+      _handleClientMessagesChanged,
+    );
+    _client.connect();
     widget.callCoordinator.addListener(_handleCallCoordinatorChanged);
     _controller.addListener(_handleComposerChanged);
     _composerFocusNode.addListener(_handleComposerFocusChanged);
     _scrollController.addListener(_handleScroll);
-    TurnaContactsDirectory.revision.addListener(_refresh);
     _loadLocalMessageState();
     unawaited(_loadSecurityBannerState());
     if (_isGroupChat) {
@@ -381,11 +425,14 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   }
 
   void _refresh() {
-    final shouldSnapToBottom =
-        !_scrollController.hasClients || _scrollController.offset < 120;
     if (mounted) {
       setState(() {});
     }
+  }
+
+  void _handleClientMessagesChanged() {
+    final shouldSnapToBottom =
+        !_scrollController.hasClients || _scrollController.offset < 120;
     final timelineCount = _buildTimelineEntries().length;
     if (timelineCount != _lastRenderedTimelineCount) {
       _lastRenderedTimelineCount = timelineCount;
@@ -751,6 +798,44 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         .replaceAll(_kTurnaSharedUrlPattern, '')
         .replaceAll(RegExp(r'\s+'), ' ')
         .trim();
+  }
+
+  void _rememberResolvedMessageText(
+    String messageId,
+    _ResolvedChatMessageText resolved,
+  ) {
+    _resolvedMessageTextCache.remove(messageId);
+    _resolvedMessageTextCache[messageId] = resolved;
+    while (_resolvedMessageTextCache.length > _resolvedMessageTextCacheLimit) {
+      _resolvedMessageTextCache.remove(_resolvedMessageTextCache.keys.first);
+    }
+  }
+
+  _ResolvedChatMessageText _resolveMessageText(ChatMessage msg) {
+    final cached = _resolvedMessageTextCache[msg.id];
+    if (cached != null && cached.rawText == msg.text) {
+      _rememberResolvedMessageText(msg.id, cached);
+      return cached;
+    }
+
+    final parsed = parseTurnaMessageText(msg.text);
+    final trimmedText = parsed.text.trim();
+    final sharedLinks = trimmedText.isEmpty
+        ? const <Uri>[]
+        : List<Uri>.unmodifiable(extractTurnaUrls(trimmedText));
+    final primaryLinkUri = sharedLinks.isEmpty ? null : sharedLinks.first;
+    final resolved = _ResolvedChatMessageText(
+      rawText: msg.text,
+      parsed: parsed,
+      trimmedText: trimmedText,
+      sharedLinks: sharedLinks,
+      primaryLinkUri: primaryLinkUri,
+      linkCaptionText: primaryLinkUri == null
+          ? trimmedText
+          : _stripLinksFromText(trimmedText),
+    );
+    _rememberResolvedMessageText(msg.id, resolved);
+    return resolved;
   }
 
   Widget _buildLinkifiedMessageText(String text, {required bool mine}) {
@@ -1578,7 +1663,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     if (_isSystemMessage(msg)) {
       return _systemMessageText(msg);
     }
-    final parsed = parseTurnaMessageText(msg.text);
+    final resolved = _resolveMessageText(msg);
+    final parsed = resolved.parsed;
     if (_isMessageDeletedPlaceholder(msg, parsed: parsed)) {
       return 'Silindi.';
     }
@@ -1588,7 +1674,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     if (parsed.contact != null) {
       return parsed.contact!.previewLabel;
     }
-    final text = parsed.text.trim();
+    final text = resolved.trimmedText;
     if (text.isNotEmpty) {
       return text.length > 72 ? '${text.substring(0, 72)}...' : text;
     }
@@ -1938,7 +2024,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   }
 
   bool _canEditMessage(ChatMessage msg, {ParsedTurnaMessageText? parsed}) {
-    final resolved = parsed ?? parseTurnaMessageText(msg.text);
+    final resolved = parsed ?? _resolveMessageText(msg).parsed;
     if (msg.senderId != widget.session.userId) return false;
     if (_isMessageDeletedPlaceholder(msg, parsed: resolved)) return false;
     if (resolved.text.trim().isEmpty) return false;
@@ -2017,8 +2103,10 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   List<ChatGalleryMediaItem> _buildMediaGalleryItems() {
     final items = <ChatGalleryMediaItem>[];
     for (final message in _currentDisplayMessages()) {
-      final parsed = parseTurnaMessageText(message.text);
-      if (_isMessageDeletedPlaceholder(message, parsed: parsed)) continue;
+      final resolved = _resolveMessageText(message);
+      if (_isMessageDeletedPlaceholder(message, parsed: resolved.parsed)) {
+        continue;
+      }
       for (final attachment in message.attachments) {
         if (!_isImageAttachment(attachment) &&
             !_isVideoAttachment(attachment)) {
@@ -2060,7 +2148,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     );
 
     try {
-      final parsed = parseTurnaMessageText(msg.text);
+      final parsed = _resolveMessageText(msg).parsed;
       final drafts = <OutgoingAttachmentDraft>[];
       for (final attachment in msg.attachments) {
         final bytes = await _downloadAttachmentBytes(attachment);
@@ -2231,7 +2319,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   }
 
   Future<void> _showDeleteMessageOptions(ChatMessage msg) async {
-    final parsed = parseTurnaMessageText(msg.text);
+    final parsed = _resolveMessageText(msg).parsed;
     final canDeleteForEveryone = _canDeleteForEveryone(msg, parsed: parsed);
     await showModalBottomSheet<void>(
       context: context,
@@ -2279,8 +2367,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   }
 
   Future<void> _translateMessage(ChatMessage msg) async {
-    final parsed = parseTurnaMessageText(msg.text);
-    final text = parsed.text.trim();
+    final text = _resolveMessageText(msg).trimmedText;
     if (text.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Çevrilecek metin bulunamadı.')),
@@ -2353,7 +2440,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   }
 
   Future<void> _showMessageInfo(ChatMessage msg) async {
-    final parsed = parseTurnaMessageText(msg.text);
+    final parsed = _resolveMessageText(msg).parsed;
     final totalBytes = msg.attachments.fold<int>(
       0,
       (total, item) => total + math.max(0, item.sizeBytes),
@@ -2637,7 +2724,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   }
 
   Future<void> _showMoreMessageActions(ChatMessage msg) async {
-    final parsed = parseTurnaMessageText(msg.text);
+    final parsed = _resolveMessageText(msg).parsed;
     if (_isMessageDeletedPlaceholder(msg, parsed: parsed)) {
       await _confirmRemoveDeletedPlaceholder(msg);
       return;
@@ -2708,7 +2795,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     ChatMessage msg, {
     ChatAttachment? attachment,
   }) async {
-    final parsed = parseTurnaMessageText(msg.text);
+    final parsed = _resolveMessageText(msg).parsed;
     if (_isMessageDeletedPlaceholder(msg, parsed: parsed)) {
       await _confirmRemoveDeletedPlaceholder(msg);
       return;
@@ -2883,11 +2970,51 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     );
   }
 
-  List<ChatMessage> _currentDisplayMessages() => _client.messages.reversed
-      .where((message) => !_deletedMessageIds.contains(message.id))
-      .toList();
+  void _trackMessageKey(String messageId) {
+    if (_trackedMessageIds.remove(messageId)) {
+      _trackedMessageKeyOrder.remove(messageId);
+    }
+    _trackedMessageIds.add(messageId);
+    _trackedMessageKeyOrder.add(messageId);
+
+    while (_trackedMessageKeyOrder.length > _trackedMessageKeyLimit) {
+      final oldestMessageId = _trackedMessageKeyOrder.removeAt(0);
+      if (oldestMessageId == _highlightedMessageId) {
+        _trackedMessageKeyOrder.add(oldestMessageId);
+        continue;
+      }
+      _trackedMessageIds.remove(oldestMessageId);
+      _messageKeys.remove(oldestMessageId);
+      break;
+    }
+  }
+
+  List<ChatMessage> _currentDisplayMessages() {
+    if (_hasCachedDisplayMessages &&
+        _cachedMessagesRevision == _client.messagesRevision &&
+        identical(_cachedDeletedMessageIdsRef, _deletedMessageIds)) {
+      return _cachedDisplayMessages;
+    }
+
+    _cachedDisplayMessages = _client.messages.reversed
+        .where((message) => !_deletedMessageIds.contains(message.id))
+        .toList(growable: false);
+    _cachedMessagesRevision = _client.messagesRevision;
+    _cachedDeletedMessageIdsRef = _deletedMessageIds;
+    _cachedPeerCallsRef = null;
+    _hasCachedDisplayMessages = true;
+    _hasCachedTimelineEntries = false;
+    return _cachedDisplayMessages;
+  }
 
   List<_ChatTimelineEntry> _buildTimelineEntries() {
+    if (_hasCachedTimelineEntries &&
+        _cachedMessagesRevision == _client.messagesRevision &&
+        identical(_cachedDeletedMessageIdsRef, _deletedMessageIds) &&
+        identical(_cachedPeerCallsRef, _peerCalls)) {
+      return _cachedTimelineEntries;
+    }
+
     final entries = <_ChatTimelineEntry>[
       ..._currentDisplayMessages().map(_ChatTimelineEntry.message),
       ..._peerCalls.map(_ChatTimelineEntry.call),
@@ -2896,11 +3023,16 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       (a, b) =>
           compareTurnaTimestamps(_timelineCreatedAt(b), _timelineCreatedAt(a)),
     );
-    return entries;
+    _cachedTimelineEntries = List<_ChatTimelineEntry>.unmodifiable(entries);
+    _cachedPeerCallsRef = _peerCalls;
+    _hasCachedTimelineEntries = true;
+    return _cachedTimelineEntries;
   }
 
-  GlobalKey _messageKeyFor(String messageId) =>
-      _messageKeys.putIfAbsent(messageId, GlobalKey.new);
+  GlobalKey? _messageKeyFor(String messageId) {
+    if (!_trackedMessageIds.contains(messageId)) return null;
+    return _messageKeys.putIfAbsent(messageId, GlobalKey.new);
+  }
 
   Future<void> _waitForNextFrame() {
     final completer = Completer<void>();
@@ -2910,6 +3042,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
 
   void _highlightMessage(String messageId) {
     _messageHighlightTimer?.cancel();
+    _trackMessageKey(messageId);
     if (mounted) {
       setState(() => _highlightedMessageId = messageId);
     }
@@ -2945,6 +3078,11 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     }
 
     _highlightMessage(messageId);
+    if (!_trackedMessageIds.contains(messageId)) {
+      setState(() => _trackMessageKey(messageId));
+      await _waitForNextFrame();
+      if (!mounted) return;
+    }
     await _waitForNextFrame();
     if (!mounted) return;
 
@@ -3271,7 +3409,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     if (_isSystemMessage(msg)) {
       return _buildSystemMessageBubble(msg);
     }
-    final parsed = parseTurnaMessageText(msg.text);
+    final resolved = _resolveMessageText(msg);
+    final parsed = resolved.parsed;
     final isDeletedPlaceholder = _isMessageDeletedPlaceholder(
       msg,
       parsed: parsed,
@@ -3279,7 +3418,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     final isPinnedMessage =
         msg.isPinned ||
         _client.pinnedMessages.any((item) => item.messageId == msg.id);
-    final displayText = isDeletedPlaceholder ? 'Silindi.' : parsed.text.trim();
+    final displayText = isDeletedPlaceholder
+        ? 'Silindi.'
+        : resolved.trimmedText;
     final locationPayload = isDeletedPlaceholder ? null : parsed.location;
     final contactPayload = isDeletedPlaceholder ? null : parsed.contact;
     final visibleAttachments = isDeletedPlaceholder
@@ -3299,11 +3440,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         !isDeletedPlaceholder &&
         msg.errorText != null &&
         msg.errorText!.trim().isNotEmpty;
-    final sharedLinks = hasText ? extractTurnaUrls(displayText) : const <Uri>[];
-    final primaryLinkUri = sharedLinks.isEmpty ? null : sharedLinks.first;
-    final linkCaptionText = primaryLinkUri == null
-        ? displayText
-        : _stripLinksFromText(displayText);
+    final primaryLinkUri = hasText ? resolved.primaryLinkUri : null;
+    final linkCaptionText = hasText ? resolved.linkCaptionText : displayText;
     final showLinkPreview =
         primaryLinkUri != null &&
         !hasLocation &&
@@ -4119,7 +4257,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     required ChatAttachmentKind kind,
     required String fileName,
     required String contentType,
-    required Future<List<int>> Function() readBytes,
+    Future<List<int>> Function()? readBytes,
+    String? filePath,
     int? sizeBytes,
     int? durationSeconds,
   }) async {
@@ -4134,14 +4273,41 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         fileName: fileName,
       );
 
-      final bytes = await readBytes();
-      final uploadRes = await http.put(
-        Uri.parse(upload.uploadUrl),
-        headers: upload.headers,
-        body: bytes,
-      );
-      if (uploadRes.statusCode >= 400) {
-        throw TurnaApiException('Dosya yüklenemedi.');
+      int resolvedSizeBytes = sizeBytes ?? 0;
+      if (filePath != null && filePath.trim().isNotEmpty) {
+        final file = File(filePath);
+        if (!await file.exists()) {
+          throw TurnaApiException('Dosya okunamadi.');
+        }
+        if (resolvedSizeBytes <= 0) {
+          resolvedSizeBytes = await file.length();
+        }
+        final request = http.StreamedRequest(
+          'PUT',
+          Uri.parse(upload.uploadUrl),
+        );
+        request.headers.addAll(upload.headers);
+        request.contentLength = resolvedSizeBytes;
+        final responseFuture = request.send();
+        await file.openRead().pipe(request.sink);
+        final uploadRes = await responseFuture;
+        if (uploadRes.statusCode >= 400) {
+          throw TurnaApiException('Dosya yüklenemedi.');
+        }
+      } else {
+        if (readBytes == null) {
+          throw TurnaApiException('Dosya okunamadi.');
+        }
+        final bytes = await readBytes();
+        resolvedSizeBytes = sizeBytes ?? bytes.length;
+        final uploadRes = await http.put(
+          Uri.parse(upload.uploadUrl),
+          headers: upload.headers,
+          body: bytes,
+        );
+        if (uploadRes.statusCode >= 400) {
+          throw TurnaApiException('Dosya yüklenemedi.');
+        }
       }
 
       final message = await ChatApi.sendMessage(
@@ -4161,7 +4327,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
             kind: kind,
             fileName: fileName,
             contentType: contentType,
-            sizeBytes: sizeBytes ?? bytes.length,
+            sizeBytes: resolvedSizeBytes,
             durationSeconds: durationSeconds,
           ),
         ],
@@ -4240,31 +4406,156 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     await _openMediaComposerFromFiles([file]);
   }
 
+  bool _ensureDocumentSizeAllowed(int sizeBytes) {
+    if (sizeBytes <= 0 || sizeBytes <= kDocumentAttachmentMaxBytes) {
+      return true;
+    }
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Belge boyutu 2 GB sınırını aşıyor.')),
+      );
+    }
+    return false;
+  }
+
+  String _fileNameFromPath(String path) {
+    final parts = path.split(RegExp(r'[\\/]'));
+    return parts.isEmpty ? path : parts.last;
+  }
+
+  Future<void> _sendDocumentAttachmentFromPath({
+    required String filePath,
+    String? fileName,
+    String? contentType,
+    int? sizeBytes,
+  }) async {
+    final normalizedPath = filePath.trim();
+    if (normalizedPath.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Secilen dosya okunamadi.')),
+        );
+      }
+      return;
+    }
+
+    final file = File(normalizedPath);
+    if (!await file.exists()) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Secilen dosya bulunamadi.')),
+        );
+      }
+      return;
+    }
+
+    final resolvedSizeBytes = sizeBytes ?? await file.length();
+    if (!_ensureDocumentSizeAllowed(resolvedSizeBytes)) {
+      return;
+    }
+
+    final resolvedFileName = (fileName?.trim().isNotEmpty ?? false)
+        ? fileName!.trim()
+        : _fileNameFromPath(normalizedPath);
+    final resolvedContentType = (contentType?.trim().isNotEmpty ?? false)
+        ? contentType!.trim()
+        : (guessContentTypeForFileName(resolvedFileName) ??
+              'application/octet-stream');
+
+    await _sendPickedAttachment(
+      kind: ChatAttachmentKind.file,
+      fileName: resolvedFileName,
+      contentType: resolvedContentType,
+      filePath: normalizedPath,
+      sizeBytes: resolvedSizeBytes,
+    );
+  }
+
   Future<void> _pickFile() async {
-    final result = await FilePicker.platform.pickFiles();
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.any,
+      allowMultiple: false,
+      withData: false,
+    );
     if (result == null || result.files.isEmpty) return;
 
     final file = result.files.single;
     final filePath = file.path;
-    if (filePath == null || filePath.trim().isEmpty) {
+    final fileName = file.name.trim().isEmpty
+        ? (filePath == null || filePath.trim().isEmpty
+              ? 'belge'
+              : _fileNameFromPath(filePath))
+        : file.name.trim();
+
+    if (filePath != null && filePath.trim().isNotEmpty) {
+      await _sendDocumentAttachmentFromPath(
+        filePath: filePath,
+        fileName: fileName,
+        sizeBytes: file.size > 0 ? file.size : null,
+      );
+      return;
+    }
+
+    final bytes = file.bytes;
+    if (bytes == null || bytes.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text('Secilen dosya okunamadi.')));
       return;
     }
+    if (!_ensureDocumentSizeAllowed(bytes.length)) {
+      return;
+    }
 
-    final fileName = file.name.trim().isEmpty
-        ? filePath.split('/').last
-        : file.name.trim();
     await _sendPickedAttachment(
       kind: ChatAttachmentKind.file,
       fileName: fileName,
       contentType:
           guessContentTypeForFileName(fileName) ?? 'application/octet-stream',
-      readBytes: () => File(filePath).readAsBytes(),
-      sizeBytes: file.size,
+      readBytes: () async => bytes,
+      sizeBytes: file.size > 0 ? file.size : bytes.length,
     );
+  }
+
+  Future<void> _pickDocumentMedia() async {
+    final file = await _mediaPicker.pickMedia();
+    if (file == null) return;
+    final fileName = file.name.trim().isEmpty
+        ? _fileNameFromPath(file.path)
+        : file.name.trim();
+    await _sendDocumentAttachmentFromPath(
+      filePath: file.path,
+      fileName: fileName,
+      contentType: guessContentTypeForFileName(fileName),
+      sizeBytes: await file.length(),
+    );
+  }
+
+  Future<void> _scanDocumentAndSend() async {
+    try {
+      final scan = await TurnaMediaBridge.scanDocument();
+      if (scan == null) return;
+      await _sendDocumentAttachmentFromPath(
+        filePath: scan.path,
+        fileName: scan.fileName,
+        contentType: scan.mimeType,
+        sizeBytes: scan.sizeBytes,
+      );
+    } on PlatformException catch (error) {
+      if (!mounted) return;
+      final message = error.message?.trim().isNotEmpty == true
+          ? error.message!.trim()
+          : 'Belge tarayıcı açılamadı.';
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
   }
 
   Future<void> _showPaymentPlaceholderModal() async {
@@ -4338,6 +4629,109 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                 TextButton(
                   onPressed: () => Navigator.pop(dialogContext),
                   child: const Text('Tamam'),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _showDocumentPickerSheet() async {
+    if (_attachmentBusy) return;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) {
+        Future<void> handleSelection(Future<void> Function() action) async {
+          Navigator.pop(sheetContext);
+          await Future<void>.delayed(const Duration(milliseconds: 140));
+          if (!mounted) return;
+          await action();
+        }
+
+        return SafeArea(
+          child: Container(
+            margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF2F2F6),
+              borderRadius: BorderRadius.circular(30),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    const SizedBox(width: 44),
+                    const Expanded(
+                      child: Text(
+                        'Belge seçin',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                          color: TurnaColors.text,
+                        ),
+                      ),
+                    ),
+                    SizedBox(
+                      width: 44,
+                      height: 44,
+                      child: IconButton(
+                        splashRadius: 20,
+                        onPressed: () => Navigator.pop(sheetContext),
+                        icon: const Icon(Icons.close_rounded),
+                        color: const Color(0xFF5C5C5F),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 24),
+                  child: Text(
+                    'Boyutu en fazla 2 GB olan orijinal dosyaları gönderin.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 14.5,
+                      height: 1.38,
+                      color: TurnaColors.textMuted,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 18),
+                Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(24),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _DocumentPickerActionTile(
+                        title: 'Dosyalardan seç',
+                        icon: Icons.insert_drive_file_outlined,
+                        onTap: () => unawaited(handleSelection(_pickFile)),
+                      ),
+                      const Divider(height: 1, indent: 20, endIndent: 20),
+                      _DocumentPickerActionTile(
+                        title: 'Fotoğraf veya video seç',
+                        icon: Icons.photo_library_outlined,
+                        onTap: () =>
+                            unawaited(handleSelection(_pickDocumentMedia)),
+                      ),
+                      const Divider(height: 1, indent: 20, endIndent: 20),
+                      _DocumentPickerActionTile(
+                        title: 'Belgeyi tarayın',
+                        icon: Icons.document_scanner_outlined,
+                        onTap: () =>
+                            unawaited(handleSelection(_scanDocumentAndSend)),
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),
@@ -4434,7 +4828,12 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                       backgroundColor: TurnaColors.primaryDeep,
                       onTap: () {
                         Navigator.pop(sheetContext);
-                        _pickFile();
+                        unawaited(
+                          Future<void>.delayed(
+                            const Duration(milliseconds: 140),
+                            _showDocumentPickerSheet,
+                          ),
+                        );
                       },
                     ),
                     _AttachmentQuickAction(
@@ -4574,8 +4973,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       kTurnaRouteObserver.unsubscribe(this);
     }
     kTurnaActiveChatRegistry.clearCurrent(widget.chat.chatId);
-    _client.removeListener(_refresh);
-    TurnaContactsDirectory.revision.removeListener(_refresh);
+    _client.messagesRevisionListenable.removeListener(
+      _handleClientMessagesChanged,
+    );
     _client.dispose();
     widget.callCoordinator.removeListener(_handleCallCoordinatorChanged);
     _controller.removeListener(_handleComposerChanged);
@@ -4614,9 +5014,6 @@ class _ChatRoomPageState extends State<ChatRoomPage>
 
   @override
   Widget build(BuildContext context) {
-    final timelineEntries = _buildTimelineEntries();
-    final peerStatusText = _buildPeerStatusText();
-
     return Scaffold(
       backgroundColor: TurnaColors.backgroundSoft,
       appBar: AppBar(
@@ -4624,76 +5021,90 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         titleSpacing: 4,
-        title: GestureDetector(
-          onTap: _isGroupChat
-              ? _openGroupInfo
-              : (_peerUserId == null ? null : _openPeerProfile),
-          child: Row(
-            children: [
-              _ProfileAvatar(
-                label: _chatDisplayName,
-                avatarUrl: _isGroupChat
-                    ? _groupAvatarUrl
-                    : widget.chat.avatarUrl,
-                authToken: widget.session.token,
-                radius: 19,
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      _chatDisplayName,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    if (peerStatusText != null)
-                      Text(
-                        peerStatusText,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 12.5,
-                          color: _client.peerTyping
-                              ? TurnaColors.primary
-                              : TurnaColors.textMuted,
-                          fontWeight: _client.peerTyping
-                              ? FontWeight.w600
-                              : FontWeight.w500,
+        title: AnimatedBuilder(
+          animation: _headerListenable,
+          builder: (context, _) {
+            final peerStatusText = _buildPeerStatusText();
+            final peerTyping = _client.peerTyping;
+            return GestureDetector(
+              onTap: _isGroupChat
+                  ? _openGroupInfo
+                  : (_peerUserId == null ? null : _openPeerProfile),
+              child: Row(
+                children: [
+                  _ProfileAvatar(
+                    label: _chatDisplayName,
+                    avatarUrl: _isGroupChat
+                        ? _groupAvatarUrl
+                        : widget.chat.avatarUrl,
+                    authToken: widget.session.token,
+                    radius: 19,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _chatDisplayName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
-                      ),
-                  ],
-                ),
+                        if (peerStatusText != null)
+                          Text(
+                            peerStatusText,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 12.5,
+                              color: peerTyping
+                                  ? TurnaColors.primary
+                                  : TurnaColors.textMuted,
+                              fontWeight: peerTyping
+                                  ? FontWeight.w600
+                                  : FontWeight.w500,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
-            ],
-          ),
+            );
+          },
         ),
         actions: [
           if (_isGroupChat)
-            IconButton(
-              tooltip: _activeGroupCall == null
-                  ? (_canCurrentUserStartGroupCalls
-                        ? 'Grup çağrısı başlat'
-                        : 'Aktif çağrı varsa katıl')
-                  : 'Aktif grup çağrısına katıl',
-              onPressed:
-                  (_activeGroupCall == null && !_canCurrentUserStartGroupCalls)
-                  ? null
-                  : _openGroupCallTypePicker,
-              icon: Icon(
-                _activeGroupCall?.type == TurnaCallType.video
-                    ? Icons.videocam_rounded
-                    : Icons.call_rounded,
-                color: _activeGroupCall == null
-                    ? null
-                    : TurnaColors.primaryStrong,
-              ),
+            AnimatedBuilder(
+              animation: _headerListenable,
+              builder: (context, _) {
+                final activeGroupCall = _activeGroupCall;
+                return IconButton(
+                  tooltip: activeGroupCall == null
+                      ? (_canCurrentUserStartGroupCalls
+                            ? 'Grup çağrısı başlat'
+                            : 'Aktif çağrı varsa katıl')
+                      : 'Aktif grup çağrısına katıl',
+                  onPressed:
+                      (activeGroupCall == null &&
+                          !_canCurrentUserStartGroupCalls)
+                      ? null
+                      : _openGroupCallTypePicker,
+                  icon: Icon(
+                    activeGroupCall?.type == TurnaCallType.video
+                        ? Icons.videocam_rounded
+                        : Icons.call_rounded,
+                    color: activeGroupCall == null
+                        ? null
+                        : TurnaColors.primaryStrong,
+                  ),
+                );
+              },
             ),
           if (_isGroupChat)
             IconButton(
@@ -4725,165 +5136,180 @@ class _ChatRoomPageState extends State<ChatRoomPage>
           ],
         ],
       ),
-      body: Column(
-        children: [
-          if (_client.error != null)
-            Container(
-              width: double.infinity,
-              color: const Color(0xFFFFF1E6),
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              child: Text(
-                _client.error!,
-                style: const TextStyle(color: Color(0xFF7A4B00)),
-              ),
-            ),
-          if (_attachmentBusy)
-            Container(
-              width: double.infinity,
-              color: TurnaColors.primary50,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              child: const Text(
-                'Medya yükleniyor. Mesaj hazırlanıyor...',
-                style: TextStyle(color: TurnaColors.primaryStrong),
-              ),
-            ),
-          if (_activePinnedMessage != null)
-            _PinnedMessageBar(
-              pinned: _activePinnedMessage!,
-              onTap: _openPinnedMessagesSheet,
-              onClear: _canManagePinnedMessages
-                  ? () => _togglePinnedMessage(
-                      _messageForPinnedSummary(_activePinnedMessage!),
-                    )
-                  : null,
-            ),
-          if (_activeGroupCall != null)
-            Container(
-              width: double.infinity,
-              margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              decoration: BoxDecoration(
-                color: TurnaColors.primary50,
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(color: TurnaColors.primary200),
-              ),
-              child: Row(
-                children: [
-                  Icon(
-                    _activeGroupCall!.type == TurnaCallType.video
-                        ? Icons.videocam_rounded
-                        : Icons.call_rounded,
-                    color: TurnaColors.primaryStrong,
+      body: AnimatedBuilder(
+        animation: _contentListenable,
+        builder: (context, _) {
+          final timelineEntries = _buildTimelineEntries();
+          return Column(
+            children: [
+              if (_client.error != null)
+                Container(
+                  width: double.infinity,
+                  color: const Color(0xFFFFF1E6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 10,
                   ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      _activeGroupCallLabel() ?? 'Aktif grup çağrısı',
-                      style: const TextStyle(
-                        color: TurnaColors.primary800,
-                        fontWeight: FontWeight.w600,
+                  child: Text(
+                    _client.error!,
+                    style: const TextStyle(color: Color(0xFF7A4B00)),
+                  ),
+                ),
+              if (_attachmentBusy)
+                Container(
+                  width: double.infinity,
+                  color: TurnaColors.primary50,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 10,
+                  ),
+                  child: const Text(
+                    'Medya yükleniyor. Mesaj hazırlanıyor...',
+                    style: TextStyle(color: TurnaColors.primaryStrong),
+                  ),
+                ),
+              if (_activePinnedMessage != null)
+                _PinnedMessageBar(
+                  pinned: _activePinnedMessage!,
+                  onTap: _openPinnedMessagesSheet,
+                  onClear: _canManagePinnedMessages
+                      ? () => _togglePinnedMessage(
+                          _messageForPinnedSummary(_activePinnedMessage!),
+                        )
+                      : null,
+                ),
+              if (_activeGroupCall != null)
+                Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 12,
+                  ),
+                  decoration: BoxDecoration(
+                    color: TurnaColors.primary50,
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(color: TurnaColors.primary200),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        _activeGroupCall!.type == TurnaCallType.video
+                            ? Icons.videocam_rounded
+                            : Icons.call_rounded,
+                        color: TurnaColors.primaryStrong,
                       ),
-                    ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          _activeGroupCallLabel() ?? 'Aktif grup çağrısı',
+                          style: const TextStyle(
+                            color: TurnaColors.primary800,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: () =>
+                            _joinOrStartGroupCall(_activeGroupCall!.type),
+                        child: const Text('Katıl'),
+                      ),
+                    ],
                   ),
-                  TextButton(
-                    onPressed: () =>
-                        _joinOrStartGroupCall(_activeGroupCall!.type),
-                    child: const Text('Katıl'),
-                  ),
-                ],
-              ),
-            ),
-          if (_showSecurityBanner) _buildSecurityBanner(),
-          Expanded(
-            child: Stack(
-              children: [
-                const Positioned.fill(child: _ChatWallpaper()),
-                if (timelineEntries.isEmpty && _client.loadingInitial)
-                  const SizedBox.expand()
-                else if (timelineEntries.isEmpty)
-                  const _CenteredState(
-                    icon: Icons.chat_bubble_outline,
-                    title: 'Henüz mesaj yok',
-                    message: 'İlk mesajı göndererek sohbeti başlat.',
-                  )
-                else
-                  ListView.builder(
-                    controller: _scrollController,
-                    reverse: true,
-                    padding: const EdgeInsets.fromLTRB(8, 14, 8, 18),
-                    itemCount: timelineEntries.length + 1,
-                    itemBuilder: (context, index) {
-                      if (index == timelineEntries.length) {
-                        if (_client.loadingMore) {
-                          return const Padding(
-                            padding: EdgeInsets.symmetric(vertical: 12),
-                            child: Center(
-                              child: Text(
-                                'Eski mesajlar ekleniyor...',
-                                style: TextStyle(color: Color(0xFF777C79)),
-                              ),
-                            ),
-                          );
-                        }
-                        if (_client.hasMore) {
-                          return const Padding(
-                            padding: EdgeInsets.symmetric(vertical: 12),
-                            child: Center(
-                              child: Text(
-                                'Eski mesajlar yükleniyor...',
-                                style: TextStyle(color: Color(0xFF777C79)),
-                              ),
-                            ),
-                          );
-                        }
-                        return const SizedBox(height: 24);
-                      }
-
-                      final entry = timelineEntries[index];
-                      final msg = entry.message;
-                      final call = entry.call;
-                      return Column(
-                        children: [
-                          if (_shouldShowDayChip(timelineEntries, index))
-                            Padding(
-                              padding: const EdgeInsets.symmetric(
-                                vertical: TurnaChatTokens.dateGap / 2,
-                              ),
-                              child: _DateSeparatorChip(
-                                label: _formatDayLabel(
-                                  _timelineCreatedAt(entry),
+                ),
+              if (_showSecurityBanner) _buildSecurityBanner(),
+              Expanded(
+                child: Stack(
+                  children: [
+                    const Positioned.fill(child: _ChatWallpaper()),
+                    if (timelineEntries.isEmpty && _client.loadingInitial)
+                      const SizedBox.expand()
+                    else if (timelineEntries.isEmpty)
+                      const _CenteredState(
+                        icon: Icons.chat_bubble_outline,
+                        title: 'Henüz mesaj yok',
+                        message: 'İlk mesajı göndererek sohbeti başlat.',
+                      )
+                    else
+                      ListView.builder(
+                        controller: _scrollController,
+                        reverse: true,
+                        padding: const EdgeInsets.fromLTRB(8, 14, 8, 18),
+                        itemCount: timelineEntries.length + 1,
+                        itemBuilder: (context, index) {
+                          if (index == timelineEntries.length) {
+                            if (_client.loadingMore) {
+                              return const Padding(
+                                padding: EdgeInsets.symmetric(vertical: 12),
+                                child: Center(
+                                  child: Text(
+                                    'Eski mesajlar ekleniyor...',
+                                    style: TextStyle(color: Color(0xFF777C79)),
+                                  ),
                                 ),
-                              ),
-                            ),
-                          if (msg != null)
-                            _buildMessageBubble(
-                              timelineEntries,
-                              index,
-                              msg,
-                              msg.senderId == widget.session.userId,
-                            )
-                          else if (call != null)
-                            _buildCallBubble(timelineEntries, index, call),
-                        ],
-                      );
-                    },
-                  ),
-                if (_showScrollToBottom)
-                  Positioned(
-                    right: 16,
-                    bottom: 16,
-                    child: FloatingActionButton.small(
-                      backgroundColor: Colors.white,
-                      foregroundColor: TurnaColors.primary,
-                      onPressed: _jumpToBottom,
-                      child: const Icon(Icons.keyboard_arrow_down),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-          _buildComposer(),
-        ],
+                              );
+                            }
+                            if (_client.hasMore) {
+                              return const Padding(
+                                padding: EdgeInsets.symmetric(vertical: 12),
+                                child: Center(
+                                  child: Text(
+                                    'Eski mesajlar yükleniyor...',
+                                    style: TextStyle(color: Color(0xFF777C79)),
+                                  ),
+                                ),
+                              );
+                            }
+                            return const SizedBox(height: 24);
+                          }
+
+                          final entry = timelineEntries[index];
+                          final msg = entry.message;
+                          final call = entry.call;
+                          return Column(
+                            children: [
+                              if (_shouldShowDayChip(timelineEntries, index))
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: TurnaChatTokens.dateGap / 2,
+                                  ),
+                                  child: _DateSeparatorChip(
+                                    label: _formatDayLabel(
+                                      _timelineCreatedAt(entry),
+                                    ),
+                                  ),
+                                ),
+                              if (msg != null)
+                                _buildMessageBubble(
+                                  timelineEntries,
+                                  index,
+                                  msg,
+                                  msg.senderId == widget.session.userId,
+                                )
+                              else if (call != null)
+                                _buildCallBubble(timelineEntries, index, call),
+                            ],
+                          );
+                        },
+                      ),
+                    if (_showScrollToBottom)
+                      Positioned(
+                        right: 16,
+                        bottom: 16,
+                        child: FloatingActionButton.small(
+                          backgroundColor: Colors.white,
+                          foregroundColor: TurnaColors.primary,
+                          onPressed: _jumpToBottom,
+                          child: const Icon(Icons.keyboard_arrow_down),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              _buildComposer(),
+            ],
+          );
+        },
       ),
     );
   }
@@ -5146,6 +5572,48 @@ class _AttachmentQuickAction extends StatelessWidget {
   }
 }
 
+class _DocumentPickerActionTile extends StatelessWidget {
+  const _DocumentPickerActionTile({
+    required this.title,
+    required this.icon,
+    required this.onTap,
+  });
+
+  final String title;
+  final IconData icon;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(20),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 18),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w500,
+                    color: TurnaColors.text,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Icon(icon, size: 28, color: const Color(0xFF151515)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _MessageQuickAction extends StatelessWidget {
   const _MessageQuickAction({
     required this.icon,
@@ -5370,7 +5838,7 @@ class _ReplySnippetThumbnail extends StatelessWidget {
   }
 }
 
-class _TurnaMessageLinkPreviewCard extends StatelessWidget {
+class _TurnaMessageLinkPreviewCard extends StatefulWidget {
   const _TurnaMessageLinkPreviewCard({
     required this.uri,
     required this.mine,
@@ -5382,7 +5850,37 @@ class _TurnaMessageLinkPreviewCard extends StatelessWidget {
   final VoidCallback onTap;
 
   @override
+  State<_TurnaMessageLinkPreviewCard> createState() =>
+      _TurnaMessageLinkPreviewCardState();
+}
+
+class _TurnaMessageLinkPreviewCardState
+    extends State<_TurnaMessageLinkPreviewCard> {
+  late Future<TurnaLinkPreviewMetadata> _future;
+  TurnaLinkPreviewMetadata? _initialData;
+
+  @override
+  void initState() {
+    super.initState();
+    _bindPreview();
+  }
+
+  @override
+  void didUpdateWidget(covariant _TurnaMessageLinkPreviewCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.uri != widget.uri) {
+      _bindPreview();
+    }
+  }
+
+  void _bindPreview() {
+    _initialData = TurnaLinkPreviewCache.peek(widget.uri);
+    _future = TurnaLinkPreviewCache.resolve(widget.uri);
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final mine = widget.mine;
     final surfaceColor = mine
         ? Colors.white.withValues(alpha: 0.44)
         : const Color(0xFFF6F8FB);
@@ -5391,24 +5889,25 @@ class _TurnaMessageLinkPreviewCard extends StatelessWidget {
         : TurnaColors.border;
 
     return FutureBuilder<TurnaLinkPreviewMetadata>(
-      future: TurnaLinkPreviewCache.resolve(uri),
+      future: _future,
+      initialData: _initialData,
       builder: (context, snapshot) {
         final preview = snapshot.data;
         final host = preview?.host.isNotEmpty == true
             ? preview!.host
-            : uri.host.replaceFirst(
+            : widget.uri.host.replaceFirst(
                 RegExp(r'^www\.', caseSensitive: false),
                 '',
               );
         final title = (preview?.title.trim().isNotEmpty ?? false)
             ? preview!.title.trim()
-            : (host.isEmpty ? uri.toString() : host);
-        final displayUrl = preview?.displayUrl ?? uri.toString();
+            : (host.isEmpty ? widget.uri.toString() : host);
+        final displayUrl = preview?.displayUrl ?? widget.uri.toString();
 
         return Material(
           color: Colors.transparent,
           child: InkWell(
-            onTap: onTap,
+            onTap: widget.onTap,
             borderRadius: BorderRadius.circular(16),
             child: Container(
               width: 250,

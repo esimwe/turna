@@ -22,6 +22,27 @@ class ChatsPage extends StatefulWidget {
 
 enum _ChatsMenuAction { select, markAllRead }
 
+class _ChatsPageViewData {
+  const _ChatsPageViewData({
+    required this.folders,
+    required this.archivedChats,
+    required this.filteredChats,
+    required this.hasAnyActiveChats,
+    required this.unreadTotal,
+    required this.query,
+  });
+
+  final List<ChatFolder> folders;
+  final List<ChatPreview> archivedChats;
+  final List<ChatPreview> filteredChats;
+  final bool hasAnyActiveChats;
+  final int unreadTotal;
+  final String query;
+
+  bool get archivedTopVisible => archivedChats.isNotEmpty;
+  bool get filtersVisible => folders.isNotEmpty;
+}
+
 class _ChatsPageState extends State<ChatsPage> {
   static const String _allChatsFilterId = '__all__';
 
@@ -33,6 +54,11 @@ class _ChatsPageState extends State<ChatsPage> {
   late Future<ChatInboxData> _inboxFuture;
   ChatInboxData? _cachedInbox;
   String _selectedFilterId = _allChatsFilterId;
+  ChatInboxData? _cachedViewInbox;
+  _ChatsPageViewData? _cachedViewData;
+  String _cachedViewQuery = '';
+  String _cachedViewFilterId = _allChatsFilterId;
+  int? _lastReportedUnreadTotal;
 
   @override
   void initState() {
@@ -95,6 +121,67 @@ class _ChatsPageState extends State<ChatsPage> {
   void _onContactsChanged() {
     if (!mounted) return;
     setState(_scheduleInboxReload);
+  }
+
+  _ChatsPageViewData _resolveViewData(ChatInboxData inbox) {
+    final query = _searchController.text.trim().toLowerCase();
+    if (_cachedViewData != null &&
+        identical(_cachedViewInbox, inbox) &&
+        _cachedViewQuery == query &&
+        _cachedViewFilterId == _selectedFilterId) {
+      return _cachedViewData!;
+    }
+
+    final chats = inbox.chats;
+    final folders = inbox.folders;
+    final archivedChats = _prioritizeFavoritedChats(
+      chats.where((chat) => chat.isArchived),
+    );
+    final activeChats = _prioritizeFavoritedChats(
+      chats.where((chat) => !chat.isArchived),
+    );
+    final scopedChats = switch (_selectedFilterId) {
+      _allChatsFilterId => activeChats,
+      _ =>
+        activeChats
+            .where((chat) => chat.folderId == _selectedFilterId)
+            .toList(),
+    };
+    final filteredChats = query.isEmpty
+        ? scopedChats
+        : scopedChats
+              .where((chat) {
+                final searchableMessage = chat.isLocked
+                    ? ''
+                    : chat.message.toLowerCase();
+                return chat.name.toLowerCase().contains(query) ||
+                    searchableMessage.contains(query);
+              })
+              .toList(growable: false);
+
+    final data = _ChatsPageViewData(
+      folders: folders,
+      archivedChats: archivedChats,
+      filteredChats: filteredChats,
+      hasAnyActiveChats: activeChats.isNotEmpty,
+      unreadTotal: chats.fold<int>(0, (sum, chat) => sum + chat.unreadCount),
+      query: query,
+    );
+
+    _cachedViewInbox = inbox;
+    _cachedViewData = data;
+    _cachedViewQuery = query;
+    _cachedViewFilterId = _selectedFilterId;
+    return data;
+  }
+
+  void _reportUnreadTotalIfNeeded(int unreadTotal) {
+    if (_lastReportedUnreadTotal == unreadTotal) return;
+    _lastReportedUnreadTotal = unreadTotal;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      widget.onUnreadChanged?.call(unreadTotal);
+    });
   }
 
   @override
@@ -984,8 +1071,8 @@ class _ChatsPageState extends State<ChatsPage> {
 
           final resolvedInbox =
               inbox ?? ChatInboxData(chats: const [], folders: const []);
-          final chats = resolvedInbox.chats;
-          final folders = resolvedInbox.folders;
+          final viewData = _resolveViewData(resolvedInbox);
+          final folders = viewData.folders;
           final hasSelectedFolder =
               _selectedFilterId == _allChatsFilterId ||
               folders.any((folder) => folder.id == _selectedFilterId);
@@ -995,39 +1082,12 @@ class _ChatsPageState extends State<ChatsPage> {
               setState(() => _selectedFilterId = _allChatsFilterId);
             });
           }
-          final unreadTotal = chats.fold<int>(
-            0,
-            (sum, chat) => sum + chat.unreadCount,
-          );
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (!mounted) return;
-            widget.onUnreadChanged?.call(unreadTotal);
-          });
+          _reportUnreadTotalIfNeeded(viewData.unreadTotal);
 
-          final archivedChats = _prioritizeFavoritedChats(
-            chats.where((chat) => chat.isArchived),
-          );
-          final activeChats = _prioritizeFavoritedChats(
-            chats.where((chat) => !chat.isArchived),
-          );
-          final scopedChats = switch (_selectedFilterId) {
-            _allChatsFilterId => activeChats,
-            _ =>
-              activeChats
-                  .where((chat) => chat.folderId == _selectedFilterId)
-                  .toList(),
-          };
-          final query = _searchController.text.trim().toLowerCase();
-          final filteredChats = scopedChats.where((chat) {
-            if (query.isEmpty) return true;
-            final searchableMessage = chat.isLocked
-                ? ''
-                : chat.message.toLowerCase();
-            return chat.name.toLowerCase().contains(query) ||
-                searchableMessage.contains(query);
-          }).toList();
-          final archivedTopVisible = archivedChats.isNotEmpty;
-          final filtersVisible = folders.isNotEmpty;
+          final archivedChats = viewData.archivedChats;
+          final filteredChats = viewData.filteredChats;
+          final archivedTopVisible = viewData.archivedTopVisible;
+          final filtersVisible = viewData.filtersVisible;
           final headerSlots =
               1 + (archivedTopVisible ? 1 : 0) + (filtersVisible ? 1 : 0);
 
@@ -1047,7 +1107,7 @@ class _ChatsPageState extends State<ChatsPage> {
                       decoration: InputDecoration(
                         hintText: 'Sohbetlerde ara',
                         prefixIcon: const Icon(Icons.search),
-                        suffixIcon: query.isEmpty
+                        suffixIcon: viewData.query.isEmpty
                             ? null
                             : IconButton(
                                 onPressed: () => _searchController.clear(),
@@ -1109,7 +1169,7 @@ class _ChatsPageState extends State<ChatsPage> {
                 }
 
                 if (filteredChats.isEmpty) {
-                  if (activeChats.isEmpty && archivedChats.isEmpty) {
+                  if (!viewData.hasAnyActiveChats && archivedChats.isEmpty) {
                     return const _CenteredListState(
                       icon: Icons.chat_bubble_outline,
                       title: 'Henüz sohbet yok',
@@ -1296,6 +1356,8 @@ class _ArchivedChatsPageState extends State<ArchivedChatsPage> {
   int _refreshTick = 0;
   bool _actionBusy = false;
   ChatInboxData? _cachedInbox;
+  ChatInboxData? _cachedArchivedInbox;
+  List<ChatPreview>? _cachedArchivedChats;
 
   @override
   void initState() {
@@ -1325,6 +1387,20 @@ class _ArchivedChatsPageState extends State<ArchivedChatsPage> {
     final cached = await TurnaChatInboxLocalCache.load(widget.session.userId);
     if (!mounted || cached == null) return;
     setState(() => _cachedInbox = cached);
+  }
+
+  List<ChatPreview> _resolveArchivedChats(ChatInboxData inbox) {
+    if (_cachedArchivedChats != null &&
+        identical(_cachedArchivedInbox, inbox)) {
+      return _cachedArchivedChats!;
+    }
+
+    final archivedChats = _prioritizeFavoritedChats(
+      inbox.chats.where((chat) => chat.isArchived),
+    );
+    _cachedArchivedInbox = inbox;
+    _cachedArchivedChats = archivedChats;
+    return archivedChats;
   }
 
   void _handleActionError(Object error) {
@@ -1712,9 +1788,7 @@ class _ArchivedChatsPageState extends State<ArchivedChatsPage> {
               snapshot.data ??
               _cachedInbox ??
               ChatInboxData(chats: const [], folders: const []);
-          final archivedChats = _prioritizeFavoritedChats(
-            inbox.chats.where((chat) => chat.isArchived),
-          );
+          final archivedChats = _resolveArchivedChats(inbox);
 
           return RefreshIndicator(
             onRefresh: () async => setState(() => _refreshTick++),

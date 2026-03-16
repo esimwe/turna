@@ -1404,6 +1404,9 @@ class TurnaSocketClient extends ChangeNotifier {
   final List<TurnaPinnedMessageSummary> _pinnedMessages =
       <TurnaPinnedMessageSummary>[];
   TurnaGroupCallState? _activeGroupCallState;
+  final ValueNotifier<int> messagesRevisionListenable = ValueNotifier<int>(0);
+  final ValueNotifier<int> headerRevisionListenable = ValueNotifier<int>(0);
+  final ValueNotifier<int> contentRevisionListenable = ValueNotifier<int>(0);
   final Map<String, Timer> _messageTimeouts = {};
   final Map<String, ChatMessageStatus> _pendingStatusByMessageId = {};
   final Map<String, Timer> _groupTypingTimeouts = <String, Timer>{};
@@ -1426,9 +1429,11 @@ class TurnaSocketClient extends ChangeNotifier {
   String? nextBefore;
   String? error;
   String? peerLastSeenAt;
+  int _messagesRevision = 0;
   List<TurnaPinnedMessageSummary> get pinnedMessages =>
       List<TurnaPinnedMessageSummary>.unmodifiable(_pinnedMessages);
   TurnaGroupCallState? get activeGroupCallState => _activeGroupCallState;
+  int get messagesRevision => _messagesRevision;
 
   String? get groupTypingSummary {
     if (chatType != TurnaChatType.group || _typingNamesByUserId.isEmpty) {
@@ -1468,7 +1473,7 @@ class TurnaSocketClient extends ChangeNotifier {
     }
 
     if (before != groupTypingSummary) {
-      notifyListeners();
+      _notifyHeaderListeners();
     }
   }
 
@@ -1510,6 +1515,41 @@ class TurnaSocketClient extends ChangeNotifier {
     _sortMessages();
   }
 
+  void _bumpMessagesRevision() {
+    _messagesRevision += 1;
+    messagesRevisionListenable.value = _messagesRevision;
+    contentRevisionListenable.value += 1;
+  }
+
+  void _bumpHeaderRevision() {
+    headerRevisionListenable.value += 1;
+  }
+
+  void _bumpContentRevision() {
+    contentRevisionListenable.value += 1;
+  }
+
+  void _notifyHeaderListeners() {
+    _bumpHeaderRevision();
+    notifyListeners();
+  }
+
+  void _notifyContentListeners() {
+    _bumpContentRevision();
+    notifyListeners();
+  }
+
+  void _notifyMessageListeners() {
+    _bumpMessagesRevision();
+    notifyListeners();
+  }
+
+  void _notifyHeaderAndContentListeners() {
+    _bumpHeaderRevision();
+    _bumpContentRevision();
+    notifyListeners();
+  }
+
   void connect() {
     _hydrateWarmCache();
     loadingInitial = messages.isEmpty;
@@ -1538,7 +1578,7 @@ class TurnaSocketClient extends ChangeNotifier {
         _emitTyping(true);
       }
       _flushQueuedMessages();
-      notifyListeners();
+      _notifyContentListeners();
     });
 
     _socket!.onConnectError((data) {
@@ -1546,14 +1586,14 @@ class TurnaSocketClient extends ChangeNotifier {
       turnaLog('socket connect_error', data);
       if (_isSessionExpiredSignal(data)) {
         error = 'Oturumun suresi doldu.';
-        notifyListeners();
+        _notifyContentListeners();
         onSessionExpired?.call();
         return;
       }
       if (messages.isEmpty) {
         error = 'Canlı bağlantı kurulamadı.';
         loadingInitial = false;
-        notifyListeners();
+        _notifyContentListeners();
       }
     });
 
@@ -1564,7 +1604,7 @@ class TurnaSocketClient extends ChangeNotifier {
     _socket!.on('auth:session_revoked', (data) {
       turnaLog('socket auth:session_revoked', data);
       error = 'Oturumun suresi doldu.';
-      notifyListeners();
+      _notifyContentListeners();
       onSessionExpired?.call();
     });
 
@@ -1677,6 +1717,7 @@ class TurnaSocketClient extends ChangeNotifier {
           'count': messageIds.length,
           'status': payload['status'],
         });
+        _bumpMessagesRevision();
         notifyListeners();
       }
     });
@@ -1710,7 +1751,7 @@ class TurnaSocketClient extends ChangeNotifier {
           'userId': userId,
           'online': online,
         });
-        notifyListeners();
+        _notifyHeaderListeners();
       }
     });
 
@@ -1749,15 +1790,14 @@ class TurnaSocketClient extends ChangeNotifier {
       if (payload == null) return;
       if ((payload['chatId'] ?? '').toString() != chatId) return;
 
-      final pinned =
-          (payload['pinnedMessages'] as List<dynamic>? ?? const [])
-              .whereType<Map>()
-              .map(
-                (item) => TurnaPinnedMessageSummary.fromMap(
-                  Map<String, dynamic>.from(item),
-                ),
-              )
-              .toList();
+      final pinned = (payload['pinnedMessages'] as List<dynamic>? ?? const [])
+          .whereType<Map>()
+          .map(
+            (item) => TurnaPinnedMessageSummary.fromMap(
+              Map<String, dynamic>.from(item),
+            ),
+          )
+          .toList();
       setPinnedMessages(pinned);
     });
 
@@ -1771,13 +1811,15 @@ class TurnaSocketClient extends ChangeNotifier {
           : TurnaGroupCallState.fromMap(Map<String, dynamic>.from(rawState));
       final changed =
           _activeGroupCallState?.roomName != nextState?.roomName ||
-          _activeGroupCallState?.participantCount != nextState?.participantCount ||
+          _activeGroupCallState?.participantCount !=
+              nextState?.participantCount ||
           _activeGroupCallState?.type != nextState?.type ||
-          _activeGroupCallState?.microphonePolicy != nextState?.microphonePolicy ||
+          _activeGroupCallState?.microphonePolicy !=
+              nextState?.microphonePolicy ||
           _activeGroupCallState?.cameraPolicy != nextState?.cameraPolicy;
       _activeGroupCallState = nextState;
       if (changed) {
-        notifyListeners();
+        _notifyHeaderAndContentListeners();
       }
     });
 
@@ -1791,7 +1833,7 @@ class TurnaSocketClient extends ChangeNotifier {
       _groupTypingTimeouts.clear();
       _typingNamesByUserId.clear();
       turnaLog('socket disconnected', {'reason': reason, 'chatId': chatId});
-      notifyListeners();
+      _notifyHeaderAndContentListeners();
     });
 
     _restorePendingMessages();
@@ -1831,18 +1873,18 @@ class TurnaSocketClient extends ChangeNotifier {
       error = null;
       _markSeen();
       _persistMessageCaches();
-      notifyListeners();
+      _notifyMessageListeners();
     } on TurnaUnauthorizedException catch (authError) {
       loadingInitial = false;
       error = authError.toString();
-      notifyListeners();
+      _notifyContentListeners();
       onSessionExpired?.call();
     } catch (_) {
       loadingInitial = false;
       if (messages.isEmpty) {
         error = 'Mesajlar yüklenemedi.';
       }
-      notifyListeners();
+      _notifyContentListeners();
     }
   }
 
@@ -1850,8 +1892,9 @@ class TurnaSocketClient extends ChangeNotifier {
     if (loadingMore || !hasMore || messages.isEmpty) return;
 
     loadingMore = true;
-    notifyListeners();
+    _notifyContentListeners();
 
+    var messagesChanged = false;
     try {
       final page = await ChatApi.fetchMessagesPage(
         token,
@@ -1875,6 +1918,7 @@ class TurnaSocketClient extends ChangeNotifier {
         ..addAll(merged);
       hasMore = page.hasMore;
       nextBefore = page.nextBefore;
+      messagesChanged = true;
       _persistMessageCaches();
     } on TurnaUnauthorizedException catch (authError) {
       error = authError.toString();
@@ -1883,7 +1927,11 @@ class TurnaSocketClient extends ChangeNotifier {
       error = 'Eski mesajlar yüklenemedi.';
     } finally {
       loadingMore = false;
-      notifyListeners();
+      if (messagesChanged) {
+        _notifyMessageListeners();
+      } else {
+        _notifyContentListeners();
+      }
     }
   }
 
@@ -1954,8 +2002,10 @@ class TurnaSocketClient extends ChangeNotifier {
     if (messageChanged) {
       _sortMessages();
       unawaited(_persistMessageCaches());
+      notifyListeners();
+      return;
     }
-    notifyListeners();
+    _notifyContentListeners();
   }
 
   void setActiveGroupCallState(TurnaGroupCallState? state) {
@@ -1967,7 +2017,7 @@ class TurnaSocketClient extends ChangeNotifier {
         _activeGroupCallState?.cameraPolicy != state?.cameraPolicy;
     _activeGroupCallState = state;
     if (changed) {
-      notifyListeners();
+      _notifyHeaderAndContentListeners();
     }
   }
 
@@ -2011,7 +2061,7 @@ class TurnaSocketClient extends ChangeNotifier {
       }
       _groupTypingTimeouts.clear();
       _typingNamesByUserId.clear();
-      notifyListeners();
+      _notifyHeaderAndContentListeners();
     }
   }
 
@@ -2057,6 +2107,7 @@ class TurnaSocketClient extends ChangeNotifier {
           : 'Bağlantı yok. Geri gelince otomatik gönderilecek.',
       clearErrorText: isConnected,
     );
+    _bumpMessagesRevision();
     await _persistMessageCaches();
     notifyListeners();
 
@@ -2177,6 +2228,7 @@ class TurnaSocketClient extends ChangeNotifier {
             ? 'Mesaj gönderilemedi. Tekrar dene.'
             : 'Bağlantı yok. Geri gelince otomatik gönderilecek.',
       );
+      _bumpMessagesRevision();
       await _persistMessageCaches();
       notifyListeners();
     });
@@ -2210,6 +2262,7 @@ class TurnaSocketClient extends ChangeNotifier {
           status: ChatMessageStatus.sending,
           clearErrorText: true,
         );
+        _bumpMessagesRevision();
         notifyListeners();
         _emitQueuedMessage(pendingId);
         await Future<void>.delayed(const Duration(milliseconds: 120));
@@ -2233,7 +2286,7 @@ class TurnaSocketClient extends ChangeNotifier {
     _cancelPeerTypingTimeout();
     if (peerTyping != isTyping) {
       peerTyping = isTyping;
-      notifyListeners();
+      _notifyHeaderListeners();
     }
     if (!isTyping) return;
 
@@ -2263,7 +2316,7 @@ class TurnaSocketClient extends ChangeNotifier {
       _typingNamesByUserId.remove(userId);
     }
     if (before != groupTypingSummary) {
-      notifyListeners();
+      _notifyHeaderListeners();
     }
   }
 
@@ -2301,6 +2354,7 @@ class TurnaSocketClient extends ChangeNotifier {
 
   void _sortMessages() {
     messages.sort((a, b) => compareTurnaTimestamps(a.createdAt, b.createdAt));
+    _bumpMessagesRevision();
   }
 
   bool _samePinnedMessages(List<TurnaPinnedMessageSummary> next) {
@@ -2334,6 +2388,9 @@ class TurnaSocketClient extends ChangeNotifier {
     _cancelPeerTypingTimeout();
     _persistWarmCacheSnapshot();
     _socket?.dispose();
+    messagesRevisionListenable.dispose();
+    headerRevisionListenable.dispose();
+    contentRevisionListenable.dispose();
     super.dispose();
   }
 }
@@ -4604,18 +4661,20 @@ class ChatApi {
         chatId,
       );
       final normalized = trimmedQuery.toLowerCase();
-      final filtered = cached.where((message) {
-        if ((message.systemType ?? '').trim().isNotEmpty) return false;
-        final text = message.text.toLowerCase();
-        final sender = (message.senderDisplayName ?? '').toLowerCase();
-        final fileNames = message.attachments
-            .map((attachment) => (attachment.fileName ?? '').toLowerCase())
-            .join(' ');
-        return text.contains(normalized) ||
-            sender.contains(normalized) ||
-            fileNames.contains(normalized);
-      }).toList()
-        ..sort((a, b) => compareTurnaTimestamps(a.createdAt, b.createdAt));
+      final filtered =
+          cached.where((message) {
+            if ((message.systemType ?? '').trim().isNotEmpty) return false;
+            final text = message.text.toLowerCase();
+            final sender = (message.senderDisplayName ?? '').toLowerCase();
+            final fileNames = message.attachments
+                .map((attachment) => (attachment.fileName ?? '').toLowerCase())
+                .join(' ');
+            return text.contains(normalized) ||
+                sender.contains(normalized) ||
+                fileNames.contains(normalized);
+          }).toList()..sort(
+            (a, b) => compareTurnaTimestamps(a.createdAt, b.createdAt),
+          );
       final window = before == null || before.isEmpty
           ? filtered
           : filtered
