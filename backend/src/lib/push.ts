@@ -174,6 +174,11 @@ function buildPushBody(message: ChatMessage): string {
   }
 }
 
+function buildChatPushCollapseId(chatId: string): string {
+  const normalized = `chat-${chatId}`.replace(/[^A-Za-z0-9_.-]/g, "_");
+  return normalized.length <= 64 ? normalized : normalized.slice(0, 64);
+}
+
 function base64UrlEncode(value: string): string {
   return Buffer.from(value)
     .toString("base64")
@@ -497,7 +502,7 @@ export async function sendChatMessagePush(params: {
   message: ChatMessage;
   senderDisplayName: string;
   recipientUserIds: string[];
-}): Promise<void> {
+}): Promise<string[]> {
   const eligibleRecipientUserIds = await getEligibleChatPushRecipients({
     chatId: params.message.chatId,
     senderId: params.message.senderId,
@@ -510,7 +515,7 @@ export async function sendChatMessagePush(params: {
       chatId: params.message.chatId,
       recipientCount: eligibleRecipientUserIds.length
     });
-    return;
+    return [];
   }
 
   const app = ensureFirebaseApp();
@@ -519,7 +524,7 @@ export async function sendChatMessagePush(params: {
       reason: "firebase_app_init_failed",
       chatId: params.message.chatId
     });
-    return;
+    return [];
   }
 
   const devices = (await findActiveDevices(eligibleRecipientUserIds)).filter(
@@ -531,11 +536,12 @@ export async function sendChatMessagePush(params: {
       chatId: params.message.chatId,
       recipientUserIds: eligibleRecipientUserIds
     });
-    return;
+    return [];
   }
 
   try {
     const chatContext = await getChatPushContext(params.message.chatId);
+    const collapseId = buildChatPushCollapseId(params.message.chatId);
     const mentionUserIds = new Set(
       params.message.mentions
         .map((mention) => mention.userId.trim())
@@ -558,6 +564,7 @@ export async function sendChatMessagePush(params: {
       message: string;
     }> = [];
     const invalidTokenIds: string[] = [];
+    const deliveredRecipientUserIds = new Set<string>();
 
     for (const recipientUserId of eligibleRecipientUserIds) {
       const recipientDevices = groupedDevices.get(recipientUserId) ?? [];
@@ -580,6 +587,7 @@ export async function sendChatMessagePush(params: {
         data: {
           type: "chat_message",
           chatId: params.message.chatId,
+          messageId: params.message.id,
           senderId: params.message.senderId,
           senderDisplayName: params.senderDisplayName,
           chatType: chatContext?.chatType ?? "direct",
@@ -590,23 +598,30 @@ export async function sendChatMessagePush(params: {
         },
         android: {
           priority: "high",
+          collapseKey: collapseId,
           notification: {
-            notificationCount: unreadTotal
+            notificationCount: unreadTotal,
+            tag: collapseId
           }
         },
         apns: {
           headers: {
-            "apns-priority": "10"
+            "apns-priority": "10",
+            "apns-collapse-id": collapseId
           },
           payload: {
             aps: {
               sound: "default",
-              badge: unreadTotal
+              badge: unreadTotal,
+              threadId: collapseId
             }
           }
         }
       });
 
+      if (response.successCount > 0) {
+        deliveredRecipientUserIds.add(recipientUserId);
+      }
       totalSuccessCount += response.successCount;
       totalFailureCount += response.failureCount;
       invalidTokenIds.push(...getInvalidFcmTokenIds(response, recipientDevices));
@@ -625,8 +640,10 @@ export async function sendChatMessagePush(params: {
       failureCount: totalFailureCount,
       failures: allFailures
     });
+    return [...deliveredRecipientUserIds];
   } catch (error) {
     logError("send chat push failed", error);
+    return [];
   }
 }
 

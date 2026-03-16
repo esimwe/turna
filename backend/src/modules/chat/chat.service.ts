@@ -1503,6 +1503,37 @@ export class ChatService {
     return messageIds;
   }
 
+  async markSpecificMessagesDelivered(
+    chatId: string,
+    userId: string,
+    messageIds: string[]
+  ): Promise<string[]> {
+    const uniqueMessageIds = [...new Set(messageIds.map((item) => item.trim()).filter(Boolean))];
+    if (uniqueMessageIds.length === 0) return [];
+
+    const membership = await this.getMembershipState(chatId, userId);
+    const cutoff = latestDate(membership?.hiddenAt, membership?.clearedAt);
+    const targetRows = await prisma.message.findMany({
+      where: {
+        id: { in: uniqueMessageIds },
+        chatId,
+        senderId: { not: userId },
+        status: MessageStatus.sent,
+        ...(cutoff ? { createdAt: { gt: cutoff } } : {})
+      },
+      select: { id: true }
+    });
+    const deliverableIds = targetRows.map((row: any) => row.id);
+    if (deliverableIds.length === 0) return [];
+
+    await prisma.message.updateMany({
+      where: { id: { in: deliverableIds } },
+      data: { status: MessageStatus.delivered }
+    });
+
+    return deliverableIds;
+  }
+
   async markMessagesRead(chatId: string, userId: string): Promise<string[]> {
     const membership = await this.getMembershipState(chatId, userId);
     const cutoff = latestDate(membership?.hiddenAt, membership?.clearedAt);

@@ -231,13 +231,28 @@ export function registerChatSocket(io: Server): void {
         if (recipientIds.length > 0) {
           chatService
             .getUserDisplayName(userId)
-            .then((senderDisplayName) =>
-              sendChatMessagePush({
+            .then(async (senderDisplayName) => {
+              const deliveredRecipientIds = await sendChatMessagePush({
                 message: socketMessage,
                 senderDisplayName,
                 recipientUserIds: recipientIds
-              })
-            )
+              });
+              for (const recipientId of deliveredRecipientIds) {
+                const deliveredIds = await chatService.markSpecificMessagesDelivered(
+                  parsed.data.chatId,
+                  recipientId,
+                  [message.id]
+                );
+                if (deliveredIds.length == 0) continue;
+                emitChatStatus({
+                  chatId: parsed.data.chatId,
+                  chatType: audience.chatType,
+                  status: "delivered",
+                  messageIds: deliveredIds,
+                  userIds: [userId]
+                });
+              }
+            })
             .catch((error: unknown) => {
               logError("chat push after socket send failed", error);
             });
