@@ -838,11 +838,22 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     return resolved;
   }
 
-  Widget _buildLinkifiedMessageText(String text, {required bool mine}) {
+  Widget _buildLinkifiedMessageText(
+    String text, {
+    required bool mine,
+    bool deletedPlaceholder = false,
+  }) {
     final baseStyle = TextStyle(
-      fontSize: 16,
+      fontSize: deletedPlaceholder ? 14.5 : 16,
       height: 1.28,
-      color: mine ? TurnaColors.chatOutgoingText : TurnaColors.chatIncomingText,
+      color: deletedPlaceholder
+          ? (mine
+                ? TurnaColors.chatOutgoingText.withValues(alpha: 0.72)
+                : TurnaColors.chatIncomingText.withValues(alpha: 0.72))
+          : (mine
+                ? TurnaColors.chatOutgoingText
+                : TurnaColors.chatIncomingText),
+      fontStyle: deletedPlaceholder ? FontStyle.italic : FontStyle.normal,
     );
     final matches = _kTurnaSharedUrlPattern.allMatches(text).toList();
     if (matches.isEmpty) {
@@ -3717,6 +3728,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                       child: _buildLinkifiedMessageText(
                         showLinkPreview ? linkCaptionText : displayText,
                         mine: mine,
+                        deletedPlaceholder: isDeletedPlaceholder,
                       ),
                     ),
                     footer,
@@ -6615,7 +6627,8 @@ class _ChatAttachmentList extends StatelessWidget {
           'HD',
           style: TextStyle(
             color: Colors.white,
-            fontSize: 11,
+            fontSize: 10,
+            height: 1,
             fontWeight: FontWeight.w700,
           ),
         ),

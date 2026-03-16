@@ -2471,6 +2471,8 @@ class _MediaComposerPageState extends State<_MediaComposerPage> {
               _quality.label,
               style: const TextStyle(
                 color: Colors.white,
+                fontSize: 13,
+                height: 1,
                 fontWeight: FontWeight.w700,
               ),
             ),
