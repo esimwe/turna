@@ -32,9 +32,10 @@ const prismaUserContact = (prisma as unknown as { userContact: any }).userContac
 const sendMessageAttachmentSchema = z.object({
   objectKey: z.string().trim().min(1).max(512),
   kind: z.enum(["image", "video", "file"]),
+  transferMode: z.enum(["standard", "hd", "document"]).optional().default("standard"),
   fileName: z.string().trim().min(1).max(255).nullable().optional(),
   contentType: z.string().trim().min(1).max(100),
-  sizeBytes: z.coerce.number().int().min(0).max(500 * 1024 * 1024).nullable().optional(),
+  sizeBytes: z.coerce.number().int().min(0).max(2 * 1024 * 1024 * 1024).nullable().optional(),
   width: z.coerce.number().int().min(0).max(10000).nullable().optional(),
   height: z.coerce.number().int().min(0).max(10000).nullable().optional(),
   durationSeconds: z.coerce.number().int().min(0).max(24 * 60 * 60).nullable().optional()

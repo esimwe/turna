@@ -1,5 +1,6 @@
 export type ChatMessageStatus = "sent" | "delivered" | "read";
 export type ChatAttachmentKind = "image" | "video" | "file";
+export type ChatAttachmentTransferMode = "standard" | "hd" | "document";
 export type AppChatType = "direct" | "group";
 export type ChatMemberRole = "OWNER" | "ADMIN" | "EDITOR" | "MEMBER";
 export type ChatPolicyScope = "OWNER_ONLY" | "ADMIN_ONLY" | "EDITOR_ONLY" | "EVERYONE";
@@ -9,6 +10,7 @@ export interface ChatAttachment {
   id: string;
   objectKey: string;
   kind: ChatAttachmentKind;
+  transferMode: ChatAttachmentTransferMode;
   fileName: string | null;
   contentType: string;
   sizeBytes: number;
@@ -71,6 +73,7 @@ export interface SendMessagePayload {
 export interface SendMessageAttachmentInput {
   objectKey: string;
   kind: ChatAttachmentKind;
+  transferMode?: ChatAttachmentTransferMode | null;
   fileName?: string | null;
   contentType: string;
   sizeBytes?: number | null;

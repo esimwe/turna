@@ -51,6 +51,12 @@ enum AttachmentKind {
   FILE
 }
 
+enum AttachmentTransferMode {
+  STANDARD
+  HD
+  DOCUMENT
+}
+
 enum PushPlatform {
   IOS
   ANDROID
@@ -569,6 +575,7 @@ model MessageAttachment {
   messageId        String
   objectKey        String         @unique
   kind             AttachmentKind
+  transferMode     AttachmentTransferMode @default(STANDARD)
   fileName         String?
   contentType      String
   sizeBytes        Int

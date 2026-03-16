@@ -38,6 +38,11 @@ const AttachmentKind = {
   VIDEO: "VIDEO",
   FILE: "FILE"
 } as const;
+const AttachmentTransferMode = {
+  STANDARD: "STANDARD",
+  HD: "HD",
+  DOCUMENT: "DOCUMENT"
+} as const;
 const ChatType = {
   DIRECT: "DIRECT",
   GROUP: "GROUP"
@@ -81,6 +86,8 @@ const MessageStatus = {
   read: "read"
 } as const;
 type AttachmentKindValue = typeof AttachmentKind[keyof typeof AttachmentKind];
+type AttachmentTransferModeValue =
+  typeof AttachmentTransferMode[keyof typeof AttachmentTransferMode];
 type MessageStatusValue = typeof MessageStatus[keyof typeof MessageStatus];
 type ChatTypeValue = typeof ChatType[keyof typeof ChatType];
 type ChatMemberRoleValue = typeof ChatMemberRole[keyof typeof ChatMemberRole];
@@ -191,6 +198,7 @@ type MessageRow = {
     id: string;
     objectKey: string;
     kind: AttachmentKindValue;
+    transferMode: AttachmentTransferModeValue;
     fileName: string | null;
     contentType: string;
     sizeBytes: number;
@@ -256,6 +264,32 @@ function fromAttachmentKind(kind: SendMessageAttachmentInput["kind"]): Attachmen
       return AttachmentKind.VIDEO;
     default:
       return AttachmentKind.FILE;
+  }
+}
+
+function toAttachmentTransferMode(
+  transferMode: AttachmentTransferModeValue | null | undefined
+): ChatAttachment["transferMode"] {
+  switch (transferMode) {
+    case AttachmentTransferMode.HD:
+      return "hd";
+    case AttachmentTransferMode.DOCUMENT:
+      return "document";
+    default:
+      return "standard";
+  }
+}
+
+function fromAttachmentTransferMode(
+  transferMode: SendMessageAttachmentInput["transferMode"]
+): AttachmentTransferModeValue {
+  switch (transferMode) {
+    case "hd":
+      return AttachmentTransferMode.HD;
+    case "document":
+      return AttachmentTransferMode.DOCUMENT;
+    default:
+      return AttachmentTransferMode.STANDARD;
   }
 }
 
@@ -483,6 +517,7 @@ async function toChatAttachment(
     id: row.id,
     objectKey: row.objectKey,
     kind: toAttachmentKind(row.kind),
+    transferMode: toAttachmentTransferMode(row.transferMode),
     fileName: row.fileName,
     contentType: row.contentType,
     sizeBytes: row.sizeBytes,
@@ -998,6 +1033,7 @@ export class ChatService {
                 create: preparedAttachments.map((attachment) => ({
                   objectKey: attachment.objectKey,
                   kind: attachment.kind,
+                  transferMode: attachment.transferMode,
                   fileName: attachment.fileName,
                   contentType: attachment.contentType,
                   sizeBytes: attachment.sizeBytes,
@@ -3899,6 +3935,7 @@ export class ChatService {
         return {
           objectKey: attachment.objectKey,
           kind: fromAttachmentKind(attachment.kind),
+          transferMode: fromAttachmentTransferMode(attachment.transferMode),
           fileName: attachment.fileName?.trim() || null,
           contentType: head.contentType ?? attachment.contentType,
           sizeBytes:
