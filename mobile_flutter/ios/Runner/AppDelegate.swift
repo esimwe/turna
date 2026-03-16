@@ -4,14 +4,16 @@ import CallKit
 import FirebaseCore
 import Flutter
 import Photos
+import PDFKit
 import PushKit
 import UIKit
 import UserNotifications
+import VisionKit
 import flutter_callkit_incoming
 import Darwin
 
 @main
-@objc class AppDelegate: FlutterAppDelegate, PKPushRegistryDelegate, CallkitIncomingAppDelegate {
+@objc class AppDelegate: FlutterAppDelegate, PKPushRegistryDelegate, CallkitIncomingAppDelegate, VNDocumentCameraViewControllerDelegate {
   private let pendingActionDefaultsKey = "flutter.turna_pending_native_call_action"
   private var displayChannel: FlutterMethodChannel?
   private var deviceChannel: FlutterMethodChannel?
@@ -19,6 +21,7 @@ import Darwin
   private var statusCameraChannel: FlutterMethodChannel?
   private var didConfigureDisplayChannel = false
   private var pendingStatusCameraResult: FlutterResult?
+  private var pendingDocumentScanResult: FlutterResult?
 
   override func application(
     _ application: UIApplication,
@@ -234,6 +237,8 @@ import Darwin
         }
         let mimeType = args["mimeType"] as? String
         self?.saveToGallery(path: path, mimeType: mimeType, result: result)
+      case "scanDocument":
+        self?.presentDocumentScanner(result: result)
       default:
         result(FlutterMethodNotImplemented)
       }
@@ -401,6 +406,161 @@ import Darwin
         }
       }
     }
+  }
+
+  private func presentDocumentScanner(result: @escaping FlutterResult) {
+    guard pendingDocumentScanResult == nil else {
+      result(
+        FlutterError(code: "busy", message: "Belge tarayıcı zaten açık.", details: nil)
+      )
+      return
+    }
+    guard VNDocumentCameraViewController.isSupported else {
+      result(
+        FlutterError(
+          code: "unsupported",
+          message: "Bu cihaz belge taramayı desteklemiyor.",
+          details: nil
+        )
+      )
+      return
+    }
+    guard let controller = topMostViewController() else {
+      result(
+        FlutterError(code: "missing_view", message: "Tarayıcı açılamadı.", details: nil)
+      )
+      return
+    }
+
+    pendingDocumentScanResult = result
+    let scanner = VNDocumentCameraViewController()
+    scanner.delegate = self
+    DispatchQueue.main.async {
+      controller.present(scanner, animated: true)
+    }
+  }
+
+  func documentCameraViewControllerDidCancel(_ controller: VNDocumentCameraViewController) {
+    controller.dismiss(animated: true) { [weak self] in
+      self?.finishDocumentScan(payload: nil, error: nil)
+    }
+  }
+
+  func documentCameraViewController(
+    _ controller: VNDocumentCameraViewController,
+    didFailWithError error: Error
+  ) {
+    controller.dismiss(animated: true) { [weak self] in
+      self?.finishDocumentScan(payload: nil, error: error)
+    }
+  }
+
+  func documentCameraViewController(
+    _ controller: VNDocumentCameraViewController,
+    didFinishWith scan: VNDocumentCameraScan
+  ) {
+    controller.dismiss(animated: true) { [weak self] in
+      self?.exportDocumentScan(scan)
+    }
+  }
+
+  private func exportDocumentScan(_ scan: VNDocumentCameraScan) {
+    DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+      guard let self else { return }
+
+      let pdfDocument = PDFDocument()
+      pdfDocument.documentAttributes = [:]
+
+      for index in 0 ..< scan.pageCount {
+        autoreleasepool {
+          let image = scan.imageOfPage(at: index)
+          if let page = PDFPage(image: image) {
+            pdfDocument.insert(page, at: pdfDocument.pageCount)
+          }
+        }
+      }
+
+      guard pdfDocument.pageCount > 0 else {
+        DispatchQueue.main.async {
+          self.finishDocumentScan(
+            payload: nil,
+            error: NSError(
+              domain: "turna.media",
+              code: -1,
+              userInfo: [NSLocalizedDescriptionKey: "Taranan belge hazırlanamadı."]
+            )
+          )
+        }
+        return
+      }
+
+      let fileName = self.buildScannedDocumentFileName(from: scan.title)
+      let tempUrl = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString)
+        .appendingPathExtension("pdf")
+
+      guard pdfDocument.write(to: tempUrl) else {
+        DispatchQueue.main.async {
+          self.finishDocumentScan(
+            payload: nil,
+            error: NSError(
+              domain: "turna.media",
+              code: -2,
+              userInfo: [NSLocalizedDescriptionKey: "PDF dosyası oluşturulamadı."]
+            )
+          )
+        }
+        return
+      }
+
+      let attributes = try? FileManager.default.attributesOfItem(atPath: tempUrl.path)
+      let sizeBytes = (attributes?[.size] as? NSNumber)?.intValue ?? 0
+
+      DispatchQueue.main.async {
+        self.finishDocumentScan(
+          payload: [
+            "path": tempUrl.path,
+            "fileName": fileName,
+            "mimeType": "application/pdf",
+            "sizeBytes": sizeBytes,
+            "pageCount": scan.pageCount,
+          ],
+          error: nil
+        )
+      }
+    }
+  }
+
+  private func finishDocumentScan(payload: [String: Any]?, error: Error?) {
+    guard let pending = pendingDocumentScanResult else {
+      return
+    }
+    pendingDocumentScanResult = nil
+    if let error {
+      pending(
+        FlutterError(code: "scan_failed", message: error.localizedDescription, details: nil)
+      )
+      return
+    }
+    pending(payload)
+  }
+
+  private func buildScannedDocumentFileName(from title: String) -> String {
+    let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+    let baseName: String
+    if trimmed.isEmpty {
+      let formatter = DateFormatter()
+      formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+      baseName = "scan_\(formatter.string(from: Date()))"
+    } else {
+      baseName = trimmed
+    }
+
+    let invalidCharacters = CharacterSet(charactersIn: "/\\:?%*|\"<>")
+    let cleaned = baseName.components(separatedBy: invalidCharacters).joined(separator: "-")
+    let normalized = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+    let safeName = normalized.isEmpty ? "scan" : normalized
+    return safeName.lowercased().hasSuffix(".pdf") ? safeName : "\(safeName).pdf"
   }
 
   private func preparePhotosCompatibleUrl(for fileUrl: URL, mimeType: String) -> URL? {
