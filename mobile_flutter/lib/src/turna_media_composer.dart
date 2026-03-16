@@ -952,14 +952,17 @@ class _TurnaFullscreenVideoPageState extends State<_TurnaFullscreenVideoPage> {
   }
 }
 
-enum MediaComposerQuality { sd, hd }
+enum MediaComposerQuality { standard, hd }
 
 extension MediaComposerQualityX on MediaComposerQuality {
-  String get label => name.toUpperCase();
+  String get label => switch (this) {
+    MediaComposerQuality.standard => 'Standart',
+    MediaComposerQuality.hd => 'HD',
+  };
 
   double get imageMaxDimension {
     switch (this) {
-      case MediaComposerQuality.sd:
+      case MediaComposerQuality.standard:
         return kInlineImageSdMaxDimension;
       case MediaComposerQuality.hd:
         return kInlineImageHdMaxDimension;
@@ -968,12 +971,17 @@ extension MediaComposerQualityX on MediaComposerQuality {
 
   int get jpegQuality {
     switch (this) {
-      case MediaComposerQuality.sd:
-        return 74;
+      case MediaComposerQuality.standard:
+        return 72;
       case MediaComposerQuality.hd:
         return 86;
     }
   }
+
+  ChatAttachmentTransferMode get transferMode => switch (this) {
+    MediaComposerQuality.standard => ChatAttachmentTransferMode.standard,
+    MediaComposerQuality.hd => ChatAttachmentTransferMode.hd,
+  };
 }
 
 class _TurnaVideoThumbnail extends StatefulWidget {
@@ -1134,7 +1142,7 @@ typedef _MediaComposerPreparedSend =
     Future<dynamic> Function(
       List<_PreparedComposerAttachment> attachments,
       String? caption,
-      MediaComposerQuality quality,
+      ChatAttachmentTransferMode transferMode,
     );
 
 class _MediaCropPreset {
@@ -1165,6 +1173,7 @@ class _MediaComposerPage extends StatefulWidget {
     this.chat,
     this.onPreparedSend,
     this.captionEnabled = true,
+    this.initialQuality = MediaComposerQuality.standard,
   }) : assert(
          chat != null || onPreparedSend != null,
          'chat veya onPreparedSend verilmelidir.',
@@ -1176,6 +1185,7 @@ class _MediaComposerPage extends StatefulWidget {
   final VoidCallback onSessionExpired;
   final _MediaComposerPreparedSend? onPreparedSend;
   final bool captionEnabled;
+  final MediaComposerQuality initialQuality;
 
   @override
   State<_MediaComposerPage> createState() => _MediaComposerPageState();
@@ -1193,7 +1203,7 @@ class _MediaComposerPageState extends State<_MediaComposerPage> {
   bool _sending = false;
   String? _sendingLabel;
   String? _activeTextOverlayId;
-  MediaComposerQuality _quality = MediaComposerQuality.sd;
+  late MediaComposerQuality _quality;
   double _overlayInteractionBaseScale = 1;
   double _brushSizeFactor = 0.011;
   bool _eraserMode = false;
@@ -1222,6 +1232,7 @@ class _MediaComposerPageState extends State<_MediaComposerPage> {
     super.initState();
     _pageController = PageController();
     _items = widget.items.map(_MediaComposerItem.fromSeed).toList();
+    _quality = widget.initialQuality;
     for (final item in _items.where((item) => item.isImage)) {
       unawaited(_primeImageSize(item));
     }
@@ -1445,9 +1456,9 @@ class _MediaComposerPageState extends State<_MediaComposerPage> {
 
   void _toggleQuality() {
     setState(() {
-      _quality = _quality == MediaComposerQuality.sd
+      _quality = _quality == MediaComposerQuality.standard
           ? MediaComposerQuality.hd
-          : MediaComposerQuality.sd;
+          : MediaComposerQuality.standard;
     });
   }
 
@@ -2101,25 +2112,19 @@ class _MediaComposerPageState extends State<_MediaComposerPage> {
           contentType: prepared.contentType,
           fileName: prepared.fileName,
         );
-
-        final uploadRes = await http.put(
-          Uri.parse(upload.uploadUrl),
-          headers: upload.headers,
-          body: prepared.bytes,
-        );
-        if (uploadRes.statusCode >= 400) {
-          throw TurnaApiException('Dosya yüklenemedi.');
-        }
+        await _uploadPreparedAttachment(upload, prepared);
 
         attachments.add(
           OutgoingAttachmentDraft(
             objectKey: upload.objectKey,
             kind: prepared.kind,
+            transferMode: _quality.transferMode,
             fileName: prepared.fileName,
             contentType: prepared.contentType,
-            sizeBytes: prepared.bytes.length,
+            sizeBytes: prepared.sizeBytes,
             width: prepared.width,
             height: prepared.height,
+            durationSeconds: prepared.durationSeconds,
           ),
         );
       }
@@ -2131,7 +2136,7 @@ class _MediaComposerPageState extends State<_MediaComposerPage> {
         final result = await widget.onPreparedSend!(
           preparedAttachments,
           normalizedCaption,
-          _quality,
+          _quality.transferMode,
         );
         if (!mounted) return;
         Navigator.pop(context, result);
@@ -2148,7 +2153,7 @@ class _MediaComposerPageState extends State<_MediaComposerPage> {
 
       await TurnaAnalytics.logEvent('attachment_sent', {
         'chat_id': chat.chatId,
-        'quality': _quality.name,
+        'quality': _quality.transferMode.name,
         'count': attachments.length,
         'kind': attachments.length == 1 ? attachments.first.kind.name : 'album',
       });
@@ -2177,19 +2182,68 @@ class _MediaComposerPageState extends State<_MediaComposerPage> {
   Future<_PreparedComposerAttachment> _prepareAttachment(
     _MediaComposerItem item,
   ) async {
-    final sourceBytes = await item.file.readAsBytes();
-
     if (!item.isImage) {
-      return _PreparedComposerAttachment(
-        kind: item.kind,
-        fileName: item.fileName,
-        contentType: item.contentType,
-        bytes: sourceBytes,
-      );
+      return _prepareVideoAttachment(item);
     }
 
+    final sourceBytes = await item.file.readAsBytes();
     await _primeImageSize(item);
     return _renderImageAttachment(item, sourceBytes);
+  }
+
+  Future<_PreparedComposerAttachment> _prepareVideoAttachment(
+    _MediaComposerItem item,
+  ) async {
+    final processed = await TurnaMediaBridge.processVideo(
+      path: item.file.path,
+      transferMode: _quality.transferMode,
+      fileName: item.fileName,
+    );
+    return _PreparedComposerAttachment(
+      kind: ChatAttachmentKind.video,
+      fileName: processed.fileName,
+      contentType: processed.mimeType,
+      filePath: processed.path,
+      sizeBytes: processed.sizeBytes,
+      width: processed.width,
+      height: processed.height,
+      durationSeconds: processed.durationSeconds,
+    );
+  }
+
+  Future<void> _uploadPreparedAttachment(
+    ChatAttachmentUploadTicket upload,
+    _PreparedComposerAttachment prepared,
+  ) async {
+    if (prepared.filePath != null && prepared.filePath!.trim().isNotEmpty) {
+      final file = File(prepared.filePath!);
+      if (!await file.exists()) {
+        throw TurnaApiException('Hazirlanan dosya bulunamadi.');
+      }
+      final request = http.StreamedRequest('PUT', Uri.parse(upload.uploadUrl));
+      request.headers.addAll(upload.headers);
+      request.contentLength = prepared.sizeBytes;
+      final responseFuture = request.send();
+      await file.openRead().pipe(request.sink);
+      final uploadRes = await responseFuture;
+      if (uploadRes.statusCode >= 400) {
+        throw TurnaApiException('Dosya yüklenemedi.');
+      }
+      return;
+    }
+
+    final bytes = prepared.bytes;
+    if (bytes == null) {
+      throw TurnaApiException('Hazirlanan dosya okunamadi.');
+    }
+    final uploadRes = await http.put(
+      Uri.parse(upload.uploadUrl),
+      headers: upload.headers,
+      body: bytes,
+    );
+    if (uploadRes.statusCode >= 400) {
+      throw TurnaApiException('Dosya yüklenemedi.');
+    }
   }
 
   List<_MediaComposerStroke> _transformStrokesForCrop(
@@ -2382,6 +2436,7 @@ class _MediaComposerPageState extends State<_MediaComposerPage> {
       fileName: replaceFileExtension(item.fileName, 'jpg'),
       contentType: 'image/jpeg',
       bytes: jpgBytes,
+      sizeBytes: jpgBytes.length,
       width: outputWidth,
       height: outputHeight,
     );
@@ -3360,17 +3415,23 @@ class _PreparedComposerAttachment {
     required this.kind,
     required this.fileName,
     required this.contentType,
-    required this.bytes,
+    required this.sizeBytes,
+    this.bytes,
+    this.filePath,
     this.width,
     this.height,
+    this.durationSeconds,
   });
 
   final ChatAttachmentKind kind;
   final String fileName;
   final String contentType;
-  final Uint8List bytes;
+  final Uint8List? bytes;
+  final String? filePath;
+  final int sizeBytes;
   final int? width;
   final int? height;
+  final int? durationSeconds;
 }
 
 class _MediaComposerStrokePainter extends CustomPainter {

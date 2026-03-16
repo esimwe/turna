@@ -57,4 +57,6 @@ flutter {
 dependencies {
     implementation("me.leolin:ShortcutBadger:1.1.22@aar")
     implementation("com.google.android.gms:play-services-mlkit-document-scanner:16.0.0")
+    implementation("androidx.media3:media3-transformer:1.5.1")
+    implementation("androidx.media3:media3-effect:1.5.1")
 }

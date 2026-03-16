@@ -8,6 +8,7 @@ class _TurnaMediaComposerPage extends StatelessWidget {
     this.chat,
     this.onPreparedSend,
     this.captionEnabled = true,
+    this.initialQuality = MediaComposerQuality.standard,
   }) : assert(
          chat != null || onPreparedSend != null,
          'chat veya onPreparedSend verilmelidir.',
@@ -19,6 +20,7 @@ class _TurnaMediaComposerPage extends StatelessWidget {
   final VoidCallback onSessionExpired;
   final _MediaComposerPreparedSend? onPreparedSend;
   final bool captionEnabled;
+  final MediaComposerQuality initialQuality;
 
   @override
   Widget build(BuildContext context) {
@@ -29,6 +31,7 @@ class _TurnaMediaComposerPage extends StatelessWidget {
       onSessionExpired: onSessionExpired,
       onPreparedSend: onPreparedSend,
       captionEnabled: captionEnabled,
+      initialQuality: initialQuality,
     );
   }
 }
@@ -84,11 +87,16 @@ Future<List<MediaComposerSeed>> buildTurnaMediaComposerSeeds(
     if (seed == null) continue;
 
     final sizeBytes = await file.length();
-    if (sizeBytes > kInlineAttachmentSoftLimitBytes) {
+    final maxAllowedBytes = seed.kind == ChatAttachmentKind.video
+        ? kDocumentAttachmentMaxBytes
+        : kInlineAttachmentSoftLimitBytes;
+    if (sizeBytes > maxAllowedBytes) {
       messenger?.showSnackBar(
         SnackBar(
           content: Text(
-            '${file.name} 64 MB üstü olduğu için inline medya olarak gönderilemiyor.',
+            seed.kind == ChatAttachmentKind.video
+                ? '${file.name} 2 GB ustu oldugu icin gonderilemiyor.'
+                : '${file.name} 64 MB ustu oldugu icin inline medya olarak gonderilemiyor.',
           ),
         ),
       );

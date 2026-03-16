@@ -5,6 +5,8 @@ import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
+import android.media.MediaMetadataRetriever
+import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.os.PowerManager
@@ -15,6 +17,16 @@ import android.view.WindowManager
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.FileProvider
+import androidx.media3.common.MediaItem
+import androidx.media3.effect.Presentation
+import androidx.media3.transformer.Composition
+import androidx.media3.transformer.DefaultEncoderFactory
+import androidx.media3.transformer.EditedMediaItem
+import androidx.media3.transformer.Effects
+import androidx.media3.transformer.ExportException
+import androidx.media3.transformer.ExportResult
+import androidx.media3.transformer.Transformer
+import androidx.media3.transformer.VideoEncoderSettings
 import com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanning
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanningResult
@@ -29,6 +41,7 @@ import java.util.Locale
 class MainActivity : FlutterFragmentActivity() {
     private var proximityWakeLock: PowerManager.WakeLock? = null
     private var pendingDocumentScanResult: MethodChannel.Result? = null
+    private var pendingVideoProcessResult: MethodChannel.Result? = null
     private val documentScanLauncher =
         registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { activityResult ->
             handleDocumentScanResult(activityResult.resultCode, activityResult.data)
@@ -135,6 +148,17 @@ class MainActivity : FlutterFragmentActivity() {
                         result.error("invalid_args", "Dosya yolu gerekli.", null)
                     } else {
                         saveToGallery(path, mimeType, result)
+                    }
+                }
+
+                "processVideo" -> {
+                    val path = call.argument<String>("path")
+                    val transferMode = call.argument<String>("transferMode") ?: "standard"
+                    val fileName = call.argument<String>("fileName")
+                    if (path.isNullOrBlank()) {
+                        result.error("invalid_args", "Video yolu gerekli.", null)
+                    } else {
+                        processVideo(path, transferMode, fileName, result)
                     }
                 }
 
@@ -280,6 +304,163 @@ class MainActivity : FlutterFragmentActivity() {
             result.error("save_failed", error.message, null)
         }
     }
+
+    private fun processVideo(
+        path: String,
+        transferMode: String,
+        fileName: String?,
+        result: MethodChannel.Result,
+    ) {
+        if (pendingVideoProcessResult != null) {
+            result.error("busy", "Video zaten işleniyor.", null)
+            return
+        }
+
+        val inputFile = File(path)
+        if (!inputFile.exists()) {
+            result.error("missing_file", "Video bulunamadı.", null)
+            return
+        }
+
+        val normalizedMode = transferMode.trim().lowercase(Locale.US)
+        val inputDimensions = resolveVideoDimensions(path)
+        val targetHeight =
+            when (normalizedMode) {
+                "hd" -> minOf(inputDimensions.height.takeIf { it > 0 } ?: 1080, 1080)
+                else -> minOf(inputDimensions.height.takeIf { it > 0 } ?: 720, 720)
+            }
+        val targetBitrate =
+            when (normalizedMode) {
+                "hd" -> 4_200_000
+                else -> 1_800_000
+            }
+
+        val outputDir = File(cacheDir, "processed-videos").apply { mkdirs() }
+        val outputFile =
+            File(
+                outputDir,
+                "${System.currentTimeMillis()}_${buildProcessedVideoFileName(fileName ?: inputFile.name)}",
+            )
+        if (outputFile.exists()) {
+            outputFile.delete()
+        }
+
+        val encoderFactory =
+            DefaultEncoderFactory.Builder(this)
+                .setRequestedVideoEncoderSettings(
+                    VideoEncoderSettings.Builder().setBitrate(targetBitrate).build(),
+                ).build()
+        val targetEditedMediaItem =
+            EditedMediaItem
+                .Builder(MediaItem.fromUri(Uri.fromFile(inputFile)))
+                .setEffects(
+                    Effects(
+                        emptyList(),
+                        listOf(Presentation.createForHeight(maxOf(1, targetHeight))),
+                    ),
+                ).build()
+
+        pendingVideoProcessResult = result
+        val transformer =
+            Transformer.Builder(this)
+                .setEncoderFactory(encoderFactory)
+                .addListener(
+                    object : Transformer.Listener {
+                        override fun onCompleted(
+                            composition: Composition,
+                            exportResult: ExportResult,
+                        ) {
+                            finishVideoProcessing(outputFile)
+                        }
+
+                        override fun onError(
+                            composition: Composition,
+                            exportResult: ExportResult,
+                            exportException: ExportException,
+                        ) {
+                            val pending = pendingVideoProcessResult ?: return
+                            pendingVideoProcessResult = null
+                            pending.error(
+                                "process_failed",
+                                exportException.message ?: "Video işlenemedi.",
+                                null,
+                            )
+                        }
+                    },
+                ).build()
+
+        transformer.start(targetEditedMediaItem, outputFile.absolutePath)
+    }
+
+    private fun finishVideoProcessing(outputFile: File) {
+        val pending = pendingVideoProcessResult ?: return
+        pendingVideoProcessResult = null
+        val dimensions = resolveVideoDimensions(outputFile.absolutePath)
+        pending.success(
+            mapOf(
+                "path" to outputFile.absolutePath,
+                "fileName" to buildProcessedVideoFileName(outputFile.name),
+                "mimeType" to "video/mp4",
+                "sizeBytes" to outputFile.length(),
+                "width" to dimensions.width,
+                "height" to dimensions.height,
+                "durationSeconds" to dimensions.durationSeconds,
+            ),
+        )
+    }
+
+    private fun resolveVideoDimensions(path: String): VideoDimensions {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(path)
+            val width =
+                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
+                    ?.toIntOrNull() ?: 0
+            val height =
+                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
+                    ?.toIntOrNull() ?: 0
+            val rotation =
+                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
+                    ?.toIntOrNull() ?: 0
+            val durationMs =
+                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                    ?.toLongOrNull() ?: 0L
+            if (rotation == 90 || rotation == 270) {
+                VideoDimensions(height, width, (durationMs / 1000L).toInt())
+            } else {
+                VideoDimensions(width, height, (durationMs / 1000L).toInt())
+            }
+        } catch (_: Throwable) {
+            VideoDimensions(0, 0, 0)
+        } finally {
+            try {
+                retriever.release()
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
+    private fun buildProcessedVideoFileName(rawName: String): String {
+        val normalized =
+            rawName
+                .trim()
+                .replace(Regex("[\\\\/:*?\"<>|]"), "-")
+                .ifEmpty { "video_${System.currentTimeMillis()}" }
+        val extensionIndex = normalized.lastIndexOf('.')
+        val stem =
+            if (extensionIndex > 0) {
+                normalized.substring(0, extensionIndex)
+            } else {
+                normalized
+            }
+        return "$stem.mp4"
+    }
+
+    private data class VideoDimensions(
+        val width: Int,
+        val height: Int,
+        val durationSeconds: Int,
+    )
 
     private fun presentDocumentScanner(result: MethodChannel.Result) {
         if (pendingDocumentScanResult != null) {

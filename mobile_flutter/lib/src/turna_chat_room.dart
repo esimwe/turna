@@ -2171,6 +2171,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
           OutgoingAttachmentDraft(
             objectKey: upload.objectKey,
             kind: attachment.kind,
+            transferMode: attachment.transferMode,
             fileName: attachment.fileName,
             contentType: attachment.contentType,
             sizeBytes: attachment.sizeBytes > 0
@@ -4253,94 +4254,131 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     );
   }
 
+  Future<OutgoingAttachmentDraft> _uploadAttachmentDraft({
+    required ChatAttachmentKind kind,
+    required String fileName,
+    required String contentType,
+    ChatAttachmentTransferMode transferMode =
+        ChatAttachmentTransferMode.standard,
+    Future<List<int>> Function()? readBytes,
+    String? filePath,
+    int? sizeBytes,
+    int? width,
+    int? height,
+    int? durationSeconds,
+  }) async {
+    final upload = await ChatApi.createAttachmentUpload(
+      widget.session,
+      chatId: widget.chat.chatId,
+      kind: kind,
+      contentType: contentType,
+      fileName: fileName,
+    );
+
+    int resolvedSizeBytes = sizeBytes ?? 0;
+    if (filePath != null && filePath.trim().isNotEmpty) {
+      final file = File(filePath);
+      if (!await file.exists()) {
+        throw TurnaApiException('Dosya okunamadi.');
+      }
+      if (resolvedSizeBytes <= 0) {
+        resolvedSizeBytes = await file.length();
+      }
+      final request = http.StreamedRequest('PUT', Uri.parse(upload.uploadUrl));
+      request.headers.addAll(upload.headers);
+      request.contentLength = resolvedSizeBytes;
+      final responseFuture = request.send();
+      await file.openRead().pipe(request.sink);
+      final uploadRes = await responseFuture;
+      if (uploadRes.statusCode >= 400) {
+        throw TurnaApiException('Dosya yüklenemedi.');
+      }
+    } else {
+      if (readBytes == null) {
+        throw TurnaApiException('Dosya okunamadi.');
+      }
+      final bytes = await readBytes();
+      resolvedSizeBytes = sizeBytes ?? bytes.length;
+      final uploadRes = await http.put(
+        Uri.parse(upload.uploadUrl),
+        headers: upload.headers,
+        body: bytes,
+      );
+      if (uploadRes.statusCode >= 400) {
+        throw TurnaApiException('Dosya yüklenemedi.');
+      }
+    }
+
+    return OutgoingAttachmentDraft(
+      objectKey: upload.objectKey,
+      kind: kind,
+      transferMode: transferMode,
+      fileName: fileName,
+      contentType: contentType,
+      sizeBytes: resolvedSizeBytes,
+      width: width,
+      height: height,
+      durationSeconds: durationSeconds,
+    );
+  }
+
+  Future<void> _sendAttachmentDrafts(
+    List<OutgoingAttachmentDraft> drafts,
+  ) async {
+    final message = await ChatApi.sendMessage(
+      widget.session,
+      chatId: widget.chat.chatId,
+      text: _controller.text.trim().isEmpty
+          ? null
+          : (_replyDraft == null
+                ? _controller.text.trim()
+                : buildTurnaReplyEncodedText(
+                    reply: _replyDraft!,
+                    text: _controller.text.trim(),
+                  )),
+      attachments: drafts,
+    );
+
+    if (!mounted) return;
+    _client.mergeServerMessage(message);
+    _controller.clear();
+    setState(() => _replyDraft = null);
+    _jumpToBottom();
+  }
+
   Future<void> _sendPickedAttachment({
     required ChatAttachmentKind kind,
     required String fileName,
     required String contentType,
+    ChatAttachmentTransferMode transferMode =
+        ChatAttachmentTransferMode.standard,
     Future<List<int>> Function()? readBytes,
     String? filePath,
     int? sizeBytes,
+    int? width,
+    int? height,
     int? durationSeconds,
   }) async {
     setState(() => _attachmentBusy = true);
 
     try {
-      final upload = await ChatApi.createAttachmentUpload(
-        widget.session,
-        chatId: widget.chat.chatId,
+      final draft = await _uploadAttachmentDraft(
         kind: kind,
-        contentType: contentType,
         fileName: fileName,
+        contentType: contentType,
+        transferMode: transferMode,
+        readBytes: readBytes,
+        filePath: filePath,
+        sizeBytes: sizeBytes,
+        width: width,
+        height: height,
+        durationSeconds: durationSeconds,
       );
-
-      int resolvedSizeBytes = sizeBytes ?? 0;
-      if (filePath != null && filePath.trim().isNotEmpty) {
-        final file = File(filePath);
-        if (!await file.exists()) {
-          throw TurnaApiException('Dosya okunamadi.');
-        }
-        if (resolvedSizeBytes <= 0) {
-          resolvedSizeBytes = await file.length();
-        }
-        final request = http.StreamedRequest(
-          'PUT',
-          Uri.parse(upload.uploadUrl),
-        );
-        request.headers.addAll(upload.headers);
-        request.contentLength = resolvedSizeBytes;
-        final responseFuture = request.send();
-        await file.openRead().pipe(request.sink);
-        final uploadRes = await responseFuture;
-        if (uploadRes.statusCode >= 400) {
-          throw TurnaApiException('Dosya yüklenemedi.');
-        }
-      } else {
-        if (readBytes == null) {
-          throw TurnaApiException('Dosya okunamadi.');
-        }
-        final bytes = await readBytes();
-        resolvedSizeBytes = sizeBytes ?? bytes.length;
-        final uploadRes = await http.put(
-          Uri.parse(upload.uploadUrl),
-          headers: upload.headers,
-          body: bytes,
-        );
-        if (uploadRes.statusCode >= 400) {
-          throw TurnaApiException('Dosya yüklenemedi.');
-        }
-      }
-
-      final message = await ChatApi.sendMessage(
-        widget.session,
-        chatId: widget.chat.chatId,
-        text: _controller.text.trim().isEmpty
-            ? null
-            : (_replyDraft == null
-                  ? _controller.text.trim()
-                  : buildTurnaReplyEncodedText(
-                      reply: _replyDraft!,
-                      text: _controller.text.trim(),
-                    )),
-        attachments: [
-          OutgoingAttachmentDraft(
-            objectKey: upload.objectKey,
-            kind: kind,
-            fileName: fileName,
-            contentType: contentType,
-            sizeBytes: resolvedSizeBytes,
-            durationSeconds: durationSeconds,
-          ),
-        ],
-      );
-
-      if (!mounted) return;
-      _client.mergeServerMessage(message);
-      _controller.clear();
-      setState(() => _replyDraft = null);
-      _jumpToBottom();
+      await _sendAttachmentDrafts([draft]);
       await TurnaAnalytics.logEvent('attachment_sent', {
         'chat_id': widget.chat.chatId,
         'kind': kind.name,
+        'transfer_mode': transferMode.name,
       });
     } on TurnaUnauthorizedException {
       if (!mounted) return;
@@ -4357,7 +4395,168 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     }
   }
 
-  Future<void> _openMediaComposerFromFiles(List<XFile> files) async {
+  Future<void> _sendDocumentMediaFiles(List<XFile> files) async {
+    if (files.isEmpty) return;
+    setState(() => _attachmentBusy = true);
+
+    try {
+      final drafts = <OutgoingAttachmentDraft>[];
+      for (final file in files.take(kComposerMediaLimit)) {
+        final fileName = file.name.trim().isEmpty
+            ? _fileNameFromPath(file.path)
+            : file.name.trim();
+        final sizeBytes = await file.length();
+        if (!_ensureDocumentSizeAllowed(sizeBytes)) {
+          continue;
+        }
+        drafts.add(
+          await _uploadAttachmentDraft(
+            kind: ChatAttachmentKind.file,
+            fileName: fileName,
+            contentType:
+                guessContentTypeForFileName(fileName) ??
+                'application/octet-stream',
+            transferMode: ChatAttachmentTransferMode.document,
+            filePath: file.path,
+            sizeBytes: sizeBytes,
+          ),
+        );
+      }
+      if (drafts.isEmpty) return;
+      await _sendAttachmentDrafts(drafts);
+      await TurnaAnalytics.logEvent('attachment_sent', {
+        'chat_id': widget.chat.chatId,
+        'kind': drafts.length == 1 ? drafts.first.kind.name : 'album',
+        'transfer_mode': ChatAttachmentTransferMode.document.name,
+        'count': drafts.length,
+      });
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    } finally {
+      if (mounted) {
+        setState(() => _attachmentBusy = false);
+      }
+    }
+  }
+
+  Future<ChatAttachmentTransferMode?> _showMediaTransferModeSheet({
+    required String title,
+  }) async {
+    if (!mounted) return null;
+    return showModalBottomSheet<ChatAttachmentTransferMode>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) {
+        Widget option({
+          required ChatAttachmentTransferMode mode,
+          required IconData icon,
+          String? subtitle,
+        }) {
+          final isDefault = mode == ChatAttachmentTransferMode.standard;
+          return ListTile(
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 20,
+              vertical: 4,
+            ),
+            leading: CircleAvatar(
+              radius: 22,
+              backgroundColor: isDefault
+                  ? TurnaColors.primary50
+                  : TurnaColors.backgroundMuted,
+              child: Icon(icon, color: TurnaColors.primary),
+            ),
+            title: Text(
+              mode.label,
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+            subtitle: subtitle == null ? null : Text(subtitle),
+            trailing: isDefault
+                ? Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: TurnaColors.primary50,
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: const Text(
+                      'Varsayılan',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: TurnaColors.primary,
+                      ),
+                    ),
+                  )
+                : null,
+            onTap: () => Navigator.pop(sheetContext, mode),
+          );
+        }
+
+        return SafeArea(
+          child: Container(
+            margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+            padding: const EdgeInsets.fromLTRB(18, 18, 18, 22),
+            decoration: BoxDecoration(
+              color: TurnaColors.surface,
+              borderRadius: BorderRadius.circular(28),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: TurnaColors.text,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Standart medya optimize edilir, HD daha yüksek kalite sunar, dosya modu orijinali gönderir.',
+                  style: TextStyle(
+                    fontSize: 14,
+                    height: 1.35,
+                    color: TurnaColors.textMuted,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                option(
+                  mode: ChatAttachmentTransferMode.standard,
+                  icon: Icons.tune_rounded,
+                  subtitle: 'Hızlı gönderim ve düşük veri kullanımı',
+                ),
+                option(
+                  mode: ChatAttachmentTransferMode.hd,
+                  icon: Icons.hd_rounded,
+                  subtitle: 'Daha yüksek çözünürlük ve daha az kayıp',
+                ),
+                option(
+                  mode: ChatAttachmentTransferMode.document,
+                  icon: Icons.insert_drive_file_outlined,
+                  subtitle: 'Orijinal dosyayı hiç işlemden geçirmeden gönder',
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _openMediaComposerFromFiles(
+    List<XFile> files, {
+    required MediaComposerQuality initialQuality,
+  }) async {
     final seeds = await buildTurnaMediaComposerSeeds(context, files);
     if (seeds.isEmpty || !mounted) return;
 
@@ -4369,6 +4568,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
           chat: widget.chat,
           items: seeds,
           onSessionExpired: widget.onSessionExpired,
+          initialQuality: initialQuality,
         ),
       ),
     );
@@ -4379,31 +4579,60 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   }
 
   Future<void> _pickGalleryPhotos() async {
-    final files = await _mediaPicker.pickMultiImage(
-      limit: kComposerMediaLimit,
-      imageQuality: kInlineImagePickerQuality,
-      maxWidth: kInlineImagePickerMaxDimension,
-      maxHeight: kInlineImagePickerMaxDimension,
+    final transferMode = await _showMediaTransferModeSheet(
+      title: 'Fotoğraf gönder',
     );
+    if (transferMode == null) return;
+    final files = await _mediaPicker.pickMultiImage(limit: kComposerMediaLimit);
     if (files.isEmpty) return;
-    await _openMediaComposerFromFiles(files);
+    if (transferMode == ChatAttachmentTransferMode.document) {
+      await _sendDocumentMediaFiles(files);
+      return;
+    }
+    await _openMediaComposerFromFiles(
+      files,
+      initialQuality: transferMode == ChatAttachmentTransferMode.hd
+          ? MediaComposerQuality.hd
+          : MediaComposerQuality.standard,
+    );
   }
 
   Future<void> _pickGalleryVideo() async {
+    final transferMode = await _showMediaTransferModeSheet(
+      title: 'Video gönder',
+    );
+    if (transferMode == null) return;
     final file = await _mediaPicker.pickVideo(source: ImageSource.gallery);
     if (file == null) return;
-    await _openMediaComposerFromFiles([file]);
+    if (transferMode == ChatAttachmentTransferMode.document) {
+      await _sendDocumentMediaFiles([file]);
+      return;
+    }
+    await _openMediaComposerFromFiles(
+      [file],
+      initialQuality: transferMode == ChatAttachmentTransferMode.hd
+          ? MediaComposerQuality.hd
+          : MediaComposerQuality.standard,
+    );
   }
 
   Future<void> _pickCameraImage() async {
-    final file = await _mediaPicker.pickImage(
-      source: ImageSource.camera,
-      imageQuality: kInlineImagePickerQuality,
-      maxWidth: kInlineImagePickerMaxDimension,
-      maxHeight: kInlineImagePickerMaxDimension,
+    final transferMode = await _showMediaTransferModeSheet(
+      title: 'Kamera fotoğrafı gönder',
     );
+    if (transferMode == null) return;
+    final file = await _mediaPicker.pickImage(source: ImageSource.camera);
     if (file == null) return;
-    await _openMediaComposerFromFiles([file]);
+    if (transferMode == ChatAttachmentTransferMode.document) {
+      await _sendDocumentMediaFiles([file]);
+      return;
+    }
+    await _openMediaComposerFromFiles(
+      [file],
+      initialQuality: transferMode == ChatAttachmentTransferMode.hd
+          ? MediaComposerQuality.hd
+          : MediaComposerQuality.standard,
+    );
   }
 
   bool _ensureDocumentSizeAllowed(int sizeBytes) {
@@ -4466,6 +4695,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       kind: ChatAttachmentKind.file,
       fileName: resolvedFileName,
       contentType: resolvedContentType,
+      transferMode: ChatAttachmentTransferMode.document,
       filePath: normalizedPath,
       sizeBytes: resolvedSizeBytes,
     );
@@ -4513,6 +4743,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       fileName: fileName,
       contentType:
           guessContentTypeForFileName(fileName) ?? 'application/octet-stream',
+      transferMode: ChatAttachmentTransferMode.document,
       readBytes: () async => bytes,
       sizeBytes: file.size > 0 ? file.size : bytes.length,
     );
@@ -4783,7 +5014,12 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                       backgroundColor: TurnaColors.accent,
                       onTap: () {
                         Navigator.pop(sheetContext);
-                        _pickGalleryPhotos();
+                        unawaited(
+                          Future<void>.delayed(
+                            const Duration(milliseconds: 140),
+                            _pickGalleryPhotos,
+                          ),
+                        );
                       },
                     ),
                     _AttachmentQuickAction(
@@ -4792,7 +5028,12 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                       backgroundColor: TurnaColors.primaryStrong,
                       onTap: () {
                         Navigator.pop(sheetContext);
-                        _pickGalleryVideo();
+                        unawaited(
+                          Future<void>.delayed(
+                            const Duration(milliseconds: 140),
+                            _pickGalleryVideo,
+                          ),
+                        );
                       },
                     ),
                     _AttachmentQuickAction(
@@ -4801,7 +5042,12 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                       backgroundColor: TurnaColors.primary,
                       onTap: () {
                         Navigator.pop(sheetContext);
-                        _pickCameraImage();
+                        unawaited(
+                          Future<void>.delayed(
+                            const Duration(milliseconds: 140),
+                            _pickCameraImage,
+                          ),
+                        );
                       },
                     ),
                     _AttachmentQuickAction(
@@ -6365,6 +6611,27 @@ class _ChatAttachmentList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final showOverlay = overlayFooter != null && attachments.length == 1;
+    Widget? buildTransferBadge(ChatAttachment attachment) {
+      if (attachment.transferMode != ChatAttachmentTransferMode.hd) {
+        return null;
+      }
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.62),
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: const Text(
+          'HD',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      );
+    }
+
     return Column(
       children: attachments.map<Widget>((attachment) {
         if (_isAudioAttachment(attachment)) {
@@ -6383,6 +6650,7 @@ class _ChatAttachmentList extends StatelessWidget {
 
         if (_isImageAttachment(attachment)) {
           final imageUrl = attachment.url?.trim() ?? '';
+          final transferBadge = buildTransferBadge(attachment);
           return Padding(
             padding: EdgeInsets.only(bottom: showOverlay ? 0 : 8),
             child: InkWell(
@@ -6421,6 +6689,8 @@ class _ChatAttachmentList extends StatelessWidget {
                               ),
                       ),
                     ),
+                    if (transferBadge != null)
+                      Positioned(left: 10, top: 10, child: transferBadge),
                     if (showOverlay)
                       Positioned(
                         left: 0,
@@ -6457,6 +6727,7 @@ class _ChatAttachmentList extends StatelessWidget {
 
         final isVideo = _isVideoAttachment(attachment);
         if (isVideo) {
+          final transferBadge = buildTransferBadge(attachment);
           return Padding(
             padding: EdgeInsets.only(bottom: showOverlay ? 0 : 8),
             child: InkWell(
@@ -6510,6 +6781,8 @@ class _ChatAttachmentList extends StatelessWidget {
                           ),
                         ),
                       ),
+                      if (transferBadge != null)
+                        Positioned(left: 10, top: 10, child: transferBadge),
                       Positioned.fill(
                         child: DecoratedBox(
                           decoration: BoxDecoration(

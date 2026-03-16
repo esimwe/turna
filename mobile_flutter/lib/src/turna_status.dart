@@ -2425,7 +2425,7 @@ class StatusMediaComposerPage extends StatelessWidget {
   Future<bool> _submitPrepared(
     List<_PreparedComposerAttachment> attachments,
     String? caption,
-    MediaComposerQuality quality,
+    ChatAttachmentTransferMode _,
   ) async {
     if (attachments.isEmpty) {
       throw TurnaApiException('Paylasilacak medya bulunamadi.');
@@ -2466,13 +2466,32 @@ class StatusMediaComposerPage extends StatelessWidget {
       fileName: fileName,
     );
 
-    final uploadRes = await http.put(
-      Uri.parse(upload.uploadUrl),
-      headers: upload.headers,
-      body: prepared.bytes,
-    );
-    if (uploadRes.statusCode >= 400) {
-      throw TurnaApiException('Dosya yüklenemedi.');
+    if (prepared.filePath != null && prepared.filePath!.trim().isNotEmpty) {
+      final uploadRequest = http.StreamedRequest(
+        'PUT',
+        Uri.parse(upload.uploadUrl),
+      );
+      uploadRequest.headers.addAll(upload.headers);
+      uploadRequest.contentLength = prepared.sizeBytes;
+      final responseFuture = uploadRequest.send();
+      await File(prepared.filePath!).openRead().pipe(uploadRequest.sink);
+      final uploadRes = await responseFuture;
+      if (uploadRes.statusCode >= 400) {
+        throw TurnaApiException('Dosya yüklenemedi.');
+      }
+    } else {
+      final bytes = prepared.bytes;
+      if (bytes == null) {
+        throw TurnaApiException('Dosya hazirlanamadi.');
+      }
+      final uploadRes = await http.put(
+        Uri.parse(upload.uploadUrl),
+        headers: upload.headers,
+        body: bytes,
+      );
+      if (uploadRes.statusCode >= 400) {
+        throw TurnaApiException('Dosya yüklenemedi.');
+      }
     }
 
     await TurnaStatusApi.createMediaStatus(
@@ -2481,7 +2500,7 @@ class StatusMediaComposerPage extends StatelessWidget {
       objectKey: upload.objectKey,
       contentType: contentType,
       fileName: fileName,
-      sizeBytes: prepared.bytes.length,
+      sizeBytes: prepared.sizeBytes,
       width: width,
       height: height,
       durationSeconds: durationSeconds,

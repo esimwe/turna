@@ -101,8 +101,12 @@ const int kDocumentAttachmentMaxBytes = 2 * 1024 * 1024 * 1024;
 const int kStatusMaxVideoDurationSeconds = 60;
 const int kInlineImagePickerQuality = 82;
 const double kInlineImagePickerMaxDimension = 2200;
-const double kInlineImageSdMaxDimension = 1280;
-const double kInlineImageHdMaxDimension = 2048;
+const double kInlineImageSdMaxDimension = 1600;
+const double kInlineImageHdMaxDimension = 2560;
+const int kInlineVideoStandardMaxHeight = 720;
+const int kInlineVideoHdMaxHeight = 1080;
+const int kInlineVideoStandardBitrate = 1800000;
+const int kInlineVideoHdBitrate = 4200000;
 const Offset kComposerOverlayDefaultPosition = Offset(0.5, 0.5);
 const Rect kComposerFullCropRectNormalized = Rect.fromLTWH(0, 0, 1, 1);
 const double kComposerCropInitialInset = 0.08;
@@ -622,6 +626,23 @@ class TurnaMediaBridge {
     if (payload == null) return null;
     return TurnaDocumentScanResult.fromMap(Map<String, dynamic>.from(payload));
   }
+
+  static Future<TurnaProcessedVideoResult> processVideo({
+    required String path,
+    required ChatAttachmentTransferMode transferMode,
+    String? fileName,
+  }) async {
+    final payload = await _channel.invokeMapMethod<String, dynamic>(
+      'processVideo',
+      {'path': path, 'transferMode': transferMode.name, 'fileName': fileName},
+    );
+    if (payload == null) {
+      throw TurnaApiException('Video islenemedi.');
+    }
+    return TurnaProcessedVideoResult.fromMap(
+      Map<String, dynamic>.from(payload),
+    );
+  }
 }
 
 class TurnaDocumentScanResult {
@@ -646,6 +667,38 @@ class TurnaDocumentScanResult {
       mimeType: (map['mimeType'] ?? 'application/pdf').toString(),
       sizeBytes: (map['sizeBytes'] as num?)?.toInt() ?? 0,
       pageCount: (map['pageCount'] as num?)?.toInt(),
+    );
+  }
+}
+
+class TurnaProcessedVideoResult {
+  const TurnaProcessedVideoResult({
+    required this.path,
+    required this.fileName,
+    required this.mimeType,
+    required this.sizeBytes,
+    this.width,
+    this.height,
+    this.durationSeconds,
+  });
+
+  final String path;
+  final String fileName;
+  final String mimeType;
+  final int sizeBytes;
+  final int? width;
+  final int? height;
+  final int? durationSeconds;
+
+  factory TurnaProcessedVideoResult.fromMap(Map<String, dynamic> map) {
+    return TurnaProcessedVideoResult(
+      path: (map['path'] ?? '').toString(),
+      fileName: (map['fileName'] ?? '').toString(),
+      mimeType: (map['mimeType'] ?? 'video/mp4').toString(),
+      sizeBytes: (map['sizeBytes'] as num?)?.toInt() ?? 0,
+      width: (map['width'] as num?)?.toInt(),
+      height: (map['height'] as num?)?.toInt(),
+      durationSeconds: (map['durationSeconds'] as num?)?.toInt(),
     );
   }
 }

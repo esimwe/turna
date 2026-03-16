@@ -947,11 +947,22 @@ class TurnaChatHistoryLocalCache {
 
 enum ChatAttachmentKind { image, video, file }
 
+enum ChatAttachmentTransferMode { standard, hd, document }
+
+extension ChatAttachmentTransferModeX on ChatAttachmentTransferMode {
+  String get label => switch (this) {
+    ChatAttachmentTransferMode.standard => 'Standart',
+    ChatAttachmentTransferMode.hd => 'HD',
+    ChatAttachmentTransferMode.document => 'Dosya olarak gönder',
+  };
+}
+
 class ChatAttachment {
   ChatAttachment({
     required this.id,
     required this.objectKey,
     required this.kind,
+    required this.transferMode,
     required this.contentType,
     required this.sizeBytes,
     this.fileName,
@@ -964,6 +975,7 @@ class ChatAttachment {
   final String id;
   final String objectKey;
   final ChatAttachmentKind kind;
+  final ChatAttachmentTransferMode transferMode;
   final String? fileName;
   final String contentType;
   final int sizeBytes;
@@ -979,11 +991,20 @@ class ChatAttachment {
       'video' => ChatAttachmentKind.video,
       _ => ChatAttachmentKind.file,
     };
+    final transferModeText = (map['transferMode'] ?? '')
+        .toString()
+        .toLowerCase();
+    final transferMode = switch (transferModeText) {
+      'hd' => ChatAttachmentTransferMode.hd,
+      'document' => ChatAttachmentTransferMode.document,
+      _ => ChatAttachmentTransferMode.standard,
+    };
 
     return ChatAttachment(
       id: (map['id'] ?? '').toString(),
       objectKey: (map['objectKey'] ?? '').toString(),
       kind: kind,
+      transferMode: transferMode,
       fileName: TurnaUserProfile._nullableString(map['fileName']),
       contentType: (map['contentType'] ?? '').toString(),
       sizeBytes: (map['sizeBytes'] as num?)?.toInt() ?? 0,
@@ -999,6 +1020,7 @@ class ChatAttachment {
       'id': id,
       'objectKey': objectKey,
       'kind': kind.name,
+      'transferMode': transferMode.name,
       'fileName': fileName,
       'contentType': contentType,
       'sizeBytes': sizeBytes,
@@ -3046,6 +3068,7 @@ class OutgoingAttachmentDraft {
   OutgoingAttachmentDraft({
     required this.objectKey,
     required this.kind,
+    required this.transferMode,
     required this.contentType,
     required this.sizeBytes,
     this.fileName,
@@ -3056,6 +3079,7 @@ class OutgoingAttachmentDraft {
 
   final String objectKey;
   final ChatAttachmentKind kind;
+  final ChatAttachmentTransferMode transferMode;
   final String? fileName;
   final String contentType;
   final int sizeBytes;
@@ -3067,6 +3091,7 @@ class OutgoingAttachmentDraft {
     return {
       'objectKey': objectKey,
       'kind': kind.name,
+      'transferMode': transferMode.name,
       'fileName': fileName,
       'contentType': contentType,
       'sizeBytes': sizeBytes,
