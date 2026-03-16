@@ -16240,7 +16240,7 @@ class _TurnaGroupSettingsPageState extends State<_TurnaGroupSettingsPage> {
                 ),
                 const Divider(height: 1),
                 ListTile(
-                  leading: const Icon(Icons.add_call_rounded),
+                  leading: const Icon(Icons.call_rounded),
                   title: const Text('Kim çağrı başlatabilir?'),
                   subtitle: Text(_policyLabel(_detail.whoCanStartCalls)),
                   trailing: const Icon(Icons.chevron_right_rounded),

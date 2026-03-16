@@ -582,10 +582,14 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
     final publications = participant.videoTrackPublications;
     for (final publication in publications) {
       final track = publication.track;
+      final hasActiveStream =
+          publication is lk.RemoteTrackPublication<lk.RemoteVideoTrack>
+              ? publication.streamState == lk.StreamState.active
+              : true;
       if (track is lk.VideoTrack &&
           publication.subscribed &&
           !publication.muted &&
-          publication.streamState == lk.StreamState.active) {
+          hasActiveStream) {
         return track;
       }
     }
