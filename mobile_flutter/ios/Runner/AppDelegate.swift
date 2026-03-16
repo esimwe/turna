@@ -237,6 +237,24 @@ import Darwin
         }
         let mimeType = args["mimeType"] as? String
         self?.saveToGallery(path: path, mimeType: mimeType, result: result)
+      case "processVideo":
+        guard
+          let args = call.arguments as? [String: Any],
+          let path = args["path"] as? String
+        else {
+          result(
+            FlutterError(code: "invalid_args", message: "Video yolu gerekli.", details: nil)
+          )
+          return
+        }
+        let transferMode = (args["transferMode"] as? String) ?? "standard"
+        let fileName = args["fileName"] as? String
+        self?.processVideo(
+          path: path,
+          transferMode: transferMode,
+          fileName: fileName,
+          result: result
+        )
       case "scanDocument":
         self?.presentDocumentScanner(result: result)
       default:
@@ -408,6 +426,91 @@ import Darwin
     }
   }
 
+  private func processVideo(
+    path: String,
+    transferMode: String,
+    fileName: String?,
+    result: @escaping FlutterResult
+  ) {
+    let inputUrl = URL(fileURLWithPath: path)
+    guard FileManager.default.fileExists(atPath: inputUrl.path) else {
+      result(FlutterError(code: "missing_file", message: "Video bulunamadı.", details: nil))
+      return
+    }
+
+    let asset = AVURLAsset(url: inputUrl)
+    let normalizedMode = transferMode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    let preferredPreset =
+      normalizedMode == "hd" ? AVAssetExportPreset1920x1080 : AVAssetExportPreset1280x720
+    let compatiblePresets = AVAssetExportSession.exportPresets(compatibleWith: asset)
+    let presetName = compatiblePresets.contains(preferredPreset)
+      ? preferredPreset
+      : AVAssetExportPresetHighestQuality
+
+    guard let exportSession = AVAssetExportSession(asset: asset, presetName: presetName) else {
+      result(
+        FlutterError(
+          code: "process_failed",
+          message: "Video dışa aktarma başlatılamadı.",
+          details: nil
+        )
+      )
+      return
+    }
+
+    let outputUrl = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString)
+      .appendingPathExtension("mp4")
+    try? FileManager.default.removeItem(at: outputUrl)
+
+    exportSession.outputURL = outputUrl
+    exportSession.outputFileType = .mp4
+    exportSession.shouldOptimizeForNetworkUse = true
+    exportSession.metadata = []
+
+    exportSession.exportAsynchronously { [weak self] in
+      guard let self else { return }
+      DispatchQueue.main.async {
+        switch exportSession.status {
+        case .completed:
+          let exportedAsset = AVURLAsset(url: outputUrl)
+          let videoTrack = exportedAsset.tracks(withMediaType: .video).first
+          let videoSize = self.resolveVideoSize(videoTrack)
+          let durationSeconds = max(0, Int(round(CMTimeGetSeconds(exportedAsset.duration))))
+          let attributes = try? FileManager.default.attributesOfItem(atPath: outputUrl.path)
+          let sizeBytes = (attributes?[.size] as? NSNumber)?.intValue ?? 0
+          result([
+            "path": outputUrl.path,
+            "fileName": self.buildProcessedVideoFileName(
+              sourceName: fileName ?? inputUrl.lastPathComponent
+            ),
+            "mimeType": "video/mp4",
+            "sizeBytes": sizeBytes,
+            "width": videoSize.width,
+            "height": videoSize.height,
+            "durationSeconds": durationSeconds,
+          ])
+        case .cancelled:
+          result(
+            FlutterError(
+              code: "process_cancelled",
+              message: "Video işleme iptal edildi.",
+              details: nil
+            )
+          )
+        default:
+          result(
+            FlutterError(
+              code: "process_failed",
+              message: exportSession.error?.localizedDescription ?? "Video işlenemedi.",
+              details: nil
+            )
+          )
+        }
+      }
+    }
+  }
+
   private func presentDocumentScanner(result: @escaping FlutterResult) {
     guard pendingDocumentScanResult == nil else {
       result(
@@ -561,6 +664,22 @@ import Darwin
     let normalized = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
     let safeName = normalized.isEmpty ? "scan" : normalized
     return safeName.lowercased().hasSuffix(".pdf") ? safeName : "\(safeName).pdf"
+  }
+
+  private func buildProcessedVideoFileName(sourceName: String) -> String {
+    let trimmed = sourceName.trimmingCharacters(in: .whitespacesAndNewlines)
+    let baseName = trimmed.isEmpty ? "video_\(Int(Date().timeIntervalSince1970))" : trimmed
+    let nsName = baseName as NSString
+    let stem = nsName.deletingPathExtension.isEmpty ? baseName : nsName.deletingPathExtension
+    return "\(stem).mp4"
+  }
+
+  private func resolveVideoSize(_ track: AVAssetTrack?) -> (width: Int, height: Int) {
+    guard let track else { return (0, 0) }
+    let transformed = track.naturalSize.applying(track.preferredTransform)
+    let width = max(0, Int(round(abs(transformed.width))))
+    let height = max(0, Int(round(abs(transformed.height))))
+    return (width, height)
   }
 
   private func preparePhotosCompatibleUrl(for fileUrl: URL, mimeType: String) -> URL? {
