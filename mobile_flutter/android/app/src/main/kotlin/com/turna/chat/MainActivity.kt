@@ -5,15 +5,20 @@ import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.pdf.PdfRenderer
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.os.Environment
+import android.os.ParcelFileDescriptor
 import android.os.PowerManager
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.telephony.TelephonyManager
 import android.view.WindowManager
+import android.webkit.MimeTypeMap
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.FileProvider
@@ -34,6 +39,7 @@ import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import me.leolin.shortcutbadger.ShortcutBadger
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.util.Locale
@@ -42,10 +48,18 @@ class MainActivity : FlutterFragmentActivity() {
     private var proximityWakeLock: PowerManager.WakeLock? = null
     private var pendingDocumentScanResult: MethodChannel.Result? = null
     private var pendingVideoProcessResult: MethodChannel.Result? = null
+    private var shareTargetChannel: MethodChannel? = null
+    private var isShareTargetBridgeReady: Boolean = false
+    private var pendingSharedPayload: Map<String, Any?>? = null
     private val documentScanLauncher =
         registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { activityResult ->
             handleDocumentScanResult(activityResult.resultCode, activityResult.data)
         }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        captureIncomingSharedPayload(intent, notifyFlutter = false)
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -151,6 +165,17 @@ class MainActivity : FlutterFragmentActivity() {
                     }
                 }
 
+                "saveFile" -> {
+                    val path = call.argument<String>("path")
+                    val mimeType = call.argument<String>("mimeType")
+                    val fileName = call.argument<String>("fileName")
+                    if (path.isNullOrBlank()) {
+                        result.error("invalid_args", "Dosya yolu gerekli.", null)
+                    } else {
+                        saveFile(path, mimeType, fileName, result)
+                    }
+                }
+
                 "processVideo" -> {
                     val path = call.argument<String>("path")
                     val transferMode = call.argument<String>("transferMode") ?: "standard"
@@ -168,9 +193,58 @@ class MainActivity : FlutterFragmentActivity() {
                     }
                 }
 
+                "getPdfPageCount" -> {
+                    val path = call.argument<String>("path")
+                    if (path.isNullOrBlank()) {
+                        result.error("invalid_args", "PDF yolu gerekli.", null)
+                    } else {
+                        getPdfPageCount(path, result)
+                    }
+                }
+
+                "renderPdfPage" -> {
+                    val path = call.argument<String>("path")
+                    val pageIndex = call.argument<Int>("pageIndex")
+                    val targetWidth = call.argument<Int>("targetWidth") ?: 1440
+                    if (path.isNullOrBlank() || pageIndex == null) {
+                        result.error("invalid_args", "PDF parametreleri eksik.", null)
+                    } else {
+                        renderPdfPage(path, pageIndex, targetWidth, result)
+                    }
+                }
+
                 else -> result.notImplemented()
             }
         }
+
+        val shareChannel =
+            MethodChannel(
+                flutterEngine.dartExecutor.binaryMessenger,
+                "turna/share_target",
+            )
+        shareChannel.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "shareBridgeReady" -> {
+                    isShareTargetBridgeReady = true
+                    result.success(null)
+                }
+
+                "consumeInitialPayload" -> {
+                    val payload = pendingSharedPayload
+                    pendingSharedPayload = null
+                    result.success(payload)
+                }
+
+                else -> result.notImplemented()
+            }
+        }
+        shareTargetChannel = shareChannel
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        captureIncomingSharedPayload(intent, notifyFlutter = true)
     }
 
     override fun onDestroy() {
@@ -214,6 +288,141 @@ class MainActivity : FlutterFragmentActivity() {
             }
         } catch (_: Throwable) {
         }
+    }
+
+    private fun captureIncomingSharedPayload(intent: Intent?, notifyFlutter: Boolean) {
+        if (intent == null) return
+        val action = intent.action ?: return
+        if (action != Intent.ACTION_SEND && action != Intent.ACTION_SEND_MULTIPLE) {
+            return
+        }
+        val payload = buildSharedPayload(intent) ?: return
+        pendingSharedPayload = payload
+        if (notifyFlutter) {
+            dispatchSharedPayloadIfReady()
+        }
+    }
+
+    private fun dispatchSharedPayloadIfReady() {
+        val payload = pendingSharedPayload ?: return
+        val channel = shareTargetChannel ?: return
+        if (!isShareTargetBridgeReady) return
+        pendingSharedPayload = null
+        runOnUiThread {
+            channel.invokeMethod("sharedPayloadUpdated", payload)
+        }
+    }
+
+    private fun buildSharedPayload(intent: Intent): Map<String, Any?>? {
+        val resolvedItems = mutableListOf<Map<String, Any?>>()
+        val fallbackMimeType = intent.type?.takeIf { it.isNotBlank() }
+        val uris = mutableListOf<Uri>()
+
+        when (intent.action) {
+            Intent.ACTION_SEND -> {
+                intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)?.let(uris::add)
+                val clipData = intent.clipData
+                if (uris.isEmpty() && clipData != null) {
+                    for (index in 0 until clipData.itemCount) {
+                        clipData.getItemAt(index).uri?.let(uris::add)
+                    }
+                }
+            }
+
+            Intent.ACTION_SEND_MULTIPLE -> {
+                val extraUris = intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)
+                if (!extraUris.isNullOrEmpty()) {
+                    uris.addAll(extraUris)
+                }
+                val clipData = intent.clipData
+                if (clipData != null) {
+                    for (index in 0 until clipData.itemCount) {
+                        clipData.getItemAt(index).uri?.let(uris::add)
+                    }
+                }
+            }
+        }
+
+        for (uri in uris.distinct()) {
+            copySharedUriToCache(uri, fallbackMimeType)?.let(resolvedItems::add)
+        }
+
+        if (resolvedItems.isEmpty()) return null
+        return mapOf("items" to resolvedItems)
+    }
+
+    private fun copySharedUriToCache(
+        uri: Uri,
+        fallbackMimeType: String?,
+    ): Map<String, Any?>? {
+        return try {
+            val sharedDir =
+                File(cacheDir, "share_target").apply {
+                    if (!exists()) {
+                        mkdirs()
+                    }
+                }
+            val originalFileName =
+                resolveSharedDisplayName(uri)?.trim()?.takeIf { it.isNotEmpty() }
+                    ?: "turna_share_${System.currentTimeMillis()}"
+            val resolvedMimeType =
+                contentResolver.getType(uri)?.takeIf { it.isNotBlank() }
+                    ?: fallbackMimeType
+                    ?: guessMimeTypeFromFileName(originalFileName)
+                    ?: "application/octet-stream"
+            val safeName = sanitizeSharedFileName(originalFileName)
+            val cachedFile =
+                File(sharedDir, "${System.currentTimeMillis()}_$safeName")
+            val inputStream =
+                if (uri.scheme == "file") {
+                    File(uri.path ?: return null).inputStream()
+                } else {
+                    contentResolver.openInputStream(uri)
+                }
+            inputStream?.use { input ->
+                FileOutputStream(cachedFile).use { output ->
+                    input.copyTo(output)
+                }
+            } ?: return null
+
+            mapOf(
+                "path" to cachedFile.absolutePath,
+                "fileName" to originalFileName,
+                "mimeType" to resolvedMimeType,
+                "sizeBytes" to cachedFile.length(),
+            )
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    private fun resolveSharedDisplayName(uri: Uri): String? {
+        if (uri.scheme == "file") {
+            return File(uri.path ?: return null).name
+        }
+        return try {
+            contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+                ?.use { cursor ->
+                    val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (index >= 0 && cursor.moveToFirst()) {
+                        cursor.getString(index)
+                    } else {
+                        null
+                    }
+                }
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    private fun sanitizeSharedFileName(fileName: String): String {
+        return fileName.replace(Regex("[^A-Za-z0-9._-]"), "_")
+    }
+
+    private fun guessMimeTypeFromFileName(fileName: String): String? {
+        val extension = fileName.substringAfterLast('.', "").lowercase(Locale.US)
+        if (extension.isBlank()) return null
+        return MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
     }
 
     private fun shareFile(path: String, mimeType: String?, result: MethodChannel.Result) {
@@ -302,6 +511,126 @@ class MainActivity : FlutterFragmentActivity() {
         } catch (error: Throwable) {
             contentResolver.delete(uri, null, null)
             result.error("save_failed", error.message, null)
+        }
+    }
+
+    private fun saveFile(
+        path: String,
+        mimeType: String?,
+        fileName: String?,
+        result: MethodChannel.Result,
+    ) {
+        val file = File(path)
+        if (!file.exists()) {
+            result.error("missing_file", "Dosya bulunamadı.", null)
+            return
+        }
+
+        val resolvedFileName =
+            fileName?.trim()?.takeIf { it.isNotEmpty() } ?: file.name
+        val resolvedMime =
+            mimeType?.takeIf { it.isNotBlank() }
+                ?: when {
+                    resolvedFileName.endsWith(".pdf", ignoreCase = true) -> "application/pdf"
+                    else -> "*/*"
+                }
+        val values =
+            ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, resolvedFileName)
+                put(MediaStore.MediaColumns.MIME_TYPE, resolvedMime)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    put(
+                        MediaStore.MediaColumns.RELATIVE_PATH,
+                        "${Environment.DIRECTORY_DOWNLOADS}/Turna",
+                    )
+                    put(MediaStore.MediaColumns.IS_PENDING, 1)
+                }
+            }
+
+        val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+        if (uri == null) {
+            result.error("save_failed", "Dosya kaydedilemedi.", null)
+            return
+        }
+
+        try {
+            contentResolver.openOutputStream(uri)?.use { output ->
+                file.inputStream().use { input ->
+                    input.copyTo(output)
+                }
+            } ?: throw IllegalStateException("Çıkış akışı açılamadı.")
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                values.clear()
+                values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+                contentResolver.update(uri, values, null, null)
+            }
+            result.success(null)
+        } catch (error: Throwable) {
+            contentResolver.delete(uri, null, null)
+            result.error("save_failed", error.message, null)
+        }
+    }
+
+    private fun getPdfPageCount(path: String, result: MethodChannel.Result) {
+        val file = File(path)
+        if (!file.exists()) {
+            result.error("missing_file", "PDF bulunamadı.", null)
+            return
+        }
+
+        try {
+            ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { fd ->
+                PdfRenderer(fd).use { renderer ->
+                    result.success(renderer.pageCount)
+                }
+            }
+        } catch (error: Throwable) {
+            result.error("invalid_pdf", error.message, null)
+        }
+    }
+
+    private fun renderPdfPage(
+        path: String,
+        pageIndex: Int,
+        targetWidth: Int,
+        result: MethodChannel.Result,
+    ) {
+        val file = File(path)
+        if (!file.exists()) {
+            result.error("missing_file", "PDF bulunamadı.", null)
+            return
+        }
+
+        try {
+            ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { fd ->
+                PdfRenderer(fd).use { renderer ->
+                    if (pageIndex < 0 || pageIndex >= renderer.pageCount) {
+                        result.error("invalid_page", "PDF sayfası bulunamadı.", null)
+                        return
+                    }
+                    renderer.openPage(pageIndex).use { page ->
+                        val safeWidth = maxOf(1, targetWidth)
+                        val scale = safeWidth.toFloat() / page.width.toFloat()
+                        val bitmapWidth = safeWidth
+                        val bitmapHeight = maxOf(1, (page.height * scale).toInt())
+                        val bitmap =
+                            Bitmap.createBitmap(
+                                bitmapWidth,
+                                bitmapHeight,
+                                Bitmap.Config.ARGB_8888,
+                            )
+                        bitmap.eraseColor(android.graphics.Color.WHITE)
+                        page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                        val output = ByteArrayOutputStream()
+                        bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
+                        bitmap.recycle()
+                        result.success(output.toByteArray())
+                    }
+                }
+            }
+        } catch (error: Throwable) {
+            result.error("render_failed", error.message, null)
         }
     }
 

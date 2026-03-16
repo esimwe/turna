@@ -4750,16 +4750,144 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   }
 
   Future<void> _pickDocumentMedia() async {
-    final file = await _mediaPicker.pickMedia();
-    if (file == null) return;
-    final fileName = file.name.trim().isEmpty
-        ? _fileNameFromPath(file.path)
-        : file.name.trim();
+    final selection = await _pickDocumentMediaFromGallery();
+    if (selection == null) return;
     await _sendDocumentAttachmentFromPath(
-      filePath: file.path,
-      fileName: fileName,
-      contentType: guessContentTypeForFileName(fileName),
-      sizeBytes: await file.length(),
+      filePath: selection.filePath,
+      fileName: selection.fileName,
+      contentType: selection.contentType,
+      sizeBytes: selection.sizeBytes,
+    );
+  }
+
+  Future<_TurnaSelectedDocumentMedia?> _pickDocumentMediaFromGallery() async {
+    final permission = await pm.PhotoManager.requestPermissionExtend();
+    if (!permission.isAuth) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Galeri erisimi verilmedi.')),
+        );
+      }
+      return null;
+    }
+
+    final albums = await pm.PhotoManager.getAssetPathList(
+      onlyAll: true,
+      type: pm.RequestType.common,
+      filterOption: pm.FilterOptionGroup(
+        orders: const <pm.OrderOption>[
+          pm.OrderOption(type: pm.OrderOptionType.createDate, asc: false),
+        ],
+      ),
+    );
+    final recent = albums.isEmpty ? null : albums.first;
+    final assets = recent == null
+        ? const <pm.AssetEntity>[]
+        : (await recent.getAssetListPaged(page: 0, size: 120))
+              .where(
+                (asset) =>
+                    asset.type == pm.AssetType.image ||
+                    asset.type == pm.AssetType.video,
+              )
+              .toList(growable: false);
+
+    if (!mounted || assets.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Galeride secilebilir medya bulunamadi.'),
+          ),
+        );
+      }
+      return null;
+    }
+
+    return showModalBottomSheet<_TurnaSelectedDocumentMedia>(
+      context: context,
+      backgroundColor: Colors.black,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      builder: (sheetContext) {
+        return SafeArea(
+          top: false,
+          child: SizedBox(
+            height: MediaQuery.of(sheetContext).size.height * 0.78,
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+                  child: Row(
+                    children: [
+                      const Text(
+                        'Fotoğraf veya video seç',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const Spacer(),
+                      IconButton(
+                        onPressed: () => Navigator.pop(sheetContext),
+                        icon: const Icon(
+                          Icons.close_rounded,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: GridView.builder(
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                    gridDelegate:
+                        const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 3,
+                          crossAxisSpacing: 6,
+                          mainAxisSpacing: 6,
+                        ),
+                    itemCount: assets.length,
+                    itemBuilder: (context, index) {
+                      final asset = assets[index];
+                      return _StatusGalleryAssetTile(
+                        asset: asset,
+                        onTap: () async {
+                          final sourceFile =
+                              await asset.originFile ?? await asset.file;
+                          if (sourceFile == null || !sheetContext.mounted) {
+                            return;
+                          }
+                          final rawTitle = (await asset.titleAsync).trim();
+                          final resolvedFileName = rawTitle.isNotEmpty
+                              ? rawTitle
+                              : _fileNameFromPath(sourceFile.path);
+                          final sizeBytes = await sourceFile.length();
+                          if (!sheetContext.mounted) return;
+                          Navigator.pop(
+                            sheetContext,
+                            _TurnaSelectedDocumentMedia(
+                              filePath: sourceFile.path,
+                              fileName: resolvedFileName,
+                              contentType:
+                                  guessContentTypeForFileName(
+                                    resolvedFileName,
+                                  ) ??
+                                  'application/octet-stream',
+                              sizeBytes: sizeBytes,
+                            ),
+                          );
+                        },
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -5141,15 +5269,17 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       return;
     }
 
-    final opened = await launchUrl(
-      Uri.parse(url),
-      mode: LaunchMode.externalApplication,
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ChatDocumentAttachmentPage(
+          session: widget.session,
+          attachment: attachment,
+          cacheKey: 'attachment:${attachment.objectKey}',
+          url: url,
+        ),
+      ),
     );
-    if (!opened && mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Dosya açılamadı.')));
-    }
   }
 
   Future<void> _openMediaAttachment(
@@ -6447,10 +6577,12 @@ class ForwardMessagePickerPage extends StatefulWidget {
     super.key,
     required this.session,
     required this.currentChatId,
+    this.title = 'Ilet',
   });
 
   final AuthSession session;
   final String currentChatId;
+  final String title;
 
   @override
   State<ForwardMessagePickerPage> createState() =>
@@ -6493,7 +6625,7 @@ class _ForwardMessagePickerPageState extends State<ForwardMessagePickerPage> {
   Widget build(BuildContext context) {
     final query = _searchController.text.trim().toLowerCase();
     return Scaffold(
-      appBar: AppBar(title: const Text('Ilet')),
+      appBar: AppBar(title: Text(widget.title)),
       body: FutureBuilder<ChatInboxData>(
         future: _chatsFuture,
         initialData: _cachedInbox,
@@ -6844,6 +6976,10 @@ class _ChatAttachmentList extends StatelessWidget {
           );
         }
 
+        final extension = _attachmentFileExtension(attachment);
+        final extensionBadge = extension.isEmpty
+            ? 'DOSYA'
+            : extension.toUpperCase();
         return Padding(
           padding: const EdgeInsets.only(bottom: 8),
           child: InkWell(
@@ -6853,43 +6989,68 @@ class _ChatAttachmentList extends StatelessWidget {
                 : () => onLongPress!(attachment),
             borderRadius: BorderRadius.circular(14),
             child: Container(
-              width: 220,
-              padding: const EdgeInsets.all(12),
+              width: 228,
+              padding: const EdgeInsets.all(13),
               decoration: BoxDecoration(
-                color: TurnaColors.backgroundMuted,
-                borderRadius: BorderRadius.circular(14),
+                color: mine
+                    ? Colors.white.withValues(alpha: 0.26)
+                    : Colors.white.withValues(alpha: 0.86),
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(
+                  color: mine
+                      ? Colors.white.withValues(alpha: 0.12)
+                      : TurnaColors.border.withValues(alpha: 0.8),
+                ),
               ),
               child: Row(
                 children: [
                   Container(
-                    width: 42,
-                    height: 42,
+                    width: 48,
+                    height: 48,
                     decoration: BoxDecoration(
-                      color: TurnaColors.surface,
-                      borderRadius: BorderRadius.circular(12),
+                      color: mine
+                          ? Colors.black.withValues(alpha: 0.22)
+                          : const Color(0xFF5D6470),
+                      borderRadius: BorderRadius.circular(14),
                     ),
-                    child: const Icon(
-                      Icons.insert_drive_file_outlined,
-                      color: TurnaColors.primary,
+                    alignment: Alignment.center,
+                    child: Text(
+                      extensionBadge,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.3,
+                      ),
                     ),
                   ),
-                  const SizedBox(width: 10),
+                  const SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
                           attachment.fileName ?? 'Dosya',
-                          maxLines: 2,
+                          maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontWeight: FontWeight.w600),
+                          style: TextStyle(
+                            fontSize: 15.5,
+                            fontWeight: FontWeight.w700,
+                            color: mine
+                                ? Colors.black.withValues(alpha: 0.8)
+                                : TurnaColors.text,
+                          ),
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          'Dosya • ${formatFileSize(attachment.sizeBytes)}',
-                          style: const TextStyle(
+                          '${formatFileSize(attachment.sizeBytes)}${extension.isEmpty ? '' : ' • $extension'}',
+                          style: TextStyle(
                             fontSize: 12,
-                            color: TurnaColors.textMuted,
+                            color: mine
+                                ? Colors.black.withValues(alpha: 0.52)
+                                : TurnaColors.textMuted,
                           ),
                         ),
                       ],
@@ -6911,6 +7072,22 @@ class _TurnaChatCameraResult {
   final List<XFile> files;
 }
 
+class _TurnaSelectedDocumentMedia {
+  const _TurnaSelectedDocumentMedia({
+    required this.filePath,
+    required this.fileName,
+    required this.contentType,
+    required this.sizeBytes,
+  });
+
+  final String filePath;
+  final String fileName;
+  final String contentType;
+  final int sizeBytes;
+}
+
+enum _TurnaChatInlineCameraMode { video, photo, videoNote }
+
 class _TurnaChatInlineCameraPage extends StatefulWidget {
   const _TurnaChatInlineCameraPage();
 
@@ -6925,23 +7102,38 @@ class _TurnaChatInlineCameraPageState extends State<_TurnaChatInlineCameraPage>
   Future<void>? _cameraInitFuture;
   List<cam.CameraDescription> _cameras = const <cam.CameraDescription>[];
   cam.CameraDescription? _selectedCamera;
+  _TurnaChatInlineCameraMode _mode = _TurnaChatInlineCameraMode.photo;
   bool _cameraInitializing = true;
   bool _cameraBusy = false;
+  bool _recording = false;
   String? _cameraError;
   cam.FlashMode _flashMode = cam.FlashMode.off;
   List<pm.AssetEntity> _recentAssets = const <pm.AssetEntity>[];
   bool _galleryLoading = false;
   String? _galleryError;
+  Duration _recordingDuration = Duration.zero;
+  Timer? _recordingTimer;
   double _minZoomLevel = 1;
   double _maxZoomLevel = 1;
   double _currentZoomLevel = 1;
 
+  bool get _isVideoMode => _mode != _TurnaChatInlineCameraMode.photo;
   bool get _cameraReady {
     final controller = _cameraController;
     return !_cameraInitializing &&
         _cameraError == null &&
         controller != null &&
         controller.value.isInitialized;
+  }
+
+  TurnaStatusCaptureMode get _shutterMode => _isVideoMode
+      ? TurnaStatusCaptureMode.video
+      : TurnaStatusCaptureMode.photo;
+
+  cam.CameraLensDirection get _preferredLensDirection {
+    return _mode == _TurnaChatInlineCameraMode.videoNote
+        ? cam.CameraLensDirection.front
+        : cam.CameraLensDirection.back;
   }
 
   @override
@@ -6957,6 +7149,7 @@ class _TurnaChatInlineCameraPageState extends State<_TurnaChatInlineCameraPage>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _recordingTimer?.cancel();
     final controller = _cameraController;
     _cameraController = null;
     unawaited(controller?.dispose() ?? Future<void>.value());
@@ -6982,9 +7175,7 @@ class _TurnaChatInlineCameraPageState extends State<_TurnaChatInlineCameraPage>
   }
 
   Future<void> _bootstrap() async {
-    await _initializeCamera(
-      preferredLensDirection: cam.CameraLensDirection.back,
-    );
+    await _initializeCamera(preferredLensDirection: _preferredLensDirection);
     if (!mounted) return;
     await _loadGallery();
   }
@@ -7036,12 +7227,17 @@ class _TurnaChatInlineCameraPageState extends State<_TurnaChatInlineCameraPage>
         throw TurnaApiException('Kamera bulunamadi.');
       }
       final selected = _pickCamera(cameras, preferredLensDirection);
+      final isVideoMode = _isVideoMode;
       final controller = cam.CameraController(
         selected,
         Platform.isIOS
-            ? cam.ResolutionPreset.high
-            : cam.ResolutionPreset.veryHigh,
-        enableAudio: false,
+            ? (isVideoMode
+                  ? cam.ResolutionPreset.medium
+                  : cam.ResolutionPreset.high)
+            : (isVideoMode
+                  ? cam.ResolutionPreset.high
+                  : cam.ResolutionPreset.veryHigh),
+        enableAudio: isVideoMode,
       );
       _cameras = cameras;
       _selectedCamera = selected;
@@ -7108,7 +7304,7 @@ class _TurnaChatInlineCameraPageState extends State<_TurnaChatInlineCameraPage>
       }
       final albums = await pm.PhotoManager.getAssetPathList(
         onlyAll: true,
-        type: pm.RequestType.image,
+        type: pm.RequestType.common,
         filterOption: pm.FilterOptionGroup(
           orders: const <pm.OrderOption>[
             pm.OrderOption(type: pm.OrderOptionType.createDate, asc: false),
@@ -7144,6 +7340,56 @@ class _TurnaChatInlineCameraPageState extends State<_TurnaChatInlineCameraPage>
     return parts.isEmpty ? path : parts.last;
   }
 
+  String _durationLabel(int seconds) {
+    final minutes = (seconds ~/ 60).toString().padLeft(2, '0');
+    final remaining = (seconds % 60).toString().padLeft(2, '0');
+    return '$minutes:$remaining';
+  }
+
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _setMode(_TurnaChatInlineCameraMode mode) async {
+    if (_mode == mode || _cameraBusy || _recording) return;
+    setState(() => _mode = mode);
+    await _initializeCamera(
+      preferredLensDirection: mode == _TurnaChatInlineCameraMode.videoNote
+          ? cam.CameraLensDirection.front
+          : cam.CameraLensDirection.back,
+    );
+  }
+
+  void _handlePreviewSwipe(DragEndDetails details) {
+    if (_cameraBusy || _recording) return;
+    final velocity = details.primaryVelocity ?? 0;
+    if (velocity.abs() < 220) return;
+    const order = <_TurnaChatInlineCameraMode>[
+      _TurnaChatInlineCameraMode.video,
+      _TurnaChatInlineCameraMode.photo,
+      _TurnaChatInlineCameraMode.videoNote,
+    ];
+    final currentIndex = order.indexOf(_mode);
+    if (currentIndex == -1) return;
+    final nextIndex = velocity < 0 ? currentIndex - 1 : currentIndex + 1;
+    if (nextIndex < 0 || nextIndex >= order.length) return;
+    unawaited(_setMode(order[nextIndex]));
+  }
+
+  Future<void> _handleCapturePressed() async {
+    if (_isVideoMode) {
+      if (_recording) {
+        await _stopVideoRecording();
+      } else {
+        await _startVideoRecording();
+      }
+      return;
+    }
+    await _takePhoto();
+  }
+
   Future<void> _takePhoto() async {
     if (_cameraBusy || !_cameraReady) return;
     final controller = _cameraController;
@@ -7170,19 +7416,15 @@ class _TurnaChatInlineCameraPageState extends State<_TurnaChatInlineCameraPage>
       );
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            error is TurnaApiException ? error.message : 'Fotograf cekilemedi.',
-          ),
-        ),
+      _showMessage(
+        error is TurnaApiException ? error.message : 'Fotograf cekilemedi.',
       );
       setState(() => _cameraBusy = false);
     }
   }
 
   Future<void> _switchCamera() async {
-    if (_cameras.length < 2 || _cameraBusy) return;
+    if (_cameras.length < 2 || _cameraBusy || _recording) return;
     final current =
         _selectedCamera?.lensDirection ?? cam.CameraLensDirection.back;
     final next = current == cam.CameraLensDirection.front
@@ -7193,7 +7435,9 @@ class _TurnaChatInlineCameraPageState extends State<_TurnaChatInlineCameraPage>
 
   Future<void> _toggleFlash() async {
     final controller = _cameraController;
-    if (controller == null || !_cameraReady || _cameraBusy) return;
+    if (controller == null || !_cameraReady || _cameraBusy || _recording) {
+      return;
+    }
     final next = switch (_flashMode) {
       cam.FlashMode.off => cam.FlashMode.auto,
       cam.FlashMode.auto => cam.FlashMode.always,
@@ -7205,9 +7449,7 @@ class _TurnaChatInlineCameraPageState extends State<_TurnaChatInlineCameraPage>
       setState(() => _flashMode = next);
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Flash ayarlanamadi.')));
+      _showMessage('Flash ayarlanamadi.');
     }
   }
 
@@ -7229,7 +7471,7 @@ class _TurnaChatInlineCameraPageState extends State<_TurnaChatInlineCameraPage>
   }
 
   Future<void> _selectGalleryAsset(pm.AssetEntity asset) async {
-    if (_cameraBusy) return;
+    if (_cameraBusy || _recording) return;
     final file = await asset.file;
     if (file == null || !mounted) return;
     final fileName = _fileNameFromPath(file.path);
@@ -7247,8 +7489,94 @@ class _TurnaChatInlineCameraPageState extends State<_TurnaChatInlineCameraPage>
     );
   }
 
+  Future<void> _startVideoRecording() async {
+    if (_cameraBusy || !_cameraReady) return;
+    final controller = _cameraController;
+    if (controller == null) return;
+    setState(() => _cameraBusy = true);
+    try {
+      if (_cameraInitFuture != null) {
+        await _cameraInitFuture;
+      }
+      if (Platform.isIOS) {
+        await controller.prepareForVideoRecording();
+      }
+      await controller.startVideoRecording();
+      _recordingTimer?.cancel();
+      _recordingTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+        if (!mounted) return;
+        final next = _recordingDuration + const Duration(seconds: 1);
+        if (next.inSeconds >= kStatusMaxVideoDurationSeconds) {
+          timer.cancel();
+          unawaited(_stopVideoRecording());
+          return;
+        }
+        setState(() => _recordingDuration = next);
+      });
+      if (!mounted) return;
+      setState(() {
+        _recording = true;
+        _recordingDuration = Duration.zero;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      _showMessage(
+        _mode == _TurnaChatInlineCameraMode.videoNote
+            ? 'Goruntulu not kaydi baslatilamadi.'
+            : 'Video kaydi baslatilamadi.',
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _cameraBusy = false);
+      }
+    }
+  }
+
+  Future<void> _stopVideoRecording() async {
+    final controller = _cameraController;
+    if (controller == null || !_recording) return;
+    setState(() => _cameraBusy = true);
+    _recordingTimer?.cancel();
+    try {
+      final captured = await controller.stopVideoRecording();
+      if (!mounted) return;
+      final fileName = _fileNameFromPath(captured.path);
+      setState(() {
+        _recording = false;
+        _recordingDuration = Duration.zero;
+      });
+      Navigator.pop(
+        context,
+        _TurnaChatCameraResult(
+          files: [
+            XFile(
+              captured.path,
+              name: fileName,
+              mimeType: guessContentTypeForFileName(fileName) ?? 'video/mp4',
+            ),
+          ],
+        ),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _recording = false;
+        _recordingDuration = Duration.zero;
+      });
+      _showMessage(
+        _mode == _TurnaChatInlineCameraMode.videoNote
+            ? 'Goruntulu not kaydi durdurulamadi.'
+            : 'Video kaydi durdurulamadi.',
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _cameraBusy = false);
+      }
+    }
+  }
+
   Future<void> _openGallerySheet() async {
-    if (_cameraBusy) return;
+    if (_cameraBusy || _recording) return;
     if (_recentAssets.isEmpty && !_galleryLoading) {
       await _loadGallery();
     }
@@ -7313,7 +7641,7 @@ class _TurnaChatInlineCameraPageState extends State<_TurnaChatInlineCameraPage>
                       if (_recentAssets.isEmpty) {
                         return const Center(
                           child: Text(
-                            'Galeride gosterilecek fotograf bulunamadi.',
+                            'Galeride gosterilecek medya bulunamadi.',
                             style: TextStyle(color: Colors.white70),
                           ),
                         );
@@ -7379,14 +7707,17 @@ class _TurnaChatInlineCameraPageState extends State<_TurnaChatInlineCameraPage>
       return const SizedBox.expand(child: ColoredBox(color: Colors.black));
     }
     return ClipRect(
-      child: OverflowBox(
-        alignment: Alignment.center,
-        child: FittedBox(
-          fit: BoxFit.cover,
-          child: SizedBox(
-            width: previewSize.height,
-            height: previewSize.width,
-            child: cam.CameraPreview(controller),
+      child: GestureDetector(
+        onHorizontalDragEnd: _handlePreviewSwipe,
+        child: OverflowBox(
+          alignment: Alignment.center,
+          child: FittedBox(
+            fit: BoxFit.cover,
+            child: SizedBox(
+              width: previewSize.height,
+              height: previewSize.width,
+              child: cam.CameraPreview(controller),
+            ),
           ),
         ),
       ),
@@ -7402,7 +7733,10 @@ class _TurnaChatInlineCameraPageState extends State<_TurnaChatInlineCameraPage>
           children: [
             _StatusCaptureTopButton(
               icon: Icons.close_rounded,
-              onTap: () => Navigator.pop(context),
+              onTap: () {
+                if (_recording) return;
+                Navigator.pop(context);
+              },
             ),
             const Spacer(),
             _StatusCaptureTopButton(icon: _flashIcon, onTap: _toggleFlash),
@@ -7427,27 +7761,55 @@ class _TurnaChatInlineCameraPageState extends State<_TurnaChatInlineCameraPage>
             onTap: () => _selectGalleryAsset(asset),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(12),
-              child: FutureBuilder<Uint8List?>(
-                future: asset.thumbnailDataWithSize(
-                  const pm.ThumbnailSize(180, 180),
-                  quality: 88,
-                ),
-                builder: (context, snapshot) {
-                  final bytes = snapshot.data;
-                  if (bytes == null || bytes.isEmpty) {
-                    return Container(
-                      width: 56,
-                      height: 74,
-                      color: Colors.white.withValues(alpha: 0.08),
-                    );
-                  }
-                  return Image.memory(
-                    bytes,
-                    width: 56,
-                    height: 74,
-                    fit: BoxFit.cover,
-                  );
-                },
+              child: Stack(
+                children: [
+                  FutureBuilder<Uint8List?>(
+                    future: asset.thumbnailDataWithSize(
+                      const pm.ThumbnailSize(180, 180),
+                      quality: 88,
+                    ),
+                    builder: (context, snapshot) {
+                      final bytes = snapshot.data;
+                      if (bytes == null || bytes.isEmpty) {
+                        return Container(
+                          width: 56,
+                          height: 74,
+                          color: Colors.white.withValues(alpha: 0.08),
+                        );
+                      }
+                      return Image.memory(
+                        bytes,
+                        width: 56,
+                        height: 74,
+                        fit: BoxFit.cover,
+                      );
+                    },
+                  ),
+                  if (asset.type == pm.AssetType.video)
+                    Positioned(
+                      left: 4,
+                      right: 4,
+                      bottom: 4,
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.videocam_rounded,
+                            size: 11,
+                            color: Colors.white,
+                          ),
+                          const SizedBox(width: 3),
+                          Text(
+                            _durationLabel(asset.duration),
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
               ),
             ),
           );
@@ -7496,6 +7858,25 @@ class _TurnaChatInlineCameraPageState extends State<_TurnaChatInlineCameraPage>
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (_recording)
+              Container(
+                margin: const EdgeInsets.only(bottom: 12),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.red.withValues(alpha: 0.9),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Text(
+                  '${_recordingDuration.inSeconds.toString().padLeft(2, '0')} sn',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
             _buildRecentStrip(),
             if (_recentAssets.isNotEmpty) const SizedBox(height: 14),
             Row(
@@ -7507,10 +7888,10 @@ class _TurnaChatInlineCameraPageState extends State<_TurnaChatInlineCameraPage>
                   onTap: _openGallerySheet,
                 ),
                 _StatusCaptureShutterButton(
-                  mode: TurnaStatusCaptureMode.photo,
-                  recording: false,
+                  mode: _shutterMode,
+                  recording: _recording,
                   busy: _cameraBusy || !_cameraReady,
-                  onTap: _takePhoto,
+                  onTap: _handleCapturePressed,
                 ),
                 Column(
                   mainAxisSize: MainAxisSize.min,
@@ -7543,19 +7924,23 @@ class _TurnaChatInlineCameraPageState extends State<_TurnaChatInlineCameraPage>
                 color: Colors.black.withValues(alpha: 0.48),
                 borderRadius: BorderRadius.circular(22),
               ),
-              child: const Row(
+              child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   _StatusModeChip(
                     label: 'VIDEO',
-                    selected: false,
-                    enabled: false,
+                    selected: _mode == _TurnaChatInlineCameraMode.video,
+                    onTap: () => _setMode(_TurnaChatInlineCameraMode.video),
                   ),
-                  _StatusModeChip(label: 'FOTOGRAF', selected: true),
+                  _StatusModeChip(
+                    label: 'FOTOGRAF',
+                    selected: _mode == _TurnaChatInlineCameraMode.photo,
+                    onTap: () => _setMode(_TurnaChatInlineCameraMode.photo),
+                  ),
                   _StatusModeChip(
                     label: 'GORUNTULU NOT',
-                    selected: false,
-                    enabled: false,
+                    selected: _mode == _TurnaChatInlineCameraMode.videoNote,
+                    onTap: () => _setMode(_TurnaChatInlineCameraMode.videoNote),
                   ),
                 ],
               ),

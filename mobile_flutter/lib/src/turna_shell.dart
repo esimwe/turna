@@ -613,6 +613,7 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
   final _callCoordinator = TurnaCallCoordinator();
   final Set<int> _visitedTabs = <int>{3};
   final Object _pushChatOpenBinding = Object();
+  final Object _shareTargetBinding = Object();
   String? _activeIncomingCallId;
   String? _lastPushOpenedChatId;
   bool _endingSession = false;
@@ -632,6 +633,10 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
     kTurnaPushChatOpenCoordinator.bind(
       _pushChatOpenBinding,
       _handlePushChatOpen,
+    );
+    kTurnaShareTargetCoordinator.bind(
+      _shareTargetBinding,
+      _handleIncomingSharePayload,
     );
     TurnaPushManager.syncSession(widget.session);
     TurnaNativeCallManager.bindSession(
@@ -679,6 +684,7 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     kTurnaPushChatOpenCoordinator.unbind(_pushChatOpenBinding);
+    kTurnaShareTargetCoordinator.unbind(_shareTargetBinding);
     _callCoordinator.removeListener(_handleCallCoordinator);
     _presenceClient.dispose();
     TurnaNativeCallManager.unbindSession(widget.session.userId);
@@ -911,6 +917,146 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
       );
     } finally {
       _openingPushChat = false;
+    }
+  }
+
+  ChatAttachmentKind _attachmentKindForSharedItem(
+    TurnaIncomingSharedItem item,
+  ) {
+    final mimeType = item.mimeType.toLowerCase();
+    if (mimeType.startsWith('image/')) {
+      return ChatAttachmentKind.image;
+    }
+    if (mimeType.startsWith('video/')) {
+      return ChatAttachmentKind.video;
+    }
+    final guessed =
+        guessContentTypeForFileName(item.fileName)?.toLowerCase() ?? '';
+    if (guessed.startsWith('image/')) {
+      return ChatAttachmentKind.image;
+    }
+    if (guessed.startsWith('video/')) {
+      return ChatAttachmentKind.video;
+    }
+    return ChatAttachmentKind.file;
+  }
+
+  Future<OutgoingAttachmentDraft> _uploadIncomingSharedItem(
+    ChatPreview targetChat,
+    TurnaIncomingSharedItem item,
+  ) async {
+    final file = File(item.filePath);
+    if (!await file.exists()) {
+      throw TurnaApiException('Paylasilan dosya bulunamadi.');
+    }
+
+    final fileName = item.fileName.trim().isNotEmpty
+        ? item.fileName.trim()
+        : file.uri.pathSegments.last;
+    final contentType = item.mimeType.trim().isNotEmpty
+        ? item.mimeType.trim()
+        : (guessContentTypeForFileName(fileName) ?? 'application/octet-stream');
+    final kind = _attachmentKindForSharedItem(item);
+    final sizeBytes = item.sizeBytes > 0 ? item.sizeBytes : await file.length();
+    final upload = await ChatApi.createAttachmentUpload(
+      widget.session,
+      chatId: targetChat.chatId,
+      kind: kind,
+      contentType: contentType,
+      fileName: fileName,
+    );
+
+    final request = http.StreamedRequest('PUT', Uri.parse(upload.uploadUrl));
+    request.headers.addAll(upload.headers);
+    request.contentLength = sizeBytes;
+    final responseFuture = request.send();
+    await file.openRead().pipe(request.sink);
+    final uploadRes = await responseFuture;
+    if (uploadRes.statusCode >= 400) {
+      throw TurnaApiException('Paylasilan dosya yuklenemedi.');
+    }
+
+    return OutgoingAttachmentDraft(
+      objectKey: upload.objectKey,
+      kind: kind,
+      transferMode: ChatAttachmentTransferMode.document,
+      fileName: fileName,
+      contentType: contentType,
+      sizeBytes: sizeBytes,
+    );
+  }
+
+  Future<void> _shareIncomingPayloadToChat(
+    ChatPreview targetChat,
+    TurnaIncomingSharePayload payload,
+  ) async {
+    final drafts = <OutgoingAttachmentDraft>[];
+    for (final item in payload.items) {
+      drafts.add(await _uploadIncomingSharedItem(targetChat, item));
+    }
+    if (drafts.isEmpty) {
+      throw TurnaApiException('Paylasilacak dosya bulunamadi.');
+    }
+    await ChatApi.sendMessage(
+      widget.session,
+      chatId: targetChat.chatId,
+      attachments: drafts,
+    );
+  }
+
+  Future<void> _handleIncomingSharePayload(
+    TurnaIncomingSharePayload payload,
+  ) async {
+    if (!mounted || payload.isEmpty) return;
+    focusChatsTab();
+    _inboxUpdateNotifier.value++;
+
+    final navigator = kTurnaNavigatorKey.currentState;
+    if (navigator == null) return;
+    await Future<void>.delayed(Duration.zero);
+    if (!mounted) return;
+
+    final targetChat = await navigator.push<ChatPreview>(
+      MaterialPageRoute(
+        builder: (_) => ForwardMessagePickerPage(
+          session: widget.session,
+          currentChatId: '',
+          title: 'Turna\'da paylas',
+        ),
+      ),
+    );
+    if (!mounted || targetChat == null) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(
+      SnackBar(content: Text('${targetChat.name} sohbetine gonderiliyor...')),
+    );
+
+    try {
+      await _shareIncomingPayloadToChat(targetChat, payload);
+      if (!mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(content: Text('${targetChat.name} sohbetine gonderildi.')),
+        );
+      _inboxUpdateNotifier.value++;
+      await navigator.push(
+        buildChatRoomRoute(
+          chat: targetChat,
+          session: widget.session,
+          callCoordinator: _callCoordinator,
+          onSessionExpired: _handleSessionExpired,
+        ),
+      );
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      _handleSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(error.toString())));
     }
   }
 

@@ -23,6 +23,7 @@ class ChatAttachmentViewerPage extends StatefulWidget {
     required this.items,
     this.initialIndex = 0,
     this.autoOpenInitialVideoFullscreen = false,
+    this.currentChatId,
     this.formatTimestamp,
     this.isStarred,
     this.onReply,
@@ -35,6 +36,7 @@ class ChatAttachmentViewerPage extends StatefulWidget {
   final List<ChatGalleryMediaItem> items;
   final int initialIndex;
   final bool autoOpenInitialVideoFullscreen;
+  final String? currentChatId;
   final String Function(String iso)? formatTimestamp;
   final bool Function(ChatMessage message)? isStarred;
   final Future<void> Function(ChatMessage message)? onReply;
@@ -99,9 +101,8 @@ class _ChatAttachmentViewerPageState extends State<ChatAttachmentViewerPage> {
     throw TurnaApiException('Medya indirilemedi.');
   }
 
-  Future<void> _saveCurrentMedia() async {
+  Future<void> _saveResolvedMedia(File file) async {
     try {
-      final file = await _resolveFile(_currentItem);
       await TurnaMediaBridge.saveToGallery(
         path: file.path,
         mimeType: _currentItem.attachment.contentType,
@@ -118,59 +119,35 @@ class _ChatAttachmentViewerPageState extends State<ChatAttachmentViewerPage> {
     }
   }
 
-  Future<void> _shareCurrentMedia() async {
-    try {
-      final file = await _resolveFile(_currentItem);
-      await TurnaMediaBridge.shareFile(
-        path: file.path,
-        mimeType: _currentItem.attachment.contentType,
-      );
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(error.toString())));
-    }
+  Future<void> _shareResolvedMedia(File file) {
+    return TurnaMediaBridge.shareFile(
+      path: file.path,
+      mimeType: _currentItem.attachment.contentType,
+    );
   }
 
   Future<void> _showShareOptions() async {
     final message = _currentItem.message;
     await showModalBottomSheet<void>(
       context: context,
-      builder: (sheetContext) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ListTile(
-                leading: const Icon(Icons.download_rounded),
-                title: const Text('Kaydet'),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  _saveCurrentMedia();
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.ios_share_rounded),
-                title: const Text('Paylaş'),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  _shareCurrentMedia();
-                },
-              ),
-              if (message != null && widget.onForward != null)
-                ListTile(
-                  leading: const Icon(Icons.forward_rounded),
-                  title: const Text('İlet'),
-                  onTap: () async {
-                    Navigator.pop(sheetContext);
-                    await widget.onForward!(message);
-                  },
-                ),
-            ],
-          ),
-        );
-      },
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _TurnaAttachmentShareSheet(
+        session: widget.session,
+        attachment: _currentItem.attachment,
+        currentChatId: widget.currentChatId,
+        resolveFile: () => _resolveFile(_currentItem),
+        saveLabel: _attachmentHasImageContent(_currentItem.attachment)
+            ? 'Goruntuyu kaydet'
+            : (_attachmentHasVideoContent(_currentItem.attachment)
+                  ? 'Videoyu kaydet'
+                  : 'Dosyayi kaydet'),
+        onSave: _saveResolvedMedia,
+        onShareExternally: _shareResolvedMedia,
+        onForwardMessage: message != null && widget.onForward != null
+            ? () => widget.onForward!(message)
+            : null,
+      ),
     );
   }
 
@@ -497,6 +474,717 @@ class _ChatAttachmentViewerPageState extends State<ChatAttachmentViewerPage> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class ChatDocumentAttachmentPage extends StatefulWidget {
+  const ChatDocumentAttachmentPage({
+    super.key,
+    required this.session,
+    required this.attachment,
+    required this.cacheKey,
+    required this.url,
+    this.currentChatId,
+  });
+
+  final AuthSession session;
+  final ChatAttachment attachment;
+  final String cacheKey;
+  final String url;
+  final String? currentChatId;
+
+  @override
+  State<ChatDocumentAttachmentPage> createState() =>
+      _ChatDocumentAttachmentPageState();
+}
+
+class _ChatDocumentAttachmentPageState
+    extends State<ChatDocumentAttachmentPage> {
+  Future<File> _resolveFile() async {
+    final file = await TurnaLocalMediaCache.getOrDownloadFile(
+      cacheKey: widget.cacheKey,
+      url: widget.url,
+      authToken: widget.session.token,
+    );
+    if (file != null) return file;
+    throw TurnaApiException('Dosya yuklenemedi.');
+  }
+
+  String get _saveLabel {
+    if (_attachmentHasImageContent(widget.attachment)) {
+      return 'Goruntuyu kaydet';
+    }
+    if (_attachmentHasVideoContent(widget.attachment)) {
+      return 'Videoyu kaydet';
+    }
+    return 'Dosyayi kaydet';
+  }
+
+  Future<void> _saveFile(File file) async {
+    try {
+      if (_attachmentHasImageContent(widget.attachment) ||
+          _attachmentHasVideoContent(widget.attachment)) {
+        await TurnaMediaBridge.saveToGallery(
+          path: file.path,
+          mimeType: widget.attachment.contentType,
+        );
+      } else {
+        await TurnaMediaBridge.saveFile(
+          path: file.path,
+          mimeType: widget.attachment.contentType,
+          fileName: widget.attachment.fileName,
+        );
+      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('$_saveLabel hazir.')));
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
+  Future<void> _shareFile(File file) async {
+    try {
+      await TurnaMediaBridge.shareFile(
+        path: file.path,
+        mimeType: widget.attachment.contentType,
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
+  Future<void> _showShareSheet() {
+    return showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _TurnaAttachmentShareSheet(
+        session: widget.session,
+        attachment: widget.attachment,
+        currentChatId: widget.currentChatId,
+        resolveFile: _resolveFile,
+        saveLabel: _saveLabel,
+        onSave: _saveFile,
+        onShareExternally: _shareFile,
+      ),
+    );
+  }
+
+  Future<void> _openVideoFullscreen(File file) {
+    return Navigator.push<void>(
+      context,
+      PageRouteBuilder<void>(
+        pageBuilder: (context, animation, secondaryAnimation) =>
+            _TurnaFullscreenVideoPage(file: file),
+        opaque: false,
+        transitionDuration: const Duration(milliseconds: 180),
+        reverseTransitionDuration: const Duration(milliseconds: 160),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) =>
+            FadeTransition(
+              opacity: CurvedAnimation(
+                parent: animation,
+                curve: Curves.easeOut,
+              ),
+              child: child,
+            ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final useDarkChrome = _attachmentHasVideoContent(widget.attachment);
+    final backgroundColor = useDarkChrome ? Colors.black : Colors.white;
+    final foregroundColor = useDarkChrome ? Colors.white : Colors.black87;
+    return Scaffold(
+      backgroundColor: backgroundColor,
+      appBar: AppBar(
+        backgroundColor: backgroundColor,
+        foregroundColor: foregroundColor,
+        centerTitle: true,
+        title: Text(
+          widget.attachment.fileName ?? 'Dosya',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontSize: 17,
+            fontWeight: FontWeight.w600,
+            color: foregroundColor,
+          ),
+        ),
+        actions: [
+          FutureBuilder<File>(
+            future: _resolveFile(),
+            builder: (context, snapshot) {
+              final file = snapshot.data;
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    onPressed: file == null ? null : () => _saveFile(file),
+                    icon: const Icon(Icons.download_rounded),
+                  ),
+                  IconButton(
+                    onPressed: file == null ? null : _showShareSheet,
+                    icon: const Icon(Icons.ios_share_rounded),
+                  ),
+                ],
+              );
+            },
+          ),
+        ],
+      ),
+      body: FutureBuilder<File>(
+        future: _resolveFile(),
+        builder: (context, snapshot) {
+          final file = snapshot.data;
+          if (file == null) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return Center(
+                child: CircularProgressIndicator(
+                  color: useDarkChrome ? Colors.white : TurnaColors.primary,
+                ),
+              );
+            }
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Text(
+                  'Dosya yuklenemedi.',
+                  style: TextStyle(color: foregroundColor),
+                ),
+              ),
+            );
+          }
+
+          if (_attachmentHasVideoContent(widget.attachment)) {
+            return _TurnaInlineVideoPreviewSurface(
+              file: file,
+              onOpenFullscreen: () => _openVideoFullscreen(file),
+            );
+          }
+          if (_attachmentHasPdfContent(widget.attachment)) {
+            return _TurnaPdfDocumentSurface(file: file);
+          }
+          if (_attachmentHasImageContent(widget.attachment)) {
+            return InteractiveViewer(
+              minScale: 0.8,
+              maxScale: 4,
+              child: Center(child: Image.file(file, fit: BoxFit.contain)),
+            );
+          }
+          return _TurnaGenericFilePreviewSurface(
+            attachment: widget.attachment,
+            file: file,
+          );
+        },
+      ),
+    );
+  }
+}
+
+Future<void> _sendAttachmentToTurnaChat({
+  required AuthSession session,
+  required ChatPreview targetChat,
+  required ChatAttachment attachment,
+  required File file,
+}) async {
+  final fileName = (attachment.fileName?.trim().isNotEmpty ?? false)
+      ? attachment.fileName!.trim()
+      : file.uri.pathSegments.last;
+  final upload = await ChatApi.createAttachmentUpload(
+    session,
+    chatId: targetChat.chatId,
+    kind: attachment.kind,
+    contentType: attachment.contentType,
+    fileName: fileName,
+  );
+
+  final sizeBytes = await file.length();
+  final request = http.StreamedRequest('PUT', Uri.parse(upload.uploadUrl));
+  request.headers.addAll(upload.headers);
+  request.contentLength = sizeBytes;
+  final responseFuture = request.send();
+  await file.openRead().pipe(request.sink);
+  final uploadRes = await responseFuture;
+  if (uploadRes.statusCode >= 400) {
+    throw TurnaApiException('Dosya gonderilemedi.');
+  }
+
+  await ChatApi.sendMessage(
+    session,
+    chatId: targetChat.chatId,
+    attachments: [
+      OutgoingAttachmentDraft(
+        objectKey: upload.objectKey,
+        kind: attachment.kind,
+        transferMode: attachment.transferMode,
+        fileName: fileName,
+        contentType: attachment.contentType,
+        sizeBytes: sizeBytes,
+        width: attachment.width,
+        height: attachment.height,
+        durationSeconds: attachment.durationSeconds,
+      ),
+    ],
+  );
+}
+
+class _TurnaAttachmentShareSheet extends StatefulWidget {
+  const _TurnaAttachmentShareSheet({
+    required this.session,
+    required this.attachment,
+    required this.resolveFile,
+    required this.saveLabel,
+    required this.onSave,
+    required this.onShareExternally,
+    this.currentChatId,
+    this.onForwardMessage,
+  });
+
+  final AuthSession session;
+  final ChatAttachment attachment;
+  final Future<File> Function() resolveFile;
+  final String saveLabel;
+  final Future<void> Function(File file) onSave;
+  final Future<void> Function(File file) onShareExternally;
+  final String? currentChatId;
+  final Future<void> Function()? onForwardMessage;
+
+  @override
+  State<_TurnaAttachmentShareSheet> createState() =>
+      _TurnaAttachmentShareSheetState();
+}
+
+class _TurnaAttachmentShareSheetState
+    extends State<_TurnaAttachmentShareSheet> {
+  late final Future<File> _fileFuture;
+  ChatInboxData? _cachedInbox;
+  late final Future<ChatInboxData> _inboxFuture;
+  String? _busyChatId;
+  bool _actionBusy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _fileFuture = widget.resolveFile();
+    _cachedInbox = TurnaChatInboxLocalCache.peek(widget.session.userId);
+    _inboxFuture = ChatApi.fetchChats(widget.session);
+    unawaited(_loadCachedInbox());
+  }
+
+  Future<void> _loadCachedInbox() async {
+    final cached = await TurnaChatInboxLocalCache.load(widget.session.userId);
+    if (!mounted || cached == null) return;
+    setState(() => _cachedInbox = cached);
+  }
+
+  List<ChatPreview> _recentChats(ChatInboxData? inbox) {
+    final chats = List<ChatPreview>.from(inbox?.chats ?? const <ChatPreview>[]);
+    return chats
+        .where((chat) => !chat.isArchived)
+        .where((chat) => chat.chatId != widget.currentChatId)
+        .take(8)
+        .toList();
+  }
+
+  Future<void> _shareToTurnaChat(ChatPreview targetChat) async {
+    if (_busyChatId != null || _actionBusy) return;
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _busyChatId = targetChat.chatId);
+    try {
+      final file = await _fileFuture;
+      await _sendAttachmentToTurnaChat(
+        session: widget.session,
+        targetChat: targetChat,
+        attachment: widget.attachment,
+        file: file,
+      );
+      if (!mounted) return;
+      Navigator.pop(context);
+      messenger.showSnackBar(
+        SnackBar(content: Text('${targetChat.name} sohbetine gonderildi.')),
+      );
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      Navigator.pop(context);
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Oturumunuz yenilenmeli.')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      messenger.showSnackBar(SnackBar(content: Text(error.toString())));
+    } finally {
+      if (mounted) {
+        setState(() => _busyChatId = null);
+      }
+    }
+  }
+
+  Future<void> _openForwardPicker() async {
+    if (_busyChatId != null || _actionBusy) return;
+    final targetChat = await Navigator.push<ChatPreview>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ForwardMessagePickerPage(
+          session: widget.session,
+          currentChatId: widget.currentChatId ?? '',
+        ),
+      ),
+    );
+    if (!mounted || targetChat == null) return;
+    await _shareToTurnaChat(targetChat);
+  }
+
+  Future<void> _runExternalShare() async {
+    if (_busyChatId != null || _actionBusy) return;
+    setState(() => _actionBusy = true);
+    try {
+      final file = await _fileFuture;
+      if (!mounted) return;
+      Navigator.pop(context);
+      await widget.onShareExternally(file);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    } finally {
+      if (mounted) {
+        setState(() => _actionBusy = false);
+      }
+    }
+  }
+
+  Future<void> _runSave() async {
+    if (_busyChatId != null || _actionBusy) return;
+    setState(() => _actionBusy = true);
+    try {
+      final file = await _fileFuture;
+      if (!mounted) return;
+      Navigator.pop(context);
+      await widget.onSave(file);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    } finally {
+      if (mounted) {
+        setState(() => _actionBusy = false);
+      }
+    }
+  }
+
+  Widget _buildPreview(File? file) {
+    if (file != null && _attachmentHasImageContent(widget.attachment)) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(18),
+        child: Image.file(file, fit: BoxFit.cover),
+      );
+    }
+    final extension = _attachmentFileExtension(widget.attachment);
+    final badge = extension.isEmpty ? 'DOSYA' : extension.toUpperCase();
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFFE8EEF6),
+        borderRadius: BorderRadius.circular(18),
+      ),
+      alignment: Alignment.center,
+      child: Text(
+        badge,
+        style: const TextStyle(
+          color: Color(0xFF3D5B7D),
+          fontSize: 15,
+          fontWeight: FontWeight.w800,
+          letterSpacing: 0.4,
+        ),
+      ),
+    );
+  }
+
+  String _metaLabel() {
+    final extension = _attachmentFileExtension(widget.attachment);
+    return '${formatBytesLabel(widget.attachment.sizeBytes)}${extension.isEmpty ? '' : ' • $extension'}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      top: false,
+      child: Container(
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+        ),
+        padding: const EdgeInsets.fromLTRB(18, 14, 18, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 38,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+              ),
+            ),
+            const SizedBox(height: 18),
+            FutureBuilder<File>(
+              future: _fileFuture,
+              builder: (context, snapshot) {
+                return Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF7F8FA),
+                    borderRadius: BorderRadius.circular(24),
+                  ),
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: 62,
+                        height: 62,
+                        child: _buildPreview(snapshot.data),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              widget.attachment.fileName ?? 'Dosya',
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 17,
+                                fontWeight: FontWeight.w700,
+                                color: TurnaColors.text,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              _metaLabel(),
+                              style: const TextStyle(
+                                fontSize: 13,
+                                color: TurnaColors.textMuted,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+            const SizedBox(height: 18),
+            const Text(
+              'Turna\'da paylaş',
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+                color: TurnaColors.text,
+              ),
+            ),
+            const SizedBox(height: 12),
+            FutureBuilder<ChatInboxData>(
+              future: _inboxFuture,
+              initialData: _cachedInbox,
+              builder: (context, snapshot) {
+                if (snapshot.hasData) {
+                  _cachedInbox = snapshot.data;
+                }
+                final chats = _recentChats(snapshot.data ?? _cachedInbox);
+                if (snapshot.connectionState == ConnectionState.waiting &&
+                    chats.isEmpty) {
+                  return const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 12),
+                    child: Center(child: CircularProgressIndicator()),
+                  );
+                }
+                return SizedBox(
+                  height: chats.isEmpty ? 0 : 94,
+                  child: chats.isEmpty
+                      ? const SizedBox.shrink()
+                      : ListView.separated(
+                          scrollDirection: Axis.horizontal,
+                          itemCount: chats.length,
+                          separatorBuilder: (_, _) => const SizedBox(width: 14),
+                          itemBuilder: (context, index) {
+                            final chat = chats[index];
+                            final busy = _busyChatId == chat.chatId;
+                            return SizedBox(
+                              width: 72,
+                              child: InkWell(
+                                onTap: busy
+                                    ? null
+                                    : () => _shareToTurnaChat(chat),
+                                borderRadius: BorderRadius.circular(20),
+                                child: Column(
+                                  children: [
+                                    Stack(
+                                      alignment: Alignment.center,
+                                      children: [
+                                        _ProfileAvatar(
+                                          label: chat.name,
+                                          avatarUrl: chat.avatarUrl,
+                                          authToken: widget.session.token,
+                                          radius: 26,
+                                        ),
+                                        if (busy)
+                                          Container(
+                                            width: 52,
+                                            height: 52,
+                                            decoration: BoxDecoration(
+                                              color: Colors.black.withValues(
+                                                alpha: 0.2,
+                                              ),
+                                              shape: BoxShape.circle,
+                                            ),
+                                            alignment: Alignment.center,
+                                            child: const SizedBox(
+                                              width: 18,
+                                              height: 18,
+                                              child: CircularProgressIndicator(
+                                                strokeWidth: 2,
+                                                color: Colors.white,
+                                              ),
+                                            ),
+                                          ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      chat.name,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      textAlign: TextAlign.center,
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                        color: TurnaColors.text,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                );
+              },
+            ),
+            const SizedBox(height: 14),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: _TurnaShareActionButton(
+                    icon: Icons.forward_rounded,
+                    label: 'Tum sohbetler',
+                    onTap: _openForwardPicker,
+                    busy: _busyChatId != null || _actionBusy,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _TurnaShareActionButton(
+                    icon: Icons.ios_share_rounded,
+                    label: 'Diger uygulamalar',
+                    onTap: _runExternalShare,
+                    busy: _busyChatId != null || _actionBusy,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _TurnaShareActionButton(
+                    icon: Icons.download_rounded,
+                    label: widget.saveLabel,
+                    onTap: _runSave,
+                    busy: _busyChatId != null || _actionBusy,
+                  ),
+                ),
+              ],
+            ),
+            if (widget.onForwardMessage != null) ...[
+              const SizedBox(height: 12),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.repeat_rounded),
+                title: const Text('Mesaji ilet'),
+                subtitle: const Text(
+                  'Varsa mevcut mesaj metniyle birlikte ilet.',
+                ),
+                onTap: () async {
+                  Navigator.pop(context);
+                  await widget.onForwardMessage!();
+                },
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TurnaShareActionButton extends StatelessWidget {
+  const _TurnaShareActionButton({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.busy = false,
+  });
+
+  final IconData icon;
+  final String label;
+  final Future<void> Function() onTap;
+  final bool busy;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: busy ? null : () => unawaited(onTap()),
+      borderRadius: BorderRadius.circular(22),
+      child: Opacity(
+        opacity: busy ? 0.55 : 1,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 14),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF5F6F8),
+            borderRadius: BorderRadius.circular(22),
+          ),
+          child: Column(
+            children: [
+              Icon(icon, size: 24, color: TurnaColors.text),
+              const SizedBox(height: 8),
+              Text(
+                label,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: TurnaColors.text,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -942,6 +1630,330 @@ class _TurnaFullscreenVideoPageState extends State<_TurnaFullscreenVideoPage> {
                       ),
                     ),
                   ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TurnaInlineVideoPreviewSurface extends StatefulWidget {
+  const _TurnaInlineVideoPreviewSurface({
+    required this.file,
+    this.onOpenFullscreen,
+  });
+
+  final File file;
+  final Future<void> Function()? onOpenFullscreen;
+
+  @override
+  State<_TurnaInlineVideoPreviewSurface> createState() =>
+      _TurnaInlineVideoPreviewSurfaceState();
+}
+
+class _TurnaInlineVideoPreviewSurfaceState
+    extends State<_TurnaInlineVideoPreviewSurface> {
+  vp.VideoPlayerController? _controller;
+  Future<void>? _initFuture;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _prepare();
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  Future<void> _prepare() async {
+    try {
+      final controller = vp.VideoPlayerController.file(widget.file);
+      final initFuture = controller.initialize();
+      await controller.setLooping(true);
+      if (!mounted) {
+        await controller.dispose();
+        return;
+      }
+      setState(() {
+        _controller = controller;
+        _initFuture = initFuture;
+      });
+      await initFuture;
+      if (!mounted) return;
+      setState(() {});
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _error = 'Video yuklenemedi.');
+    }
+  }
+
+  void _togglePlayback() {
+    final controller = _controller;
+    if (controller == null || !controller.value.isInitialized) return;
+    if (controller.value.isPlaying) {
+      controller.pause();
+    } else {
+      controller.play();
+    }
+    setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = _controller;
+    final initFuture = _initFuture;
+    if (_error != null) {
+      return Center(
+        child: Text(_error!, style: const TextStyle(color: Colors.white)),
+      );
+    }
+    if (controller == null || initFuture == null) {
+      return const Center(
+        child: CircularProgressIndicator(color: Colors.white),
+      );
+    }
+    return FutureBuilder<void>(
+      future: initFuture,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done ||
+            !controller.value.isInitialized) {
+          return const Center(
+            child: CircularProgressIndicator(color: Colors.white),
+          );
+        }
+        return GestureDetector(
+          onTap: widget.onOpenFullscreen == null
+              ? _togglePlayback
+              : () => widget.onOpenFullscreen!(),
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              Center(
+                child: AspectRatio(
+                  aspectRatio: controller.value.aspectRatio <= 0
+                      ? 16 / 9
+                      : controller.value.aspectRatio,
+                  child: vp.VideoPlayer(controller),
+                ),
+              ),
+              if (!controller.value.isPlaying)
+                Container(
+                  width: 72,
+                  height: 72,
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.38),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.play_arrow_rounded,
+                    color: Colors.white,
+                    size: 42,
+                  ),
+                ),
+              Positioned(
+                left: 18,
+                right: 18,
+                bottom: 22,
+                child: vp.VideoProgressIndicator(
+                  controller,
+                  allowScrubbing: true,
+                  colors: const vp.VideoProgressColors(
+                    playedColor: Colors.white,
+                    bufferedColor: Colors.white38,
+                    backgroundColor: Colors.white24,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _TurnaPdfDocumentSurface extends StatelessWidget {
+  const _TurnaPdfDocumentSurface({required this.file});
+
+  final File file;
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<int>(
+      future: TurnaMediaBridge.getPdfPageCount(path: file.path),
+      builder: (context, snapshot) {
+        final count = snapshot.data ?? 0;
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (count <= 0) {
+          return const Center(
+            child: Text(
+              'PDF goruntulenemedi.',
+              style: TextStyle(color: TurnaColors.text),
+            ),
+          );
+        }
+        final targetWidth =
+            (MediaQuery.of(context).size.width *
+                    ui.PlatformDispatcher.instance.views.first.devicePixelRatio)
+                .round()
+                .clamp(720, 1800);
+        return ListView.separated(
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+          itemCount: count,
+          separatorBuilder: (_, _) => const SizedBox(height: 14),
+          itemBuilder: (context, index) => _TurnaPdfPageImage(
+            path: file.path,
+            pageIndex: index,
+            targetWidth: targetWidth,
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _TurnaPdfPageImage extends StatelessWidget {
+  const _TurnaPdfPageImage({
+    required this.path,
+    required this.pageIndex,
+    required this.targetWidth,
+  });
+
+  final String path;
+  final int pageIndex;
+  final int targetWidth;
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<Uint8List?>(
+      future: TurnaMediaBridge.renderPdfPage(
+        path: path,
+        pageIndex: pageIndex,
+        targetWidth: targetWidth,
+      ),
+      builder: (context, snapshot) {
+        final bytes = snapshot.data;
+        if (bytes == null || bytes.isEmpty) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return Container(
+              height: 420,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(18),
+              ),
+              alignment: Alignment.center,
+              child: const CircularProgressIndicator(),
+            );
+          }
+          return Container(
+            height: 220,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(18),
+            ),
+            alignment: Alignment.center,
+            child: Text('Sayfa ${pageIndex + 1} yuklenemedi.'),
+          );
+        }
+        return DecoratedBox(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(18),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.06),
+                blurRadius: 14,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(18),
+            child: Image.memory(bytes, fit: BoxFit.fitWidth),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _TurnaGenericFilePreviewSurface extends StatelessWidget {
+  const _TurnaGenericFilePreviewSurface({
+    required this.attachment,
+    required this.file,
+  });
+
+  final ChatAttachment attachment;
+  final File file;
+
+  @override
+  Widget build(BuildContext context) {
+    final extension = _attachmentFileExtension(attachment);
+    final badge = extension.isEmpty ? 'DOSYA' : extension.toUpperCase();
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Container(
+          width: 320,
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(24),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.06),
+                blurRadius: 18,
+                offset: const Offset(0, 6),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 74,
+                height: 74,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEEF2F8),
+                  borderRadius: BorderRadius.circular(22),
+                ),
+                alignment: Alignment.center,
+                child: Text(
+                  badge,
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800,
+                    color: Color(0xFF40556E),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 18),
+              Text(
+                attachment.fileName ?? file.uri.pathSegments.last,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                  color: TurnaColors.text,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                '${formatBytesLabel(attachment.sizeBytes)}${extension.isEmpty ? '' : ' • $extension'}',
+                style: const TextStyle(
+                  fontSize: 13,
+                  color: TurnaColors.textMuted,
                 ),
               ),
             ],

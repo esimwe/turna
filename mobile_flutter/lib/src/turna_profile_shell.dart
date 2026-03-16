@@ -3946,7 +3946,17 @@ class _ConversationMediaPageState extends State<ConversationMediaPage> {
       _showSnackBar('Belge açılamadı.');
       return;
     }
-    await _openExternalUri(Uri.parse(url), 'Belge açılamadı.');
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ChatDocumentAttachmentPage(
+          session: widget.session,
+          attachment: item.attachment,
+          cacheKey: 'library:${item.attachment.objectKey}',
+          url: url,
+        ),
+      ),
+    );
   }
 
   void _showSnackBar(String message) {

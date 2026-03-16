@@ -148,6 +148,8 @@ final TurnaActiveChatRegistry kTurnaActiveChatRegistry =
 final TurnaCallUiController kTurnaCallUiController = TurnaCallUiController();
 final TurnaPushChatOpenCoordinator kTurnaPushChatOpenCoordinator =
     TurnaPushChatOpenCoordinator();
+final TurnaShareTargetCoordinator kTurnaShareTargetCoordinator =
+    TurnaShareTargetCoordinator();
 
 class TurnaPushChatOpenCoordinator {
   Object? _owner;
@@ -181,6 +183,135 @@ class TurnaPushChatOpenCoordinator {
     }
     if (_pendingChatIds.contains(normalized)) return;
     _pendingChatIds.add(normalized);
+  }
+}
+
+class TurnaIncomingSharedItem {
+  const TurnaIncomingSharedItem({
+    required this.filePath,
+    required this.fileName,
+    required this.mimeType,
+    required this.sizeBytes,
+  });
+
+  final String filePath;
+  final String fileName;
+  final String mimeType;
+  final int sizeBytes;
+
+  factory TurnaIncomingSharedItem.fromMap(Map<String, dynamic> map) {
+    return TurnaIncomingSharedItem(
+      filePath: (map['path'] ?? '').toString(),
+      fileName: (map['fileName'] ?? '').toString(),
+      mimeType: (map['mimeType'] ?? '').toString(),
+      sizeBytes: (map['sizeBytes'] as num?)?.toInt() ?? 0,
+    );
+  }
+}
+
+class TurnaIncomingSharePayload {
+  const TurnaIncomingSharePayload({required this.items});
+
+  final List<TurnaIncomingSharedItem> items;
+
+  bool get isEmpty => items.isEmpty;
+
+  factory TurnaIncomingSharePayload.fromMap(Map<String, dynamic> map) {
+    final rawItems = map['items'] as List<dynamic>? ?? const [];
+    return TurnaIncomingSharePayload(
+      items: rawItems
+          .whereType<Map>()
+          .map(
+            (item) => TurnaIncomingSharedItem.fromMap(
+              Map<String, dynamic>.from(item),
+            ),
+          )
+          .where((item) => item.filePath.trim().isNotEmpty)
+          .toList(growable: false),
+    );
+  }
+}
+
+class TurnaShareTargetCoordinator {
+  Object? _owner;
+  Future<void> Function(TurnaIncomingSharePayload payload)? _handler;
+  final List<TurnaIncomingSharePayload> _pendingPayloads =
+      <TurnaIncomingSharePayload>[];
+  bool _dispatching = false;
+
+  void bind(
+    Object owner,
+    Future<void> Function(TurnaIncomingSharePayload payload) handler,
+  ) {
+    _owner = owner;
+    _handler = handler;
+    unawaited(_pump());
+  }
+
+  void unbind(Object owner) {
+    if (!identical(_owner, owner)) return;
+    _owner = null;
+    _handler = null;
+  }
+
+  void requestHandle(TurnaIncomingSharePayload payload) {
+    if (payload.isEmpty) return;
+    _pendingPayloads.add(payload);
+    unawaited(_pump());
+  }
+
+  Future<void> _pump() async {
+    if (_dispatching) return;
+    final handler = _handler;
+    if (handler == null) return;
+    _dispatching = true;
+    try {
+      while (_pendingPayloads.isNotEmpty && identical(handler, _handler)) {
+        final payload = _pendingPayloads.removeAt(0);
+        await handler(payload);
+      }
+    } finally {
+      _dispatching = false;
+    }
+  }
+}
+
+class TurnaShareTargetBridge {
+  static const MethodChannel _channel = MethodChannel('turna/share_target');
+  static bool _initialized = false;
+
+  static Future<void> initialize() async {
+    if (_initialized) return;
+    _initialized = true;
+    _channel.setMethodCallHandler(_handleMethodCall);
+    try {
+      await _channel.invokeMethod<void>('shareBridgeReady');
+      final payload = await _channel.invokeMethod<dynamic>(
+        'consumeInitialPayload',
+      );
+      _dispatchPayload(payload);
+    } catch (error) {
+      turnaLog('share target init skipped', error);
+    }
+  }
+
+  static Future<void> _handleMethodCall(MethodCall call) async {
+    switch (call.method) {
+      case 'sharedPayloadUpdated':
+        _dispatchPayload(call.arguments);
+        return;
+      default:
+        return;
+    }
+  }
+
+  static void _dispatchPayload(dynamic payload) {
+    if (payload is! Map) return;
+    final parsed = TurnaIncomingSharePayload.fromMap(
+      Map<String, dynamic>.from(payload),
+    );
+    if (parsed.isEmpty) return;
+    kTurnaShareTargetCoordinator.requestHandle(parsed);
   }
 }
 
@@ -656,6 +787,18 @@ class TurnaMediaBridge {
     });
   }
 
+  static Future<void> saveFile({
+    required String path,
+    String? mimeType,
+    String? fileName,
+  }) async {
+    await _channel.invokeMethod('saveFile', {
+      'path': path,
+      'mimeType': mimeType,
+      'fileName': fileName,
+    });
+  }
+
   static Future<TurnaDocumentScanResult?> scanDocument() async {
     final payload = await _channel.invokeMapMethod<String, dynamic>(
       'scanDocument',
@@ -679,6 +822,26 @@ class TurnaMediaBridge {
     return TurnaProcessedVideoResult.fromMap(
       Map<String, dynamic>.from(payload),
     );
+  }
+
+  static Future<int> getPdfPageCount({required String path}) async {
+    final count = await _channel.invokeMethod<int>('getPdfPageCount', {
+      'path': path,
+    });
+    return count ?? 0;
+  }
+
+  static Future<Uint8List?> renderPdfPage({
+    required String path,
+    required int pageIndex,
+    int targetWidth = 1440,
+  }) async {
+    final data = await _channel.invokeMethod<Uint8List>('renderPdfPage', {
+      'path': path,
+      'pageIndex': pageIndex,
+      'targetWidth': targetWidth,
+    });
+    return data;
   }
 }
 
@@ -1573,33 +1736,60 @@ bool _isAudioAttachment(ChatAttachment attachment) {
       fileName.endsWith('.opus');
 }
 
-bool _isImageAttachment(ChatAttachment attachment) {
-  if (attachment.kind == ChatAttachmentKind.file) return false;
+String _attachmentFileExtension(ChatAttachment attachment) {
+  final fileName = (attachment.fileName ?? '').trim();
+  final dotIndex = fileName.lastIndexOf('.');
+  if (dotIndex >= 0 && dotIndex < fileName.length - 1) {
+    return fileName.substring(dotIndex + 1).toLowerCase();
+  }
+  final contentType = attachment.contentType.toLowerCase().trim();
+  if (contentType.contains('/')) {
+    return contentType.split('/').last.toLowerCase();
+  }
+  return '';
+}
+
+bool _attachmentHasImageContent(ChatAttachment attachment) {
   if (attachment.kind == ChatAttachmentKind.image) return true;
   final contentType = attachment.contentType.toLowerCase();
   if (contentType.startsWith('image/')) return true;
-  final fileName = (attachment.fileName ?? '').toLowerCase();
-  return fileName.endsWith('.jpg') ||
-      fileName.endsWith('.jpeg') ||
-      fileName.endsWith('.png') ||
-      fileName.endsWith('.webp') ||
-      fileName.endsWith('.gif') ||
-      fileName.endsWith('.heic') ||
-      fileName.endsWith('.heif');
+  final extension = _attachmentFileExtension(attachment);
+  return extension == 'jpg' ||
+      extension == 'jpeg' ||
+      extension == 'png' ||
+      extension == 'webp' ||
+      extension == 'gif' ||
+      extension == 'heic' ||
+      extension == 'heif';
+}
+
+bool _attachmentHasVideoContent(ChatAttachment attachment) {
+  if (attachment.kind == ChatAttachmentKind.video) return true;
+  final contentType = attachment.contentType.toLowerCase();
+  if (contentType.startsWith('video/')) return true;
+  final extension = _attachmentFileExtension(attachment);
+  return extension == 'mp4' ||
+      extension == 'mov' ||
+      extension == 'm4v' ||
+      extension == 'webm' ||
+      extension == 'mkv' ||
+      extension == 'avi';
+}
+
+bool _attachmentHasPdfContent(ChatAttachment attachment) {
+  final contentType = attachment.contentType.toLowerCase();
+  if (contentType == 'application/pdf') return true;
+  return _attachmentFileExtension(attachment) == 'pdf';
+}
+
+bool _isImageAttachment(ChatAttachment attachment) {
+  if (attachment.kind == ChatAttachmentKind.file) return false;
+  return _attachmentHasImageContent(attachment);
 }
 
 bool _isVideoAttachment(ChatAttachment attachment) {
   if (attachment.kind == ChatAttachmentKind.file) return false;
-  if (attachment.kind == ChatAttachmentKind.video) return true;
-  final contentType = attachment.contentType.toLowerCase();
-  if (contentType.startsWith('video/')) return true;
-  final fileName = (attachment.fileName ?? '').toLowerCase();
-  return fileName.endsWith('.mp4') ||
-      fileName.endsWith('.mov') ||
-      fileName.endsWith('.m4v') ||
-      fileName.endsWith('.webm') ||
-      fileName.endsWith('.mkv') ||
-      fileName.endsWith('.avi');
+  return _attachmentHasVideoContent(attachment);
 }
 
 String formatBytesLabel(int bytes) {
@@ -1792,6 +1982,12 @@ class _TurnaAppState extends State<TurnaApp> with WidgetsBindingObserver {
       await TurnaNativeCallManager.initialize();
     } catch (error) {
       turnaLog('native call init skipped', error);
+    }
+
+    try {
+      await TurnaShareTargetBridge.initialize();
+    } catch (error) {
+      turnaLog('share target bridge init skipped', error);
     }
   }
 
