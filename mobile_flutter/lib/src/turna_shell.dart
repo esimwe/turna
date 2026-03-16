@@ -612,9 +612,12 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
   final _inboxUpdateNotifier = ValueNotifier<int>(0);
   final _callCoordinator = TurnaCallCoordinator();
   final Set<int> _visitedTabs = <int>{3};
+  final Object _pushChatOpenBinding = Object();
   String? _activeIncomingCallId;
+  String? _lastPushOpenedChatId;
   bool _endingSession = false;
   bool _openingProfileFromCommunity = false;
+  bool _openingPushChat = false;
 
   void _handleSessionExpired() {
     if (_endingSession) return;
@@ -626,6 +629,10 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    kTurnaPushChatOpenCoordinator.bind(
+      _pushChatOpenBinding,
+      _handlePushChatOpen,
+    );
     TurnaPushManager.syncSession(widget.session);
     TurnaNativeCallManager.bindSession(
       session: widget.session,
@@ -671,6 +678,7 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    kTurnaPushChatOpenCoordinator.unbind(_pushChatOpenBinding);
     _callCoordinator.removeListener(_handleCallCoordinator);
     _presenceClient.dispose();
     TurnaNativeCallManager.unbindSession(widget.session.userId);
@@ -813,6 +821,97 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
       _index = 3;
       _visitedTabs.add(3);
     });
+  }
+
+  ChatPreview? _findChatPreview(ChatInboxData? inbox, String chatId) {
+    if (inbox == null) return null;
+    for (final chat in inbox.chats) {
+      if (chat.chatId == chatId) return chat;
+    }
+    return null;
+  }
+
+  ChatPreview _previewFromDetail(TurnaChatDetail detail) {
+    final title = detail.title.trim();
+    return ChatPreview(
+      chatId: detail.chatId,
+      chatType: detail.chatType,
+      name: title.isEmpty ? 'Sohbet' : title,
+      message: '',
+      time: '',
+      avatarUrl: detail.avatarUrl,
+      memberPreviewNames: detail.memberPreviewNames,
+      memberCount: detail.memberCount,
+      myRole: detail.myRole,
+      description: detail.description,
+      isPublic: detail.isPublic,
+    );
+  }
+
+  Future<ChatPreview?> _resolvePushChatPreview(String chatId) async {
+    final userId = widget.session.userId;
+    final cachedInbox =
+        TurnaChatInboxLocalCache.peek(userId) ??
+        await TurnaChatInboxLocalCache.load(userId);
+    final cachedMatch = _findChatPreview(cachedInbox, chatId);
+    if (cachedMatch != null) return cachedMatch;
+
+    try {
+      final freshInbox = await ChatApi.fetchChats(widget.session);
+      final freshMatch = _findChatPreview(freshInbox, chatId);
+      if (freshMatch != null) return freshMatch;
+    } catch (error) {
+      turnaLog('push chat inbox refresh skipped', {
+        'chatId': chatId,
+        'error': error.toString(),
+      });
+    }
+
+    try {
+      final detail = await ChatApi.fetchChatDetail(widget.session, chatId);
+      return _previewFromDetail(detail);
+    } catch (error) {
+      turnaLog('push chat detail load failed', {
+        'chatId': chatId,
+        'error': error.toString(),
+      });
+      return null;
+    }
+  }
+
+  Future<void> _handlePushChatOpen(String chatId) async {
+    final normalizedChatId = chatId.trim();
+    if (!mounted || normalizedChatId.isEmpty) return;
+    if (_openingPushChat && _lastPushOpenedChatId == normalizedChatId) return;
+    if (kTurnaActiveChatRegistry.isChatActive(normalizedChatId)) {
+      focusChatsTab();
+      _inboxUpdateNotifier.value++;
+      return;
+    }
+
+    _openingPushChat = true;
+    _lastPushOpenedChatId = normalizedChatId;
+    try {
+      focusChatsTab();
+      _inboxUpdateNotifier.value++;
+      final chat = await _resolvePushChatPreview(normalizedChatId);
+      if (!mounted || chat == null) return;
+      if (kTurnaActiveChatRegistry.isChatActive(chat.chatId)) return;
+      final navigator = kTurnaNavigatorKey.currentState;
+      if (navigator == null) return;
+      await Future<void>.delayed(Duration.zero);
+      if (!mounted) return;
+      await navigator.push(
+        buildChatRoomRoute(
+          chat: chat,
+          session: widget.session,
+          callCoordinator: _callCoordinator,
+          onSessionExpired: _handleSessionExpired,
+        ),
+      );
+    } finally {
+      _openingPushChat = false;
+    }
   }
 
   @override

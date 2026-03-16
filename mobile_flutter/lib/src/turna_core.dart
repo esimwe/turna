@@ -2952,6 +2952,14 @@ class TurnaPushManager {
   static const _lastPushTokenKey = 'turna_last_push_token';
   static AuthSession? _session;
   static bool _listenersAttached = false;
+  static bool _initialMessageChecked = false;
+
+  static Future<void> _handleChatPushOpen(Map<String, dynamic> data) async {
+    if ((data['type'] ?? '').toString() != 'chat_message') return;
+    final chatId = (data['chatId'] ?? '').toString().trim();
+    if (chatId.isEmpty) return;
+    kTurnaPushChatOpenCoordinator.requestOpen(chatId);
+  }
 
   static Future<void> syncSession(AuthSession session) async {
     _session = session;
@@ -2989,6 +2997,7 @@ class TurnaPushManager {
         });
         FirebaseMessaging.onMessageOpenedApp.listen((message) async {
           turnaLog('push opened', message.data);
+          await _handleChatPushOpen(message.data);
           await TurnaNativeCallManager.handleForegroundRemoteMessage(
             message.data,
           );
@@ -3011,6 +3020,17 @@ class TurnaPushManager {
             turnaLog('push token refresh register failed', error);
           }
         });
+      }
+      if (!_initialMessageChecked) {
+        _initialMessageChecked = true;
+        final initialMessage = await messaging.getInitialMessage();
+        if (initialMessage != null) {
+          turnaLog('push initial', initialMessage.data);
+          await _handleChatPushOpen(initialMessage.data);
+          await TurnaNativeCallManager.handleForegroundRemoteMessage(
+            initialMessage.data,
+          );
+        }
       }
     } catch (error) {
       turnaLog('push sync skipped', error);

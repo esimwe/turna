@@ -146,6 +146,43 @@ final ValueNotifier<AppLifecycleState> kTurnaLifecycleState = ValueNotifier(
 final TurnaActiveChatRegistry kTurnaActiveChatRegistry =
     TurnaActiveChatRegistry();
 final TurnaCallUiController kTurnaCallUiController = TurnaCallUiController();
+final TurnaPushChatOpenCoordinator kTurnaPushChatOpenCoordinator =
+    TurnaPushChatOpenCoordinator();
+
+class TurnaPushChatOpenCoordinator {
+  Object? _owner;
+  Future<void> Function(String chatId)? _handler;
+  final List<String> _pendingChatIds = <String>[];
+
+  void bind(Object owner, Future<void> Function(String chatId) handler) {
+    _owner = owner;
+    _handler = handler;
+    if (_pendingChatIds.isEmpty) return;
+    final pending = List<String>.from(_pendingChatIds);
+    _pendingChatIds.clear();
+    for (final chatId in pending) {
+      unawaited(handler(chatId));
+    }
+  }
+
+  void unbind(Object owner) {
+    if (!identical(_owner, owner)) return;
+    _owner = null;
+    _handler = null;
+  }
+
+  void requestOpen(String chatId) {
+    final normalized = chatId.trim();
+    if (normalized.isEmpty) return;
+    final handler = _handler;
+    if (handler != null) {
+      unawaited(handler(normalized));
+      return;
+    }
+    if (_pendingChatIds.contains(normalized)) return;
+    _pendingChatIds.add(normalized);
+  }
+}
 
 class TurnaColors {
   static const primary50 = Color(0xFFEEF7FF);
