@@ -986,10 +986,30 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
     );
   }
 
+  TurnaStatusType? _statusTypeForSharedItem(TurnaIncomingSharedItem item) {
+    final mimeType = item.mimeType.toLowerCase();
+    if (mimeType.startsWith('image/')) {
+      return TurnaStatusType.image;
+    }
+    if (mimeType.startsWith('video/')) {
+      return TurnaStatusType.video;
+    }
+    final guessed =
+        guessContentTypeForFileName(item.fileName)?.toLowerCase() ?? '';
+    if (guessed.startsWith('image/')) {
+      return TurnaStatusType.image;
+    }
+    if (guessed.startsWith('video/')) {
+      return TurnaStatusType.video;
+    }
+    return null;
+  }
+
   Future<void> _shareIncomingPayloadToChat(
     ChatPreview targetChat,
-    TurnaIncomingSharePayload payload,
-  ) async {
+    TurnaIncomingSharePayload payload, {
+    String? text,
+  }) async {
     final drafts = <OutgoingAttachmentDraft>[];
     for (final item in payload.items) {
       drafts.add(await _uploadIncomingSharedItem(targetChat, item));
@@ -1000,8 +1020,67 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
     await ChatApi.sendMessage(
       widget.session,
       chatId: targetChat.chatId,
+      text: text,
       attachments: drafts,
     );
+  }
+
+  Future<void> _shareIncomingPayloadToStatus(
+    TurnaIncomingSharePayload payload,
+  ) async {
+    var sharedAny = false;
+    for (final item in payload.items) {
+      final type = _statusTypeForSharedItem(item);
+      if (type == null) {
+        continue;
+      }
+      final file = File(item.filePath);
+      if (!await file.exists()) {
+        continue;
+      }
+      final fileName = item.fileName.trim().isNotEmpty
+          ? item.fileName.trim()
+          : file.uri.pathSegments.last;
+      final contentType = item.mimeType.trim().isNotEmpty
+          ? item.mimeType.trim()
+          : (guessContentTypeForFileName(fileName) ??
+                (type == TurnaStatusType.video ? 'video/mp4' : 'image/jpeg'));
+      final sizeBytes = item.sizeBytes > 0
+          ? item.sizeBytes
+          : await file.length();
+      final upload = await TurnaStatusApi.createUpload(
+        widget.session,
+        type: type,
+        contentType: contentType,
+        fileName: fileName,
+      );
+
+      final request = http.StreamedRequest('PUT', Uri.parse(upload.uploadUrl));
+      request.headers.addAll(upload.headers);
+      request.contentLength = sizeBytes;
+      final responseFuture = request.send();
+      await file.openRead().pipe(request.sink);
+      final uploadRes = await responseFuture;
+      if (uploadRes.statusCode >= 400) {
+        throw TurnaApiException('Durum dosyasi yuklenemedi.');
+      }
+
+      await TurnaStatusApi.createMediaStatus(
+        widget.session,
+        type: type,
+        objectKey: upload.objectKey,
+        contentType: contentType,
+        fileName: fileName,
+        sizeBytes: sizeBytes,
+      );
+      sharedAny = true;
+    }
+
+    if (!sharedAny) {
+      throw TurnaApiException(
+        'Bu paylasim durum olarak gonderilebilecek fotograf veya video icermiyor.',
+      );
+    }
   }
 
   Future<void> _handleIncomingSharePayload(
@@ -1011,44 +1090,70 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
     focusChatsTab();
     _inboxUpdateNotifier.value++;
 
-    final navigator = kTurnaNavigatorKey.currentState;
+    NavigatorState? navigator = kTurnaNavigatorKey.currentState;
+    var attempts = 0;
+    while (navigator == null && attempts < 10) {
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+      navigator = kTurnaNavigatorKey.currentState;
+      attempts++;
+    }
     if (navigator == null) return;
-    await Future<void>.delayed(Duration.zero);
+    await WidgetsBinding.instance.endOfFrame;
+    await Future<void>.delayed(const Duration(milliseconds: 120));
     if (!mounted) return;
 
-    final targetChat = await navigator.push<ChatPreview>(
+    final selection = await navigator.push<TurnaShareTargetSelectionResult>(
       MaterialPageRoute(
         builder: (_) => ForwardMessagePickerPage(
           session: widget.session,
           currentChatId: '',
           title: 'Turna\'da paylas',
-        ),
-      ),
-    );
-    if (!mounted || targetChat == null) return;
-
-    final messenger = ScaffoldMessenger.of(context);
-    messenger.showSnackBar(
-      SnackBar(content: Text('${targetChat.name} sohbetine gonderiliyor...')),
-    );
-
-    try {
-      await _shareIncomingPayloadToChat(targetChat, payload);
-      if (!mounted) return;
-      messenger
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          SnackBar(content: Text('${targetChat.name} sohbetine gonderildi.')),
-        );
-      _inboxUpdateNotifier.value++;
-      await navigator.push(
-        buildChatRoomRoute(
-          chat: targetChat,
-          session: widget.session,
+          sharePayload: payload,
           callCoordinator: _callCoordinator,
           onSessionExpired: _handleSessionExpired,
         ),
-      );
+      ),
+    );
+    if (!mounted || selection == null || !selection.hasTargets) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(
+      const SnackBar(content: Text('Paylasim gonderiliyor...')),
+    );
+
+    try {
+      if (selection.shareToStatus) {
+        await _shareIncomingPayloadToStatus(payload);
+      }
+      for (final chat in selection.chats) {
+        await _shareIncomingPayloadToChat(
+          chat,
+          payload,
+          text: selection.caption,
+        );
+      }
+      if (!mounted) return;
+      final sentTargetCount =
+          selection.chats.length + (selection.shareToStatus ? 1 : 0);
+      final sentTargetLabel = sentTargetCount == 1
+          ? (selection.shareToStatus && selection.chats.isEmpty
+                ? 'Durumum'
+                : selection.chats.first.name)
+          : '$sentTargetCount hedefe';
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text('$sentTargetLabel gonderildi.')));
+      _inboxUpdateNotifier.value++;
+      if (!selection.shareToStatus && selection.chats.length == 1) {
+        await navigator.push(
+          buildChatRoomRoute(
+            chat: selection.chats.first,
+            session: widget.session,
+            callCoordinator: _callCoordinator,
+            onSessionExpired: _handleSessionExpired,
+          ),
+        );
+      }
     } on TurnaUnauthorizedException {
       if (!mounted) return;
       _handleSessionExpired();

@@ -6572,17 +6572,37 @@ class _PinnedMessageBar extends StatelessWidget {
   }
 }
 
+class TurnaShareTargetSelectionResult {
+  const TurnaShareTargetSelectionResult({
+    required this.chats,
+    required this.caption,
+    required this.shareToStatus,
+  });
+
+  final List<ChatPreview> chats;
+  final String caption;
+  final bool shareToStatus;
+
+  bool get hasTargets => shareToStatus || chats.isNotEmpty;
+}
+
 class ForwardMessagePickerPage extends StatefulWidget {
   const ForwardMessagePickerPage({
     super.key,
     required this.session,
     required this.currentChatId,
     this.title = 'Ilet',
+    this.sharePayload,
+    this.callCoordinator,
+    this.onSessionExpired,
   });
 
   final AuthSession session;
   final String currentChatId;
   final String title;
+  final TurnaIncomingSharePayload? sharePayload;
+  final TurnaCallCoordinator? callCoordinator;
+  final VoidCallback? onSessionExpired;
 
   @override
   State<ForwardMessagePickerPage> createState() =>
@@ -6591,8 +6611,27 @@ class ForwardMessagePickerPage extends StatefulWidget {
 
 class _ForwardMessagePickerPageState extends State<ForwardMessagePickerPage> {
   final TextEditingController _searchController = TextEditingController();
+  final TextEditingController _captionController = TextEditingController();
   late Future<ChatInboxData> _chatsFuture;
   ChatInboxData? _cachedInbox;
+  final Set<String> _selectedChatIds = <String>{};
+  bool _shareToStatus = false;
+
+  bool get _shareTargetMode => widget.sharePayload != null;
+
+  bool get _canShareToStatus {
+    final payload = widget.sharePayload;
+    if (payload == null) return false;
+    return payload.items.any((item) {
+      final mimeType = item.mimeType.toLowerCase();
+      if (mimeType.startsWith('image/') || mimeType.startsWith('video/')) {
+        return true;
+      }
+      final guessed =
+          guessContentTypeForFileName(item.fileName)?.toLowerCase() ?? '';
+      return guessed.startsWith('image/') || guessed.startsWith('video/');
+    });
+  }
 
   @override
   void initState() {
@@ -6618,14 +6657,345 @@ class _ForwardMessagePickerPageState extends State<ForwardMessagePickerPage> {
   void dispose() {
     _searchController.removeListener(_refresh);
     _searchController.dispose();
+    _captionController.dispose();
     super.dispose();
+  }
+
+  List<ChatPreview> _visibleChatsForQuery(String query) {
+    final chats = (_cachedInbox?.chats ?? const <ChatPreview>[])
+        .where((chat) => !chat.isArchived)
+        .where((chat) => chat.chatId != widget.currentChatId)
+        .where((chat) {
+          if (query.isEmpty) return true;
+          return chat.name.toLowerCase().contains(query) ||
+              chat.message.toLowerCase().contains(query);
+        })
+        .toList();
+    return chats;
+  }
+
+  List<ChatPreview> _selectedChats(List<ChatPreview> chats) {
+    return chats
+        .where((chat) => _selectedChatIds.contains(chat.chatId))
+        .toList(growable: false);
+  }
+
+  void _toggleChatSelection(ChatPreview chat) {
+    setState(() {
+      if (_selectedChatIds.contains(chat.chatId)) {
+        _selectedChatIds.remove(chat.chatId);
+      } else {
+        _selectedChatIds.add(chat.chatId);
+      }
+    });
+  }
+
+  void _toggleStatusSelection() {
+    if (!_canShareToStatus) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Durumum icin yalnizca fotograf veya video paylasabilirsin.',
+          ),
+        ),
+      );
+      return;
+    }
+    setState(() => _shareToStatus = !_shareToStatus);
+  }
+
+  Future<void> _openCreateGroupFlow() async {
+    final callCoordinator = widget.callCoordinator;
+    final onSessionExpired = widget.onSessionExpired;
+    if (callCoordinator == null || onSessionExpired == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Yeni grup akisi su anda acilamiyor.')),
+      );
+      return;
+    }
+    final createdChat = await Navigator.push<ChatPreview>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => NewChatPage(
+          session: widget.session,
+          callCoordinator: callCoordinator,
+          onSessionExpired: onSessionExpired,
+        ),
+      ),
+    );
+    if (!mounted || createdChat == null) return;
+    setState(() => _selectedChatIds.add(createdChat.chatId));
+  }
+
+  void _submitShareSelection(List<ChatPreview> allChats) {
+    final selectedChats = _selectedChats(allChats);
+    if (!_shareToStatus && selectedChats.isEmpty) {
+      return;
+    }
+    Navigator.pop(
+      context,
+      TurnaShareTargetSelectionResult(
+        chats: selectedChats,
+        caption: _captionController.text.trim(),
+        shareToStatus: _shareToStatus,
+      ),
+    );
+  }
+
+  String _selectionSummary(List<ChatPreview> allChats) {
+    final labels = <String>[
+      if (_shareToStatus) 'Durumum',
+      ..._selectedChats(
+        allChats,
+      ).map((chat) => chat.name.trim()).where((name) => name.isNotEmpty),
+    ];
+    return labels.join(', ');
+  }
+
+  Widget _buildLegacyForwardPicker(List<ChatPreview> chats) {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+          child: TextField(
+            controller: _searchController,
+            decoration: InputDecoration(
+              hintText: 'Sohbet ara',
+              prefixIcon: const Icon(Icons.search),
+              filled: true,
+              fillColor: TurnaColors.backgroundMuted,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(24),
+                borderSide: BorderSide.none,
+              ),
+            ),
+          ),
+        ),
+        Expanded(
+          child: chats.isEmpty
+              ? const _CenteredState(
+                  icon: Icons.chat_bubble_outline,
+                  title: 'Sohbet bulunamadı',
+                  message: 'İletilecek başka sohbet bulunmuyor.',
+                )
+              : ListView.builder(
+                  itemCount: chats.length,
+                  itemBuilder: (context, index) {
+                    final chat = chats[index];
+                    return ListTile(
+                      leading: _ProfileAvatar(
+                        label: chat.name,
+                        avatarUrl: chat.avatarUrl,
+                        authToken: widget.session.token,
+                        radius: 22,
+                      ),
+                      title: Text(
+                        chat.name,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      subtitle: chat.message.trim().isEmpty
+                          ? null
+                          : Text(
+                              chat.message,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                      onTap: () => Navigator.pop(context, chat),
+                    );
+                  },
+                ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildShareTargetPicker(
+    List<ChatPreview> allChats,
+    List<ChatPreview> chats,
+    String query,
+  ) {
+    final frequentChats = allChats
+        .where((chat) => chat.chatType == TurnaChatType.direct)
+        .take(3)
+        .toList(growable: false);
+    final showBottomComposer = _shareToStatus || _selectedChatIds.isNotEmpty;
+
+    return Stack(
+      children: [
+        Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+              child: TextField(
+                controller: _searchController,
+                decoration: InputDecoration(
+                  hintText: 'Ara',
+                  prefixIcon: const Icon(
+                    Icons.search_rounded,
+                    size: 20,
+                    color: TurnaColors.textMuted,
+                  ),
+                  isDense: true,
+                  filled: true,
+                  fillColor: const Color(0xFFF1F3F5),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide.none,
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 10,
+                  ),
+                ),
+              ),
+            ),
+            Expanded(
+              child: chats.isEmpty
+                  ? const _CenteredState(
+                      icon: Icons.search_off_rounded,
+                      title: 'Kisi bulunamadi',
+                      message: 'Paylasabilecegin uygun bir sohbet yok.',
+                    )
+                  : ListView(
+                      padding: EdgeInsets.fromLTRB(
+                        14,
+                        0,
+                        14,
+                        showBottomComposer ? 168 : 24,
+                      ),
+                      children: [
+                        if (query.isEmpty) ...[
+                          _TurnaShareTargetTile(
+                            title: 'Durumum',
+                            subtitle: 'Kisilerim',
+                            leading: Container(
+                              width: 44,
+                              height: 44,
+                              decoration: const BoxDecoration(
+                                color: Color(0xFFE9EDF2),
+                                shape: BoxShape.circle,
+                              ),
+                              alignment: Alignment.center,
+                              child: const Icon(
+                                Icons.motion_photos_on_rounded,
+                                color: Color(0xFF6E7580),
+                                size: 22,
+                              ),
+                            ),
+                            selected: _shareToStatus,
+                            onTap: _toggleStatusSelection,
+                          ),
+                          if (frequentChats.isNotEmpty) ...[
+                            const SizedBox(height: 14),
+                            const _TurnaShareTargetSectionHeader(
+                              title: 'Sik gorusulenler',
+                            ),
+                            const SizedBox(height: 8),
+                            ...frequentChats.map(
+                              (chat) => _TurnaShareTargetTile(
+                                title: chat.name,
+                                subtitle: chat.message.trim().isEmpty
+                                    ? (chat.phone?.trim().isNotEmpty == true
+                                          ? chat.phone!.trim()
+                                          : null)
+                                    : chat.message,
+                                leading: _ProfileAvatar(
+                                  label: chat.name,
+                                  avatarUrl: chat.avatarUrl,
+                                  authToken: widget.session.token,
+                                  radius: 22,
+                                ),
+                                selected: _selectedChatIds.contains(
+                                  chat.chatId,
+                                ),
+                                onTap: () => _toggleChatSelection(chat),
+                              ),
+                            ),
+                          ],
+                          const SizedBox(height: 14),
+                          const _TurnaShareTargetSectionHeader(
+                            title: 'Son sohbetler',
+                          ),
+                          const SizedBox(height: 8),
+                        ],
+                        ...chats.map(
+                          (chat) => _TurnaShareTargetTile(
+                            title: chat.name,
+                            subtitle: chat.message.trim().isEmpty
+                                ? (chat.phone?.trim().isNotEmpty == true
+                                      ? chat.phone!.trim()
+                                      : null)
+                                : chat.message,
+                            leading: _ProfileAvatar(
+                              label: chat.name,
+                              avatarUrl: chat.avatarUrl,
+                              authToken: widget.session.token,
+                              radius: 22,
+                            ),
+                            selected: _selectedChatIds.contains(chat.chatId),
+                            onTap: () => _toggleChatSelection(chat),
+                          ),
+                        ),
+                      ],
+                    ),
+            ),
+          ],
+        ),
+        if (showBottomComposer)
+          Align(
+            alignment: Alignment.bottomCenter,
+            child: _TurnaShareTargetComposerBar(
+              payload: widget.sharePayload!,
+              captionController: _captionController,
+              recipientsLabel: _selectionSummary(allChats),
+              onSend: () => _submitShareSelection(allChats),
+            ),
+          ),
+      ],
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final query = _searchController.text.trim().toLowerCase();
     return Scaffold(
-      appBar: AppBar(title: Text(widget.title)),
+      backgroundColor: Colors.white,
+      appBar: _shareTargetMode
+          ? AppBar(
+              backgroundColor: Colors.white,
+              surfaceTintColor: Colors.white,
+              leadingWidth: 74,
+              leading: TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text(
+                  'Iptal',
+                  style: TextStyle(
+                    color: TurnaColors.text,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w400,
+                  ),
+                ),
+              ),
+              centerTitle: true,
+              title: const Text(
+                'Gonder:',
+                style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: _openCreateGroupFlow,
+                  child: const Text(
+                    'Yeni grup',
+                    style: TextStyle(
+                      color: TurnaColors.text,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w400,
+                    ),
+                  ),
+                ),
+              ],
+            )
+          : AppBar(title: Text(widget.title)),
       body: FutureBuilder<ChatInboxData>(
         future: _chatsFuture,
         initialData: _cachedInbox,
@@ -6646,74 +7016,339 @@ class _ForwardMessagePickerPageState extends State<ForwardMessagePickerPage> {
             );
           }
 
-          final chats =
-              ((snapshot.data ?? _cachedInbox)?.chats ?? const <ChatPreview>[])
-                  .where((chat) => !chat.isArchived)
-                  .where((chat) => chat.chatId != widget.currentChatId)
-                  .where((chat) {
-                    if (query.isEmpty) return true;
-                    return chat.name.toLowerCase().contains(query) ||
-                        chat.message.toLowerCase().contains(query);
-                  })
-                  .toList();
+          final allChats = _visibleChatsForQuery('');
+          final chats = query.isEmpty ? allChats : _visibleChatsForQuery(query);
+          return _shareTargetMode
+              ? _buildShareTargetPicker(allChats, chats, query)
+              : _buildLegacyForwardPicker(chats);
+        },
+      ),
+    );
+  }
+}
 
-          return Column(
+class _TurnaShareTargetSectionHeader extends StatelessWidget {
+  const _TurnaShareTargetSectionHeader({required this.title});
+
+  final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      title,
+      style: const TextStyle(
+        fontSize: 14,
+        fontWeight: FontWeight.w700,
+        color: TurnaColors.textSoft,
+      ),
+    );
+  }
+}
+
+class _TurnaShareTargetTile extends StatelessWidget {
+  const _TurnaShareTargetTile({
+    required this.title,
+    required this.leading,
+    required this.selected,
+    required this.onTap,
+    this.subtitle,
+  });
+
+  final String title;
+  final String? subtitle;
+  final Widget leading;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Material(
+        color: const Color(0xFFF9FAFB),
+        borderRadius: BorderRadius.circular(14),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: Row(
+              children: [
+                leading,
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500,
+                          color: TurnaColors.text,
+                        ),
+                      ),
+                      if (subtitle != null && subtitle!.trim().isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 2),
+                          child: Text(
+                            subtitle!,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 13,
+                              color: TurnaColors.textMuted,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 10),
+                _TurnaShareTargetSelectionIndicator(selected: selected),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TurnaShareTargetSelectionIndicator extends StatelessWidget {
+  const _TurnaShareTargetSelectionIndicator({required this.selected});
+
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 160),
+      width: 24,
+      height: 24,
+      decoration: BoxDecoration(
+        color: selected ? const Color(0xFF111111) : Colors.white,
+        shape: BoxShape.circle,
+        border: Border.all(
+          color: selected ? const Color(0xFF111111) : const Color(0xFFD0D5DD),
+          width: 1.5,
+        ),
+      ),
+      child: selected
+          ? const Icon(Icons.check_rounded, color: Colors.white, size: 16)
+          : null,
+    );
+  }
+}
+
+class _TurnaShareTargetComposerBar extends StatelessWidget {
+  const _TurnaShareTargetComposerBar({
+    required this.payload,
+    required this.captionController,
+    required this.recipientsLabel,
+    required this.onSend,
+  });
+
+  final TurnaIncomingSharePayload payload;
+  final TextEditingController captionController;
+  final String recipientsLabel;
+  final VoidCallback onSend;
+
+  bool _isImage(TurnaIncomingSharedItem item) {
+    final mimeType = item.mimeType.toLowerCase();
+    if (mimeType.startsWith('image/')) return true;
+    final guessed =
+        guessContentTypeForFileName(item.fileName)?.toLowerCase() ?? '';
+    return guessed.startsWith('image/');
+  }
+
+  bool _isVideo(TurnaIncomingSharedItem item) {
+    final mimeType = item.mimeType.toLowerCase();
+    if (mimeType.startsWith('video/')) return true;
+    final guessed =
+        guessContentTypeForFileName(item.fileName)?.toLowerCase() ?? '';
+    return guessed.startsWith('video/');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final firstItem = payload.items.first;
+    final safeBottom = MediaQuery.of(context).padding.bottom;
+    final keyboardInset = MediaQuery.of(context).viewInsets.bottom;
+    final preview = _TurnaShareTargetPayloadPreview(
+      item: firstItem,
+      extraCount: math.max(0, payload.items.length - 1),
+      isImage: _isImage(firstItem),
+      isVideo: _isVideo(firstItem),
+    );
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: keyboardInset),
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.08),
+              blurRadius: 18,
+              offset: const Offset(0, -6),
+            ),
+          ],
+        ),
+        child: SafeArea(
+          top: false,
+          minimum: EdgeInsets.fromLTRB(12, 10, 12, math.max(10, safeBottom)),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-                child: TextField(
-                  controller: _searchController,
-                  decoration: InputDecoration(
-                    hintText: 'Sohbet ara',
-                    prefixIcon: const Icon(Icons.search),
-                    filled: true,
-                    fillColor: TurnaColors.backgroundMuted,
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(24),
-                      borderSide: BorderSide.none,
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  preview,
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Container(
+                      constraints: const BoxConstraints(minHeight: 58),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(color: const Color(0xFFD5D9DF)),
+                      ),
+                      child: TextField(
+                        controller: captionController,
+                        minLines: 1,
+                        maxLines: 4,
+                        decoration: const InputDecoration(
+                          hintText: 'Mesaj ekleyin...',
+                          border: InputBorder.none,
+                          contentPadding: EdgeInsets.fromLTRB(14, 14, 14, 14),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      recipientsLabel,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        color: TurnaColors.text,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  GestureDetector(
+                    onTap: onSend,
+                    child: const Text(
+                      'Gonder',
+                      style: TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w700,
+                        color: TurnaColors.text,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TurnaShareTargetPayloadPreview extends StatelessWidget {
+  const _TurnaShareTargetPayloadPreview({
+    required this.item,
+    required this.extraCount,
+    required this.isImage,
+    required this.isVideo,
+  });
+
+  final TurnaIncomingSharedItem item;
+  final int extraCount;
+  final bool isImage;
+  final bool isVideo;
+
+  @override
+  Widget build(BuildContext context) {
+    final file = File(item.filePath);
+    Widget content;
+    if (isImage && file.existsSync()) {
+      content = Image.file(
+        file,
+        fit: BoxFit.cover,
+        errorBuilder: (_, _, _) => _buildFallback(),
+      );
+    } else {
+      content = _buildFallback();
+    }
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(14),
+      child: SizedBox(
+        width: 60,
+        height: 60,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            content,
+            if (isVideo)
+              Container(
+                color: Colors.black.withValues(alpha: 0.28),
+                alignment: Alignment.center,
+                child: const Icon(
+                  Icons.play_circle_fill_rounded,
+                  color: Colors.white,
+                  size: 26,
+                ),
+              ),
+            if (extraCount > 0)
+              Positioned(
+                right: 4,
+                bottom: 4,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.74),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    '+$extraCount',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
                 ),
               ),
-              Expanded(
-                child: chats.isEmpty
-                    ? const _CenteredState(
-                        icon: Icons.chat_bubble_outline,
-                        title: 'Sohbet bulunamadı',
-                        message: 'İletilecek başka sohbet bulunmuyor.',
-                      )
-                    : ListView.builder(
-                        itemCount: chats.length,
-                        itemBuilder: (context, index) {
-                          final chat = chats[index];
-                          return ListTile(
-                            leading: _ProfileAvatar(
-                              label: chat.name,
-                              avatarUrl: chat.avatarUrl,
-                              authToken: widget.session.token,
-                              radius: 22,
-                            ),
-                            title: Text(
-                              chat.name,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            subtitle: chat.message.trim().isEmpty
-                                ? null
-                                : Text(
-                                    chat.message,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                            onTap: () => Navigator.pop(context, chat),
-                          );
-                        },
-                      ),
-              ),
-            ],
-          );
-        },
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFallback() {
+    return Container(
+      color: const Color(0xFFE8EDF3),
+      alignment: Alignment.center,
+      child: Icon(
+        isVideo ? Icons.videocam_rounded : Icons.insert_drive_file_rounded,
+        color: const Color(0xFF5E6772),
+        size: 26,
       ),
     );
   }
@@ -7954,60 +8589,65 @@ class _TurnaChatInlineCameraPageState extends State<_TurnaChatInlineCameraPage>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      resizeToAvoidBottomInset: false,
       backgroundColor: Colors.black,
-      body: Stack(
-        children: [
-          Positioned.fill(child: _buildPreviewLayer()),
-          Positioned(
-            left: 0,
-            right: 0,
-            top: 0,
-            child: IgnorePointer(
-              child: Container(
-                height: 168,
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      Colors.black.withValues(alpha: 0.42),
-                      Colors.black.withValues(alpha: 0.14),
-                      Colors.transparent,
-                    ],
+      body: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onHorizontalDragEnd: _handlePreviewSwipe,
+        child: Stack(
+          children: [
+            Positioned.fill(child: _buildPreviewLayer()),
+            Positioned(
+              left: 0,
+              right: 0,
+              top: 0,
+              child: IgnorePointer(
+                child: Container(
+                  height: 168,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Colors.black.withValues(alpha: 0.42),
+                        Colors.black.withValues(alpha: 0.14),
+                        Colors.transparent,
+                      ],
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: IgnorePointer(
-              child: Container(
-                height: 244,
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      Colors.transparent,
-                      Colors.black.withValues(alpha: 0.2),
-                      Colors.black.withValues(alpha: 0.56),
-                    ],
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: IgnorePointer(
+                child: Container(
+                  height: 244,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Colors.transparent,
+                        Colors.black.withValues(alpha: 0.2),
+                        Colors.black.withValues(alpha: 0.56),
+                      ],
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
-          _buildTopBar(),
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: _buildBottomControls(),
-          ),
-        ],
+            _buildTopBar(),
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: _buildBottomControls(),
+            ),
+          ],
+        ),
       ),
     );
   }
