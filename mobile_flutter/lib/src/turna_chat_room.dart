@@ -3953,30 +3953,36 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                     )
                   else
                     Row(
-                      crossAxisAlignment: CrossAxisAlignment.end,
+                      crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
-                        IconButton(
-                          onPressed: _attachmentBusy
-                              ? null
-                              : _showAttachmentSheet,
-                          icon: _attachmentBusy
-                              ? const SizedBox(
-                                  width: 18,
-                                  height: 18,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                )
-                              : const Icon(Icons.add, size: 28),
-                          color: TurnaColors.textSoft,
+                        SizedBox(
+                          width: 42,
+                          height: 42,
+                          child: IconButton(
+                            onPressed: _attachmentBusy
+                                ? null
+                                : _showAttachmentSheet,
+                            icon: _attachmentBusy
+                                ? const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Icon(Icons.add, size: 29),
+                            color: TurnaColors.text,
+                            splashRadius: 22,
+                          ),
                         ),
+                        const SizedBox(width: 4),
                         Expanded(
                           child: Container(
-                            constraints: const BoxConstraints(minHeight: 52),
-                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                            constraints: const BoxConstraints(minHeight: 46),
+                            padding: const EdgeInsets.symmetric(horizontal: 4),
                             decoration: BoxDecoration(
-                              color: TurnaColors.backgroundSoft,
-                              borderRadius: BorderRadius.circular(28),
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(24),
                               border: Border.all(
                                 color: focused
                                     ? TurnaColors.primary
@@ -3985,58 +3991,69 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                               ),
                               boxShadow: [
                                 BoxShadow(
-                                  color: TurnaColors.primary.withValues(
-                                    alpha: focused ? 0.08 : 0.03,
+                                  color: Colors.black.withValues(
+                                    alpha: focused ? 0.05 : 0.025,
                                   ),
-                                  blurRadius: focused ? 16 : 8,
-                                  offset: const Offset(0, 1.5),
+                                  blurRadius: focused ? 14 : 8,
+                                  offset: const Offset(0, 1),
                                 ),
                               ],
                             ),
                             child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.end,
+                              crossAxisAlignment: CrossAxisAlignment.center,
                               children: [
                                 Expanded(
                                   child: TextField(
                                     controller: _controller,
                                     focusNode: _composerFocusNode,
                                     minLines: 1,
-                                    maxLines: 5,
+                                    maxLines: 4,
                                     textCapitalization:
                                         TextCapitalization.sentences,
+                                    style: const TextStyle(
+                                      fontSize: 16,
+                                      height: 1.25,
+                                    ),
                                     decoration: InputDecoration(
                                       hintText: _editingDraft == null
                                           ? 'Mesaj'
                                           : 'Duzenlenmis mesaji yaz',
                                       border: InputBorder.none,
-                                      contentPadding:
-                                          const EdgeInsets.symmetric(
-                                            horizontal: 8,
-                                            vertical: 14,
-                                          ),
+                                      contentPadding: const EdgeInsets.fromLTRB(
+                                        14,
+                                        11,
+                                        8,
+                                        11,
+                                      ),
                                     ),
                                   ),
                                 ),
-                                if (!_hasComposerText && _editingDraft == null)
-                                  IconButton(
-                                    onPressed: _attachmentBusy
-                                        ? null
-                                        : _pickCameraImage,
-                                    icon: const Icon(Icons.camera_alt_outlined),
-                                    color: TurnaColors.textSoft,
-                                  ),
+                                const SizedBox(width: 10),
                               ],
                             ),
                           ),
                         ),
-                        const SizedBox(width: 8),
+                        const SizedBox(width: 4),
+                        SizedBox(
+                          width: 42,
+                          height: 42,
+                          child: IconButton(
+                            onPressed: _attachmentBusy || _editingDraft != null
+                                ? null
+                                : _pickCameraImage,
+                            icon: const Icon(Icons.photo_camera_outlined),
+                            color: TurnaColors.text,
+                            splashRadius: 22,
+                          ),
+                        ),
+                        const SizedBox(width: 2),
                         AnimatedSwitcher(
                           duration: const Duration(milliseconds: 160),
                           child: _hasComposerText
                               ? Container(
                                   key: const ValueKey('send'),
-                                  width: 46,
-                                  height: 46,
+                                  width: 42,
+                                  height: 42,
                                   decoration: const BoxDecoration(
                                     color: TurnaColors.primary,
                                     shape: BoxShape.circle,
@@ -4051,9 +4068,10 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                                 )
                               : SizedBox(
                                   key: const ValueKey('mic'),
-                                  width: 46,
-                                  height: 46,
+                                  width: 42,
+                                  height: 42,
                                   child: GestureDetector(
+                                    key: _voiceMicKey,
                                     behavior: HitTestBehavior.opaque,
                                     onTap: _attachmentBusy
                                         ? null
@@ -4062,29 +4080,12 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                                         ? null
                                         : (_) =>
                                               unawaited(_startVoiceRecording()),
-                                    child: Container(
-                                      key: _voiceMicKey,
-                                      width: 46,
-                                      height: 46,
-                                      decoration: BoxDecoration(
-                                        color: Colors.white,
-                                        shape: BoxShape.circle,
-                                        boxShadow: [
-                                          BoxShadow(
-                                            color: Colors.black.withValues(
-                                              alpha: 0.05,
-                                            ),
-                                            blurRadius: 8,
-                                            offset: const Offset(0, 1),
-                                          ),
-                                        ],
-                                      ),
-                                      child: Icon(
-                                        Icons.mic_none_rounded,
-                                        color: _voiceRecorderBusy
-                                            ? TurnaColors.textMuted
-                                            : TurnaColors.textSoft,
-                                      ),
+                                    child: Icon(
+                                      Icons.mic_none_rounded,
+                                      color: _voiceRecorderBusy
+                                          ? TurnaColors.textMuted
+                                          : TurnaColors.text,
+                                      size: 28,
                                     ),
                                   ),
                                 ),
@@ -4619,21 +4620,18 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   }
 
   Future<void> _pickCameraImage() async {
-    final transferMode = await _showMediaTransferModeSheet(
-      title: 'Kamera fotoğrafı gönder',
+    if (_attachmentBusy) return;
+    FocusScope.of(context).unfocus();
+    final selection = await Navigator.of(context).push<_TurnaChatCameraResult>(
+      MaterialPageRoute<_TurnaChatCameraResult>(
+        builder: (_) => const _TurnaChatInlineCameraPage(),
+        fullscreenDialog: true,
+      ),
     );
-    if (transferMode == null) return;
-    final file = await _mediaPicker.pickImage(source: ImageSource.camera);
-    if (file == null) return;
-    if (transferMode == ChatAttachmentTransferMode.document) {
-      await _sendDocumentMediaFiles([file]);
-      return;
-    }
+    if (!mounted || selection == null || selection.files.isEmpty) return;
     await _openMediaComposerFromFiles(
-      [file],
-      initialQuality: transferMode == ChatAttachmentTransferMode.hd
-          ? MediaComposerQuality.hd
-          : MediaComposerQuality.standard,
+      selection.files,
+      initialQuality: MediaComposerQuality.standard,
     );
   }
 
@@ -6903,6 +6901,729 @@ class _ChatAttachmentList extends StatelessWidget {
           ),
         );
       }).toList(),
+    );
+  }
+}
+
+class _TurnaChatCameraResult {
+  const _TurnaChatCameraResult({required this.files});
+
+  final List<XFile> files;
+}
+
+class _TurnaChatInlineCameraPage extends StatefulWidget {
+  const _TurnaChatInlineCameraPage();
+
+  @override
+  State<_TurnaChatInlineCameraPage> createState() =>
+      _TurnaChatInlineCameraPageState();
+}
+
+class _TurnaChatInlineCameraPageState extends State<_TurnaChatInlineCameraPage>
+    with WidgetsBindingObserver {
+  cam.CameraController? _cameraController;
+  Future<void>? _cameraInitFuture;
+  List<cam.CameraDescription> _cameras = const <cam.CameraDescription>[];
+  cam.CameraDescription? _selectedCamera;
+  bool _cameraInitializing = true;
+  bool _cameraBusy = false;
+  String? _cameraError;
+  cam.FlashMode _flashMode = cam.FlashMode.off;
+  List<pm.AssetEntity> _recentAssets = const <pm.AssetEntity>[];
+  bool _galleryLoading = false;
+  String? _galleryError;
+  double _minZoomLevel = 1;
+  double _maxZoomLevel = 1;
+  double _currentZoomLevel = 1;
+
+  bool get _cameraReady {
+    final controller = _cameraController;
+    return !_cameraInitializing &&
+        _cameraError == null &&
+        controller != null &&
+        controller.value.isInitialized;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(_bootstrap());
+    });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    final controller = _cameraController;
+    _cameraController = null;
+    unawaited(controller?.dispose() ?? Future<void>.value());
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (!mounted) return;
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      unawaited(_disposeCamera());
+      return;
+    }
+    if (state == AppLifecycleState.resumed) {
+      unawaited(
+        _initializeCamera(
+          preferredLensDirection:
+              _selectedCamera?.lensDirection ?? cam.CameraLensDirection.back,
+        ),
+      );
+    }
+  }
+
+  Future<void> _bootstrap() async {
+    await _initializeCamera(
+      preferredLensDirection: cam.CameraLensDirection.back,
+    );
+    if (!mounted) return;
+    await _loadGallery();
+  }
+
+  Future<void> _disposeCamera() async {
+    final controller = _cameraController;
+    _cameraController = null;
+    _cameraInitFuture = null;
+    if (controller != null) {
+      await controller.dispose();
+    }
+  }
+
+  Future<List<cam.CameraDescription>> _loadAvailableCameras() async {
+    final cached = _kStatusCameraCache;
+    if (cached != null && cached.isNotEmpty) {
+      return cached;
+    }
+    final cameras = await cam.availableCameras();
+    _kStatusCameraCache = cameras;
+    return cameras;
+  }
+
+  cam.CameraDescription _pickCamera(
+    List<cam.CameraDescription> cameras,
+    cam.CameraLensDirection preferredLensDirection,
+  ) {
+    for (final camera in cameras) {
+      if (camera.lensDirection == preferredLensDirection) {
+        return camera;
+      }
+    }
+    return cameras.first;
+  }
+
+  Future<void> _initializeCamera({
+    required cam.CameraLensDirection preferredLensDirection,
+  }) async {
+    if (!mounted) return;
+    setState(() {
+      _cameraInitializing = true;
+      _cameraError = null;
+    });
+
+    final previous = _cameraController;
+    try {
+      final cameras = await _loadAvailableCameras();
+      if (cameras.isEmpty) {
+        throw TurnaApiException('Kamera bulunamadi.');
+      }
+      final selected = _pickCamera(cameras, preferredLensDirection);
+      final controller = cam.CameraController(
+        selected,
+        Platform.isIOS
+            ? cam.ResolutionPreset.high
+            : cam.ResolutionPreset.veryHigh,
+        enableAudio: false,
+      );
+      _cameras = cameras;
+      _selectedCamera = selected;
+      _cameraController = controller;
+      _cameraInitFuture = controller.initialize().then((_) async {
+        try {
+          await controller.setFlashMode(_flashMode);
+        } catch (_) {}
+        try {
+          _minZoomLevel = await controller.getMinZoomLevel();
+          _maxZoomLevel = await controller.getMaxZoomLevel();
+          _currentZoomLevel = _currentZoomLevel.clamp(
+            _minZoomLevel,
+            _maxZoomLevel,
+          );
+          await controller.setZoomLevel(_currentZoomLevel);
+        } catch (_) {
+          _minZoomLevel = 1;
+          _maxZoomLevel = 1;
+          _currentZoomLevel = 1;
+        }
+        if (!Platform.isIOS) {
+          try {
+            await controller.lockCaptureOrientation(
+              DeviceOrientation.portraitUp,
+            );
+          } catch (_) {}
+        }
+      });
+      await _cameraInitFuture;
+      await previous?.dispose();
+      if (!mounted || _cameraController != controller) {
+        await controller.dispose();
+        return;
+      }
+      setState(() {
+        _cameraInitializing = false;
+        _cameraError = null;
+      });
+    } catch (error) {
+      await previous?.dispose();
+      if (!mounted) return;
+      setState(() {
+        _cameraController = null;
+        _cameraInitFuture = null;
+        _cameraInitializing = false;
+        _cameraError = error is TurnaApiException
+            ? error.message
+            : 'Kamera acilamadi.';
+      });
+    }
+  }
+
+  Future<void> _loadGallery() async {
+    if (!mounted) return;
+    setState(() {
+      _galleryLoading = true;
+      _galleryError = null;
+    });
+    try {
+      final permission = await pm.PhotoManager.requestPermissionExtend();
+      if (!permission.isAuth) {
+        throw TurnaApiException('Galeri erisimi verilmedi.');
+      }
+      final albums = await pm.PhotoManager.getAssetPathList(
+        onlyAll: true,
+        type: pm.RequestType.image,
+        filterOption: pm.FilterOptionGroup(
+          orders: const <pm.OrderOption>[
+            pm.OrderOption(type: pm.OrderOptionType.createDate, asc: false),
+          ],
+        ),
+      );
+      final recent = albums.isEmpty ? null : albums.first;
+      final assets = recent == null
+          ? const <pm.AssetEntity>[]
+          : await recent.getAssetListPaged(
+              page: 0,
+              size: _kStatusGalleryPageSize,
+            );
+      if (!mounted) return;
+      setState(() {
+        _recentAssets = assets;
+        _galleryLoading = false;
+        _galleryError = null;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _galleryLoading = false;
+        _galleryError = error is TurnaApiException
+            ? error.message
+            : 'Galeri yuklenemedi.';
+      });
+    }
+  }
+
+  String _fileNameFromPath(String path) {
+    final parts = path.split(RegExp(r'[\\/]'));
+    return parts.isEmpty ? path : parts.last;
+  }
+
+  Future<void> _takePhoto() async {
+    if (_cameraBusy || !_cameraReady) return;
+    final controller = _cameraController;
+    if (controller == null) return;
+    setState(() => _cameraBusy = true);
+    try {
+      if (_cameraInitFuture != null) {
+        await _cameraInitFuture;
+      }
+      final captured = await controller.takePicture();
+      if (!mounted) return;
+      final fileName = _fileNameFromPath(captured.path);
+      Navigator.pop(
+        context,
+        _TurnaChatCameraResult(
+          files: [
+            XFile(
+              captured.path,
+              name: fileName,
+              mimeType: guessContentTypeForFileName(fileName) ?? 'image/jpeg',
+            ),
+          ],
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            error is TurnaApiException ? error.message : 'Fotograf cekilemedi.',
+          ),
+        ),
+      );
+      setState(() => _cameraBusy = false);
+    }
+  }
+
+  Future<void> _switchCamera() async {
+    if (_cameras.length < 2 || _cameraBusy) return;
+    final current =
+        _selectedCamera?.lensDirection ?? cam.CameraLensDirection.back;
+    final next = current == cam.CameraLensDirection.front
+        ? cam.CameraLensDirection.back
+        : cam.CameraLensDirection.front;
+    await _initializeCamera(preferredLensDirection: next);
+  }
+
+  Future<void> _toggleFlash() async {
+    final controller = _cameraController;
+    if (controller == null || !_cameraReady || _cameraBusy) return;
+    final next = switch (_flashMode) {
+      cam.FlashMode.off => cam.FlashMode.auto,
+      cam.FlashMode.auto => cam.FlashMode.always,
+      _ => cam.FlashMode.off,
+    };
+    try {
+      await controller.setFlashMode(next);
+      if (!mounted) return;
+      setState(() => _flashMode = next);
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Flash ayarlanamadi.')));
+    }
+  }
+
+  IconData get _flashIcon => switch (_flashMode) {
+    cam.FlashMode.off => Icons.flash_off_rounded,
+    cam.FlashMode.auto => Icons.flash_auto_rounded,
+    _ => Icons.flash_on_rounded,
+  };
+
+  Future<void> _setZoomPreset(double preset) async {
+    final controller = _cameraController;
+    if (controller == null || !_cameraReady || _cameraBusy) return;
+    final target = preset.clamp(_minZoomLevel, _maxZoomLevel).toDouble();
+    try {
+      await controller.setZoomLevel(target);
+      if (!mounted) return;
+      setState(() => _currentZoomLevel = target);
+    } catch (_) {}
+  }
+
+  Future<void> _selectGalleryAsset(pm.AssetEntity asset) async {
+    if (_cameraBusy) return;
+    final file = await asset.file;
+    if (file == null || !mounted) return;
+    final fileName = _fileNameFromPath(file.path);
+    Navigator.pop(
+      context,
+      _TurnaChatCameraResult(
+        files: [
+          XFile(
+            file.path,
+            name: fileName,
+            mimeType: guessContentTypeForFileName(fileName) ?? 'image/jpeg',
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _openGallerySheet() async {
+    if (_cameraBusy) return;
+    if (_recentAssets.isEmpty && !_galleryLoading) {
+      await _loadGallery();
+    }
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.black,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      builder: (sheetContext) {
+        return SafeArea(
+          top: false,
+          child: SizedBox(
+            height: MediaQuery.of(sheetContext).size.height * 0.72,
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+                  child: Row(
+                    children: [
+                      const Text(
+                        'Galeri',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const Spacer(),
+                      IconButton(
+                        onPressed: () => Navigator.pop(sheetContext),
+                        icon: const Icon(
+                          Icons.close_rounded,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: Builder(
+                    builder: (context) {
+                      if (_galleryLoading) {
+                        return const Center(
+                          child: CircularProgressIndicator(color: Colors.white),
+                        );
+                      }
+                      if (_galleryError != null) {
+                        return Center(
+                          child: Padding(
+                            padding: const EdgeInsets.all(24),
+                            child: Text(
+                              _galleryError!,
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(color: Colors.white70),
+                            ),
+                          ),
+                        );
+                      }
+                      if (_recentAssets.isEmpty) {
+                        return const Center(
+                          child: Text(
+                            'Galeride gosterilecek fotograf bulunamadi.',
+                            style: TextStyle(color: Colors.white70),
+                          ),
+                        );
+                      }
+                      return GridView.builder(
+                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                        gridDelegate:
+                            const SliverGridDelegateWithFixedCrossAxisCount(
+                              crossAxisCount: 3,
+                              crossAxisSpacing: 6,
+                              mainAxisSpacing: 6,
+                            ),
+                        itemCount: _recentAssets.length,
+                        itemBuilder: (context, index) {
+                          final asset = _recentAssets[index];
+                          return _StatusGalleryAssetTile(
+                            asset: asset,
+                            onTap: () async {
+                              Navigator.pop(sheetContext);
+                              await _selectGalleryAsset(asset);
+                            },
+                          );
+                        },
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildPreviewLayer() {
+    final controller = _cameraController;
+    if (_cameraError != null) {
+      return ColoredBox(
+        color: Colors.black,
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text(
+              _cameraError!,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.white70, fontSize: 15),
+            ),
+          ),
+        ),
+      );
+    }
+    if (_cameraInitializing ||
+        controller == null ||
+        !controller.value.isInitialized) {
+      return const ColoredBox(
+        color: Colors.black,
+        child: Center(child: CircularProgressIndicator(color: Colors.white)),
+      );
+    }
+    final previewSize = controller.value.previewSize;
+    if (previewSize == null) {
+      return const SizedBox.expand(child: ColoredBox(color: Colors.black));
+    }
+    return ClipRect(
+      child: OverflowBox(
+        alignment: Alignment.center,
+        child: FittedBox(
+          fit: BoxFit.cover,
+          child: SizedBox(
+            width: previewSize.height,
+            height: previewSize.width,
+            child: cam.CameraPreview(controller),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTopBar() {
+    return SafeArea(
+      bottom: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+        child: Row(
+          children: [
+            _StatusCaptureTopButton(
+              icon: Icons.close_rounded,
+              onTap: () => Navigator.pop(context),
+            ),
+            const Spacer(),
+            _StatusCaptureTopButton(icon: _flashIcon, onTap: _toggleFlash),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRecentStrip() {
+    if (_recentAssets.isEmpty) return const SizedBox.shrink();
+    return SizedBox(
+      height: 74,
+      child: ListView.separated(
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        scrollDirection: Axis.horizontal,
+        itemCount: _recentAssets.length.clamp(0, 12),
+        separatorBuilder: (_, _) => const SizedBox(width: 8),
+        itemBuilder: (context, index) {
+          final asset = _recentAssets[index];
+          return GestureDetector(
+            onTap: () => _selectGalleryAsset(asset),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: FutureBuilder<Uint8List?>(
+                future: asset.thumbnailDataWithSize(
+                  const pm.ThumbnailSize(180, 180),
+                  quality: 88,
+                ),
+                builder: (context, snapshot) {
+                  final bytes = snapshot.data;
+                  if (bytes == null || bytes.isEmpty) {
+                    return Container(
+                      width: 56,
+                      height: 74,
+                      color: Colors.white.withValues(alpha: 0.08),
+                    );
+                  }
+                  return Image.memory(
+                    bytes,
+                    width: 56,
+                    height: 74,
+                    fit: BoxFit.cover,
+                  );
+                },
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildZoomPreset(double preset) {
+    final enabled = preset <= (_maxZoomLevel + 0.05) || preset == 1;
+    final selected =
+        (_currentZoomLevel - preset).abs() < 0.35 ||
+        (!enabled &&
+            preset > 1 &&
+            (_currentZoomLevel - _maxZoomLevel).abs() < 0.2);
+    return GestureDetector(
+      onTap: enabled ? () => _setZoomPreset(preset) : null,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: selected
+              ? Colors.white.withValues(alpha: 0.18)
+              : Colors.black.withValues(alpha: 0.34),
+          borderRadius: BorderRadius.circular(16),
+          border: selected
+              ? Border.all(color: Colors.white.withValues(alpha: 0.4))
+              : null,
+        ),
+        child: Text(
+          '${preset.toInt()}x',
+          style: TextStyle(
+            color: enabled ? Colors.white : Colors.white38,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBottomControls() {
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _buildRecentStrip(),
+            if (_recentAssets.isNotEmpty) const SizedBox(height: 14),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                _StatusGalleryLauncherButton(
+                  asset: _recentAssets.isEmpty ? null : _recentAssets.first,
+                  onTap: _openGallerySheet,
+                ),
+                _StatusCaptureShutterButton(
+                  mode: TurnaStatusCaptureMode.photo,
+                  recording: false,
+                  busy: _cameraBusy || !_cameraReady,
+                  onTap: _takePhoto,
+                ),
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _buildZoomPreset(1),
+                        const SizedBox(width: 8),
+                        _buildZoomPreset(2),
+                        const SizedBox(width: 8),
+                        _buildZoomPreset(5),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    _StatusCaptureTopButton(
+                      icon: Icons.cameraswitch_rounded,
+                      compact: true,
+                      onTap: _switchCamera,
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.48),
+                borderRadius: BorderRadius.circular(22),
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _StatusModeChip(
+                    label: 'VIDEO',
+                    selected: false,
+                    enabled: false,
+                  ),
+                  _StatusModeChip(label: 'FOTOGRAF', selected: true),
+                  _StatusModeChip(
+                    label: 'GORUNTULU NOT',
+                    selected: false,
+                    enabled: false,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
+        children: [
+          Positioned.fill(child: _buildPreviewLayer()),
+          Positioned(
+            left: 0,
+            right: 0,
+            top: 0,
+            child: IgnorePointer(
+              child: Container(
+                height: 168,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.black.withValues(alpha: 0.42),
+                      Colors.black.withValues(alpha: 0.14),
+                      Colors.transparent,
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: IgnorePointer(
+              child: Container(
+                height: 244,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.transparent,
+                      Colors.black.withValues(alpha: 0.2),
+                      Colors.black.withValues(alpha: 0.56),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          _buildTopBar(),
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: _buildBottomControls(),
+          ),
+        ],
+      ),
     );
   }
 }
