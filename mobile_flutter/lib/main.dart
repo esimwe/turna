@@ -36,7 +36,13 @@ import 'package:video_player/video_player.dart' as vp;
 
 import 'community_shell_preview.dart';
 
-part 'src/turna_chats.dart';
+part 'src/turna_shell.dart';
+part 'src/turna_inbox.dart';
+part 'src/turna_chat_room.dart';
+part 'src/turna_group_info.dart';
+part 'src/turna_group_settings.dart';
+part 'src/turna_media_composer.dart';
+part 'src/turna_voice.dart';
 part 'src/turna_auth_flow.dart';
 part 'src/turna_profile_shell.dart';
 part 'src/turna_core.dart';
