@@ -556,6 +556,10 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
 
   Iterable<lk.RemoteParticipant> get remoteParticipants =>
       _room?.remoteParticipants.values ?? const <lk.RemoteParticipant>[];
+  lk.LocalParticipant? get localParticipant => _room?.localParticipant;
+
+  List<lk.Participant> get activeSpeakers =>
+      List<lk.Participant>.from(_room?.activeSpeakers ?? const <lk.Participant>[]);
 
   lk.VideoTrack? get primaryRemoteVideoTrack {
     final currentRoom = _room;
@@ -569,6 +573,20 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
             publication.streamState == lk.StreamState.active) {
           return track;
         }
+      }
+    }
+    return null;
+  }
+
+  lk.VideoTrack? videoTrackForParticipant(lk.Participant participant) {
+    final publications = participant.videoTrackPublications;
+    for (final publication in publications) {
+      final track = publication.track;
+      if (track is lk.VideoTrack &&
+          publication.subscribed &&
+          !publication.muted &&
+          publication.streamState == lk.StreamState.active) {
+        return track;
       }
     }
     return null;
@@ -808,6 +826,7 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
         ..on<lk.TrackStreamStateUpdatedEvent>((_) => notifyListeners())
         ..on<lk.LocalTrackPublishedEvent>((_) => notifyListeners())
         ..on<lk.LocalTrackUnpublishedEvent>((_) => notifyListeners())
+        ..on<lk.ActiveSpeakersChangedEvent>((_) => notifyListeners())
         ..on<lk.ParticipantConnectionQualityUpdatedEvent>(
           _handleConnectionQualityUpdated,
         );

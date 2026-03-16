@@ -3242,6 +3242,18 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     return _policyAllowsForCurrentUser(detail.whoCanSend, detail.myRole ?? '');
   }
 
+  bool get _canCurrentUserStartGroupCalls {
+    if (!_isGroupChat) return false;
+    final detail = _cachedGroupDetail;
+    if (detail == null) return false;
+    return _policyAllowsForCurrentUser(
+      detail.whoCanStartCalls,
+      detail.myRole ?? '',
+    );
+  }
+
+  TurnaGroupCallState? get _activeGroupCall => _client.activeGroupCallState;
+
   String? get _groupSendRestrictionText {
     if (!_isGroupChat) return null;
     final detail = _cachedGroupDetail;
@@ -3299,6 +3311,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     if (_isGroupChat) {
       unawaited(_loadPinnedMessages());
       unawaited(_loadGroupDetail());
+      unawaited(_loadActiveGroupCallState());
       unawaited(_loadMentionCandidates());
     }
     if (!_isGroupChat) {
@@ -3503,6 +3516,20 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     } catch (_) {}
   }
 
+  Future<void> _loadActiveGroupCallState() async {
+    if (!_isGroupChat) return;
+    try {
+      final result = await CallApi.fetchActiveGroupCall(
+        widget.session,
+        chatId: widget.chat.chatId,
+      );
+      _client.setActiveGroupCallState(result.state);
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (_) {}
+  }
+
   Future<void> _startCall(TurnaCallType type) async {
     final peerUserId = _peerUserId;
     if (peerUserId == null) return;
@@ -3535,6 +3562,105 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         context,
       ).showSnackBar(SnackBar(content: Text(error.toString())));
     }
+  }
+
+  Future<void> _openGroupCallTypePicker() async {
+    if (!_isGroupChat) return;
+    if (_activeGroupCall != null) {
+      await _joinOrStartGroupCall(_activeGroupCall!.type);
+      return;
+    }
+    if (!_canCurrentUserStartGroupCalls) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Bu grupta çağrı başlatma yetkin yok.'),
+        ),
+      );
+      return;
+    }
+    final selectedType = await showModalBottomSheet<TurnaCallType>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.call_outlined),
+                title: const Text('Sesli grup çağrısı'),
+                subtitle: const Text('Katılımcılar yalnızca sesle bağlanır.'),
+                onTap: () => Navigator.of(context).pop(TurnaCallType.audio),
+              ),
+              ListTile(
+                leading: const Icon(Icons.videocam_outlined),
+                title: const Text('Görüntülü grup çağrısı'),
+                subtitle: const Text(
+                  'Katılımcılar kameralarını açıp kapatabilir.',
+                ),
+                onTap: () => Navigator.of(context).pop(TurnaCallType.video),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+    if (selectedType == null) return;
+    await _joinOrStartGroupCall(selectedType);
+  }
+
+  Future<void> _joinOrStartGroupCall(TurnaCallType type) async {
+    if (!_isGroupChat) return;
+
+    try {
+      final joined = await CallApi.joinGroupCall(
+        widget.session,
+        chatId: widget.chat.chatId,
+        type: _activeGroupCall == null ? type : null,
+      );
+      if (joined.state != null) {
+        _client.setActiveGroupCallState(joined.state);
+      }
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => GroupCallPage(
+            session: widget.session,
+            chat: widget.chat,
+            initialState: joined.state,
+            connect: joined.connect,
+            onSessionExpired: widget.onSessionExpired,
+          ),
+        ),
+      );
+      if (!mounted) return;
+      await _loadActiveGroupCallState();
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
+  String? _activeGroupCallLabel() {
+    final activeCall = _activeGroupCall;
+    if (activeCall == null) return null;
+    final starter = (activeCall.startedByDisplayName ?? '').trim();
+    final mode =
+        activeCall.type == TurnaCallType.video ? 'görüntülü' : 'sesli';
+    final count = activeCall.participantCount;
+    if (starter.isNotEmpty) {
+      return count > 1
+          ? '$starter $mode çağrıda · $count kişi'
+          : '$starter $mode çağrı başlattı';
+    }
+    return count > 1 ? '$mode grup çağrısı · $count kişi' : '$mode grup çağrısı aktif';
   }
 
   void _handleScroll() {
@@ -7442,6 +7568,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     if (state == AppLifecycleState.resumed) {
       _client.refreshConnection();
       unawaited(_loadPeerCallHistory());
+      if (_isGroupChat) {
+        unawaited(_loadActiveGroupCallState());
+      }
       return;
     }
 
@@ -7520,6 +7649,26 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         actions: [
           if (_isGroupChat)
             IconButton(
+              tooltip: _activeGroupCall == null
+                  ? (_canCurrentUserStartGroupCalls
+                        ? 'Grup çağrısı başlat'
+                        : 'Aktif çağrı varsa katıl')
+                  : 'Aktif grup çağrısına katıl',
+              onPressed:
+                  (_activeGroupCall == null && !_canCurrentUserStartGroupCalls)
+                  ? null
+                  : _openGroupCallTypePicker,
+              icon: Icon(
+                _activeGroupCall?.type == TurnaCallType.video
+                    ? Icons.videocam_rounded
+                    : Icons.call_rounded,
+                color: _activeGroupCall == null
+                    ? null
+                    : TurnaColors.primaryStrong,
+              ),
+            ),
+          if (_isGroupChat)
+            IconButton(
               tooltip: 'Grup içi ara',
               onPressed: _openGroupSearch,
               icon: const Icon(Icons.search_rounded),
@@ -7580,6 +7729,41 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                           _messageForPinnedSummary(_activePinnedMessage!),
                         )
                   : null,
+            ),
+          if (_activeGroupCall != null)
+            Container(
+              width: double.infinity,
+              margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              decoration: BoxDecoration(
+                color: TurnaColors.primary50,
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: TurnaColors.primary200),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    _activeGroupCall!.type == TurnaCallType.video
+                        ? Icons.videocam_rounded
+                        : Icons.call_rounded,
+                    color: TurnaColors.primaryStrong,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      _activeGroupCallLabel() ?? 'Aktif grup çağrısı',
+                      style: const TextStyle(
+                        color: TurnaColors.primary800,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => _joinOrStartGroupCall(_activeGroupCall!.type),
+                    child: const Text('Katıl'),
+                  ),
+                ],
+              ),
             ),
           if (_showSecurityBanner) _buildSecurityBanner(),
           Expanded(
@@ -15668,6 +15852,7 @@ class _TurnaGroupSettingsPageState extends State<_TurnaGroupSettingsPage> {
     String? whoCanEditInfo,
     String? whoCanInvite,
     String? whoCanAddMembers,
+    String? whoCanStartCalls,
     bool? historyVisibleToNewMembers,
   }) async {
     if (_saving) return;
@@ -15685,6 +15870,7 @@ class _TurnaGroupSettingsPageState extends State<_TurnaGroupSettingsPage> {
         whoCanEditInfo: whoCanEditInfo,
         whoCanInvite: whoCanInvite,
         whoCanAddMembers: whoCanAddMembers,
+        whoCanStartCalls: whoCanStartCalls,
         historyVisibleToNewMembers: historyVisibleToNewMembers,
       );
       if (!mounted) return;
@@ -16048,6 +16234,21 @@ class _TurnaGroupSettingsPageState extends State<_TurnaGroupSettingsPage> {
                           currentValue: _detail.whoCanInvite,
                           onSelected: (value) =>
                               _applySettings(whoCanInvite: value),
+                        ),
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  leading: const Icon(Icons.add_call_rounded),
+                  title: const Text('Kim çağrı başlatabilir?'),
+                  subtitle: Text(_policyLabel(_detail.whoCanStartCalls)),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: _saving
+                      ? null
+                      : () => _pickPolicy(
+                          title: 'Kim çağrı başlatabilir?',
+                          currentValue: _detail.whoCanStartCalls,
+                          onSelected: (value) =>
+                              _applySettings(whoCanStartCalls: value),
                         ),
                 ),
                 const Divider(height: 1),

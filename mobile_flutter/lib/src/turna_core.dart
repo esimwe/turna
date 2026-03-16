@@ -128,6 +128,7 @@ class TurnaChatDetail {
     this.whoCanEditInfo = 'EDITOR_ONLY',
     this.whoCanInvite = 'ADMIN_ONLY',
     this.whoCanAddMembers = 'ADMIN_ONLY',
+    this.whoCanStartCalls = 'EDITOR_ONLY',
     this.historyVisibleToNewMembers = true,
     this.myCanSend = true,
     this.myIsMuted = false,
@@ -151,6 +152,7 @@ class TurnaChatDetail {
   final String whoCanEditInfo;
   final String whoCanInvite;
   final String whoCanAddMembers;
+  final String whoCanStartCalls;
   final bool historyVisibleToNewMembers;
   final bool myCanSend;
   final bool myIsMuted;
@@ -172,6 +174,7 @@ class TurnaChatDetail {
     String? whoCanEditInfo,
     String? whoCanInvite,
     String? whoCanAddMembers,
+    String? whoCanStartCalls,
     bool? historyVisibleToNewMembers,
     bool? myCanSend,
     bool? myIsMuted,
@@ -195,6 +198,7 @@ class TurnaChatDetail {
       whoCanEditInfo: whoCanEditInfo ?? this.whoCanEditInfo,
       whoCanInvite: whoCanInvite ?? this.whoCanInvite,
       whoCanAddMembers: whoCanAddMembers ?? this.whoCanAddMembers,
+      whoCanStartCalls: whoCanStartCalls ?? this.whoCanStartCalls,
       historyVisibleToNewMembers:
           historyVisibleToNewMembers ?? this.historyVisibleToNewMembers,
       myCanSend: myCanSend ?? this.myCanSend,
@@ -237,6 +241,9 @@ class TurnaChatDetail {
           TurnaUserProfile._nullableString(map['whoCanAddMembers']) ??
           TurnaUserProfile._nullableString(map['memberAddPolicy']) ??
           'ADMIN_ONLY',
+      whoCanStartCalls:
+          TurnaUserProfile._nullableString(map['whoCanStartCalls']) ??
+          'EDITOR_ONLY',
       historyVisibleToNewMembers: map['historyVisibleToNewMembers'] != false,
       myCanSend: map['myCanSend'] != false,
       myIsMuted: map['myIsMuted'] == true,
@@ -263,6 +270,7 @@ class TurnaChatDetail {
       'whoCanEditInfo': whoCanEditInfo,
       'whoCanInvite': whoCanInvite,
       'whoCanAddMembers': whoCanAddMembers,
+      'whoCanStartCalls': whoCanStartCalls,
       'historyVisibleToNewMembers': historyVisibleToNewMembers,
       'myCanSend': myCanSend,
       'myIsMuted': myIsMuted,
@@ -1395,6 +1403,7 @@ class TurnaSocketClient extends ChangeNotifier {
   final List<ChatMessage> messages = [];
   final List<TurnaPinnedMessageSummary> _pinnedMessages =
       <TurnaPinnedMessageSummary>[];
+  TurnaGroupCallState? _activeGroupCallState;
   final Map<String, Timer> _messageTimeouts = {};
   final Map<String, ChatMessageStatus> _pendingStatusByMessageId = {};
   final Map<String, Timer> _groupTypingTimeouts = <String, Timer>{};
@@ -1419,6 +1428,7 @@ class TurnaSocketClient extends ChangeNotifier {
   String? peerLastSeenAt;
   List<TurnaPinnedMessageSummary> get pinnedMessages =>
       List<TurnaPinnedMessageSummary>.unmodifiable(_pinnedMessages);
+  TurnaGroupCallState? get activeGroupCallState => _activeGroupCallState;
 
   String? get groupTypingSummary {
     if (chatType != TurnaChatType.group || _typingNamesByUserId.isEmpty) {
@@ -1751,6 +1761,24 @@ class TurnaSocketClient extends ChangeNotifier {
       setPinnedMessages(pinned);
     });
 
+    _socket!.on('chat:group-call:update', (data) {
+      final payload = _asMap(data);
+      if (payload == null) return;
+      if ((payload['chatId'] ?? '').toString() != chatId) return;
+      final rawState = payload['state'] as Map?;
+      final nextState = rawState == null
+          ? null
+          : TurnaGroupCallState.fromMap(Map<String, dynamic>.from(rawState));
+      final changed =
+          _activeGroupCallState?.roomName != nextState?.roomName ||
+          _activeGroupCallState?.participantCount != nextState?.participantCount ||
+          _activeGroupCallState?.type != nextState?.type;
+      _activeGroupCallState = nextState;
+      if (changed) {
+        notifyListeners();
+      }
+    });
+
     _socket!.onDisconnect((reason) {
       isConnected = false;
       _cancelPeerTypingTimeout();
@@ -1926,6 +1954,17 @@ class TurnaSocketClient extends ChangeNotifier {
       unawaited(_persistMessageCaches());
     }
     notifyListeners();
+  }
+
+  void setActiveGroupCallState(TurnaGroupCallState? state) {
+    final changed =
+        _activeGroupCallState?.roomName != state?.roomName ||
+        _activeGroupCallState?.participantCount != state?.participantCount ||
+        _activeGroupCallState?.type != state?.type;
+    _activeGroupCallState = state;
+    if (changed) {
+      notifyListeners();
+    }
   }
 
   void refreshConnection() {
@@ -3308,6 +3347,12 @@ class ProfileApi {
           return 'Bu üyeyi yasaklama yetkin yok.';
         case 'group_pin_not_allowed':
           return 'Bu grupta sabit mesaj yönetme yetkin yok.';
+        case 'group_call_state_unavailable':
+          return 'Grup çağrısı durumu şu an kullanılamıyor.';
+        case 'group_call_type_required':
+          return 'Başlatmak için sesli veya görüntülü çağrı seç.';
+        case 'group_call_not_allowed':
+          return 'Bu grupta çağrı başlatma yetkin yok.';
         case 'group_ban_not_found':
           return 'Aktif yasak kaydı bulunamadı.';
         case 'chat_send_restricted':
@@ -3585,6 +3630,7 @@ class ChatApi {
     String? whoCanEditInfo,
     String? whoCanInvite,
     String? whoCanAddMembers,
+    String? whoCanStartCalls,
     bool? historyVisibleToNewMembers,
   }) async {
     try {
@@ -3607,6 +3653,9 @@ class ChatApi {
           ...?whoCanAddMembers == null
               ? null
               : {'whoCanAddMembers': whoCanAddMembers},
+          ...?whoCanStartCalls == null
+              ? null
+              : {'whoCanStartCalls': whoCanStartCalls},
           ...?historyVisibleToNewMembers == null
               ? null
               : {'historyVisibleToNewMembers': historyVisibleToNewMembers},

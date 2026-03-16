@@ -258,6 +258,64 @@ class TurnaCallConnectPayload {
   }
 }
 
+class TurnaGroupCallState {
+  TurnaGroupCallState({
+    required this.chatId,
+    required this.roomName,
+    required this.type,
+    required this.startedByUserId,
+    this.startedByDisplayName,
+    this.startedAt,
+    this.participantCount = 0,
+    this.canStart = false,
+  });
+
+  final String chatId;
+  final String roomName;
+  final TurnaCallType type;
+  final String startedByUserId;
+  final String? startedByDisplayName;
+  final String? startedAt;
+  final int participantCount;
+  final bool canStart;
+
+  factory TurnaGroupCallState.fromMap(Map<String, dynamic> map) {
+    return TurnaGroupCallState(
+      chatId: (map['chatId'] ?? '').toString(),
+      roomName: (map['roomName'] ?? '').toString(),
+      type: ((map['type'] ?? '').toString().toLowerCase() == 'video')
+          ? TurnaCallType.video
+          : TurnaCallType.audio,
+      startedByUserId: (map['startedByUserId'] ?? '').toString(),
+      startedByDisplayName: TurnaUserProfile._nullableString(
+        map['startedByDisplayName'],
+      ),
+      startedAt: TurnaUserProfile._nullableString(map['startedAt']),
+      participantCount: (map['participantCount'] as num?)?.toInt() ?? 0,
+      canStart: map['canStart'] == true,
+    );
+  }
+}
+
+class TurnaGroupCallJoinResult {
+  TurnaGroupCallJoinResult({required this.state, required this.connect});
+
+  final TurnaGroupCallState? state;
+  final TurnaCallConnectPayload connect;
+
+  factory TurnaGroupCallJoinResult.fromMap(Map<String, dynamic> map) {
+    final rawState = map['state'] as Map?;
+    return TurnaGroupCallJoinResult(
+      state: rawState == null
+          ? null
+          : TurnaGroupCallState.fromMap(Map<String, dynamic>.from(rawState)),
+      connect: TurnaCallConnectPayload.fromMap(
+        Map<String, dynamic>.from(map['connect'] as Map? ?? const {}),
+      ),
+    );
+  }
+}
+
 class TurnaAcceptedCallEvent {
   TurnaAcceptedCallEvent({required this.call, required this.connect});
 
@@ -487,6 +545,87 @@ class CallApi {
         return cached;
       }
       throw TurnaApiException('Arama geçmişi yüklenemedi.');
+    }
+  }
+
+  static Future<({TurnaGroupCallState? state, bool canStart})>
+  fetchActiveGroupCall(
+    AuthSession session, {
+    required String chatId,
+  }) async {
+    try {
+      final res = await http.get(
+        Uri.parse('$kBackendBaseUrl/api/calls/group-chat/$chatId'),
+        headers: {'Authorization': 'Bearer ${session.token}'},
+      );
+      ChatApi._throwIfApiError(res);
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = Map<String, dynamic>.from(map['data'] as Map? ?? const {});
+      final rawState = data['state'] as Map?;
+      return (
+        state: rawState == null
+            ? null
+            : TurnaGroupCallState.fromMap(Map<String, dynamic>.from(rawState)),
+        canStart: data['canStart'] == true
+      );
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Grup çağrısı durumu yüklenemedi.');
+    }
+  }
+
+  static Future<TurnaGroupCallJoinResult> joinGroupCall(
+    AuthSession session, {
+    required String chatId,
+    TurnaCallType? type,
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse('$kBackendBaseUrl/api/calls/group-chat/$chatId/join'),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          if (type != null) 'type': type.name,
+        }),
+      );
+      ChatApi._throwIfApiError(res);
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = Map<String, dynamic>.from(map['data'] as Map? ?? const {});
+      return TurnaGroupCallJoinResult.fromMap(data);
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Grup çağrısına katılınamadı.');
+    }
+  }
+
+  static Future<TurnaGroupCallState?> leaveGroupCall(
+    AuthSession session, {
+    required String chatId,
+    required String roomName,
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse('$kBackendBaseUrl/api/calls/group-chat/$chatId/leave'),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'roomName': roomName}),
+      );
+      ChatApi._throwIfApiError(res);
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = Map<String, dynamic>.from(map['data'] as Map? ?? const {});
+      final rawState = data['state'] as Map?;
+      if (rawState == null) return null;
+      return TurnaGroupCallState.fromMap(Map<String, dynamic>.from(rawState));
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Grup çağrısından çıkılamadı.');
     }
   }
 

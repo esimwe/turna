@@ -630,6 +630,424 @@ class _OutgoingCallPageState extends State<OutgoingCallPage> {
   }
 }
 
+class GroupCallPage extends StatefulWidget {
+  const GroupCallPage({
+    super.key,
+    required this.session,
+    required this.chat,
+    required this.connect,
+    required this.onSessionExpired,
+    this.initialState,
+  });
+
+  final AuthSession session;
+  final ChatPreview chat;
+  final TurnaCallConnectPayload connect;
+  final TurnaGroupCallState? initialState;
+  final VoidCallback onSessionExpired;
+
+  @override
+  State<GroupCallPage> createState() => _GroupCallPageState();
+}
+
+class _GroupCallPageState extends State<GroupCallPage> {
+  late final LiveKitCallAdapter _adapter = LiveKitCallAdapter(
+    connectPayload: widget.connect,
+    videoEnabled: widget.connect.type == TurnaCallType.video,
+  );
+  bool _leaving = false;
+  int _durationSeconds = 0;
+  Timer? _durationTicker;
+
+  @override
+  void initState() {
+    super.initState();
+    _adapter.addListener(_handleAdapterChanged);
+    unawaited(_adapter.connect());
+    _durationTicker = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!_adapter.connected || !mounted) return;
+      setState(() => _durationSeconds++);
+    });
+  }
+
+  @override
+  void dispose() {
+    _durationTicker?.cancel();
+    _adapter.removeListener(_handleAdapterChanged);
+    _adapter.dispose();
+    super.dispose();
+  }
+
+  void _handleAdapterChanged() {
+    if (!mounted) return;
+    setState(() {});
+  }
+
+  Future<void> _leaveCall() async {
+    if (_leaving) return;
+    _leaving = true;
+    try {
+      await _adapter.disconnect();
+      await CallApi.leaveGroupCall(
+        widget.session,
+        chatId: widget.chat.chatId,
+        roomName: widget.connect.roomName,
+      );
+    } on TurnaUnauthorizedException {
+      if (mounted) {
+        widget.onSessionExpired();
+      }
+    } catch (_) {}
+    if (mounted) {
+      Navigator.of(context).pop();
+    }
+  }
+
+  String _formatDuration() {
+    final minutes = (_durationSeconds ~/ 60).toString().padLeft(2, '0');
+    final seconds = (_durationSeconds % 60).toString().padLeft(2, '0');
+    return '$minutes:$seconds';
+  }
+
+  List<_GroupCallParticipantViewData> _participantViews() {
+    final items = <_GroupCallParticipantViewData>[];
+    final localParticipant = _adapter.localParticipant;
+    if (localParticipant != null) {
+      items.add(
+        _GroupCallParticipantViewData(
+          id: localParticipant.identity,
+          displayName: localParticipant.name.trim().isNotEmpty
+              ? localParticipant.name.trim()
+              : widget.session.displayName,
+          isLocal: true,
+          isSpeaking: localParticipant.isSpeaking,
+          audioLevel: localParticipant.audioLevel,
+          videoTrack: _adapter.localVideoTrack,
+        ),
+      );
+    }
+
+    for (final participant in _adapter.remoteParticipants) {
+      items.add(
+        _GroupCallParticipantViewData(
+          id: participant.identity,
+          displayName: participant.name.trim().isNotEmpty
+              ? participant.name.trim()
+              : 'Katılımcı',
+          isLocal: false,
+          isSpeaking: participant.isSpeaking,
+          audioLevel: participant.audioLevel,
+          videoTrack: _adapter.videoTrackForParticipant(participant),
+        ),
+      );
+    }
+
+    items.sort((a, b) {
+      if (a.isSpeaking != b.isSpeaking) return a.isSpeaking ? -1 : 1;
+      final levelCompare = b.audioLevel.compareTo(a.audioLevel);
+      if (levelCompare != 0) return levelCompare;
+      if (a.videoTrack != null && b.videoTrack == null) return -1;
+      if (a.videoTrack == null && b.videoTrack != null) return 1;
+      if (a.isLocal != b.isLocal) return a.isLocal ? 1 : -1;
+      return a.displayName.compareTo(b.displayName);
+    });
+    return items;
+  }
+
+  _GroupCallParticipantViewData? _spotlightParticipant(
+    List<_GroupCallParticipantViewData> items,
+  ) {
+    if (items.isEmpty) return null;
+    for (final item in items) {
+      if (item.isSpeaking) return item;
+    }
+    for (final item in items) {
+      if (item.videoTrack != null) return item;
+    }
+    return items.first;
+  }
+
+  Widget _buildParticipantTile(
+    _GroupCallParticipantViewData item, {
+    bool spotlight = false,
+  }) {
+    final hasVideo = item.videoTrack != null && widget.connect.type == TurnaCallType.video;
+    final borderColor = item.isSpeaking
+        ? TurnaColors.success
+        : Colors.white.withValues(alpha: 0.08);
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF111416),
+        borderRadius: BorderRadius.circular(spotlight ? 24 : 18),
+        border: Border.all(color: borderColor, width: item.isSpeaking ? 2 : 1),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          if (hasVideo)
+            lk.VideoTrackRenderer(
+              item.videoTrack!,
+              fit: lk.VideoViewFit.cover,
+              mirrorMode: item.isLocal
+                  ? (_adapter.cameraPosition == lk.CameraPosition.front
+                        ? lk.VideoViewMirrorMode.mirror
+                        : lk.VideoViewMirrorMode.off)
+                  : lk.VideoViewMirrorMode.off,
+            )
+          else
+            Container(
+              color: const Color(0xFF171C1E),
+              child: Center(
+                child: _ProfileAvatar(
+                  label: item.displayName,
+                  avatarUrl: item.isLocal
+                      ? resolveTurnaSessionAvatarUrl(widget.session)
+                      : null,
+                  authToken: widget.session.token,
+                  radius: spotlight ? 40 : 28,
+                ),
+              ),
+            ),
+          Positioned(
+            left: 10,
+            right: 10,
+            bottom: 10,
+            child: Row(
+              children: [
+                Expanded(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 7,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.45),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Row(
+                      children: [
+                        if (item.isSpeaking)
+                          const Padding(
+                            padding: EdgeInsets.only(right: 6),
+                            child: Icon(
+                              Icons.graphic_eq_rounded,
+                              size: 16,
+                              color: TurnaColors.success,
+                            ),
+                          ),
+                        Expanded(
+                          child: Text(
+                            item.isLocal ? '${item.displayName} (Sen)' : item.displayName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildParticipantsLayout(List<_GroupCallParticipantViewData> items) {
+    final spotlight = _spotlightParticipant(items);
+    final others = spotlight == null
+        ? items
+        : items.where((item) => item.id != spotlight.id).toList();
+    final useSpotlight = spotlight != null && items.length > 2;
+    final columns = items.length > 8 ? 3 : 2;
+
+    if (!useSpotlight) {
+      return GridView.builder(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: items.length <= 2 ? items.length : columns,
+          mainAxisSpacing: 12,
+          crossAxisSpacing: 12,
+          childAspectRatio: widget.connect.type == TurnaCallType.video ? 0.78 : 1.05,
+        ),
+        itemCount: items.length,
+        itemBuilder: (context, index) => _buildParticipantTile(items[index]),
+      );
+    }
+
+    return Column(
+      children: [
+        if (spotlight != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+            child: SizedBox(
+              height: useSpotlight ? 240 : 180,
+              child: _buildParticipantTile(
+                spotlight,
+                spotlight: true,
+              ),
+            ),
+          ),
+        Expanded(
+          child: GridView.builder(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: columns,
+              mainAxisSpacing: 12,
+              crossAxisSpacing: 12,
+              childAspectRatio: widget.connect.type == TurnaCallType.video ? 0.78 : 1.05,
+            ),
+            itemCount: others.length,
+            itemBuilder: (context, index) {
+              return _buildParticipantTile(others[index]);
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final participants = _participantViews();
+    final statusText = _adapter.connecting
+        ? 'Bağlanıyor...'
+        : (_adapter.connected
+              ? '${participants.length} kişi · ${_formatDuration()}'
+              : (_adapter.error ?? 'Çağrı hazırlanıyor'));
+
+    return PopScope(
+      canPop: !_leaving,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) {
+          unawaited(_leaveCall());
+        }
+      },
+      child: Scaffold(
+        backgroundColor: const Color(0xFF0D1115),
+        appBar: AppBar(
+          backgroundColor: const Color(0xFF0D1115),
+          foregroundColor: Colors.white,
+          title: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(widget.chat.name),
+              Text(
+                statusText,
+                style: const TextStyle(
+                  fontSize: 12.5,
+                  color: Color(0xFFB7BCB9),
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ),
+        body: Column(
+          children: [
+            if ((_adapter.mediaError ?? '').isNotEmpty)
+              Container(
+                width: double.infinity,
+                margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF1E6),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Text(
+                  _adapter.mediaError!,
+                  style: const TextStyle(color: Color(0xFF7A4B00)),
+                ),
+              ),
+            Expanded(
+              child: participants.isEmpty
+                  ? Center(
+                      child: Text(
+                        _adapter.connecting
+                            ? 'Katılımcılar bağlanıyor...'
+                            : 'Henüz kimse katılmadı.',
+                        style: const TextStyle(color: Color(0xFFB7BCB9)),
+                      ),
+                    )
+                  : _buildParticipantsLayout(participants),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(18, 0, 18, 24),
+              child: _AudioCallControlDock(
+                children: [
+                  if (widget.connect.type == TurnaCallType.video)
+                    _AudioCallControlButton(
+                      onTap: _adapter.connecting
+                          ? null
+                          : () => _adapter.toggleCamera(),
+                      icon: Icon(
+                        _adapter.cameraEnabled
+                            ? Icons.videocam_rounded
+                            : Icons.videocam_off_rounded,
+                      ),
+                      active: _adapter.cameraEnabled,
+                    ),
+                  _AudioCallControlButton(
+                    onTap: _adapter.connecting
+                        ? null
+                        : () => _adapter.toggleSpeaker(),
+                    icon: Icon(
+                      _adapter.speakerEnabled
+                          ? Icons.volume_up_rounded
+                          : Icons.hearing_rounded,
+                    ),
+                    active: _adapter.speakerEnabled,
+                  ),
+                  _AudioCallControlButton(
+                    onTap: _adapter.connecting
+                        ? null
+                        : () => _adapter.toggleMicrophone(),
+                    icon: Icon(
+                      _adapter.microphoneEnabled
+                          ? Icons.mic_none_rounded
+                          : Icons.mic_off_rounded,
+                    ),
+                    active: !_adapter.microphoneEnabled,
+                  ),
+                  _AudioCallControlButton(
+                    onTap: _leaving ? null : _leaveCall,
+                    icon: const Icon(Icons.call_end_rounded),
+                    destructive: true,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _GroupCallParticipantViewData {
+  const _GroupCallParticipantViewData({
+    required this.id,
+    required this.displayName,
+    required this.isLocal,
+    required this.isSpeaking,
+    required this.audioLevel,
+    required this.videoTrack,
+  });
+
+  final String id;
+  final String displayName;
+  final bool isLocal;
+  final bool isSpeaking;
+  final double audioLevel;
+  final lk.VideoTrack? videoTrack;
+}
+
 class _CallIdentityPanel extends StatelessWidget {
   const _CallIdentityPanel({
     required this.authToken,
