@@ -6205,8 +6205,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
 
   Widget _buildSecurityBanner() {
     final message = _isGroupChat
-        ? 'Mesajlar ve aramalar uçtan uca şifrelidir. Yalnızca bu gruptaki kişiler bu içerikleri okuyabilir, dinleyebilir veya paylaşabilir.'
-        : 'Mesajlar ve aramalar uçtan uca şifrelidir. Yalnızca bu sohbetteki kişiler bu içerikleri okuyabilir, dinleyebilir veya paylaşabilir.';
+        ? 'Mesajlar ve aramalar uçtan uca güvenli bağlantı kullanılarak iletilir ve gizliliğiniz korunur. Yalnızca bu gruptaki kişiler bu içerikleri okuyabilir, dinleyebilir veya paylaşabilir.'
+        : 'Mesajlar ve aramalar uçtan uca güvenli bağlantı kullanılarak iletilir ve gizliliğiniz korunur. Yalnızca bu sohbetteki kişiler bu içerikleri okuyabilir, dinleyebilir veya paylaşabilir.';
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.fromLTRB(12, 8, 12, 4),
