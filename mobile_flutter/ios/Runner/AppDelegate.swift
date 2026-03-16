@@ -14,12 +14,19 @@ import Darwin
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, PKPushRegistryDelegate, CallkitIncomingAppDelegate, VNDocumentCameraViewControllerDelegate {
+  private let shareAppGroupIdentifier = "group.com.turna.chat.shared"
+  private let sharePayloadDefaultsKey = "turna.shared_payload"
+  private let shareTargetScheme = "turna"
+  private let shareTargetHost = "share-target"
   private let pendingActionDefaultsKey = "flutter.turna_pending_native_call_action"
   private var displayChannel: FlutterMethodChannel?
   private var deviceChannel: FlutterMethodChannel?
   private var mediaChannel: FlutterMethodChannel?
   private var statusCameraChannel: FlutterMethodChannel?
+  private var shareTargetChannel: FlutterMethodChannel?
   private var didConfigureDisplayChannel = false
+  private var isShareTargetBridgeReady = false
+  private var pendingSharedPayload: [String: Any]?
   private var pendingStatusCameraResult: FlutterResult?
   private var pendingDocumentScanResult: FlutterResult?
 
@@ -40,6 +47,8 @@ import Darwin
       UNUserNotificationCenter.current().delegate = self
     }
 
+    loadPendingSharedPayloadFromAppGroup()
+
     let didFinish = super.application(application, didFinishLaunchingWithOptions: launchOptions)
     configureDisplayChannelWhenReady()
     return didFinish
@@ -48,6 +57,17 @@ import Darwin
   override func applicationDidBecomeActive(_ application: UIApplication) {
     super.applicationDidBecomeActive(application)
     configureDisplayChannelWhenReady()
+  }
+
+  override func application(
+    _ application: UIApplication,
+    open url: URL,
+    options: [UIApplication.OpenURLOptionsKey: Any] = [:]
+  ) -> Bool {
+    if handleIncomingSharedURL(url) {
+      return true
+    }
+    return super.application(application, open: url, options: options)
   }
 
   func pushRegistry(_ registry: PKPushRegistry, didUpdate credentials: PKPushCredentials, for type: PKPushType) {
@@ -237,6 +257,17 @@ import Darwin
         }
         let mimeType = args["mimeType"] as? String
         self?.saveToGallery(path: path, mimeType: mimeType, result: result)
+      case "saveFile":
+        guard
+          let args = call.arguments as? [String: Any],
+          let path = args["path"] as? String
+        else {
+          result(
+            FlutterError(code: "invalid_args", message: "Dosya yolu gerekli.", details: nil)
+          )
+          return
+        }
+        self?.saveFile(path: path, result: result)
       case "processVideo":
         guard
           let args = call.arguments as? [String: Any],
@@ -257,11 +288,59 @@ import Darwin
         )
       case "scanDocument":
         self?.presentDocumentScanner(result: result)
+      case "getPdfPageCount":
+        guard
+          let args = call.arguments as? [String: Any],
+          let path = args["path"] as? String
+        else {
+          result(
+            FlutterError(code: "invalid_args", message: "PDF yolu gerekli.", details: nil)
+          )
+          return
+        }
+        self?.getPdfPageCount(path: path, result: result)
+      case "renderPdfPage":
+        guard
+          let args = call.arguments as? [String: Any],
+          let path = args["path"] as? String,
+          let pageIndex = args["pageIndex"] as? Int
+        else {
+          result(
+            FlutterError(code: "invalid_args", message: "PDF parametreleri eksik.", details: nil)
+          )
+          return
+        }
+        let targetWidth = args["targetWidth"] as? Int ?? 1440
+        self?.renderPdfPage(
+          path: path,
+          pageIndex: pageIndex,
+          targetWidth: targetWidth,
+          result: result
+        )
       default:
         result(FlutterMethodNotImplemented)
       }
     }
     self.mediaChannel = mediaChannel
+
+    let shareTargetChannel = FlutterMethodChannel(
+      name: "turna/share_target",
+      binaryMessenger: controller.binaryMessenger
+    )
+    shareTargetChannel.setMethodCallHandler { [weak self] call, result in
+      switch call.method {
+      case "shareBridgeReady":
+        self?.isShareTargetBridgeReady = true
+        result(nil)
+      case "consumeInitialPayload":
+        let payload = self?.pendingSharedPayload
+        self?.pendingSharedPayload = nil
+        result(payload)
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+    self.shareTargetChannel = shareTargetChannel
 
     let statusCameraChannel = FlutterMethodChannel(
       name: "turna/status_camera",
@@ -295,6 +374,38 @@ import Darwin
     }
     self.statusCameraChannel = statusCameraChannel
     didConfigureDisplayChannel = true
+  }
+
+  @discardableResult
+  func handleIncomingSharedURL(_ url: URL) -> Bool {
+    guard
+      url.scheme?.lowercased() == shareTargetScheme,
+      url.host?.lowercased() == shareTargetHost
+    else {
+      return false
+    }
+    loadPendingSharedPayloadFromAppGroup()
+    dispatchSharedPayloadIfReady()
+    return true
+  }
+
+  private func loadPendingSharedPayloadFromAppGroup() {
+    guard let defaults = UserDefaults(suiteName: shareAppGroupIdentifier) else {
+      return
+    }
+    if let payload = defaults.dictionary(forKey: sharePayloadDefaultsKey) {
+      pendingSharedPayload = payload
+      defaults.removeObject(forKey: sharePayloadDefaultsKey)
+      defaults.synchronize()
+    }
+  }
+
+  private func dispatchSharedPayloadIfReady() {
+    guard isShareTargetBridgeReady, let payload = pendingSharedPayload else {
+      return
+    }
+    pendingSharedPayload = nil
+    shareTargetChannel?.invokeMethod("sharedPayloadUpdated", arguments: payload)
   }
 
   private func presentStatusCamera(
@@ -422,6 +533,98 @@ import Darwin
             FlutterError(code: "permission_denied", message: "Fotoğraf izni verilmedi.", details: nil)
           )
         }
+      }
+    }
+  }
+
+  private func saveFile(path: String, result: @escaping FlutterResult) {
+    let fileUrl = URL(fileURLWithPath: path)
+    guard FileManager.default.fileExists(atPath: fileUrl.path) else {
+      result(FlutterError(code: "missing_file", message: "Dosya bulunamadı.", details: nil))
+      return
+    }
+
+    DispatchQueue.main.async { [weak self] in
+      guard let controller = self?.topMostViewController() else {
+        result(
+          FlutterError(code: "missing_view", message: "Kaydetme ekranı açılamadı.", details: nil)
+        )
+        return
+      }
+      let picker = UIDocumentPickerViewController(forExporting: [fileUrl], asCopy: true)
+      picker.modalPresentationStyle = .formSheet
+      controller.present(picker, animated: true)
+      result(nil)
+    }
+  }
+
+  private func getPdfPageCount(path: String, result: @escaping FlutterResult) {
+    let fileUrl = URL(fileURLWithPath: path)
+    guard FileManager.default.fileExists(atPath: fileUrl.path) else {
+      result(FlutterError(code: "missing_file", message: "PDF bulunamadı.", details: nil))
+      return
+    }
+    guard let document = PDFDocument(url: fileUrl) else {
+      result(FlutterError(code: "invalid_pdf", message: "PDF açılamadı.", details: nil))
+      return
+    }
+    result(document.pageCount)
+  }
+
+  private func renderPdfPage(
+    path: String,
+    pageIndex: Int,
+    targetWidth: Int,
+    result: @escaping FlutterResult
+  ) {
+    let fileUrl = URL(fileURLWithPath: path)
+    guard FileManager.default.fileExists(atPath: fileUrl.path) else {
+      result(FlutterError(code: "missing_file", message: "PDF bulunamadı.", details: nil))
+      return
+    }
+    guard let document = PDFDocument(url: fileUrl) else {
+      result(FlutterError(code: "invalid_pdf", message: "PDF açılamadı.", details: nil))
+      return
+    }
+    guard let page = document.page(at: pageIndex) else {
+      result(
+        FlutterError(code: "invalid_page", message: "PDF sayfası bulunamadı.", details: nil)
+      )
+      return
+    }
+
+    DispatchQueue.global(qos: .userInitiated).async {
+      let pageBounds = page.bounds(for: .mediaBox)
+      let width = max(1, CGFloat(targetWidth))
+      let scale = width / max(pageBounds.width, 1)
+      let outputSize = CGSize(
+        width: width,
+        height: max(1, pageBounds.height * scale)
+      )
+      let renderer = UIGraphicsImageRenderer(size: outputSize)
+      let image = renderer.image { context in
+        UIColor.white.setFill()
+        context.fill(CGRect(origin: .zero, size: outputSize))
+        context.cgContext.saveGState()
+        context.cgContext.translateBy(x: 0, y: outputSize.height)
+        context.cgContext.scaleBy(x: scale, y: -scale)
+        page.draw(with: .mediaBox, to: context.cgContext)
+        context.cgContext.restoreGState()
+      }
+      guard let data = image.pngData() else {
+        DispatchQueue.main.async {
+          result(
+            FlutterError(
+              code: "render_failed",
+              message: "PDF sayfası hazırlanamadı.",
+              details: nil
+            )
+          )
+        }
+        return
+      }
+      DispatchQueue.main.async {
+        result(FlutterStandardTypedData(bytes: data))
       }
     }
   }
