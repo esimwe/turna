@@ -264,6 +264,8 @@ class TurnaGroupCallState {
     required this.roomName,
     required this.type,
     required this.startedByUserId,
+    this.microphonePolicy = 'EVERYONE',
+    this.cameraPolicy = 'EVERYONE',
     this.startedByDisplayName,
     this.startedAt,
     this.participantCount = 0,
@@ -274,6 +276,8 @@ class TurnaGroupCallState {
   final String roomName;
   final TurnaCallType type;
   final String startedByUserId;
+  final String microphonePolicy;
+  final String cameraPolicy;
   final String? startedByDisplayName;
   final String? startedAt;
   final int participantCount;
@@ -287,6 +291,11 @@ class TurnaGroupCallState {
           ? TurnaCallType.video
           : TurnaCallType.audio,
       startedByUserId: (map['startedByUserId'] ?? '').toString(),
+      microphonePolicy:
+          TurnaUserProfile._nullableString(map['microphonePolicy']) ??
+          'EVERYONE',
+      cameraPolicy:
+          TurnaUserProfile._nullableString(map['cameraPolicy']) ?? 'EVERYONE',
       startedByDisplayName: TurnaUserProfile._nullableString(
         map['startedByDisplayName'],
       ),
@@ -626,6 +635,37 @@ class CallApi {
       rethrow;
     } catch (_) {
       throw TurnaApiException('Grup çağrısından çıkılamadı.');
+    }
+  }
+
+  static Future<TurnaGroupCallState?> updateGroupCallModeration(
+    AuthSession session, {
+    required String chatId,
+    String? microphonePolicy,
+    String? cameraPolicy,
+  }) async {
+    try {
+      final res = await http.put(
+        Uri.parse('$kBackendBaseUrl/api/calls/group-chat/$chatId/moderation'),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          if (microphonePolicy != null) 'microphonePolicy': microphonePolicy,
+          if (cameraPolicy != null) 'cameraPolicy': cameraPolicy,
+        }),
+      );
+      ChatApi._throwIfApiError(res);
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = Map<String, dynamic>.from(map['data'] as Map? ?? const {});
+      final rawState = data['state'] as Map?;
+      if (rawState == null) return null;
+      return TurnaGroupCallState.fromMap(Map<String, dynamic>.from(rawState));
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Grup çağrısı ayarları güncellenemedi.');
     }
   }
 

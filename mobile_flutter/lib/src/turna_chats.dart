@@ -3629,8 +3629,10 @@ class _ChatRoomPageState extends State<ChatRoomPage>
           builder: (_) => GroupCallPage(
             session: widget.session,
             chat: widget.chat,
+            chatClient: _client,
             initialState: joined.state,
             connect: joined.connect,
+            myRole: _cachedGroupDetail?.myRole,
             onSessionExpired: widget.onSessionExpired,
           ),
         ),

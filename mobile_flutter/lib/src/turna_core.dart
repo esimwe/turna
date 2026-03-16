@@ -1772,7 +1772,9 @@ class TurnaSocketClient extends ChangeNotifier {
       final changed =
           _activeGroupCallState?.roomName != nextState?.roomName ||
           _activeGroupCallState?.participantCount != nextState?.participantCount ||
-          _activeGroupCallState?.type != nextState?.type;
+          _activeGroupCallState?.type != nextState?.type ||
+          _activeGroupCallState?.microphonePolicy != nextState?.microphonePolicy ||
+          _activeGroupCallState?.cameraPolicy != nextState?.cameraPolicy;
       _activeGroupCallState = nextState;
       if (changed) {
         notifyListeners();
@@ -1960,7 +1962,9 @@ class TurnaSocketClient extends ChangeNotifier {
     final changed =
         _activeGroupCallState?.roomName != state?.roomName ||
         _activeGroupCallState?.participantCount != state?.participantCount ||
-        _activeGroupCallState?.type != state?.type;
+        _activeGroupCallState?.type != state?.type ||
+        _activeGroupCallState?.microphonePolicy != state?.microphonePolicy ||
+        _activeGroupCallState?.cameraPolicy != state?.cameraPolicy;
     _activeGroupCallState = state;
     if (changed) {
       notifyListeners();
@@ -3353,6 +3357,10 @@ class ProfileApi {
           return 'Başlatmak için sesli veya görüntülü çağrı seç.';
         case 'group_call_not_allowed':
           return 'Bu grupta çağrı başlatma yetkin yok.';
+        case 'group_call_not_active':
+          return 'Aktif grup çağrısı bulunamadı.';
+        case 'group_call_moderation_not_allowed':
+          return 'Bu çağrıyı yönetme yetkin yok.';
         case 'group_ban_not_found':
           return 'Aktif yasak kaydı bulunamadı.';
         case 'chat_send_restricted':

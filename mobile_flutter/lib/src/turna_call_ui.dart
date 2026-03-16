@@ -635,14 +635,18 @@ class GroupCallPage extends StatefulWidget {
     super.key,
     required this.session,
     required this.chat,
+    required this.chatClient,
     required this.connect,
+    required this.myRole,
     required this.onSessionExpired,
     this.initialState,
   });
 
   final AuthSession session;
   final ChatPreview chat;
+  final TurnaSocketClient chatClient;
   final TurnaCallConnectPayload connect;
+  final String? myRole;
   final TurnaGroupCallState? initialState;
   final VoidCallback onSessionExpired;
 
@@ -656,13 +660,56 @@ class _GroupCallPageState extends State<GroupCallPage> {
     videoEnabled: widget.connect.type == TurnaCallType.video,
   );
   bool _leaving = false;
+  bool _savingModeration = false;
   int _durationSeconds = 0;
   Timer? _durationTicker;
+  bool _hasSyncedCallState = false;
+
+  TurnaGroupCallState? get _groupCallState =>
+      _hasSyncedCallState
+      ? widget.chatClient.activeGroupCallState
+      : (widget.chatClient.activeGroupCallState ?? widget.initialState);
+
+  bool get _canModerateCall {
+    final role = (widget.myRole ?? '').trim().toUpperCase();
+    return role == 'OWNER' || role == 'ADMIN' || role == 'EDITOR';
+  }
+
+  bool get _canSpeak {
+    final state = _groupCallState;
+    if (state == null) return true;
+    final role = (widget.myRole ?? '').trim().toUpperCase();
+    switch (state.microphonePolicy.trim().toUpperCase()) {
+      case 'LISTEN_ONLY':
+        return false;
+      case 'ADMINS_ONLY':
+        return role == 'OWNER' || role == 'ADMIN' || role == 'EDITOR';
+      default:
+        return true;
+    }
+  }
+
+  bool get _canEnableCamera {
+    if (widget.connect.type != TurnaCallType.video) return false;
+    final state = _groupCallState;
+    if (state == null) return true;
+    final role = (widget.myRole ?? '').trim().toUpperCase();
+    switch (state.cameraPolicy.trim().toUpperCase()) {
+      case 'DISABLED':
+        return false;
+      case 'ADMINS_ONLY':
+        return role == 'OWNER' || role == 'ADMIN' || role == 'EDITOR';
+      default:
+        return true;
+    }
+  }
 
   @override
   void initState() {
     super.initState();
+    _hasSyncedCallState = widget.chatClient.activeGroupCallState != null;
     _adapter.addListener(_handleAdapterChanged);
+    widget.chatClient.addListener(_handleGroupCallStateChanged);
     unawaited(_adapter.connect());
     _durationTicker = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!_adapter.connected || !mounted) return;
@@ -673,14 +720,41 @@ class _GroupCallPageState extends State<GroupCallPage> {
   @override
   void dispose() {
     _durationTicker?.cancel();
+    widget.chatClient.removeListener(_handleGroupCallStateChanged);
     _adapter.removeListener(_handleAdapterChanged);
     _adapter.dispose();
     super.dispose();
   }
 
   void _handleAdapterChanged() {
+    unawaited(_enforceModerationState());
     if (!mounted) return;
     setState(() {});
+  }
+
+  void _handleGroupCallStateChanged() {
+    _hasSyncedCallState = true;
+    if (widget.chatClient.activeGroupCallState == null && mounted && !_leaving) {
+      Navigator.of(context).maybePop();
+      return;
+    }
+    unawaited(_enforceModerationState());
+    if (!mounted) return;
+    setState(() {});
+  }
+
+  Future<void> _enforceModerationState() async {
+    if (!_adapter.connected) return;
+    if (!_canSpeak && _adapter.microphoneEnabled) {
+      try {
+        await _adapter.toggleMicrophone();
+      } catch (_) {}
+    }
+    if (!_canEnableCamera && _adapter.cameraEnabled) {
+      try {
+        await _adapter.toggleCamera();
+      } catch (_) {}
+    }
   }
 
   Future<void> _leaveCall() async {
@@ -707,6 +781,174 @@ class _GroupCallPageState extends State<GroupCallPage> {
     final minutes = (_durationSeconds ~/ 60).toString().padLeft(2, '0');
     final seconds = (_durationSeconds % 60).toString().padLeft(2, '0');
     return '$minutes:$seconds';
+  }
+
+  String? _restrictionText() {
+    final state = _groupCallState;
+    if (state == null) return null;
+    final messages = <String>[];
+    switch (state.microphonePolicy.trim().toUpperCase()) {
+      case 'LISTEN_ONLY':
+        messages.add('Bu çağrı dinleme modunda.');
+        break;
+      case 'ADMINS_ONLY':
+        if (!_canSpeak) {
+          messages.add('Bu çağrıda sadece yönetici rolü konuşabilir.');
+        }
+        break;
+    }
+    switch (state.cameraPolicy.trim().toUpperCase()) {
+      case 'DISABLED':
+        if (widget.connect.type == TurnaCallType.video) {
+          messages.add('Kamera açma şu an kapalı.');
+        }
+        break;
+      case 'ADMINS_ONLY':
+        if (!_canEnableCamera && widget.connect.type == TurnaCallType.video) {
+          messages.add('Kamera yalnızca yönetici rollerde açılabilir.');
+        }
+        break;
+    }
+    if (messages.isEmpty) return null;
+    return messages.join(' ');
+  }
+
+  Future<void> _openModerationSheet() async {
+    if (!_canModerateCall || _savingModeration) return;
+    final state = _groupCallState;
+    if (state == null) return;
+    final next = await showModalBottomSheet<Map<String, String>>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) {
+        String microphonePolicy = state.microphonePolicy;
+        String cameraPolicy = state.cameraPolicy;
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(18, 8, 18, 18),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Çağrı moderasyonu',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    const Text(
+                      'Mikrofon',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    RadioListTile<String>(
+                      value: 'EVERYONE',
+                      groupValue: microphonePolicy,
+                      onChanged: (value) => setModalState(
+                        () => microphonePolicy = value ?? 'EVERYONE',
+                      ),
+                      title: const Text('Herkes konuşabilir'),
+                    ),
+                    RadioListTile<String>(
+                      value: 'ADMINS_ONLY',
+                      groupValue: microphonePolicy,
+                      onChanged: (value) => setModalState(
+                        () => microphonePolicy = value ?? 'ADMINS_ONLY',
+                      ),
+                      title: const Text('Sadece yönetici rolleri konuşabilir'),
+                    ),
+                    RadioListTile<String>(
+                      value: 'LISTEN_ONLY',
+                      groupValue: microphonePolicy,
+                      onChanged: (value) => setModalState(
+                        () => microphonePolicy = value ?? 'LISTEN_ONLY',
+                      ),
+                      title: const Text('Dinleme modu'),
+                    ),
+                    if (widget.connect.type == TurnaCallType.video) ...[
+                      const SizedBox(height: 4),
+                      const Text(
+                        'Kamera',
+                        style: TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      RadioListTile<String>(
+                        value: 'EVERYONE',
+                        groupValue: cameraPolicy,
+                        onChanged: (value) => setModalState(
+                          () => cameraPolicy = value ?? 'EVERYONE',
+                        ),
+                        title: const Text('Herkes kamera açabilir'),
+                      ),
+                      RadioListTile<String>(
+                        value: 'ADMINS_ONLY',
+                        groupValue: cameraPolicy,
+                        onChanged: (value) => setModalState(
+                          () => cameraPolicy = value ?? 'ADMINS_ONLY',
+                        ),
+                        title: const Text(
+                          'Sadece yönetici rolleri kamera açabilir',
+                        ),
+                      ),
+                      RadioListTile<String>(
+                        value: 'DISABLED',
+                        groupValue: cameraPolicy,
+                        onChanged: (value) => setModalState(
+                          () => cameraPolicy = value ?? 'DISABLED',
+                        ),
+                        title: const Text('Kameraları kapat'),
+                      ),
+                    ],
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton(
+                        onPressed: () => Navigator.of(context).pop({
+                          'microphonePolicy': microphonePolicy,
+                          'cameraPolicy': cameraPolicy,
+                        }),
+                        child: const Text('Uygula'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+    if (next == null) return;
+
+    setState(() => _savingModeration = true);
+    try {
+      final updated = await CallApi.updateGroupCallModeration(
+        widget.session,
+        chatId: widget.chat.chatId,
+        microphonePolicy: next['microphonePolicy'],
+        cameraPolicy: widget.connect.type == TurnaCallType.video
+            ? next['cameraPolicy']
+            : 'DISABLED',
+      );
+      widget.chatClient.setActiveGroupCallState(updated);
+      await _enforceModerationState();
+    } on TurnaUnauthorizedException {
+      if (mounted) {
+        widget.onSessionExpired();
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.toString())));
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _savingModeration = false);
+      }
+    }
   }
 
   List<_GroupCallParticipantViewData> _participantViews() {
@@ -948,6 +1190,20 @@ class _GroupCallPageState extends State<GroupCallPage> {
               ),
             ],
           ),
+          actions: [
+            if (_canModerateCall)
+              IconButton(
+                tooltip: 'Çağrı moderasyonu',
+                onPressed: _savingModeration ? null : _openModerationSheet,
+                icon: _savingModeration
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.admin_panel_settings_outlined),
+              ),
+          ],
         ),
         body: Column(
           children: [
@@ -963,6 +1219,21 @@ class _GroupCallPageState extends State<GroupCallPage> {
                 child: Text(
                   _adapter.mediaError!,
                   style: const TextStyle(color: Color(0xFF7A4B00)),
+                ),
+              ),
+            if ((_restrictionText() ?? '').isNotEmpty)
+              Container(
+                width: double.infinity,
+                margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: TurnaColors.primary50,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: TurnaColors.primary200),
+                ),
+                child: Text(
+                  _restrictionText()!,
+                  style: const TextStyle(color: TurnaColors.primary800),
                 ),
               ),
             Expanded(
@@ -983,7 +1254,7 @@ class _GroupCallPageState extends State<GroupCallPage> {
                 children: [
                   if (widget.connect.type == TurnaCallType.video)
                     _AudioCallControlButton(
-                      onTap: _adapter.connecting
+                      onTap: _adapter.connecting || !_canEnableCamera
                           ? null
                           : () => _adapter.toggleCamera(),
                       icon: Icon(
@@ -1005,7 +1276,7 @@ class _GroupCallPageState extends State<GroupCallPage> {
                     active: _adapter.speakerEnabled,
                   ),
                   _AudioCallControlButton(
-                    onTap: _adapter.connecting
+                    onTap: _adapter.connecting || !_canSpeak
                         ? null
                         : () => _adapter.toggleMicrophone(),
                     icon: Icon(
