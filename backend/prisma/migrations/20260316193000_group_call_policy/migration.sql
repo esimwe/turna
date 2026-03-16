@@ -1,0 +1,2 @@
+ALTER TABLE "Chat"
+ADD COLUMN "whoCanStartCalls" "ChatPolicyScope" NOT NULL DEFAULT 'EDITOR_ONLY';

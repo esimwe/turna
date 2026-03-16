@@ -34,25 +34,39 @@ export class LiveKitCallProvider implements CallProvider {
     );
   }
 
-  async createSession(input: CreateCallSessionInput): Promise<CreateCallSessionResult> {
-    const roomName = `call_${input.callId}`;
+  async createRoom(input: {
+    roomName: string;
+    metadata?: Record<string, unknown>;
+    maxParticipants?: number;
+    emptyTimeoutSeconds?: number;
+  }): Promise<CreateCallSessionResult> {
     await this.roomService.createRoom({
-      name: roomName,
-      maxParticipants: 2,
-      emptyTimeout: 60 * 5,
-      metadata: JSON.stringify({
-        callId: input.callId,
-        type: input.type,
-        callerId: input.callerId,
-        calleeId: input.calleeId
-      })
+      name: input.roomName,
+      maxParticipants: input.maxParticipants ?? 2,
+      emptyTimeout: input.emptyTimeoutSeconds ?? 60 * 5,
+      metadata: JSON.stringify(input.metadata ?? {})
     });
 
     return {
       provider: this.name,
-      sessionId: roomName,
-      roomName
+      sessionId: input.roomName,
+      roomName: input.roomName
     };
+  }
+
+  async createSession(input: CreateCallSessionInput): Promise<CreateCallSessionResult> {
+    const roomName = `call_${input.callId}`;
+    return this.createRoom({
+      roomName,
+      maxParticipants: 2,
+      emptyTimeoutSeconds: 60 * 5,
+      metadata: {
+        callId: input.callId,
+        type: input.type,
+        callerId: input.callerId,
+        calleeId: input.calleeId
+      }
+    });
   }
 
   async createParticipantToken(input: CreateCallParticipantTokenInput): Promise<CallJoinPayload> {

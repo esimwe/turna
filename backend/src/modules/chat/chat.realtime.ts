@@ -121,6 +121,11 @@ export function emitInboxUpdate(userIds: string[]): void {
   emitUserEvent(userIds, "chat:inbox:update", undefined);
 }
 
+export function emitChatRoomEvent<T>(chatId: string, eventName: string, payload: T): void {
+  if (!chatIo) return;
+  chatIo.to(chatRoom(chatId)).emit(eventName, payload);
+}
+
 export function emitPresenceUpdate(userIds: string[], payload: UserPresencePayload): void {
   emitUserEvent(userIds, "user:presence", payload);
 }

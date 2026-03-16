@@ -295,6 +295,7 @@ model Chat {
   whoCanEditInfo      ChatPolicyScope     @default(EDITOR_ONLY)
   whoCanInvite        ChatPolicyScope     @default(ADMIN_ONLY)
   whoCanAddMembers    ChatPolicyScope     @default(ADMIN_ONLY)
+  whoCanStartCalls    ChatPolicyScope     @default(EDITOR_ONLY)
   historyVisibleToNewMembers Boolean      @default(true)
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @default(now()) @updatedAt

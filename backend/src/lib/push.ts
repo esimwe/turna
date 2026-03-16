@@ -335,6 +335,54 @@ async function countUnreadMessagesForUser(userId: string): Promise<number> {
   return total;
 }
 
+async function getChatPushContext(chatId: string): Promise<{
+  chatType: "direct" | "group";
+  chatTitle: string | null;
+} | null> {
+  const chat = await prisma.chat.findUnique({
+    where: { id: chatId },
+    select: {
+      type: true,
+      title: true
+    }
+  });
+  if (!chat) return null;
+  return {
+    chatType: chat.type === "GROUP" ? "group" : "direct",
+    chatTitle: chat.title?.trim() || null
+  };
+}
+
+function buildChatPushNotification(params: {
+  message: ChatMessage;
+  senderDisplayName: string;
+  chatType: "direct" | "group";
+  chatTitle: string | null;
+  isMention: boolean;
+}): { title: string; body: string } {
+  const baseBody = buildPushBody(params.message);
+  if (params.chatType === "group") {
+    const title = params.chatTitle?.trim() || "Grup sohbeti";
+    if (params.isMention) {
+      return {
+        title,
+        body: baseBody === "Yeni mesaj"
+          ? `${params.senderDisplayName} senden bahsetti`
+          : `${params.senderDisplayName}: ${baseBody}`
+      };
+    }
+    return {
+      title,
+      body: `${params.senderDisplayName}: ${baseBody}`
+    };
+  }
+
+  return {
+    title: params.senderDisplayName,
+    body: baseBody
+  };
+}
+
 async function getEligibleChatPushRecipients(params: {
   chatId: string;
   senderId: string;
@@ -487,6 +535,12 @@ export async function sendChatMessagePush(params: {
   }
 
   try {
+    const chatContext = await getChatPushContext(params.message.chatId);
+    const mentionUserIds = new Set(
+      params.message.mentions
+        .map((mention) => mention.userId.trim())
+        .filter((userId) => userId.length > 0)
+    );
     const groupedDevices = new Map<string, PushDevice[]>();
     for (const device of devices) {
       const current = groupedDevices.get(device.userId) ?? [];
@@ -510,18 +564,28 @@ export async function sendChatMessagePush(params: {
       if (recipientDevices.length === 0) continue;
 
       const unreadTotal = await countUnreadMessagesForUser(recipientUserId);
+      const notification = buildChatPushNotification({
+        message: params.message,
+        senderDisplayName: params.senderDisplayName,
+        chatType: chatContext?.chatType ?? "direct",
+        chatTitle: chatContext?.chatTitle ?? null,
+        isMention: mentionUserIds.has(recipientUserId)
+      });
       const response = await getMessaging(app).sendEachForMulticast({
         tokens: recipientDevices.map((device) => device.token),
         notification: {
-          title: params.senderDisplayName,
-          body: buildPushBody(params.message)
+          title: notification.title,
+          body: notification.body
         },
         data: {
           type: "chat_message",
           chatId: params.message.chatId,
           senderId: params.message.senderId,
           senderDisplayName: params.senderDisplayName,
-          body: buildPushBody(params.message),
+          chatType: chatContext?.chatType ?? "direct",
+          chatTitle: chatContext?.chatTitle ?? "",
+          body: notification.body,
+          isMention: mentionUserIds.has(recipientUserId) ? "true" : "false",
           unreadTotal: unreadTotal.toString()
         },
         android: {

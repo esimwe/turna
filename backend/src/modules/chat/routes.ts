@@ -228,6 +228,7 @@ const updateGroupSettingsSchema = z
     whoCanEditInfo: chatPolicyScopeSchema.optional(),
     whoCanInvite: chatPolicyScopeSchema.optional(),
     whoCanAddMembers: chatPolicyScopeSchema.optional(),
+    whoCanStartCalls: chatPolicyScopeSchema.optional(),
     historyVisibleToNewMembers: z.boolean().optional()
   })
   .superRefine((value, ctx) => {
@@ -238,6 +239,7 @@ const updateGroupSettingsSchema = z
       value.whoCanEditInfo !== undefined ||
       value.whoCanInvite !== undefined ||
       value.whoCanAddMembers !== undefined ||
+      value.whoCanStartCalls !== undefined ||
       value.historyVisibleToNewMembers !== undefined
     ) {
       return;

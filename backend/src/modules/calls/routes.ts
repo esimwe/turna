@@ -1,11 +1,14 @@
 import { Router, type Request, type Response } from "express";
+import { randomUUID } from "node:crypto";
 import { WebhookReceiver } from "livekit-server-sdk";
 import { z } from "zod";
 import { env } from "../../config/env.js";
 import { logError, logInfo } from "../../lib/logger.js";
+import { redis } from "../../lib/redis.js";
 import { sendCallEndedPush, sendIncomingCallPush } from "../../lib/push.js";
 import { requireAuth, requireCallingAccess } from "../../middleware/auth.js";
 import { emitUserEvent } from "../chat/chat.realtime.js";
+import { chatService } from "../chat/chat.service.js";
 import { buildAvatarUrlFromOrigin, getRequestOrigin } from "../profile/avatar-url.js";
 import { callService } from "./call.service.js";
 import {
@@ -15,6 +18,7 @@ import {
   scheduleCallTimeout
 } from "./call.timeout.js";
 import type { CallHistoryItem, CallRecord, CallUser } from "./call.types.js";
+import { livekitCallProvider } from "./livekit.provider.js";
 
 export const callRouter = Router();
 const liveKitWebhookReceiver =
@@ -34,6 +38,184 @@ const videoUpgradeActionSchema = z.object({
 const listCallsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50)
 });
+
+const groupChatCallParamSchema = z.object({
+  chatId: z.string().trim().min(1).max(255)
+});
+
+const joinGroupCallSchema = z.object({
+  type: z.enum(["audio", "video"]).optional()
+});
+
+const leaveGroupCallSchema = z.object({
+  roomName: z.string().trim().min(1).max(255)
+});
+
+const GROUP_CALL_TTL_SECONDS = 60 * 60 * 6;
+const GROUP_CALL_EMPTY_TIMEOUT_SECONDS = 60 * 10;
+const GROUP_CALL_MAX_PARTICIPANTS = 64;
+
+interface GroupCallStateRecord {
+  chatId: string;
+  roomName: string;
+  sessionId: string;
+  type: "audio" | "video";
+  startedByUserId: string;
+  startedByDisplayName: string | null;
+  startedAt: string;
+}
+
+function groupCallRedisKey(chatId: string): string {
+  return `turna:group-call:${chatId}`;
+}
+
+function canUseGroupCallState(): boolean {
+  return redis.status === "ready";
+}
+
+async function loadGroupCallState(chatId: string): Promise<GroupCallStateRecord | null> {
+  if (!canUseGroupCallState()) return null;
+  try {
+    const raw = await redis.get(groupCallRedisKey(chatId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<GroupCallStateRecord>;
+    if (
+      !parsed.chatId ||
+      !parsed.roomName ||
+      !parsed.sessionId ||
+      !parsed.type ||
+      !parsed.startedByUserId ||
+      !parsed.startedAt
+    ) {
+      return null;
+    }
+    return {
+      chatId: parsed.chatId,
+      roomName: parsed.roomName,
+      sessionId: parsed.sessionId,
+      type: parsed.type,
+      startedByUserId: parsed.startedByUserId,
+      startedByDisplayName: parsed.startedByDisplayName ?? null,
+      startedAt: parsed.startedAt
+    };
+  } catch (error) {
+    logError("group call state read failed", error);
+    return null;
+  }
+}
+
+async function saveGroupCallState(state: GroupCallStateRecord): Promise<void> {
+  if (!canUseGroupCallState()) {
+    throw new Error("group_call_state_unavailable");
+  }
+  await redis.set(
+    groupCallRedisKey(state.chatId),
+    JSON.stringify(state),
+    "EX",
+    GROUP_CALL_TTL_SECONDS
+  );
+}
+
+async function clearGroupCallState(chatId: string): Promise<void> {
+  if (!canUseGroupCallState()) return;
+  await redis.del(groupCallRedisKey(chatId));
+}
+
+function buildGroupCallRoomName(chatId: string): string {
+  return `group_call_${chatId.replace(/[^a-zA-Z0-9]/g, "")}_${randomUUID().slice(0, 8)}`;
+}
+
+function policyAllows(policy: string, role: string | null | undefined): boolean {
+  const normalizedRole = (role ?? "").trim().toUpperCase();
+  if (normalizedRole == "OWNER") return true;
+  switch (policy.trim().toUpperCase()) {
+    case "EVERYONE":
+      return true;
+    case "EDITOR_ONLY":
+      return normalizedRole == "ADMIN" || normalizedRole == "EDITOR";
+    case "ADMIN_ONLY":
+      return normalizedRole == "ADMIN";
+    default:
+      return false;
+  }
+}
+
+async function syncGroupCallState(
+  chatId: string
+): Promise<{ state: GroupCallStateRecord | null; participantCount: number }> {
+  const current = await loadGroupCallState(chatId);
+  if (!current) {
+    return { state: null, participantCount: 0 };
+  }
+
+  const participantCount =
+    (await livekitCallProvider.getParticipantCount({
+      callId: current.roomName,
+      roomName: current.roomName,
+      sessionId: current.sessionId
+    })) ?? 0;
+
+  if (participantCount <= 0) {
+    await clearGroupCallState(chatId);
+    return { state: null, participantCount: 0 };
+  }
+
+  await saveGroupCallState(current);
+  return { state: current, participantCount };
+}
+
+async function emitGroupCallStateUpdate(origin: string, chatId: string): Promise<void> {
+  const participantIds = await chatService.getChatParticipantIds(chatId);
+  const { state, participantCount } = await syncGroupCallState(chatId);
+  emitUserEvent(participantIds, "chat:group-call:update", {
+    chatId,
+    state: state
+      ? {
+          chatId,
+          roomName: state.roomName,
+          type: state.type,
+          startedByUserId: state.startedByUserId,
+          startedByDisplayName: state.startedByDisplayName,
+          startedAt: state.startedAt,
+          participantCount
+        }
+      : null,
+    origin
+  });
+}
+
+async function serializeGroupCallStateForViewer(params: {
+  chatId: string;
+  userId: string;
+}): Promise<{
+  chatId: string;
+  roomName: string;
+  type: "audio" | "video";
+  startedByUserId: string;
+  startedByDisplayName: string | null;
+  startedAt: string;
+  participantCount: number;
+  canStart: boolean;
+} | null> {
+  const detail = await chatService.getGroupDetail(params.chatId, params.userId);
+  if (!detail || detail.chatType !== "group") {
+    throw new Error("group_not_found");
+  }
+
+  const { state, participantCount } = await syncGroupCallState(params.chatId);
+  if (!state) return null;
+
+  return {
+    chatId: state.chatId,
+    roomName: state.roomName,
+    type: state.type,
+    startedByUserId: state.startedByUserId,
+    startedByDisplayName: state.startedByDisplayName,
+    startedAt: state.startedAt,
+    participantCount,
+    canStart: policyAllows(detail.whoCanStartCalls, detail.myRole)
+  };
+}
 
 function getRouteParam(req: Request, key: string): string {
   const value = req.params[key];
@@ -221,6 +403,18 @@ callRouter.post("/livekit/webhook", async (req, res) => {
 
     switch (event.event) {
       case "participant_joined": {
+        const groupStates = await redis.keys("turna:group-call:*").catch(() => []);
+        if (groupStates.length > 0) {
+          for (const key of groupStates) {
+            const raw = await redis.get(key).catch(() => null);
+            if (!raw) continue;
+            const state = JSON.parse(raw) as GroupCallStateRecord;
+            if (state.roomName !== roomName) continue;
+            await emitGroupCallStateUpdate("participant_joined", state.chatId);
+            res.status(204).end();
+            return;
+          }
+        }
         const call = await callService.findActiveCallByRoomName(roomName);
         if (call) {
           cancelCallReconnectGrace(call.id);
@@ -235,6 +429,18 @@ callRouter.post("/livekit/webhook", async (req, res) => {
       }
       case "participant_left":
       case "participant_connection_aborted": {
+        const groupStates = await redis.keys("turna:group-call:*").catch(() => []);
+        if (groupStates.length > 0) {
+          for (const key of groupStates) {
+            const raw = await redis.get(key).catch(() => null);
+            if (!raw) continue;
+            const state = JSON.parse(raw) as GroupCallStateRecord;
+            if (state.roomName !== roomName) continue;
+            await emitGroupCallStateUpdate("participant_left", state.chatId);
+            res.status(204).end();
+            return;
+          }
+        }
         const call = await callService.findActiveCallByRoomName(roomName);
         if (call?.status === "accepted") {
           scheduleCallReconnectGrace(call.id, async () => {
@@ -256,6 +462,19 @@ callRouter.post("/livekit/webhook", async (req, res) => {
         break;
       }
       case "room_finished": {
+        const groupStates = await redis.keys("turna:group-call:*").catch(() => []);
+        if (groupStates.length > 0) {
+          for (const key of groupStates) {
+            const raw = await redis.get(key).catch(() => null);
+            if (!raw) continue;
+            const state = JSON.parse(raw) as GroupCallStateRecord;
+            if (state.roomName !== roomName) continue;
+            await clearGroupCallState(state.chatId);
+            await emitGroupCallStateUpdate("room_finished", state.chatId);
+            res.status(204).end();
+            return;
+          }
+        }
         const call = await callService.endAcceptedCallByRoomName({
           roomName,
           reason: "room_finished_webhook"
@@ -297,6 +516,211 @@ callRouter.post("/reconcile", requireAuth, async (req, res) => {
   } catch (error) {
     logError("call reconcile failed", error);
     res.status(500).json({ error: "failed_to_reconcile_calls" });
+  }
+});
+
+callRouter.get("/group-chat/:chatId", requireAuth, async (req, res) => {
+  const parsed = groupChatCallParamSchema.safeParse(req.params);
+  if (!parsed.success) {
+    res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
+    return;
+  }
+
+  try {
+    const detail = await chatService.getGroupDetail(parsed.data.chatId, req.authUserId!);
+    if (!detail || detail.chatType !== "group") {
+      res.status(404).json({ error: "group_not_found" });
+      return;
+    }
+
+    const state = await serializeGroupCallStateForViewer({
+      chatId: parsed.data.chatId,
+      userId: req.authUserId!
+    });
+
+    res.json({
+      data: {
+        state,
+        canStart: policyAllows(detail.whoCanStartCalls, detail.myRole)
+      }
+    });
+  } catch (error) {
+    if (error instanceof Error) {
+      if (error.message === "forbidden_chat_access") {
+        res.status(403).json({ error: error.message });
+        return;
+      }
+      if (error.message === "group_not_found") {
+        res.status(404).json({ error: error.message });
+        return;
+      }
+    }
+    logError("group call state failed", error);
+    res.status(500).json({ error: "failed_to_load_group_call_state" });
+  }
+});
+
+callRouter.post(
+  "/group-chat/:chatId/join",
+  requireAuth,
+  requireCallingAccess,
+  async (req, res) => {
+    const parsedParams = groupChatCallParamSchema.safeParse(req.params);
+    const parsedBody = joinGroupCallSchema.safeParse(req.body ?? {});
+    if (!parsedParams.success) {
+      res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+      return;
+    }
+    if (!parsedBody.success) {
+      res.status(400).json({ error: "validation_error", details: parsedBody.error.flatten() });
+      return;
+    }
+    if (!canUseGroupCallState()) {
+      res.status(503).json({ error: "group_call_state_unavailable" });
+      return;
+    }
+    if (!livekitCallProvider.isConfigured()) {
+      res.status(503).json({ error: "call_provider_not_configured" });
+      return;
+    }
+
+    try {
+      const chatId = parsedParams.data.chatId;
+      const userId = req.authUserId!;
+      const detail = await chatService.getGroupDetail(chatId, userId);
+      if (!detail || detail.chatType !== "group") {
+        res.status(404).json({ error: "group_not_found" });
+        return;
+      }
+
+      let activeState = (await syncGroupCallState(chatId)).state;
+      if (!activeState) {
+        const requestedType = parsedBody.data.type;
+        if (!requestedType) {
+          res.status(400).json({ error: "group_call_type_required" });
+          return;
+        }
+        if (!policyAllows(detail.whoCanStartCalls, detail.myRole)) {
+          res.status(403).json({ error: "group_call_not_allowed" });
+          return;
+        }
+
+        const startedByDisplayName = await chatService.getUserDisplayName(userId);
+        const createdRoom = await livekitCallProvider.createRoom({
+          roomName: buildGroupCallRoomName(chatId),
+          maxParticipants: GROUP_CALL_MAX_PARTICIPANTS,
+          emptyTimeoutSeconds: GROUP_CALL_EMPTY_TIMEOUT_SECONDS,
+          metadata: {
+            scope: "group_chat",
+            chatId,
+            type: requestedType,
+            startedByUserId: userId,
+            startedByDisplayName
+          }
+        });
+
+        activeState = {
+          chatId,
+          roomName: createdRoom.roomName,
+          sessionId: createdRoom.sessionId,
+          type: requestedType,
+          startedByUserId: userId,
+          startedByDisplayName,
+          startedAt: new Date().toISOString()
+        };
+        await saveGroupCallState(activeState);
+      }
+
+      const connect = await livekitCallProvider.createParticipantToken({
+        callId: activeState.roomName,
+        roomName: activeState.roomName,
+        type: activeState.type,
+        userId,
+        participantName: await chatService.getUserDisplayName(userId)
+      });
+
+      await emitGroupCallStateUpdate("join", chatId);
+      const state = await serializeGroupCallStateForViewer({ chatId, userId });
+      res.json({
+        data: {
+          state,
+          connect
+        }
+      });
+    } catch (error) {
+      if (error instanceof Error) {
+        if (error.message === "forbidden_chat_access") {
+          res.status(403).json({ error: error.message });
+          return;
+        }
+        if (error.message === "group_not_found") {
+          res.status(404).json({ error: error.message });
+          return;
+        }
+      }
+      logError("group call join failed", error);
+      res.status(500).json({ error: "failed_to_join_group_call" });
+    }
+  }
+);
+
+callRouter.post("/group-chat/:chatId/leave", requireAuth, async (req, res) => {
+  const parsedParams = groupChatCallParamSchema.safeParse(req.params);
+  const parsedBody = leaveGroupCallSchema.safeParse(req.body);
+  if (!parsedParams.success) {
+    res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+    return;
+  }
+  if (!parsedBody.success) {
+    res.status(400).json({ error: "validation_error", details: parsedBody.error.flatten() });
+    return;
+  }
+
+  try {
+    const detail = await chatService.getGroupDetail(parsedParams.data.chatId, req.authUserId!);
+    if (!detail || detail.chatType !== "group") {
+      res.status(404).json({ error: "group_not_found" });
+      return;
+    }
+
+    const active = await loadGroupCallState(parsedParams.data.chatId);
+    if (!active || active.roomName !== parsedBody.data.roomName) {
+      res.json({ data: { state: null } });
+      return;
+    }
+
+    const participantCount =
+      (await livekitCallProvider.getParticipantCount({
+        callId: active.roomName,
+        roomName: active.roomName,
+        sessionId: active.sessionId
+      })) ?? 0;
+
+    if (participantCount <= 0) {
+      await clearGroupCallState(parsedParams.data.chatId);
+    } else {
+      await saveGroupCallState(active);
+    }
+
+    await emitGroupCallStateUpdate("leave", parsedParams.data.chatId);
+    const state = await serializeGroupCallStateForViewer({
+      chatId: parsedParams.data.chatId,
+      userId: req.authUserId!
+    });
+    res.json({ data: { state } });
+  } catch (error) {
+    if (error instanceof Error) {
+      if (error.message === "forbidden_chat_access") {
+        res.status(403).json({ error: error.message });
+        return;
+      }
+      if (error.message === "group_not_found") {
+        res.status(404).json({ error: error.message });
+        return;
+      }
+    }
+    logError("group call leave failed", error);
+    res.status(500).json({ error: "failed_to_leave_group_call" });
   }
 });
 

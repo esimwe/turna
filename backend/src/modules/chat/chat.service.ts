@@ -622,6 +622,7 @@ export class ChatService {
     whoCanEditInfo: ChatPolicyScopeValue;
     whoCanInvite: ChatPolicyScopeValue;
     whoCanAddMembers: ChatPolicyScopeValue;
+    whoCanStartCalls: ChatPolicyScopeValue;
     historyVisibleToNewMembers: boolean;
   } | null> {
     return prisma.chat.findUnique({
@@ -640,6 +641,7 @@ export class ChatService {
         whoCanEditInfo: true,
         whoCanInvite: true,
         whoCanAddMembers: true,
+        whoCanStartCalls: true,
         historyVisibleToNewMembers: true
       }
     });
@@ -1849,6 +1851,7 @@ export class ChatService {
           whoCanEditInfo: ChatPolicyScope.EDITOR_ONLY,
           whoCanInvite: ChatPolicyScope.ADMIN_ONLY,
           whoCanAddMembers: ChatPolicyScope.ADMIN_ONLY,
+          whoCanStartCalls: ChatPolicyScope.EDITOR_ONLY,
           memberAddPolicy: ChatMemberAddPolicy.ADMIN_ONLY,
           historyVisibleToNewMembers: true,
           members: {
@@ -1916,6 +1919,7 @@ export class ChatService {
         whoCanEditInfo: true,
         whoCanInvite: true,
         whoCanAddMembers: true,
+        whoCanStartCalls: true,
         historyVisibleToNewMembers: true,
         members: {
           select: {
@@ -1978,6 +1982,10 @@ export class ChatService {
         chat.type === ChatType.GROUP
           ? (chat.whoCanAddMembers ?? chat.memberAddPolicy)
           : ChatPolicyScope.ADMIN_ONLY,
+      whoCanStartCalls:
+        chat.type === ChatType.GROUP
+          ? (chat.whoCanStartCalls ?? ChatPolicyScope.EDITOR_ONLY)
+          : ChatPolicyScope.OWNER_ONLY,
       historyVisibleToNewMembers:
         chat.type === ChatType.GROUP ? chat.historyVisibleToNewMembers !== false : true,
       myCanSend: myMembership?.canSend === true,
@@ -2266,6 +2274,7 @@ export class ChatService {
     whoCanEditInfo?: ChatPolicyScopeValue;
     whoCanInvite?: ChatPolicyScopeValue;
     whoCanAddMembers?: ChatPolicyScopeValue;
+    whoCanStartCalls?: ChatPolicyScopeValue;
     historyVisibleToNewMembers?: boolean;
   }): Promise<{
     detail: ChatDetail;
@@ -2291,6 +2300,7 @@ export class ChatService {
     const nextWhoCanEditInfo = input.whoCanEditInfo ?? chat.whoCanEditInfo;
     const nextWhoCanInvite = input.whoCanInvite ?? chat.whoCanInvite;
     const nextWhoCanAddMembers = input.whoCanAddMembers ?? chat.whoCanAddMembers;
+    const nextWhoCanStartCalls = input.whoCanStartCalls ?? chat.whoCanStartCalls;
     const nextHistoryVisibleToNewMembers =
       input.historyVisibleToNewMembers ?? chat.historyVisibleToNewMembers;
 
@@ -2301,6 +2311,7 @@ export class ChatService {
       nextWhoCanEditInfo !== chat.whoCanEditInfo ||
       nextWhoCanInvite !== chat.whoCanInvite ||
       nextWhoCanAddMembers !== chat.whoCanAddMembers ||
+      nextWhoCanStartCalls !== chat.whoCanStartCalls ||
       nextHistoryVisibleToNewMembers !== chat.historyVisibleToNewMembers;
 
     if (!changed) {
@@ -2324,6 +2335,7 @@ export class ChatService {
         whoCanEditInfo: nextWhoCanEditInfo,
         whoCanInvite: nextWhoCanInvite,
         whoCanAddMembers: nextWhoCanAddMembers,
+        whoCanStartCalls: nextWhoCanStartCalls,
         memberAddPolicy: nextWhoCanAddMembers as unknown as ChatMemberAddPolicyValue,
         historyVisibleToNewMembers: nextHistoryVisibleToNewMembers
       }
@@ -2340,6 +2352,7 @@ export class ChatService {
         whoCanEditInfo: nextWhoCanEditInfo,
         whoCanInvite: nextWhoCanInvite,
         whoCanAddMembers: nextWhoCanAddMembers,
+        whoCanStartCalls: nextWhoCanStartCalls,
         historyVisibleToNewMembers: nextHistoryVisibleToNewMembers
       }
     });
@@ -2869,6 +2882,7 @@ export class ChatService {
             whoCanEditInfo: chat.whoCanEditInfo,
             whoCanInvite: chat.whoCanInvite,
             whoCanAddMembers: chat.whoCanAddMembers ?? chat.memberAddPolicy,
+            whoCanStartCalls: chat.whoCanStartCalls ?? ChatPolicyScope.EDITOR_ONLY,
             historyVisibleToNewMembers: chat.historyVisibleToNewMembers !== false,
             myCanSend: false,
             myIsMuted: false,

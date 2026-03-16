@@ -147,6 +147,7 @@ export interface ChatDetail {
   whoCanEditInfo: ChatPolicyScope;
   whoCanInvite: ChatPolicyScope;
   whoCanAddMembers: ChatPolicyScope;
+  whoCanStartCalls: ChatPolicyScope;
   historyVisibleToNewMembers: boolean;
   myCanSend: boolean;
   myIsMuted: boolean;
