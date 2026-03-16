@@ -4579,21 +4579,11 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   }
 
   Future<void> _pickGalleryPhotos() async {
-    final transferMode = await _showMediaTransferModeSheet(
-      title: 'Fotoğraf gönder',
-    );
-    if (transferMode == null) return;
     final files = await _mediaPicker.pickMultiImage(limit: kComposerMediaLimit);
     if (files.isEmpty) return;
-    if (transferMode == ChatAttachmentTransferMode.document) {
-      await _sendDocumentMediaFiles(files);
-      return;
-    }
     await _openMediaComposerFromFiles(
       files,
-      initialQuality: transferMode == ChatAttachmentTransferMode.hd
-          ? MediaComposerQuality.hd
-          : MediaComposerQuality.standard,
+      initialQuality: MediaComposerQuality.standard,
     );
   }
 
