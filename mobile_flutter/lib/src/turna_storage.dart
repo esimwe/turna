@@ -449,6 +449,15 @@ class TurnaChatInboxLocalRepository {
     }
     await prefs.setString(legacyPrefsKey, rawJson);
   }
+
+  static Future<void> clear(String userId, String legacyPrefsKey) async {
+    await TurnaLocalStore.deleteRows(
+      table: TurnaLocalStore.chatInboxTable,
+      where: <String, Object?>{'owner_user_id': userId},
+    );
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(legacyPrefsKey);
+  }
 }
 
 class TurnaChatDetailLocalRepository {
@@ -485,6 +494,19 @@ class TurnaChatDetailLocalRepository {
       return;
     }
     await prefs.setString(legacyPrefsKey, rawJson);
+  }
+
+  static Future<void> clear(
+    String userId,
+    String chatId,
+    String legacyPrefsKey,
+  ) async {
+    await TurnaLocalStore.deleteRows(
+      table: TurnaLocalStore.chatDetailTable,
+      where: <String, Object?>{'owner_user_id': userId, 'chat_id': chatId},
+    );
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(legacyPrefsKey);
   }
 }
 
@@ -545,6 +567,19 @@ class TurnaChatHistoryLocalRepository {
       legacyPrefsKey,
       messages.map((message) => jsonEncode(message.toPendingMap())).toList(),
     );
+  }
+
+  static Future<void> clear(
+    String userId,
+    String chatId,
+    String legacyPrefsKey,
+  ) async {
+    await TurnaLocalStore.deleteRows(
+      table: TurnaLocalStore.chatMessageTable,
+      where: <String, Object?>{'owner_user_id': userId, 'chat_id': chatId},
+    );
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(legacyPrefsKey);
   }
 }
 
@@ -616,6 +651,62 @@ class TurnaLocalStateReset {
     TurnaChatHistoryLocalCache._warm.clear();
     TurnaCallHistoryLocalCache._warm.clear();
     TurnaSocketClient._warmMessageCache.clear();
+  }
+
+  static Future<void> clearChatState(
+    String userId,
+    String chatId, {
+    bool removeFromInbox = false,
+  }) async {
+    TurnaChatDetailLocalCache._warm.remove(
+      TurnaChatDetailLocalCache._cacheId(userId, chatId),
+    );
+    TurnaChatHistoryLocalCache._warm.remove(
+      TurnaChatHistoryLocalCache._cacheId(userId, chatId),
+    );
+    TurnaSocketClient._warmMessageCache.remove('$userId:$chatId');
+
+    await TurnaChatDetailLocalRepository.clear(
+      userId,
+      chatId,
+      TurnaChatDetailLocalCache._key(userId, chatId),
+    );
+    await TurnaChatHistoryLocalRepository.clear(
+      userId,
+      chatId,
+      TurnaChatHistoryLocalCache._key(userId, chatId),
+    );
+    await TurnaPendingMessageLocalRepository.clear(
+      userId,
+      chatId,
+      legacyPrefsKey: 'turna_pending_chat_${userId}_$chatId',
+    );
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('turna_recent_chat_${userId}_$chatId');
+
+    if (!removeFromInbox) return;
+
+    final inbox =
+        TurnaChatInboxLocalCache.peek(userId) ??
+        await TurnaChatInboxLocalCache.load(userId);
+    if (inbox == null) return;
+
+    final nextChats = inbox.chats
+        .where((item) => item.chatId != chatId)
+        .toList(growable: false);
+    if (nextChats.length == inbox.chats.length) return;
+
+    final nextInbox = ChatInboxData(
+      chats: nextChats,
+      folders: List<ChatFolder>.from(inbox.folders),
+    );
+    TurnaChatInboxLocalCache._warmInboxes[userId] = nextInbox;
+    await TurnaChatInboxLocalRepository.saveRaw(
+      userId,
+      TurnaChatInboxLocalCache._key(userId),
+      jsonEncode(nextInbox.toCacheMap()),
+    );
   }
 }
 

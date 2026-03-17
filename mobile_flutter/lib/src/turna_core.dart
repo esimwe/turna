@@ -4329,6 +4329,7 @@ class ChatApi {
         },
       );
       _throwIfApiError(res);
+      await TurnaLocalStateReset.clearChatState(session.userId, chatId);
     } on TurnaApiException {
       rethrow;
     } catch (_) {
@@ -4383,6 +4384,15 @@ class ChatApi {
       final map = jsonDecode(res.body) as Map<String, dynamic>;
       final data = map['data'] as Map<String, dynamic>? ?? const {};
       final deleted = (data['chatIds'] as List<dynamic>? ?? const []);
+      for (final chatId in deleted) {
+        final normalized = chatId.toString().trim();
+        if (normalized.isEmpty) continue;
+        await TurnaLocalStateReset.clearChatState(
+          session.userId,
+          normalized,
+          removeFromInbox: true,
+        );
+      }
       return deleted.length;
     } on TurnaApiException {
       rethrow;
