@@ -1087,6 +1087,7 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
     TurnaIncomingSharePayload payload,
   ) async {
     if (!mounted || payload.isEmpty) return;
+    turnaLog('share target handling started', {'items': payload.items.length});
     focusChatsTab();
     _inboxUpdateNotifier.value++;
 
@@ -1097,10 +1098,14 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
       navigator = kTurnaNavigatorKey.currentState;
       attempts++;
     }
-    if (navigator == null) return;
+    if (navigator == null) {
+      turnaLog('share target navigator unavailable');
+      return;
+    }
     await WidgetsBinding.instance.endOfFrame;
     await Future<void>.delayed(const Duration(milliseconds: 120));
     if (!mounted) return;
+    turnaLog('share target picker presenting');
 
     final selection = await navigator.push<TurnaShareTargetSelectionResult>(
       MaterialPageRoute(
@@ -1114,6 +1119,10 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
         ),
       ),
     );
+    turnaLog('share target picker dismissed', {
+      'hasSelection': selection != null,
+      'hasTargets': selection?.hasTargets ?? false,
+    });
     if (!mounted || selection == null || !selection.hasTargets) return;
 
     final messenger = ScaffoldMessenger.of(context);

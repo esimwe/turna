@@ -311,6 +311,7 @@ class TurnaShareTargetBridge {
       Map<String, dynamic>.from(payload),
     );
     if (parsed.isEmpty) return;
+    turnaLog('share target payload received', {'items': parsed.items.length});
     kTurnaShareTargetCoordinator.requestHandle(parsed);
   }
 }
