@@ -958,6 +958,43 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
         : (guessContentTypeForFileName(fileName) ?? 'application/octet-stream');
     final kind = _attachmentKindForSharedItem(item);
     final sizeBytes = item.sizeBytes > 0 ? item.sizeBytes : await file.length();
+
+    if (kind != ChatAttachmentKind.file) {
+      final prepared = await prepareTurnaInlineMediaAttachment(
+        MediaComposerSeed(
+          kind: kind,
+          file: XFile(file.path, name: fileName, mimeType: contentType),
+          fileName: fileName,
+          contentType: contentType,
+          sizeBytes: sizeBytes,
+        ),
+      );
+      final upload = await ChatApi.createAttachmentUpload(
+        widget.session,
+        chatId: targetChat.chatId,
+        kind: prepared.kind,
+        contentType: prepared.contentType,
+        fileName: prepared.fileName,
+      );
+      await _uploadPreparedIncomingSharedAttachment(upload, prepared);
+      turnaLog('share target media uploaded', {
+        'chatId': targetChat.chatId,
+        'kind': prepared.kind.name,
+        'transferMode': MediaComposerQuality.standard.transferMode.name,
+      });
+      return OutgoingAttachmentDraft(
+        objectKey: upload.objectKey,
+        kind: prepared.kind,
+        transferMode: MediaComposerQuality.standard.transferMode,
+        fileName: prepared.fileName,
+        contentType: prepared.contentType,
+        sizeBytes: prepared.sizeBytes,
+        width: prepared.width,
+        height: prepared.height,
+        durationSeconds: prepared.durationSeconds,
+      );
+    }
+
     final upload = await ChatApi.createAttachmentUpload(
       widget.session,
       chatId: targetChat.chatId,
@@ -984,6 +1021,41 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
       contentType: contentType,
       sizeBytes: sizeBytes,
     );
+  }
+
+  Future<void> _uploadPreparedIncomingSharedAttachment(
+    ChatAttachmentUploadTicket upload,
+    _PreparedComposerAttachment prepared,
+  ) async {
+    if (prepared.filePath != null && prepared.filePath!.trim().isNotEmpty) {
+      final file = File(prepared.filePath!);
+      if (!await file.exists()) {
+        throw TurnaApiException('Hazirlanan dosya bulunamadi.');
+      }
+      final request = http.StreamedRequest('PUT', Uri.parse(upload.uploadUrl));
+      request.headers.addAll(upload.headers);
+      request.contentLength = prepared.sizeBytes;
+      final responseFuture = request.send();
+      await file.openRead().pipe(request.sink);
+      final uploadRes = await responseFuture;
+      if (uploadRes.statusCode >= 400) {
+        throw TurnaApiException('Paylasilan dosya yuklenemedi.');
+      }
+      return;
+    }
+
+    final bytes = prepared.bytes;
+    if (bytes == null) {
+      throw TurnaApiException('Hazirlanan dosya okunamadi.');
+    }
+    final uploadRes = await http.put(
+      Uri.parse(upload.uploadUrl),
+      headers: upload.headers,
+      body: bytes,
+    );
+    if (uploadRes.statusCode >= 400) {
+      throw TurnaApiException('Paylasilan dosya yuklenemedi.');
+    }
   }
 
   TurnaStatusType? _statusTypeForSharedItem(TurnaIncomingSharedItem item) {
