@@ -11,6 +11,7 @@ import 'package:firebase_analytics/firebase_analytics.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -93,7 +94,7 @@ class TurnaAppConfig {
   static bool get hasStadiaMapsKey => stadiaMapsApiKey.isNotEmpty;
 }
 
-const bool kTurnaDebugLogs = true;
+const bool kTurnaDebugLogs = kDebugMode;
 const String kChatRoomRouteName = 'chat-room';
 const int kComposerMediaLimit = 30;
 const int kInlineAttachmentSoftLimitBytes = 64 * 1024 * 1024;
@@ -150,6 +151,7 @@ final TurnaPushChatOpenCoordinator kTurnaPushChatOpenCoordinator =
     TurnaPushChatOpenCoordinator();
 final TurnaShareTargetCoordinator kTurnaShareTargetCoordinator =
     TurnaShareTargetCoordinator();
+final ValueNotifier<Uri?> kTurnaLastLaunchUri = ValueNotifier<Uri?>(null);
 
 class TurnaPushChatOpenCoordinator {
   Object? _owner;
@@ -314,6 +316,55 @@ class TurnaShareTargetBridge {
     turnaLog('share target payload received', {'items': parsed.items.length});
     kTurnaShareTargetCoordinator.requestHandle(parsed);
   }
+}
+
+class TurnaLaunchBridge {
+  static const MethodChannel _channel = MethodChannel('turna/launch');
+  static bool _initialized = false;
+
+  static Future<void> initialize() async {
+    if (_initialized) return;
+    _initialized = true;
+    _channel.setMethodCallHandler(_handleMethodCall);
+    try {
+      await _channel.invokeMethod<void>('launchBridgeReady');
+      final payload = await _channel.invokeMethod<dynamic>('consumeInitialUrl');
+      _dispatchUrl(payload);
+    } catch (error) {
+      turnaLog('launch bridge init skipped', error);
+    }
+  }
+
+  static Future<void> _handleMethodCall(MethodCall call) async {
+    switch (call.method) {
+      case 'launchUrlUpdated':
+        _dispatchUrl(call.arguments);
+        return;
+      default:
+        return;
+    }
+  }
+
+  static void _dispatchUrl(dynamic payload) {
+    final raw = payload?.toString().trim() ?? '';
+    if (raw.isEmpty) return;
+    final uri = Uri.tryParse(raw);
+    if (uri == null) return;
+    kTurnaLastLaunchUri.value = uri;
+    turnaLog('launch url received', {'url': _sanitizeTurnaLaunchUri(uri)});
+  }
+}
+
+String _sanitizeTurnaLaunchUri(Uri uri) {
+  if (uri.queryParameters.isEmpty) {
+    return uri.toString();
+  }
+  final sanitizedQuery = <String, String>{};
+  final keys = uri.queryParameters.keys.toList()..sort();
+  for (final key in keys) {
+    sanitizedQuery[key] = 'redacted';
+  }
+  return uri.replace(queryParameters: sanitizedQuery).toString();
 }
 
 class TurnaColors {
@@ -592,13 +643,25 @@ String sanitizeTurnaChatPreviewText(String raw) {
   return parsed.reply?.previewText ?? raw;
 }
 
+const int _kTurnaBreadcrumbLimit = 120;
+final List<String> _kTurnaBreadcrumbs = <String>[];
+
+List<String> turnaBreadcrumbSnapshot() =>
+    List<String>.unmodifiable(_kTurnaBreadcrumbs);
+
 void turnaLog(String message, [Object? data]) {
-  if (!kTurnaDebugLogs) return;
-  if (data != null) {
-    debugPrint('[turna-mobile] $message | $data');
-    return;
+  final line = data != null
+      ? '[turna-mobile] $message | $data'
+      : '[turna-mobile] $message';
+  final breadcrumb =
+      '[turna-mobile][${DateTime.now().toIso8601String()}] '
+      '$message${data != null ? ' | $data' : ''}';
+  _kTurnaBreadcrumbs.add(breadcrumb);
+  if (_kTurnaBreadcrumbs.length > _kTurnaBreadcrumbLimit) {
+    _kTurnaBreadcrumbs.removeAt(0);
   }
-  debugPrint('[turna-mobile] $message');
+  if (!kTurnaDebugLogs) return;
+  debugPrint(line);
 }
 
 Map<String, String>? buildTurnaAuthHeaders(String? authToken) {
@@ -1983,6 +2046,12 @@ class _TurnaAppState extends State<TurnaApp> with WidgetsBindingObserver {
       await TurnaNativeCallManager.initialize();
     } catch (error) {
       turnaLog('native call init skipped', error);
+    }
+
+    try {
+      await TurnaLaunchBridge.initialize();
+    } catch (error) {
+      turnaLog('launch bridge init skipped', error);
     }
 
     try {
