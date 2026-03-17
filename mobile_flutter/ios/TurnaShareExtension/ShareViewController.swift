@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 final class ShareViewController: UIViewController {
   private let appGroupIdentifier = "group.com.turna.chat.shared"
   private let sharePayloadDefaultsKey = "turna.shared_payload"
-  private let openURL = URL(string: "turna://share-target")!
+  private let hostAppURL = URL(string: "turna://share-target")!
   private let finishDelayAfterOpen: TimeInterval = 0.45
   private let statusLabel = UILabel()
   private let activityIndicator = UIActivityIndicatorView(style: .large)
@@ -200,28 +200,38 @@ final class ShareViewController: UIViewController {
   }
 
   private func openHostApp() {
-    guard let extensionContext else {
-      logShare("extension context missing before open")
-      finish()
-      return
-    }
-    logShare("opening host app", details: ["url": openURL.absoluteString])
-    extensionContext.open(openURL) { [weak self] success in
-      guard let self else { return }
-      self.logShare(
-        "host app open completed",
-        details: ["success": success ? "true" : "false"]
-      )
-      if success {
-        DispatchQueue.main.asyncAfter(
-          deadline: .now() + self.finishDelayAfterOpen
-        ) { [weak self] in
-          self?.finish()
-        }
-      } else {
-        self.finish()
+    logShare("opening host app", details: ["url": hostAppURL.absoluteString])
+    let didRequestOpen = openURL(hostAppURL)
+    logShare(
+      "host app open requested",
+      details: ["success": didRequestOpen ? "true" : "false"]
+    )
+    if didRequestOpen {
+      DispatchQueue.main.asyncAfter(
+        deadline: .now() + finishDelayAfterOpen
+      ) { [weak self] in
+        self?.finish()
       }
+    } else {
+      finish()
     }
+  }
+
+  @discardableResult
+  @objc private func openURL(_ url: URL) -> Bool {
+    var responder: UIResponder? = self
+    while let current = responder {
+      if let application = current as? UIApplication {
+        if #available(iOS 18.0, *) {
+          application.open(url, options: [:], completionHandler: nil)
+          return true
+        } else {
+          return application.perform(#selector(openURL(_:)), with: url) != nil
+        }
+      }
+      responder = current.next
+    }
+    return false
   }
 
   private func finish() {
