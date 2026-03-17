@@ -239,19 +239,8 @@ final class ShareViewController: UIViewController {
     extensionContext?.completeRequest(returningItems: nil, completionHandler: nil)
   }
 
-  private func logShare(_ message: String, details: [String: String] = [:]) {
-    let formattedDetails =
-      details.isEmpty
-      ? ""
-      : details
-        .sorted { $0.key < $1.key }
-        .map { "\($0.key): \($0.value)" }
-        .joined(separator: ", ")
-    if formattedDetails.isEmpty {
-      print("[turna-share-ext] \(message)")
-    } else {
-      print("[turna-share-ext] \(message) | {\(formattedDetails)}")
-    }
+  private func logShare(_ message: String, details: [String: Any] = [:]) {
+    TurnaLogger.debug("share-ext", message, details: details)
   }
 
   private static func guessMimeType(fromPathExtension pathExtension: String) -> String? {

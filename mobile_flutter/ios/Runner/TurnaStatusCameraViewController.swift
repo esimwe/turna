@@ -564,12 +564,16 @@ final class TurnaStatusCameraViewController: UIViewController,
       }
     }
     if let error {
-      print("[turna-mobile] native status camera finish | {error: \(error.localizedDescription)}")
+      TurnaLogger.warning(
+        "media",
+        "status camera finish",
+        details: ["error": error.localizedDescription]
+      )
     } else if let payload {
       let type = payload["type"] as? String ?? "unknown"
-      print("[turna-mobile] native status camera finish | {type: \(type)}")
+      TurnaLogger.debug("media", "status camera finish", details: ["type": type])
     } else {
-      print("[turna-mobile] native status camera finish | {cancelled: true}")
+      TurnaLogger.debug("media", "status camera finish", details: ["cancelled": true])
     }
     dismiss(animated: true) { [weak self] in
       self?.onFinish?(payload, error)
