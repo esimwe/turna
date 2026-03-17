@@ -331,16 +331,32 @@ import Darwin
       switch call.method {
       case "shareBridgeReady":
         self?.isShareTargetBridgeReady = true
+        self?.logShareTarget(
+          "bridge ready",
+          details: [
+            "hasPayload": (self?.pendingSharedPayload != nil) ? "true" : "false",
+            "items": "\(self?.sharedItemCount(from: self?.pendingSharedPayload) ?? 0)",
+          ]
+        )
+        self?.dispatchSharedPayloadIfReady()
         result(nil)
       case "consumeInitialPayload":
         let payload = self?.pendingSharedPayload
         self?.pendingSharedPayload = nil
+        self?.logShareTarget(
+          "consume initial payload",
+          details: [
+            "hasPayload": (payload != nil) ? "true" : "false",
+            "items": "\(self?.sharedItemCount(from: payload) ?? 0)",
+          ]
+        )
         result(payload)
       default:
         result(FlutterMethodNotImplemented)
       }
     }
     self.shareTargetChannel = shareTargetChannel
+    dispatchSharedPayloadIfReady()
 
     let statusCameraChannel = FlutterMethodChannel(
       name: "turna/status_camera",
@@ -384,6 +400,10 @@ import Darwin
     else {
       return false
     }
+    logShareTarget(
+      "incoming shared url",
+      details: ["url": url.absoluteString]
+    )
     loadPendingSharedPayloadFromAppGroup()
     dispatchSharedPayloadIfReady()
     return true
@@ -391,21 +411,72 @@ import Darwin
 
   private func loadPendingSharedPayloadFromAppGroup() {
     guard let defaults = UserDefaults(suiteName: shareAppGroupIdentifier) else {
+      logShareTarget("app group unavailable")
       return
     }
     if let payload = defaults.dictionary(forKey: sharePayloadDefaultsKey) {
       pendingSharedPayload = payload
       defaults.removeObject(forKey: sharePayloadDefaultsKey)
       defaults.synchronize()
+      logShareTarget(
+        "loaded payload from app group",
+        details: ["items": "\(sharedItemCount(from: payload))"]
+      )
+    } else {
+      logShareTarget("no payload found in app group")
     }
   }
 
   private func dispatchSharedPayloadIfReady() {
-    guard isShareTargetBridgeReady, let payload = pendingSharedPayload else {
+    guard let payload = pendingSharedPayload else {
+      return
+    }
+    guard isShareTargetBridgeReady else {
+      logShareTarget(
+        "dispatch postponed",
+        details: [
+          "reason": "bridge_not_ready",
+          "items": "\(sharedItemCount(from: payload))",
+        ]
+      )
+      return
+    }
+    guard shareTargetChannel != nil else {
+      logShareTarget(
+        "dispatch postponed",
+        details: [
+          "reason": "channel_missing",
+          "items": "\(sharedItemCount(from: payload))",
+        ]
+      )
       return
     }
     pendingSharedPayload = nil
+    logShareTarget(
+      "dispatching payload to flutter",
+      details: ["items": "\(sharedItemCount(from: payload))"]
+    )
     shareTargetChannel?.invokeMethod("sharedPayloadUpdated", arguments: payload)
+  }
+
+  private func sharedItemCount(from payload: [String: Any]?) -> Int {
+    let items = payload?["items"] as? [[String: Any]]
+    return items?.count ?? 0
+  }
+
+  private func logShareTarget(_ message: String, details: [String: String] = [:]) {
+    let formattedDetails =
+      details.isEmpty
+      ? ""
+      : details
+        .sorted { $0.key < $1.key }
+        .map { "\($0.key): \($0.value)" }
+        .joined(separator: ", ")
+    if formattedDetails.isEmpty {
+      print("[turna-share] \(message)")
+    } else {
+      print("[turna-share] \(message) | {\(formattedDetails)}")
+    }
   }
 
   private func presentStatusCamera(

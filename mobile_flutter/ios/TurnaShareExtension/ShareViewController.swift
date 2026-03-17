@@ -97,12 +97,14 @@ final class ShareViewController: UIViewController {
     group.notify(queue: .main) { [weak self] in
       guard let self else { return }
       guard !payloadItems.isEmpty else {
+        self.logShare("no supported items found")
         self.finish()
         return
       }
       let defaults = UserDefaults(suiteName: self.appGroupIdentifier)
       defaults?.set(["items": payloadItems], forKey: self.sharePayloadDefaultsKey)
       defaults?.synchronize()
+      self.logShare("stored payload in app group", details: ["items": "\(payloadItems.count)"])
       self.openHostApp()
     }
   }
@@ -197,20 +199,39 @@ final class ShareViewController: UIViewController {
   }
 
   private func openHostApp() {
-    let selector = sel_registerName("openURL:")
-    var responder: UIResponder? = self
-    while let current = responder {
-      if current.responds(to: selector) {
-        _ = current.perform(selector, with: openURL)
-        break
-      }
-      responder = current.next
+    guard let extensionContext else {
+      logShare("extension context missing before open")
+      finish()
+      return
     }
-    finish()
+    logShare("opening host app", details: ["url": openURL.absoluteString])
+    extensionContext.open(openURL) { [weak self] success in
+      self?.logShare(
+        "host app open completed",
+        details: ["success": success ? "true" : "false"]
+      )
+      self?.finish()
+    }
   }
 
   private func finish() {
+    logShare("finishing share extension")
     extensionContext?.completeRequest(returningItems: nil, completionHandler: nil)
+  }
+
+  private func logShare(_ message: String, details: [String: String] = [:]) {
+    let formattedDetails =
+      details.isEmpty
+      ? ""
+      : details
+        .sorted { $0.key < $1.key }
+        .map { "\($0.key): \($0.value)" }
+        .joined(separator: ", ")
+    if formattedDetails.isEmpty {
+      print("[turna-share-ext] \(message)")
+    } else {
+      print("[turna-share-ext] \(message) | {\(formattedDetails)}")
+    }
   }
 
   private static func guessMimeType(fromPathExtension pathExtension: String) -> String? {
