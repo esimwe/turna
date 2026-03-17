@@ -126,8 +126,9 @@ class TurnaNativeCallManager {
           ?.toString()
           .trim();
       if (token == null || token.isEmpty) return;
-      final prefs = await SharedPreferences.getInstance();
-      final previous = prefs.getString(_lastVoipPushTokenKey);
+      final previous = await TurnaSecureStateStore.readString(
+        _lastVoipPushTokenKey,
+      );
       if (previous == token) return;
       await PushApi.registerDevice(
         session,
@@ -136,7 +137,7 @@ class TurnaNativeCallManager {
         tokenKind: 'voip',
         deviceLabel: 'ios-voip',
       );
-      await prefs.setString(_lastVoipPushTokenKey, token);
+      await TurnaSecureStateStore.writeString(_lastVoipPushTokenKey, token);
       turnaLog('voip token synced');
     } catch (error) {
       turnaLog('voip token sync skipped', error);
@@ -344,29 +345,29 @@ class TurnaNativeCallManager {
   static Future<void> _persistPendingAction(
     _TurnaPendingNativeAction action,
   ) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_pendingActionKey, jsonEncode(action.toMap()));
+    await TurnaSecureStateStore.writeString(
+      _pendingActionKey,
+      jsonEncode(action.toMap()),
+    );
   }
 
   static Future<void> _clearPendingAction() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_pendingActionKey);
+    await TurnaSecureStateStore.delete(_pendingActionKey);
   }
 
   static Future<void> _consumePendingAction() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_pendingActionKey);
+    final raw = await TurnaSecureStateStore.readString(_pendingActionKey);
     if (raw == null || raw.trim().isEmpty) return;
     try {
       final map = jsonDecode(raw) as Map<String, dynamic>;
       final pending = _TurnaPendingNativeAction.fromMap(map);
       final handled = await _handleAction(pending.action, pending.body);
       if (handled) {
-        await prefs.remove(_pendingActionKey);
+        await TurnaSecureStateStore.delete(_pendingActionKey);
       }
     } catch (error) {
       turnaLog('pending native call action parse failed', error);
-      await prefs.remove(_pendingActionKey);
+      await TurnaSecureStateStore.delete(_pendingActionKey);
     }
   }
 
@@ -558,8 +559,9 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
       _room?.remoteParticipants.values ?? const <lk.RemoteParticipant>[];
   lk.LocalParticipant? get localParticipant => _room?.localParticipant;
 
-  List<lk.Participant> get activeSpeakers =>
-      List<lk.Participant>.from(_room?.activeSpeakers ?? const <lk.Participant>[]);
+  List<lk.Participant> get activeSpeakers => List<lk.Participant>.from(
+    _room?.activeSpeakers ?? const <lk.Participant>[],
+  );
 
   lk.VideoTrack? get primaryRemoteVideoTrack {
     final currentRoom = _room;
@@ -584,8 +586,8 @@ class LiveKitCallAdapter extends ChangeNotifier implements CallProviderAdapter {
       final track = publication.track;
       final hasActiveStream =
           publication is lk.RemoteTrackPublication<lk.RemoteVideoTrack>
-              ? publication.streamState == lk.StreamState.active
-              : true;
+          ? publication.streamState == lk.StreamState.active
+          : true;
       if (track is lk.VideoTrack &&
           publication.subscribed &&
           !publication.muted &&

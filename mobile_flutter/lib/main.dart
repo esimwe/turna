@@ -15,6 +15,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_callkit_incoming/entities/entities.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:flutter_contacts/flutter_contacts.dart' hide Event;
@@ -32,6 +33,7 @@ import 'package:photo_manager/photo_manager.dart' as pm;
 import 'package:record/record.dart' as rec;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
+import 'package:sqflite/sqflite.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart' as vp;
 
@@ -47,6 +49,7 @@ part 'src/turna_voice.dart';
 part 'src/turna_auth_flow.dart';
 part 'src/turna_profile_shell.dart';
 part 'src/turna_core.dart';
+part 'src/turna_storage.dart';
 part 'src/turna_calls.dart';
 part 'src/turna_call_runtime.dart';
 part 'src/turna_call_ui.dart';
@@ -1923,6 +1926,7 @@ Future<void> main() async {
   await TurnaAppConfig.load();
   await TurnaFirebase.ensureInitialized();
   await TurnaDeviceContext.ensureLoaded();
+  await TurnaLocalStore.ensureInitialized();
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
   runApp(const TurnaApp());
 }
