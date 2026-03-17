@@ -9,6 +9,7 @@ import flutter_callkit_incoming
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, PKPushRegistryDelegate, CallkitIncomingAppDelegate {
+  private let displayBridge = TurnaDisplayBridge()
   private let launchBridge = TurnaLaunchBridge()
   private let shareBridge = TurnaShareBridge()
   private let callBridge = TurnaCallBridge()
@@ -18,7 +19,6 @@ import flutter_callkit_incoming
     self?.topMostViewController()
   })
 
-  private var displayChannel: FlutterMethodChannel?
   private var didConfigureFlutterChannels = false
 
   override func application(
@@ -142,48 +142,13 @@ import flutter_callkit_incoming
       return
     }
 
-    configureDisplayChannel(binaryMessenger: controller.binaryMessenger)
+    displayBridge.configure(binaryMessenger: controller.binaryMessenger)
     deviceBridge.configure(binaryMessenger: controller.binaryMessenger)
     mediaBridge.configure(binaryMessenger: controller.binaryMessenger, pdfBridge: pdfBridge)
     shareBridge.configure(binaryMessenger: controller.binaryMessenger)
     launchBridge.configure(binaryMessenger: controller.binaryMessenger)
     didConfigureFlutterChannels = true
     TurnaLogger.info("lifecycle", "flutter bridges configured")
-  }
-
-  private func configureDisplayChannel(binaryMessenger: FlutterBinaryMessenger) {
-    let channel = FlutterMethodChannel(
-      name: "turna/display",
-      binaryMessenger: binaryMessenger
-    )
-    channel.setMethodCallHandler { call, result in
-      switch call.method {
-      case "setKeepScreenOn":
-        let args = call.arguments as? [String: Any]
-        let enabled = args?["enabled"] as? Bool ?? false
-        DispatchQueue.main.async {
-          UIApplication.shared.isIdleTimerDisabled = enabled
-          result(nil)
-        }
-      case "setProximityScreenLockEnabled":
-        let args = call.arguments as? [String: Any]
-        let enabled = args?["enabled"] as? Bool ?? false
-        DispatchQueue.main.async {
-          UIDevice.current.isProximityMonitoringEnabled = enabled
-          result(nil)
-        }
-      case "setAppBadgeCount":
-        let args = call.arguments as? [String: Any]
-        let count = args?["count"] as? Int ?? 0
-        DispatchQueue.main.async {
-          UIApplication.shared.applicationIconBadgeNumber = max(0, count)
-          result(nil)
-        }
-      default:
-        result(FlutterMethodNotImplemented)
-      }
-    }
-    displayChannel = channel
   }
 
   private func rootFlutterViewController() -> FlutterViewController? {
