@@ -723,13 +723,10 @@ class TurnaProfileLocalCache {
   }
 
   static Future<TurnaUserProfile?> loadSelfProfile(AuthSession session) async {
-    final raw =
-        await TurnaLocalStore.readJsonValue(
-          table: TurnaLocalStore.userProfileTable,
-          valueColumn: 'profile_json',
-          where: const <String, Object?>{'cache_key': 'self'},
-        ) ??
-        (await SharedPreferences.getInstance()).getString(_selfProfileKey);
+    final raw = await TurnaUserProfileLocalRepository.loadRaw(
+      cacheKey: 'self',
+      legacyPrefsKey: _selfProfileKey,
+    );
     if (raw == null || raw.trim().isEmpty) {
       final fallback = buildTurnaSelfProfileFromSession(session);
       _warmSelfProfile = fallback;
@@ -759,30 +756,18 @@ class TurnaProfileLocalCache {
 
   static Future<void> saveSelfProfile(TurnaUserProfile profile) async {
     _warmSelfProfile = profile;
-    final encoded = jsonEncode(profile.toMap());
-    final saved = await TurnaLocalStore.writeJsonValue(
-      table: TurnaLocalStore.userProfileTable,
-      valueColumn: 'profile_json',
-      keyValues: const <String, Object?>{'cache_key': 'self'},
-      extraValues: <String, Object?>{'user_id': profile.id, 'is_self': 1},
-      jsonValue: encoded,
+    await TurnaUserProfileLocalRepository.saveRaw(
+      cacheKey: 'self',
+      userId: profile.id,
+      isSelf: true,
+      legacyPrefsKey: _selfProfileKey,
+      rawJson: jsonEncode(profile.toMap()),
     );
-    final prefs = await SharedPreferences.getInstance();
-    if (saved) {
-      await prefs.remove(_selfProfileKey);
-      return;
-    }
-    await prefs.setString(_selfProfileKey, encoded);
   }
 
   static Future<void> clearSelfProfile() async {
     _warmSelfProfile = null;
-    await TurnaLocalStore.deleteRows(
-      table: TurnaLocalStore.userProfileTable,
-      where: const <String, Object?>{'cache_key': 'self'},
-    );
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_selfProfileKey);
+    await TurnaUserProfileLocalRepository.clearSelf(_selfProfileKey);
   }
 }
 
@@ -799,13 +784,10 @@ class TurnaUserProfileLocalCache {
     final warm = _warmProfiles[userId];
     if (warm != null) return warm;
 
-    final raw =
-        await TurnaLocalStore.readJsonValue(
-          table: TurnaLocalStore.userProfileTable,
-          valueColumn: 'profile_json',
-          where: <String, Object?>{'cache_key': userId},
-        ) ??
-        (await SharedPreferences.getInstance()).getString(_key(userId));
+    final raw = await TurnaUserProfileLocalRepository.loadRaw(
+      cacheKey: userId,
+      legacyPrefsKey: _key(userId),
+    );
     if (raw == null || raw.trim().isEmpty) return null;
     try {
       final decoded = jsonDecode(raw) as Map<String, dynamic>;
@@ -820,20 +802,13 @@ class TurnaUserProfileLocalCache {
 
   static Future<void> save(TurnaUserProfile profile) async {
     _warmProfiles[profile.id] = profile;
-    final encoded = jsonEncode(profile.toMap());
-    final saved = await TurnaLocalStore.writeJsonValue(
-      table: TurnaLocalStore.userProfileTable,
-      valueColumn: 'profile_json',
-      keyValues: <String, Object?>{'cache_key': profile.id},
-      extraValues: <String, Object?>{'user_id': profile.id, 'is_self': 0},
-      jsonValue: encoded,
+    await TurnaUserProfileLocalRepository.saveRaw(
+      cacheKey: profile.id,
+      userId: profile.id,
+      isSelf: false,
+      legacyPrefsKey: _key(profile.id),
+      rawJson: jsonEncode(profile.toMap()),
     );
-    final prefs = await SharedPreferences.getInstance();
-    if (saved) {
-      await prefs.remove(_key(profile.id));
-      return;
-    }
-    await prefs.setString(_key(profile.id), encoded);
   }
 }
 
@@ -850,13 +825,10 @@ class TurnaChatInboxLocalCache {
     final warm = _warmInboxes[userId];
     if (warm != null) return warm;
 
-    final raw =
-        await TurnaLocalStore.readJsonValue(
-          table: TurnaLocalStore.chatInboxTable,
-          valueColumn: 'inbox_json',
-          where: <String, Object?>{'owner_user_id': userId},
-        ) ??
-        (await SharedPreferences.getInstance()).getString(_key(userId));
+    final raw = await TurnaChatInboxLocalRepository.loadRaw(
+      userId,
+      _key(userId),
+    );
     if (raw == null || raw.trim().isEmpty) return null;
     try {
       final decoded = jsonDecode(raw) as Map<String, dynamic>;
@@ -871,19 +843,11 @@ class TurnaChatInboxLocalCache {
 
   static Future<void> save(String userId, ChatInboxData inbox) async {
     _warmInboxes[userId] = inbox;
-    final encoded = jsonEncode(inbox.toCacheMap());
-    final saved = await TurnaLocalStore.writeJsonValue(
-      table: TurnaLocalStore.chatInboxTable,
-      valueColumn: 'inbox_json',
-      keyValues: <String, Object?>{'owner_user_id': userId},
-      jsonValue: encoded,
+    await TurnaChatInboxLocalRepository.saveRaw(
+      userId,
+      _key(userId),
+      jsonEncode(inbox.toCacheMap()),
     );
-    final prefs = await SharedPreferences.getInstance();
-    if (saved) {
-      await prefs.remove(_key(userId));
-      return;
-    }
-    await prefs.setString(_key(userId), encoded);
   }
 }
 
@@ -906,13 +870,11 @@ class TurnaChatDetailLocalCache {
     final warm = peek(userId, chatId);
     if (warm != null) return warm;
 
-    final raw =
-        await TurnaLocalStore.readJsonValue(
-          table: TurnaLocalStore.chatDetailTable,
-          valueColumn: 'detail_json',
-          where: <String, Object?>{'owner_user_id': userId, 'chat_id': chatId},
-        ) ??
-        (await SharedPreferences.getInstance()).getString(_key(userId, chatId));
+    final raw = await TurnaChatDetailLocalRepository.loadRaw(
+      userId,
+      chatId,
+      _key(userId, chatId),
+    );
     if (raw == null || raw.trim().isEmpty) return null;
     try {
       final decoded = jsonDecode(raw) as Map<String, dynamic>;
@@ -927,22 +889,12 @@ class TurnaChatDetailLocalCache {
 
   static Future<void> save(String userId, TurnaChatDetail detail) async {
     _warm[_cacheId(userId, detail.chatId)] = detail;
-    final encoded = jsonEncode(detail.toMap());
-    final saved = await TurnaLocalStore.writeJsonValue(
-      table: TurnaLocalStore.chatDetailTable,
-      valueColumn: 'detail_json',
-      keyValues: <String, Object?>{
-        'owner_user_id': userId,
-        'chat_id': detail.chatId,
-      },
-      jsonValue: encoded,
+    await TurnaChatDetailLocalRepository.saveRaw(
+      userId,
+      detail.chatId,
+      _key(userId, detail.chatId),
+      jsonEncode(detail.toMap()),
     );
-    final prefs = await SharedPreferences.getInstance();
-    if (saved) {
-      await prefs.remove(_key(userId, detail.chatId));
-      return;
-    }
-    await prefs.setString(_key(userId, detail.chatId), encoded);
   }
 }
 
@@ -969,29 +921,11 @@ class TurnaChatHistoryLocalCache {
     final warm = peek(userId, chatId);
     if (warm != null) return warm;
 
-    final items = <ChatMessage>[];
-    final rawJson = await TurnaLocalStore.readJsonValue(
-      table: TurnaLocalStore.chatMessageTable,
-      valueColumn: 'messages_json',
-      where: <String, Object?>{'owner_user_id': userId, 'chat_id': chatId},
+    final items = await TurnaChatHistoryLocalRepository.load(
+      userId,
+      chatId,
+      _key(userId, chatId),
     );
-    if (rawJson != null && rawJson.trim().isNotEmpty) {
-      try {
-        final decoded = jsonDecode(rawJson) as List<dynamic>;
-        for (final raw in decoded.whereType<Map>()) {
-          items.add(ChatMessage.fromPendingMap(Map<String, dynamic>.from(raw)));
-        }
-      } catch (_) {}
-    } else {
-      final prefs = await SharedPreferences.getInstance();
-      final rawList = prefs.getStringList(_key(userId, chatId)) ?? const [];
-      for (final raw in rawList) {
-        try {
-          final decoded = jsonDecode(raw) as Map<String, dynamic>;
-          items.add(ChatMessage.fromPendingMap(decoded));
-        } catch (_) {}
-      }
-    }
     items.sort((a, b) => compareTurnaTimestamps(a.createdAt, b.createdAt));
     _warm[_cacheId(userId, chatId)] = List<ChatMessage>.from(items);
     if (items.isNotEmpty) {
@@ -1012,23 +946,11 @@ class TurnaChatHistoryLocalCache {
         : merged.sublist(merged.length - _messageLimit);
     _warm[_cacheId(userId, chatId)] = List<ChatMessage>.from(trimmed);
 
-    final encoded = jsonEncode(
-      trimmed.map((message) => message.toPendingMap()).toList(),
-    );
-    final saved = await TurnaLocalStore.writeJsonValue(
-      table: TurnaLocalStore.chatMessageTable,
-      valueColumn: 'messages_json',
-      keyValues: <String, Object?>{'owner_user_id': userId, 'chat_id': chatId},
-      jsonValue: encoded,
-    );
-    final prefs = await SharedPreferences.getInstance();
-    if (saved) {
-      await prefs.remove(_key(userId, chatId));
-      return;
-    }
-    await prefs.setStringList(
+    await TurnaChatHistoryLocalRepository.save(
+      userId,
+      chatId,
       _key(userId, chatId),
-      trimmed.map((message) => jsonEncode(message.toPendingMap())).toList(),
+      trimmed,
     );
   }
 
@@ -2246,7 +2168,7 @@ class TurnaSocketClient extends ChangeNotifier {
     if (_restoredPendingMessages) return;
     _restoredPendingMessages = true;
 
-    final pendingMessages = await TurnaPendingChatMessageLocalCache.load(
+    final pendingMessages = await TurnaPendingMessageLocalRepository.load(
       senderId,
       chatId,
       legacyPrefsKey: _pendingMessagesKey(),
@@ -2311,7 +2233,7 @@ class TurnaSocketClient extends ChangeNotifier {
                   message.status == ChatMessageStatus.sending),
         )
         .toList();
-    await TurnaPendingChatMessageLocalCache.save(
+    await TurnaPendingMessageLocalRepository.save(
       senderId,
       chatId,
       pending,
@@ -2749,12 +2671,7 @@ class AuthSession {
       avatarUrl: avatarUrl,
       needsOnboarding: needsOnboarding,
     );
-    await TurnaLocalStore.writeJsonValue(
-      table: TurnaLocalStore.authSessionTable,
-      valueColumn: 'session_json',
-      keyValues: const <String, Object?>{'slot': 'main'},
-      jsonValue: jsonEncode(session._toLocalSnapshotMap()),
-    );
+    await TurnaAuthSessionLocalRepository.saveSnapshot(session);
     return session;
   }
 
@@ -2799,12 +2716,7 @@ class AuthSession {
     await TurnaSecureStateStore.writeString(_phoneKey, phone);
     await TurnaSecureStateStore.writeString(_avatarUrlKey, avatarUrl);
     await TurnaSecureStateStore.writeBool(_needsOnboardingKey, needsOnboarding);
-    await TurnaLocalStore.writeJsonValue(
-      table: TurnaLocalStore.authSessionTable,
-      valueColumn: 'session_json',
-      keyValues: const <String, Object?>{'slot': 'main'},
-      jsonValue: jsonEncode(_toLocalSnapshotMap()),
-    );
+    await TurnaAuthSessionLocalRepository.saveSnapshot(this);
   }
 
   static Future<void> clear() async {
@@ -2817,10 +2729,10 @@ class AuthSession {
       _avatarUrlKey,
       _needsOnboardingKey,
     ]);
-    await TurnaLocalStore.deleteRows(
-      table: TurnaLocalStore.authSessionTable,
-      where: const <String, Object?>{'slot': 'main'},
-    );
+    await TurnaPushManager.clearSessionArtifacts();
+    await TurnaNativeCallManager.clearSessionArtifacts();
+    await TurnaAuthSessionLocalRepository.clear();
+    await TurnaLocalStateReset.clearAppData();
   }
 }
 
@@ -3166,6 +3078,11 @@ class TurnaPushManager {
     } catch (error) {
       turnaLog('push sync skipped', error);
     }
+  }
+
+  static Future<void> clearSessionArtifacts() async {
+    _session = null;
+    await TurnaSecureStateStore.delete(_lastPushTokenKey);
   }
 }
 

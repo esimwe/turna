@@ -79,6 +79,18 @@ class TurnaNativeCallManager {
     await _recoverAcceptedNativeCall();
   }
 
+  static Future<void> clearSessionArtifacts() async {
+    _session = null;
+    _coordinator = null;
+    _onSessionExpired = null;
+    _handledActionKeys.clear();
+    _suppressedEndEvents.clear();
+    _shownIncomingCalls.clear();
+    _activeCallId = null;
+    await TurnaSecureStateStore.delete(_lastVoipPushTokenKey);
+    await TurnaSecureStateStore.delete(_pendingActionKey);
+  }
+
   static Future<void> _reconcileStaleCalls(AuthSession session) async {
     try {
       final reconciledCallIds = await CallApi.reconcileCalls(session);

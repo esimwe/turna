@@ -129,6 +129,7 @@ class TurnaLocalStore {
   static const String chatDetailTable = 'chat_detail';
   static const String chatMessageTable = 'chat_message';
   static const String pendingMessageTable = 'pending_message';
+  static const String callHistoryTable = 'call_history';
 
   static Database? _database;
   static Future<Database>? _opening;
@@ -169,60 +170,82 @@ class TurnaLocalStore {
     final path = '$databasesPath/$_dbName';
     return openDatabase(
       path,
-      version: 1,
+      version: 2,
       onCreate: (db, version) async {
-        await db.execute('''
-          CREATE TABLE $authSessionTable (
-            slot TEXT PRIMARY KEY,
-            session_json TEXT NOT NULL,
-            updated_at INTEGER NOT NULL
-          )
-        ''');
-        await db.execute('''
-          CREATE TABLE $userProfileTable (
-            cache_key TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            is_self INTEGER NOT NULL DEFAULT 0,
-            profile_json TEXT NOT NULL,
-            updated_at INTEGER NOT NULL
-          )
-        ''');
-        await db.execute('''
-          CREATE TABLE $chatInboxTable (
-            owner_user_id TEXT PRIMARY KEY,
-            inbox_json TEXT NOT NULL,
-            updated_at INTEGER NOT NULL
-          )
-        ''');
-        await db.execute('''
-          CREATE TABLE $chatDetailTable (
-            owner_user_id TEXT NOT NULL,
-            chat_id TEXT NOT NULL,
-            detail_json TEXT NOT NULL,
-            updated_at INTEGER NOT NULL,
-            PRIMARY KEY (owner_user_id, chat_id)
-          )
-        ''');
-        await db.execute('''
-          CREATE TABLE $chatMessageTable (
-            owner_user_id TEXT NOT NULL,
-            chat_id TEXT NOT NULL,
-            messages_json TEXT NOT NULL,
-            updated_at INTEGER NOT NULL,
-            PRIMARY KEY (owner_user_id, chat_id)
-          )
-        ''');
-        await db.execute('''
-          CREATE TABLE $pendingMessageTable (
-            owner_user_id TEXT NOT NULL,
-            chat_id TEXT NOT NULL,
-            messages_json TEXT NOT NULL,
-            updated_at INTEGER NOT NULL,
-            PRIMARY KEY (owner_user_id, chat_id)
-          )
-        ''');
+        await _createSchema(db);
+      },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS $callHistoryTable (
+              owner_user_id TEXT PRIMARY KEY,
+              calls_json TEXT NOT NULL,
+              updated_at INTEGER NOT NULL
+            )
+          ''');
+        }
       },
     );
+  }
+
+  static Future<void> _createSchema(Database db) async {
+    await db.execute('''
+      CREATE TABLE $authSessionTable (
+        slot TEXT PRIMARY KEY,
+        session_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE $userProfileTable (
+        cache_key TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        is_self INTEGER NOT NULL DEFAULT 0,
+        profile_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE $chatInboxTable (
+        owner_user_id TEXT PRIMARY KEY,
+        inbox_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE $chatDetailTable (
+        owner_user_id TEXT NOT NULL,
+        chat_id TEXT NOT NULL,
+        detail_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (owner_user_id, chat_id)
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE $chatMessageTable (
+        owner_user_id TEXT NOT NULL,
+        chat_id TEXT NOT NULL,
+        messages_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (owner_user_id, chat_id)
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE $pendingMessageTable (
+        owner_user_id TEXT NOT NULL,
+        chat_id TEXT NOT NULL,
+        messages_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (owner_user_id, chat_id)
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE $callHistoryTable (
+        owner_user_id TEXT PRIMARY KEY,
+        calls_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    ''');
   }
 
   static Future<String?> readJsonValue({
@@ -303,9 +326,300 @@ class TurnaLocalStore {
   static String _whereClause(Map<String, Object?> where) {
     return where.keys.map((key) => '$key = ?').join(' AND ');
   }
+
+  static Future<void> clearAppData() async {
+    final db = await _databaseOrNull();
+    if (db == null) return;
+    try {
+      await db.transaction((tx) async {
+        for (final table in <String>[
+          authSessionTable,
+          userProfileTable,
+          chatInboxTable,
+          chatDetailTable,
+          chatMessageTable,
+          pendingMessageTable,
+          callHistoryTable,
+        ]) {
+          await tx.delete(table);
+        }
+      });
+    } catch (error) {
+      turnaLog('local store clear skipped', error);
+    }
+  }
 }
 
-class TurnaPendingChatMessageLocalCache {
+class TurnaAuthSessionLocalRepository {
+  static Future<void> saveSnapshot(AuthSession session) async {
+    await TurnaLocalStore.writeJsonValue(
+      table: TurnaLocalStore.authSessionTable,
+      valueColumn: 'session_json',
+      keyValues: const <String, Object?>{'slot': 'main'},
+      jsonValue: jsonEncode(session._toLocalSnapshotMap()),
+    );
+  }
+
+  static Future<void> clear() async {
+    await TurnaLocalStore.deleteRows(
+      table: TurnaLocalStore.authSessionTable,
+      where: const <String, Object?>{'slot': 'main'},
+    );
+  }
+}
+
+class TurnaUserProfileLocalRepository {
+  static Future<String?> loadRaw({
+    required String cacheKey,
+    required String legacyPrefsKey,
+  }) async {
+    final raw =
+        await TurnaLocalStore.readJsonValue(
+          table: TurnaLocalStore.userProfileTable,
+          valueColumn: 'profile_json',
+          where: <String, Object?>{'cache_key': cacheKey},
+        ) ??
+        (await SharedPreferences.getInstance()).getString(legacyPrefsKey);
+    return raw == null || raw.trim().isEmpty ? null : raw;
+  }
+
+  static Future<bool> saveRaw({
+    required String cacheKey,
+    required String userId,
+    required bool isSelf,
+    required String legacyPrefsKey,
+    required String rawJson,
+  }) async {
+    final saved = await TurnaLocalStore.writeJsonValue(
+      table: TurnaLocalStore.userProfileTable,
+      valueColumn: 'profile_json',
+      keyValues: <String, Object?>{'cache_key': cacheKey},
+      extraValues: <String, Object?>{
+        'user_id': userId,
+        'is_self': isSelf ? 1 : 0,
+      },
+      jsonValue: rawJson,
+    );
+    final prefs = await SharedPreferences.getInstance();
+    if (saved) {
+      await prefs.remove(legacyPrefsKey);
+      return true;
+    }
+    await prefs.setString(legacyPrefsKey, rawJson);
+    return false;
+  }
+
+  static Future<void> clearSelf(String legacyPrefsKey) async {
+    await TurnaLocalStore.deleteRows(
+      table: TurnaLocalStore.userProfileTable,
+      where: const <String, Object?>{'cache_key': 'self'},
+    );
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(legacyPrefsKey);
+  }
+}
+
+class TurnaChatInboxLocalRepository {
+  static Future<String?> loadRaw(String userId, String legacyPrefsKey) async {
+    final raw =
+        await TurnaLocalStore.readJsonValue(
+          table: TurnaLocalStore.chatInboxTable,
+          valueColumn: 'inbox_json',
+          where: <String, Object?>{'owner_user_id': userId},
+        ) ??
+        (await SharedPreferences.getInstance()).getString(legacyPrefsKey);
+    return raw == null || raw.trim().isEmpty ? null : raw;
+  }
+
+  static Future<void> saveRaw(
+    String userId,
+    String legacyPrefsKey,
+    String rawJson,
+  ) async {
+    final saved = await TurnaLocalStore.writeJsonValue(
+      table: TurnaLocalStore.chatInboxTable,
+      valueColumn: 'inbox_json',
+      keyValues: <String, Object?>{'owner_user_id': userId},
+      jsonValue: rawJson,
+    );
+    final prefs = await SharedPreferences.getInstance();
+    if (saved) {
+      await prefs.remove(legacyPrefsKey);
+      return;
+    }
+    await prefs.setString(legacyPrefsKey, rawJson);
+  }
+}
+
+class TurnaChatDetailLocalRepository {
+  static Future<String?> loadRaw(
+    String userId,
+    String chatId,
+    String legacyPrefsKey,
+  ) async {
+    final raw =
+        await TurnaLocalStore.readJsonValue(
+          table: TurnaLocalStore.chatDetailTable,
+          valueColumn: 'detail_json',
+          where: <String, Object?>{'owner_user_id': userId, 'chat_id': chatId},
+        ) ??
+        (await SharedPreferences.getInstance()).getString(legacyPrefsKey);
+    return raw == null || raw.trim().isEmpty ? null : raw;
+  }
+
+  static Future<void> saveRaw(
+    String userId,
+    String chatId,
+    String legacyPrefsKey,
+    String rawJson,
+  ) async {
+    final saved = await TurnaLocalStore.writeJsonValue(
+      table: TurnaLocalStore.chatDetailTable,
+      valueColumn: 'detail_json',
+      keyValues: <String, Object?>{'owner_user_id': userId, 'chat_id': chatId},
+      jsonValue: rawJson,
+    );
+    final prefs = await SharedPreferences.getInstance();
+    if (saved) {
+      await prefs.remove(legacyPrefsKey);
+      return;
+    }
+    await prefs.setString(legacyPrefsKey, rawJson);
+  }
+}
+
+class TurnaChatHistoryLocalRepository {
+  static Future<List<ChatMessage>> load(
+    String userId,
+    String chatId,
+    String legacyPrefsKey,
+  ) async {
+    final rawJson = await TurnaLocalStore.readJsonValue(
+      table: TurnaLocalStore.chatMessageTable,
+      valueColumn: 'messages_json',
+      where: <String, Object?>{'owner_user_id': userId, 'chat_id': chatId},
+    );
+    final items = <ChatMessage>[];
+    if (rawJson != null && rawJson.trim().isNotEmpty) {
+      try {
+        final decoded = jsonDecode(rawJson) as List<dynamic>;
+        for (final raw in decoded.whereType<Map>()) {
+          items.add(ChatMessage.fromPendingMap(Map<String, dynamic>.from(raw)));
+        }
+      } catch (_) {}
+      return items;
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final rawList = prefs.getStringList(legacyPrefsKey) ?? const [];
+    for (final raw in rawList) {
+      try {
+        final decoded = jsonDecode(raw) as Map<String, dynamic>;
+        items.add(ChatMessage.fromPendingMap(decoded));
+      } catch (_) {}
+    }
+    return items;
+  }
+
+  static Future<void> save(
+    String userId,
+    String chatId,
+    String legacyPrefsKey,
+    Iterable<ChatMessage> messages,
+  ) async {
+    final encoded = jsonEncode(
+      messages.map((message) => message.toPendingMap()).toList(),
+    );
+    final saved = await TurnaLocalStore.writeJsonValue(
+      table: TurnaLocalStore.chatMessageTable,
+      valueColumn: 'messages_json',
+      keyValues: <String, Object?>{'owner_user_id': userId, 'chat_id': chatId},
+      jsonValue: encoded,
+    );
+    final prefs = await SharedPreferences.getInstance();
+    if (saved) {
+      await prefs.remove(legacyPrefsKey);
+      return;
+    }
+    await prefs.setStringList(
+      legacyPrefsKey,
+      messages.map((message) => jsonEncode(message.toPendingMap())).toList(),
+    );
+  }
+}
+
+class TurnaCallHistoryLocalRepository {
+  static Future<List<TurnaCallHistoryItem>> load(
+    String userId,
+    String legacyPrefsKey,
+  ) async {
+    final rawJson = await TurnaLocalStore.readJsonValue(
+      table: TurnaLocalStore.callHistoryTable,
+      valueColumn: 'calls_json',
+      where: <String, Object?>{'owner_user_id': userId},
+    );
+    final items = <TurnaCallHistoryItem>[];
+    if (rawJson != null && rawJson.trim().isNotEmpty) {
+      try {
+        final decoded = jsonDecode(rawJson) as List<dynamic>;
+        for (final raw in decoded.whereType<Map>()) {
+          items.add(
+            TurnaCallHistoryItem.fromMap(Map<String, dynamic>.from(raw)),
+          );
+        }
+      } catch (_) {}
+      return items;
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final rawList = prefs.getStringList(legacyPrefsKey) ?? const [];
+    for (final raw in rawList) {
+      try {
+        final decoded = jsonDecode(raw) as Map<String, dynamic>;
+        items.add(TurnaCallHistoryItem.fromMap(decoded));
+      } catch (_) {}
+    }
+    return items;
+  }
+
+  static Future<void> save(
+    String userId,
+    String legacyPrefsKey,
+    Iterable<TurnaCallHistoryItem> items,
+  ) async {
+    final encoded = jsonEncode(items.map((item) => item.toMap()).toList());
+    final saved = await TurnaLocalStore.writeJsonValue(
+      table: TurnaLocalStore.callHistoryTable,
+      valueColumn: 'calls_json',
+      keyValues: <String, Object?>{'owner_user_id': userId},
+      jsonValue: encoded,
+    );
+    final prefs = await SharedPreferences.getInstance();
+    if (saved) {
+      await prefs.remove(legacyPrefsKey);
+      return;
+    }
+    await prefs.setStringList(
+      legacyPrefsKey,
+      items.map((item) => jsonEncode(item.toMap())).toList(),
+    );
+  }
+}
+
+class TurnaLocalStateReset {
+  static Future<void> clearAppData() async {
+    await TurnaLocalStore.clearAppData();
+    TurnaProfileLocalCache._warmSelfProfile = null;
+    TurnaUserProfileLocalCache._warmProfiles.clear();
+    TurnaChatInboxLocalCache._warmInboxes.clear();
+    TurnaChatDetailLocalCache._warm.clear();
+    TurnaChatHistoryLocalCache._warm.clear();
+    TurnaCallHistoryLocalCache._warm.clear();
+    TurnaSocketClient._warmMessageCache.clear();
+  }
+}
+
+class TurnaPendingMessageLocalRepository {
   static Future<List<ChatMessage>> load(
     String userId,
     String chatId, {

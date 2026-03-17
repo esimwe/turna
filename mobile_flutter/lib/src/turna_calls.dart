@@ -199,15 +199,10 @@ class TurnaCallHistoryLocalCache {
     final warm = peek(userId);
     if (warm != null) return warm;
 
-    final prefs = await SharedPreferences.getInstance();
-    final rawList = prefs.getStringList(_key(userId)) ?? const [];
-    final items = <TurnaCallHistoryItem>[];
-    for (final raw in rawList) {
-      try {
-        final decoded = jsonDecode(raw) as Map<String, dynamic>;
-        items.add(TurnaCallHistoryItem.fromMap(decoded));
-      } catch (_) {}
-    }
+    final items = await TurnaCallHistoryLocalRepository.load(
+      userId,
+      _key(userId),
+    );
     _warm[userId] = List<TurnaCallHistoryItem>.from(items);
     return items;
   }
@@ -218,12 +213,7 @@ class TurnaCallHistoryLocalCache {
   ) async {
     final trimmed = calls.take(_historyLimit).toList();
     _warm[userId] = List<TurnaCallHistoryItem>.from(trimmed);
-
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList(
-      _key(userId),
-      trimmed.map((item) => jsonEncode(item.toMap())).toList(),
-    );
+    await TurnaCallHistoryLocalRepository.save(userId, _key(userId), trimmed);
   }
 }
 
@@ -558,10 +548,7 @@ class CallApi {
   }
 
   static Future<({TurnaGroupCallState? state, bool canStart})>
-  fetchActiveGroupCall(
-    AuthSession session, {
-    required String chatId,
-  }) async {
+  fetchActiveGroupCall(AuthSession session, {required String chatId}) async {
     try {
       final res = await http.get(
         Uri.parse('$kBackendBaseUrl/api/calls/group-chat/$chatId'),
@@ -575,7 +562,7 @@ class CallApi {
         state: rawState == null
             ? null
             : TurnaGroupCallState.fromMap(Map<String, dynamic>.from(rawState)),
-        canStart: data['canStart'] == true
+        canStart: data['canStart'] == true,
       );
     } on TurnaApiException {
       rethrow;
@@ -596,9 +583,7 @@ class CallApi {
           'Authorization': 'Bearer ${session.token}',
           'Content-Type': 'application/json',
         },
-        body: jsonEncode({
-          if (type != null) 'type': type.name,
-        }),
+        body: jsonEncode({if (type != null) 'type': type.name}),
       );
       ChatApi._throwIfApiError(res);
       final map = jsonDecode(res.body) as Map<String, dynamic>;
