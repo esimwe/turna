@@ -5,6 +5,7 @@ final class ShareViewController: UIViewController {
   private let appGroupIdentifier = "group.com.turna.chat.shared"
   private let sharePayloadDefaultsKey = "turna.shared_payload"
   private let openURL = URL(string: "turna://share-target")!
+  private let finishDelayAfterOpen: TimeInterval = 0.45
   private let statusLabel = UILabel()
   private let activityIndicator = UIActivityIndicatorView(style: .large)
   private var startedProcessing = false
@@ -206,11 +207,20 @@ final class ShareViewController: UIViewController {
     }
     logShare("opening host app", details: ["url": openURL.absoluteString])
     extensionContext.open(openURL) { [weak self] success in
-      self?.logShare(
+      guard let self else { return }
+      self.logShare(
         "host app open completed",
         details: ["success": success ? "true" : "false"]
       )
-      self?.finish()
+      if success {
+        DispatchQueue.main.asyncAfter(
+          deadline: .now() + self.finishDelayAfterOpen
+        ) { [weak self] in
+          self?.finish()
+        }
+      } else {
+        self.finish()
+      }
     }
   }
 
