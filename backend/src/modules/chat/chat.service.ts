@@ -955,12 +955,6 @@ export class ChatService {
       if (await this.getActiveBan(chatId, userId)) {
         return false;
       }
-      if (member.hiddenAt) {
-        await prisma.chatMember.update({
-          where: { chatId_userId: { chatId, userId } },
-          data: { hiddenAt: null }
-        });
-      }
       return true;
     }
 
@@ -3648,13 +3642,15 @@ export class ChatService {
     const ownedChatIds = membershipRows.map((row: any) => row.chatId);
     if (ownedChatIds.length === 0) return [];
 
+    const now = new Date();
     await prisma.chatMember.updateMany({
       where: {
         userId,
         chatId: { in: ownedChatIds }
       },
       data: {
-        hiddenAt: new Date()
+        hiddenAt: now,
+        clearedAt: now
       }
     });
 
