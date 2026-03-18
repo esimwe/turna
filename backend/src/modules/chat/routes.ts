@@ -1,3 +1,4 @@
+import type { Request } from "express";
 import { Router } from "express";
 import { z } from "zod";
 import { logError } from "../../lib/logger.js";
@@ -333,6 +334,31 @@ async function resolveGroupAvatarUrl(avatarUrl: string | null): Promise<string |
   }
 }
 
+async function resolveViewerScopedUserAvatarUrl(
+  req: Request,
+  viewerUserId: string,
+  params: {
+    ownerUserId: string | null | undefined;
+    avatarKey: string | null | undefined;
+    updatedAt?: Date | null;
+  }
+): Promise<string | null> {
+  const ownerUserId = params.ownerUserId?.trim();
+  if (!ownerUserId || !params.avatarKey) {
+    return null;
+  }
+
+  const rawAvatarUrl = buildAvatarUrl(req, ownerUserId, params.updatedAt ?? new Date());
+  const scoped = await buildViewerScopedProfilePrivacy({
+    ownerUserId,
+    viewerUserId,
+    about: null,
+    avatarUrl: rawAvatarUrl,
+    socialLinks: []
+  });
+  return scoped.avatarUrl;
+}
+
 chatRouter.get("/:chatId/messages", requireAuth, async (req, res) => {
   const rawChatId = req.params.chatId;
   const chatId = Array.isArray(rawChatId) ? rawChatId[0] : rawChatId;
@@ -483,9 +509,11 @@ chatRouter.get("/", requireAuth, async (req, res) => {
       avatarUrl:
         chat.chatType === "group"
           ? await resolveGroupAvatarUrl(chat.groupAvatarUrl)
-          : chat.peerId && chat.peerAvatarKey && chat.peerUpdatedAt
-          ? buildAvatarUrl(req, chat.peerId, new Date(chat.peerUpdatedAt))
-          : null
+          : await resolveViewerScopedUserAvatarUrl(req, userId, {
+              ownerUserId: chat.peerId,
+              avatarKey: chat.peerAvatarKey,
+              updatedAt: chat.peerUpdatedAt ? new Date(chat.peerUpdatedAt) : null
+            })
     }))
   );
   res.json({
@@ -1168,8 +1196,8 @@ chatRouter.get("/:chatId/members", requireAuth, async (req, res) => {
       req.authUserId!,
       parsedQuery.data
     );
-    res.json({
-      data: page.items.map((member) => ({
+    const data = await Promise.all(
+      page.items.map(async (member) => ({
         userId: member.userId,
         displayName: member.displayName,
         username: member.username,
@@ -1181,11 +1209,15 @@ chatRouter.get("/:chatId/members", requireAuth, async (req, res) => {
         isMuted: member.isMuted,
         mutedUntil: member.mutedUntil,
         muteReason: member.muteReason,
-        avatarUrl:
-          member.avatarKey && member.updatedAt
-            ? buildAvatarUrl(req, member.userId, new Date(member.updatedAt))
-            : null
-      })),
+        avatarUrl: await resolveViewerScopedUserAvatarUrl(req, req.authUserId!, {
+          ownerUserId: member.userId,
+          avatarKey: member.avatarKey,
+          updatedAt: member.updatedAt ? new Date(member.updatedAt) : null
+        })
+      }))
+    );
+    res.json({
+      data,
       pageInfo: {
         totalCount: page.totalCount,
         hasMore: page.hasMore,
@@ -1773,13 +1805,18 @@ chatRouter.get("/:chatId/join-requests", requireAuth, requireMessagingAccess, as
   }
   try {
     const items = await chatService.listJoinRequests(parsedParams.data.chatId, req.authUserId!);
-    res.json({
-      data: items.map((item) => ({
+    const data = await Promise.all(
+      items.map(async (item) => ({
         ...item,
-        avatarUrl: item.avatarKey
-          ? buildAvatarUrl(req, item.userId, new Date())
-          : null
+        avatarUrl: await resolveViewerScopedUserAvatarUrl(req, req.authUserId!, {
+          ownerUserId: item.userId,
+          avatarKey: item.avatarKey,
+          updatedAt: null
+        })
       }))
+    );
+    res.json({
+      data
     });
   } catch (error) {
     if (error instanceof Error) {
@@ -1900,13 +1937,18 @@ chatRouter.get("/:chatId/mutes", requireAuth, requireMessagingAccess, async (req
   }
   try {
     const items = await chatService.listGroupMutes(parsedParams.data.chatId, req.authUserId!);
-    res.json({
-      data: items.map((item) => ({
+    const data = await Promise.all(
+      items.map(async (item) => ({
         ...item,
-        avatarUrl: item.avatarKey
-          ? buildAvatarUrl(req, item.userId, new Date())
-          : null
+        avatarUrl: await resolveViewerScopedUserAvatarUrl(req, req.authUserId!, {
+          ownerUserId: item.userId,
+          avatarKey: item.avatarKey,
+          updatedAt: null
+        })
       }))
+    );
+    res.json({
+      data
     });
   } catch (error) {
     if (error instanceof Error) {
@@ -2028,13 +2070,18 @@ chatRouter.get("/:chatId/bans", requireAuth, requireMessagingAccess, async (req,
   }
   try {
     const items = await chatService.listGroupBans(parsedParams.data.chatId, req.authUserId!);
-    res.json({
-      data: items.map((item) => ({
+    const data = await Promise.all(
+      items.map(async (item) => ({
         ...item,
-        avatarUrl: item.avatarKey
-          ? buildAvatarUrl(req, item.userId, new Date())
-          : null
+        avatarUrl: await resolveViewerScopedUserAvatarUrl(req, req.authUserId!, {
+          ownerUserId: item.userId,
+          avatarKey: item.avatarKey,
+          updatedAt: null
+        })
       }))
+    );
+    res.json({
+      data
     });
   } catch (error) {
     if (error instanceof Error) {
@@ -2278,13 +2325,34 @@ chatRouter.get("/:chatId", requireAuth, async (req, res) => {
       res.status(404).json({ error: "chat_not_found" });
       return;
     }
+    let avatarUrl: string | null;
+    if (detail.chatType === "group") {
+      avatarUrl = await resolveGroupAvatarUrl(detail.avatarUrl);
+    } else {
+      const peerMembership = await prisma.chatMember.findFirst({
+        where: {
+          chatId: parsedParams.data.chatId,
+          userId: { not: req.authUserId! }
+        },
+        select: {
+          userId: true,
+          user: {
+            select: {
+              updatedAt: true
+            }
+          }
+        }
+      });
+      avatarUrl = await resolveViewerScopedUserAvatarUrl(req, req.authUserId!, {
+        ownerUserId: peerMembership?.userId,
+        avatarKey: detail.avatarUrl,
+        updatedAt: peerMembership?.user?.updatedAt ?? null
+      });
+    }
     res.json({
       data: {
         ...detail,
-        avatarUrl:
-          detail.chatType === "group"
-            ? await resolveGroupAvatarUrl(detail.avatarUrl)
-            : detail.avatarUrl
+        avatarUrl
       }
     });
   } catch (error) {

@@ -9,6 +9,7 @@ import {
   DEFAULT_USER_PRIVACY_PREFERENCE,
   allowedMessageExpirationSeconds,
   buildViewerScopedProfilePrivacy,
+  canViewerAccessPrivacyAudience,
   filterPrivacyTargetUserIdsToContacts,
   getUserPrivacyPreference,
   parsePrivacyStringArray,
@@ -989,6 +990,18 @@ profileRouter.get("/avatar/:userId", requireAuth, async (req, res) => {
   });
 
   if (!user?.avatarUrl) {
+    res.status(404).json({ error: "avatar_not_found" });
+    return;
+  }
+
+  const preference = await getUserPrivacyPreference(userId);
+  const canSeeAvatar = await canViewerAccessPrivacyAudience({
+    ownerUserId: userId,
+    viewerUserId: req.authUserId!,
+    mode: preference.profilePhotoMode,
+    targetUserIds: preference.profilePhotoTargetUserIds
+  });
+  if (!canSeeAvatar) {
     res.status(404).json({ error: "avatar_not_found" });
     return;
   }
