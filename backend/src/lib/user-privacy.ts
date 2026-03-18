@@ -15,9 +15,16 @@ export const userPrivacyAudienceValues = [
 ] as const;
 
 export const userOnlineVisibilityValues = ["EVERYONE", "SAME_AS_LAST_SEEN"] as const;
+export const allowedMessageExpirationSeconds = [
+  24 * 60 * 60,
+  7 * 24 * 60 * 60,
+  90 * 24 * 60 * 60
+] as const;
 
 export type UserPrivacyAudienceValue = (typeof userPrivacyAudienceValues)[number];
 export type UserOnlineVisibilityValue = (typeof userOnlineVisibilityValues)[number];
+export type AllowedMessageExpirationSeconds =
+  (typeof allowedMessageExpirationSeconds)[number];
 
 export interface UserPrivacyPreferenceRecord {
   lastSeenMode: UserPrivacyAudienceValue;
@@ -34,6 +41,7 @@ export interface UserPrivacyPreferenceRecord {
     "EVERYONE" | "MY_CONTACTS" | "EXCLUDED_CONTACTS"
   >;
   groupsTargetUserIds: string[];
+  defaultMessageExpirationSeconds: AllowedMessageExpirationSeconds | null;
   statusAllowReshare: boolean;
 }
 
@@ -49,6 +57,7 @@ export const DEFAULT_USER_PRIVACY_PREFERENCE: UserPrivacyPreferenceRecord = {
   linksTargetUserIds: [],
   groupsMode: "EVERYONE",
   groupsTargetUserIds: [],
+  defaultMessageExpirationSeconds: null,
   statusAllowReshare: false
 };
 
@@ -142,6 +151,7 @@ export async function getUserPrivacyPreference(
       linksTargetUserIds: true,
       groupsMode: true,
       groupsTargetUserIds: true,
+      defaultMessageExpirationSeconds: true,
       statusAllowReshare: true
     }
   });
@@ -165,6 +175,10 @@ export async function getUserPrivacyPreference(
     linksTargetUserIds: parsePrivacyStringArray(existing.linksTargetUserIds),
     groupsMode: existing.groupsMode ?? DEFAULT_USER_PRIVACY_PREFERENCE.groupsMode,
     groupsTargetUserIds: parsePrivacyStringArray(existing.groupsTargetUserIds),
+    defaultMessageExpirationSeconds:
+      allowedMessageExpirationSeconds.includes(existing.defaultMessageExpirationSeconds)
+        ? existing.defaultMessageExpirationSeconds
+        : DEFAULT_USER_PRIVACY_PREFERENCE.defaultMessageExpirationSeconds,
     statusAllowReshare:
       existing.statusAllowReshare ?? DEFAULT_USER_PRIVACY_PREFERENCE.statusAllowReshare
   };

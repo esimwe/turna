@@ -12,7 +12,10 @@ import {
   isStorageConfigured
 } from "../../lib/storage.js";
 import { requireAuth, requireMessagingAccess } from "../../middleware/auth.js";
-import { buildViewerScopedProfilePrivacy } from "../../lib/user-privacy.js";
+import {
+  allowedMessageExpirationSeconds,
+  buildViewerScopedProfilePrivacy
+} from "../../lib/user-privacy.js";
 import { buildAvatarUrl } from "../profile/avatar-url.js";
 import { findLookupDisplayName } from "../profile/contact-lookup.js";
 import { normalizeUsername } from "../profile/username.js";
@@ -156,6 +159,18 @@ const setChatFavoritedSchema = z.object({
 
 const setChatLockedSchema = z.object({
   locked: z.boolean()
+});
+const messageExpirationOptionValues = [
+  ...allowedMessageExpirationSeconds,
+  null
+] as const;
+const updateDirectMessageExpirationSchema = z.object({
+  messageExpirationSeconds: z.union([
+    z.literal(messageExpirationOptionValues[0]),
+    z.literal(messageExpirationOptionValues[1]),
+    z.literal(messageExpirationOptionValues[2]),
+    z.null()
+  ])
 });
 
 const setChatFolderSchema = z.object({
@@ -1330,6 +1345,55 @@ chatRouter.put("/:chatId", requireAuth, requireMessagingAccess, async (req, res)
     res.status(500).json({ error: "failed_to_update_group" });
   }
 });
+
+chatRouter.put(
+  "/:chatId/message-expiration",
+  requireAuth,
+  requireMessagingAccess,
+  async (req, res) => {
+    const parsedParams = chatIdParamSchema.safeParse(req.params);
+    const parsedBody = updateDirectMessageExpirationSchema.safeParse(req.body);
+    if (!parsedParams.success) {
+      res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+      return;
+    }
+    if (!parsedBody.success) {
+      res.status(400).json({ error: "validation_error", details: parsedBody.error.flatten() });
+      return;
+    }
+
+    try {
+      const result = await chatService.updateDirectMessageExpiration({
+        chatId: parsedParams.data.chatId,
+        requesterUserId: req.authUserId!,
+        messageExpirationSeconds: parsedBody.data.messageExpirationSeconds
+      });
+      emitInboxUpdate(result.participantIds);
+      if (result.systemMessage) {
+        emitChatMessage(
+          parsedParams.data.chatId,
+          { ...result.systemMessage, chatType: "direct" },
+          result.participantIds
+        );
+      }
+      res.json({ data: result.detail });
+    } catch (error) {
+      if (error instanceof Error) {
+        switch (error.message) {
+          case "forbidden_chat_access":
+            res.status(403).json({ error: error.message });
+            return;
+          case "direct_chat_not_found":
+            res.status(404).json({ error: error.message });
+            return;
+        }
+      }
+
+      logError("direct message expiration update failed", error);
+      res.status(500).json({ error: "failed_to_update_direct_message_expiration" });
+    }
+  }
+);
 
 chatRouter.put(
   "/:chatId/settings",

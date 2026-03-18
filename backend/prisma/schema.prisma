@@ -317,6 +317,9 @@ model Chat {
   whoCanAddMembers    ChatPolicyScope     @default(ADMIN_ONLY)
   whoCanStartCalls    ChatPolicyScope     @default(EDITOR_ONLY)
   historyVisibleToNewMembers Boolean      @default(true)
+  messageExpirationSeconds Int?
+  usesDefaultMessageExpiration Boolean     @default(false)
+  defaultMessageExpirationUserId String?
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @default(now()) @updatedAt
   members             ChatMember[]
@@ -328,6 +331,7 @@ model Chat {
   pinnedMessages      ChatPinnedMessage[]
 
   @@index([type, updatedAt(sort: Desc)])
+  @@index([type, usesDefaultMessageExpiration, defaultMessageExpirationUserId])
   @@index([createdByUserId])
 }
 
@@ -527,6 +531,7 @@ model UserPrivacyPreference {
   linksTargetUserIds         Json?
   groupsMode                 UserPrivacyAudience  @default(EVERYONE)
   groupsTargetUserIds        Json?
+  defaultMessageExpirationSeconds Int?
   statusAllowReshare         Boolean              @default(false)
   createdAt                  DateTime             @default(now())
   updatedAt                  DateTime             @updatedAt
@@ -550,6 +555,7 @@ model Message {
   editHistory   Json?
   createdAt     DateTime           @default(now())
   readAt        DateTime?
+  expiresAt     DateTime?
 
   chat          Chat               @relation(fields: [chatId], references: [id], onDelete: Cascade)
   sender        User               @relation(fields: [senderId], references: [id], onDelete: Cascade)
@@ -561,6 +567,7 @@ model Message {
 
   @@index([chatId, createdAt(sort: Desc)])
   @@index([chatId, systemType, createdAt(sort: Desc)])
+  @@index([chatId, expiresAt])
 }
 
 model MessageMention {

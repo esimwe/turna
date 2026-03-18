@@ -7,6 +7,7 @@ import { otpService } from "../auth/otp.service.js";
 import { prisma } from "../../lib/prisma.js";
 import {
   DEFAULT_USER_PRIVACY_PREFERENCE,
+  allowedMessageExpirationSeconds,
   buildViewerScopedProfilePrivacy,
   filterPrivacyTargetUserIdsToContacts,
   getUserPrivacyPreference,
@@ -142,6 +143,10 @@ const groupPrivacyAudienceApiValues = [
   "my_contacts",
   "excluded_contacts"
 ] as const;
+const defaultMessageExpirationApiValues = [
+  ...allowedMessageExpirationSeconds,
+  null
+] as const;
 
 const syncContactsSchema = z.object({
   contacts: z.array(
@@ -164,6 +169,14 @@ const groupPrivacySettingSchema = z.object({
   mode: z.enum(groupPrivacyAudienceApiValues),
   targetUserIds: z.array(z.string().trim().min(1).max(255)).max(500).default([])
 });
+const defaultMessageExpirationSchema = z
+  .union([
+    z.literal(defaultMessageExpirationApiValues[0]),
+    z.literal(defaultMessageExpirationApiValues[1]),
+    z.literal(defaultMessageExpirationApiValues[2]),
+    z.null()
+  ])
+  .default(null);
 
 const updatePrivacySchema = z.object({
   lastSeen: privacyAudienceSettingSchema,
@@ -174,6 +187,7 @@ const updatePrivacySchema = z.object({
   about: privacyAudienceSettingSchema,
   links: privacyAudienceSettingSchema,
   groups: groupPrivacySettingSchema,
+  defaultMessageExpirationSeconds: defaultMessageExpirationSchema,
   statusAllowReshare: z.boolean().default(false)
 });
 
@@ -258,6 +272,7 @@ function buildPrivacyDto(preference: UserPrivacyPreferenceRecord) {
       mode: toApiPrivacyAudience(preference.groupsMode),
       targetUserIds: preference.groupsTargetUserIds
     },
+    defaultMessageExpirationSeconds: preference.defaultMessageExpirationSeconds,
     statusAllowReshare: preference.statusAllowReshare
   };
 }
@@ -635,6 +650,8 @@ profileRouter.put("/privacy", requireAuth, async (req, res) => {
   }
 
   try {
+    const nextDefaultMessageExpirationSeconds =
+      parsed.data.defaultMessageExpirationSeconds;
     const [
       lastSeenTargetUserIds,
       profilePhotoTargetUserIds,
@@ -655,53 +672,69 @@ profileRouter.put("/privacy", requireAuth, async (req, res) => {
       filterPrivacyTargetUserIdsToContacts(req.authUserId!, parsed.data.groups.targetUserIds)
     ]);
 
-    const updated = await (
-      prisma as unknown as { userPrivacyPreference: any }
-    ).userPrivacyPreference.upsert({
-      where: { userId: req.authUserId! },
-      create: {
-        userId: req.authUserId!,
-        lastSeenMode: toDbPrivacyAudience(parsed.data.lastSeen.mode),
-        lastSeenTargetUserIds,
-        onlineMode: toDbOnlineVisibility(parsed.data.online.mode),
-        profilePhotoMode: toDbPrivacyAudience(parsed.data.profilePhoto.mode),
-        profilePhotoTargetUserIds,
-        aboutMode: toDbPrivacyAudience(parsed.data.about.mode),
-        aboutTargetUserIds,
-        linksMode: toDbPrivacyAudience(parsed.data.links.mode),
-        linksTargetUserIds,
-        groupsMode: toDbPrivacyAudience(parsed.data.groups.mode),
-        groupsTargetUserIds,
-        statusAllowReshare: parsed.data.statusAllowReshare
-      },
-      update: {
-        lastSeenMode: toDbPrivacyAudience(parsed.data.lastSeen.mode),
-        lastSeenTargetUserIds,
-        onlineMode: toDbOnlineVisibility(parsed.data.online.mode),
-        profilePhotoMode: toDbPrivacyAudience(parsed.data.profilePhoto.mode),
-        profilePhotoTargetUserIds,
-        aboutMode: toDbPrivacyAudience(parsed.data.about.mode),
-        aboutTargetUserIds,
-        linksMode: toDbPrivacyAudience(parsed.data.links.mode),
-        linksTargetUserIds,
-        groupsMode: toDbPrivacyAudience(parsed.data.groups.mode),
-        groupsTargetUserIds,
-        statusAllowReshare: parsed.data.statusAllowReshare
-      },
-      select: {
-        lastSeenMode: true,
-        lastSeenTargetUserIds: true,
-        onlineMode: true,
-        profilePhotoMode: true,
-        profilePhotoTargetUserIds: true,
-        aboutMode: true,
-        aboutTargetUserIds: true,
-        linksMode: true,
-        linksTargetUserIds: true,
-        groupsMode: true,
-        groupsTargetUserIds: true,
-        statusAllowReshare: true
-      }
+    const updated = await prisma.$transaction(async (tx: any) => {
+      const preference = await tx.userPrivacyPreference.upsert({
+        where: { userId: req.authUserId! },
+        create: {
+          userId: req.authUserId!,
+          lastSeenMode: toDbPrivacyAudience(parsed.data.lastSeen.mode),
+          lastSeenTargetUserIds,
+          onlineMode: toDbOnlineVisibility(parsed.data.online.mode),
+          profilePhotoMode: toDbPrivacyAudience(parsed.data.profilePhoto.mode),
+          profilePhotoTargetUserIds,
+          aboutMode: toDbPrivacyAudience(parsed.data.about.mode),
+          aboutTargetUserIds,
+          linksMode: toDbPrivacyAudience(parsed.data.links.mode),
+          linksTargetUserIds,
+          groupsMode: toDbPrivacyAudience(parsed.data.groups.mode),
+          groupsTargetUserIds,
+          defaultMessageExpirationSeconds: nextDefaultMessageExpirationSeconds,
+          statusAllowReshare: parsed.data.statusAllowReshare
+        },
+        update: {
+          lastSeenMode: toDbPrivacyAudience(parsed.data.lastSeen.mode),
+          lastSeenTargetUserIds,
+          onlineMode: toDbOnlineVisibility(parsed.data.online.mode),
+          profilePhotoMode: toDbPrivacyAudience(parsed.data.profilePhoto.mode),
+          profilePhotoTargetUserIds,
+          aboutMode: toDbPrivacyAudience(parsed.data.about.mode),
+          aboutTargetUserIds,
+          linksMode: toDbPrivacyAudience(parsed.data.links.mode),
+          linksTargetUserIds,
+          groupsMode: toDbPrivacyAudience(parsed.data.groups.mode),
+          groupsTargetUserIds,
+          defaultMessageExpirationSeconds: nextDefaultMessageExpirationSeconds,
+          statusAllowReshare: parsed.data.statusAllowReshare
+        },
+        select: {
+          lastSeenMode: true,
+          lastSeenTargetUserIds: true,
+          onlineMode: true,
+          profilePhotoMode: true,
+          profilePhotoTargetUserIds: true,
+          aboutMode: true,
+          aboutTargetUserIds: true,
+          linksMode: true,
+          linksTargetUserIds: true,
+          groupsMode: true,
+          groupsTargetUserIds: true,
+          defaultMessageExpirationSeconds: true,
+          statusAllowReshare: true
+        }
+      });
+
+      await tx.chat.updateMany({
+        where: {
+          type: "DIRECT",
+          usesDefaultMessageExpiration: true,
+          defaultMessageExpirationUserId: req.authUserId!
+        },
+        data: {
+          messageExpirationSeconds: nextDefaultMessageExpirationSeconds
+        }
+      });
+
+      return preference;
     });
 
     res.json({
@@ -720,6 +753,12 @@ profileRouter.put("/privacy", requireAuth, async (req, res) => {
         linksTargetUserIds: parsePrivacyStringArray(updated.linksTargetUserIds),
         groupsMode: updated.groupsMode ?? DEFAULT_USER_PRIVACY_PREFERENCE.groupsMode,
         groupsTargetUserIds: parsePrivacyStringArray(updated.groupsTargetUserIds),
+        defaultMessageExpirationSeconds:
+          allowedMessageExpirationSeconds.includes(
+            updated.defaultMessageExpirationSeconds
+          )
+            ? updated.defaultMessageExpirationSeconds
+            : DEFAULT_USER_PRIVACY_PREFERENCE.defaultMessageExpirationSeconds,
         statusAllowReshare:
           updated.statusAllowReshare ?? DEFAULT_USER_PRIVACY_PREFERENCE.statusAllowReshare
       })

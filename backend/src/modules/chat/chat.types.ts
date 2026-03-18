@@ -47,6 +47,7 @@ export interface ChatMessage {
   systemType: string | null;
   systemPayload: Record<string, unknown> | null;
   createdAt: string;
+  expiresAt: string | null;
   status: ChatMessageStatus;
   editedAt: string | null;
   isEdited: boolean;
@@ -152,6 +153,8 @@ export interface ChatDetail {
   whoCanAddMembers: ChatPolicyScope;
   whoCanStartCalls: ChatPolicyScope;
   historyVisibleToNewMembers: boolean;
+  messageExpirationSeconds: number | null;
+  usesDefaultMessageExpiration: boolean;
   myCanSend: boolean;
   myIsMuted: boolean;
   myMutedUntil: string | null;

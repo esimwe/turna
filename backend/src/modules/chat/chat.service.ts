@@ -7,7 +7,11 @@ import {
   getBlockedUserIdsByUser,
   setUserBlocked
 } from "../../lib/user-relationship.js";
-import { canRequesterAddUserToGroup } from "../../lib/user-privacy.js";
+import {
+  allowedMessageExpirationSeconds,
+  canRequesterAddUserToGroup,
+  getUserPrivacyPreference
+} from "../../lib/user-privacy.js";
 import type {
   AppChatType,
   ChatBanSummary,
@@ -81,6 +85,8 @@ const GROUP_MEMBER_MUTED_SYSTEM_TYPE = "group_member_muted";
 const GROUP_MEMBER_UNMUTED_SYSTEM_TYPE = "group_member_unmuted";
 const GROUP_MEMBER_BANNED_SYSTEM_TYPE = "group_member_banned";
 const GROUP_MEMBER_UNBANNED_SYSTEM_TYPE = "group_member_unbanned";
+const DIRECT_MESSAGE_EXPIRATION_UPDATED_SYSTEM_TYPE =
+  "direct_message_expiration_updated";
 const MessageStatus = {
   sent: "sent",
   delivered: "delivered",
@@ -174,6 +180,7 @@ type MessageRow = {
   systemType: string | null;
   systemPayload: unknown;
   createdAt: Date;
+  expiresAt: Date | null;
   status: MessageStatusValue;
   editedAt: Date | null;
   editHistory: unknown;
@@ -208,6 +215,38 @@ type MessageRow = {
     durationSeconds: number | null;
   }>;
 };
+
+function isAllowedMessageExpirationSeconds(
+  value: number | null | undefined
+): value is (typeof allowedMessageExpirationSeconds)[number] {
+  return value != null && allowedMessageExpirationSeconds.includes(value as any);
+}
+
+function buildActiveMessageExpirationWhere(now: Date = new Date()) {
+  return {
+    OR: [{ expiresAt: null }, { expiresAt: { gt: now } }]
+  };
+}
+
+function isMessageActiveAt(
+  message: { expiresAt?: Date | null },
+  now: Date = new Date()
+): boolean {
+  return !message.expiresAt || message.expiresAt.getTime() > now.getTime();
+}
+
+function formatMessageExpirationSummary(seconds: number | null): string {
+  switch (seconds) {
+    case 24 * 60 * 60:
+      return "24 Saat";
+    case 7 * 24 * 60 * 60:
+      return "7 Gün";
+    case 90 * 24 * 60 * 60:
+      return "90 Gün";
+    default:
+      return "Kapalı";
+  }
+}
 
 function extractMentionUsernames(text: string | null | undefined): string[] {
   if (!text) return [];
@@ -378,6 +417,20 @@ function summarizeMessage(row: {
 
   if (row.systemType === GROUP_SETTINGS_UPDATED_SYSTEM_TYPE) {
     return "Grup ayarları güncellendi";
+  }
+
+  if (row.systemType === DIRECT_MESSAGE_EXPIRATION_UPDATED_SYSTEM_TYPE) {
+    const payload =
+      row.systemPayload && typeof row.systemPayload === "object"
+        ? (row.systemPayload as Record<string, unknown>)
+        : null;
+    const seconds =
+      typeof payload?.messageExpirationSeconds === "number"
+        ? payload.messageExpirationSeconds
+        : null;
+    return seconds == null
+      ? "Süreli mesajlar kapatıldı"
+      : `Süreli mesajlar ${formatMessageExpirationSummary(seconds)} olarak ayarlandı`;
   }
 
   if (row.systemType === GROUP_ROLE_UPDATED_SYSTEM_TYPE) {
@@ -584,6 +637,7 @@ async function toChatMessage(row: MessageRow): Promise<ChatMessage> {
         ? (row.systemPayload as Record<string, unknown>)
         : null,
     createdAt: row.createdAt.toISOString(),
+    expiresAt: row.expiresAt ? row.expiresAt.toISOString() : null,
     status: row.status,
     editedAt: row.editedAt ? row.editedAt.toISOString() : null,
     isEdited: row.editedAt != null,
@@ -660,6 +714,9 @@ export class ChatService {
     whoCanAddMembers: ChatPolicyScopeValue;
     whoCanStartCalls: ChatPolicyScopeValue;
     historyVisibleToNewMembers: boolean;
+    messageExpirationSeconds: number | null;
+    usesDefaultMessageExpiration: boolean;
+    defaultMessageExpirationUserId: string | null;
   } | null> {
     return prisma.chat.findUnique({
       where: { id: chatId },
@@ -678,7 +735,10 @@ export class ChatService {
         whoCanInvite: true,
         whoCanAddMembers: true,
         whoCanStartCalls: true,
-        historyVisibleToNewMembers: true
+        historyVisibleToNewMembers: true,
+        messageExpirationSeconds: true,
+        usesDefaultMessageExpiration: true,
+        defaultMessageExpirationUserId: true
       }
     });
   }
@@ -967,12 +1027,19 @@ export class ChatService {
       select: { id: true }
     });
     if (users.length !== 2) return false;
+    const preference = await getUserPrivacyPreference(userId);
+    const defaultMessageExpirationSeconds =
+      preference.defaultMessageExpirationSeconds;
 
     await prisma.chat.upsert({
       where: { id: chatId },
       create: {
         id: chatId,
         type: ChatType.DIRECT,
+        messageExpirationSeconds: defaultMessageExpirationSeconds,
+        usesDefaultMessageExpiration: defaultMessageExpirationSeconds != null,
+        defaultMessageExpirationUserId:
+          defaultMessageExpirationSeconds != null ? userId : null,
         members: {
           create: participants.map((participantId) => ({ userId: participantId }))
         }
@@ -1008,6 +1075,10 @@ export class ChatService {
     );
 
     const message = await prisma.$transaction(async (tx: any) => {
+      const expiresAt =
+        chat?.messageExpirationSeconds != null
+          ? new Date(Date.now() + chat.messageExpirationSeconds * 1000)
+          : null;
       const mentionedUsers =
         chat?.type === ChatType.GROUP
           ? await resolveMentionedUsersForChat(
@@ -1023,6 +1094,7 @@ export class ChatService {
           senderId: payload.senderId,
           text: payload.text?.trim() ? payload.text.trim() : null,
           status: MessageStatus.sent,
+          expiresAt,
           attachments: preparedAttachments.length
             ? {
                 create: preparedAttachments.map((attachment) => ({
@@ -1483,6 +1555,7 @@ export class ChatService {
         chatId,
         senderId: { not: userId },
         status: MessageStatus.sent,
+        ...buildActiveMessageExpirationWhere(),
         ...(cutoff ? { createdAt: { gt: cutoff } } : {})
       },
       select: { id: true }
@@ -1514,6 +1587,7 @@ export class ChatService {
         chatId,
         senderId: { not: userId },
         status: MessageStatus.sent,
+        ...buildActiveMessageExpirationWhere(),
         ...(cutoff ? { createdAt: { gt: cutoff } } : {})
       },
       select: { id: true }
@@ -1537,6 +1611,7 @@ export class ChatService {
         chatId,
         senderId: { not: userId },
         status: { in: [MessageStatus.sent, MessageStatus.delivered] },
+        ...buildActiveMessageExpirationWhere(),
         ...(cutoff ? { createdAt: { gt: cutoff } } : {})
       },
       select: { id: true }
@@ -1605,53 +1680,67 @@ export class ChatService {
     const clearedAt = latestDate(membership?.clearedAt ?? null, visibleFrom);
     const trimmedSearchQuery = options.searchQuery?.trim() ?? "";
 
-    const where: Record<string, unknown> = {
-      chatId,
-      createdAt: {
-        ...(beforeDate ? { lt: beforeDate } : {}),
-        ...(clearedAt ? { gt: clearedAt } : {})
-      }
-    };
+    const whereAnd: Record<string, unknown>[] = [
+      {
+        chatId,
+        createdAt: {
+          ...(beforeDate ? { lt: beforeDate } : {}),
+          ...(clearedAt ? { gt: clearedAt } : {})
+        }
+      },
+      buildActiveMessageExpirationWhere()
+    ];
 
     if (trimmedSearchQuery.length > 0 || options.collectionFilter) {
-      where.systemType = null;
+      whereAnd.push({ systemType: null });
     }
 
     if (trimmedSearchQuery.length > 0) {
-      where.OR = [
-        { text: { contains: trimmedSearchQuery, mode: "insensitive" } },
-        { sender: { displayName: { contains: trimmedSearchQuery, mode: "insensitive" } } },
-        {
-          attachments: {
-            some: {
-              fileName: { contains: trimmedSearchQuery, mode: "insensitive" }
+      whereAnd.push({
+        OR: [
+          { text: { contains: trimmedSearchQuery, mode: "insensitive" } },
+          { sender: { displayName: { contains: trimmedSearchQuery, mode: "insensitive" } } },
+          {
+            attachments: {
+              some: {
+                fileName: { contains: trimmedSearchQuery, mode: "insensitive" }
+              }
             }
           }
-        }
-      ];
+        ]
+      });
     }
 
     if (options.collectionFilter === "media") {
-      where.attachments = {
-        some: {
-          kind: {
-            in: [AttachmentKind.IMAGE, AttachmentKind.VIDEO]
+      whereAnd.push({
+        attachments: {
+          some: {
+            kind: {
+              in: [AttachmentKind.IMAGE, AttachmentKind.VIDEO]
+            }
           }
         }
-      };
+      });
     } else if (options.collectionFilter === "docs") {
-      where.attachments = {
-        some: {
-          kind: AttachmentKind.FILE
+      whereAnd.push({
+        attachments: {
+          some: {
+            kind: AttachmentKind.FILE
+          }
         }
-      };
+      });
     } else if (options.collectionFilter === "links") {
-      where.OR = [
-        { text: { contains: "http://" } },
-        { text: { contains: "https://" } },
-        { text: { contains: "www." } }
-      ];
+      whereAnd.push({
+        OR: [
+          { text: { contains: "http://" } },
+          { text: { contains: "https://" } },
+          { text: { contains: "www." } }
+        ]
+      });
     }
+
+    const where: Record<string, unknown> =
+      whereAnd.length == 1 ? whereAnd[0] : { AND: whereAnd };
 
     const rows = await prisma.message.findMany({
       where,
@@ -1787,21 +1876,28 @@ export class ChatService {
           return null;
         }
         const unreadCutoff = latestDate(hiddenAt, visibilityCutoff);
+        const now = new Date();
         const visibleLast =
           chat.messages.find(
             (message: any) =>
               !isSilentSystemType(message.systemType) &&
+              isMessageActiveAt(message, now) &&
               (!visibilityCutoff || message.createdAt > visibilityCutoff)
           ) ?? null;
         const unreadCount = await prisma.message.count({
           where: {
-            chatId: chat.id,
-            senderId: { not: userId },
-            status: { not: MessageStatus.read },
-            NOT: {
-              systemType: ADMIN_NOTICE_SILENT_SYSTEM_TYPE
-            },
-            ...(unreadCutoff ? { createdAt: { gt: unreadCutoff } } : {})
+            AND: [
+              {
+                chatId: chat.id,
+                senderId: { not: userId },
+                status: { not: MessageStatus.read },
+                NOT: {
+                  systemType: ADMIN_NOTICE_SILENT_SYSTEM_TYPE
+                },
+                ...(unreadCutoff ? { createdAt: { gt: unreadCutoff } } : {})
+              },
+              buildActiveMessageExpirationWhere(now)
+            ]
           }
         });
 
@@ -1983,6 +2079,8 @@ export class ChatService {
         whoCanAddMembers: true,
         whoCanStartCalls: true,
         historyVisibleToNewMembers: true,
+        messageExpirationSeconds: true,
+        usesDefaultMessageExpiration: true,
         members: {
           select: {
             userId: true,
@@ -2050,6 +2148,15 @@ export class ChatService {
           : ChatPolicyScope.OWNER_ONLY,
       historyVisibleToNewMembers:
         chat.type === ChatType.GROUP ? chat.historyVisibleToNewMembers !== false : true,
+      messageExpirationSeconds:
+        chat.type === ChatType.DIRECT &&
+        isAllowedMessageExpirationSeconds(chat.messageExpirationSeconds)
+          ? chat.messageExpirationSeconds
+          : null,
+      usesDefaultMessageExpiration:
+        chat.type === ChatType.DIRECT &&
+        chat.messageExpirationSeconds != null &&
+        chat.usesDefaultMessageExpiration === true,
       myCanSend: myMembership?.canSend === true,
       myIsMuted: activeMute != null,
       myMutedUntil: activeMute?.mutedUntil ? activeMute.mutedUntil.toISOString() : null,
@@ -2432,6 +2539,86 @@ export class ChatService {
     const detail = await this.getGroupDetail(input.chatId, input.requesterUserId);
     if (!detail) {
       throw new Error("group_not_found");
+    }
+
+    return {
+      detail,
+      participantIds: await this.getChatParticipantIds(input.chatId),
+      systemMessage
+    };
+  }
+
+  async updateDirectMessageExpiration(input: {
+    chatId: string;
+    requesterUserId: string;
+    messageExpirationSeconds: number | null;
+  }): Promise<{
+    detail: ChatDetail;
+    participantIds: string[];
+    systemMessage: ChatMessage | null;
+  }> {
+    const hasAccess = await this.ensureChatAccess(
+      input.chatId,
+      input.requesterUserId
+    );
+    if (!hasAccess) {
+      throw new Error("forbidden_chat_access");
+    }
+
+    const chat = await this.getChatMeta(input.chatId);
+    if (!chat || chat.type !== ChatType.DIRECT) {
+      throw new Error("direct_chat_not_found");
+    }
+
+    const nextMessageExpirationSeconds = isAllowedMessageExpirationSeconds(
+      input.messageExpirationSeconds
+    )
+      ? input.messageExpirationSeconds
+      : null;
+    const changed =
+      nextMessageExpirationSeconds !== chat.messageExpirationSeconds ||
+      chat.usesDefaultMessageExpiration === true;
+
+    if (!changed) {
+      const detail = await this.getChatDetail(input.chatId, input.requesterUserId);
+      if (!detail) {
+        throw new Error("direct_chat_not_found");
+      }
+      return {
+        detail,
+        participantIds: await this.getChatParticipantIds(input.chatId),
+        systemMessage: null
+      };
+    }
+
+    await prisma.chat.update({
+      where: { id: input.chatId },
+      data: {
+        messageExpirationSeconds: nextMessageExpirationSeconds,
+        usesDefaultMessageExpiration: false,
+        defaultMessageExpirationUserId: null
+      }
+    });
+
+    const requester = await prisma.user.findUnique({
+      where: { id: input.requesterUserId },
+      select: { displayName: true }
+    });
+
+    const systemMessage = await this.createSystemMessage({
+      chatId: input.chatId,
+      senderId: input.requesterUserId,
+      systemType: DIRECT_MESSAGE_EXPIRATION_UPDATED_SYSTEM_TYPE,
+      systemPayload: {
+        updatedByUserId: input.requesterUserId,
+        updatedByDisplayName: requester?.displayName ?? "Turna",
+        messageExpirationSeconds: nextMessageExpirationSeconds
+      }
+    });
+
+    const detail = await this.getChatDetail(input.chatId, input.requesterUserId);
+    if (!detail) {
+      throw new Error("direct_chat_not_found");
     }
 
     return {
@@ -2956,6 +3143,8 @@ export class ChatService {
             whoCanAddMembers: chat.whoCanAddMembers ?? chat.memberAddPolicy,
             whoCanStartCalls: chat.whoCanStartCalls ?? ChatPolicyScope.EDITOR_ONLY,
             historyVisibleToNewMembers: chat.historyVisibleToNewMembers !== false,
+            messageExpirationSeconds: null,
+            usesDefaultMessageExpiration: false,
             myCanSend: false,
             myIsMuted: false,
             myMutedUntil: null,
