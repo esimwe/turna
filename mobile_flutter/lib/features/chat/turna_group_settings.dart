@@ -1,4 +1,4 @@
-part of turna_app;
+part of '../../app/turna_app.dart';
 
 class _TurnaGroupSettingsPage extends StatefulWidget {
   const _TurnaGroupSettingsPage({

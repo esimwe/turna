@@ -1,4 +1,4 @@
-part of turna_app;
+part of '../app/turna_app.dart';
 
 class ProfileApi {
   static Future<TurnaUserProfile> fetchMe(AuthSession session) async {

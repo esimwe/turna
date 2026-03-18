@@ -1,4 +1,4 @@
-part of turna_app;
+part of 'turna_app.dart';
 
 class MainTabs extends StatefulWidget {
   const MainTabs({
@@ -23,17 +23,22 @@ class _MainTabsState extends State<MainTabs>
   int _index = 3;
   int _totalUnreadChats = 0;
   late final PresenceSocketClient _presenceClient;
+  @override
   final _inboxUpdateNotifier = ValueNotifier<int>(0);
+  @override
   final _callCoordinator = TurnaCallCoordinator();
   final Set<int> _visitedTabs = <int>{3};
   final Object _pushChatOpenBinding = Object();
   final Object _shareTargetBinding = Object();
   String? _activeIncomingCallId;
+  @override
   String? _lastPushOpenedChatId;
   bool _endingSession = false;
   bool _openingProfileFromCommunity = false;
+  @override
   bool _openingPushChat = false;
 
+  @override
   void _handleSessionExpired() {
     if (_endingSession) return;
     _endingSession = true;
@@ -234,6 +239,7 @@ class _MainTabsState extends State<MainTabs>
     }
   }
 
+  @override
   void focusChatsTab() {
     if (!mounted) return;
     if (_index == 3 && _visitedTabs.contains(3)) return;

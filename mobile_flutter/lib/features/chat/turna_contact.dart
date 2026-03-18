@@ -1,4 +1,4 @@
-part of turna_app;
+part of '../../app/turna_app.dart';
 
 String _normalizeTurnaSharedPhone(String value) {
   final trimmed = value.trim();

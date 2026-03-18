@@ -1,4 +1,4 @@
-part of turna_app;
+part of '../../app/turna_app.dart';
 
 class TurnaCallHistoryLocalCache {
   static const int _historyLimit = 240;
@@ -160,8 +160,8 @@ class CallApi {
           'Content-Type': 'application/json',
         },
         body: jsonEncode({
-          if (microphonePolicy != null) 'microphonePolicy': microphonePolicy,
-          if (cameraPolicy != null) 'cameraPolicy': cameraPolicy,
+          ?microphonePolicy: microphonePolicy,
+          ?cameraPolicy: cameraPolicy,
         }),
       );
       ChatApi._throwIfApiError(res);

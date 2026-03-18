@@ -1,4 +1,4 @@
-part of turna_app;
+part of '../../app/turna_app.dart';
 
 class _TurnaPendingNativeAction {
   const _TurnaPendingNativeAction({required this.action, required this.body});

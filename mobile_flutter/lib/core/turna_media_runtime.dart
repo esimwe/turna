@@ -1,4 +1,4 @@
-part of turna_app;
+part of '../app/turna_app.dart';
 
 class TurnaMediaBridge {
   static const MethodChannel _channel = MethodChannel('turna/media');

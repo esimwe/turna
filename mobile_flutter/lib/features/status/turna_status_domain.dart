@@ -1,4 +1,4 @@
-part of turna_app;
+part of '../../app/turna_app.dart';
 
 class TurnaStatusApi {
   static Future<TurnaStatusFeedData> fetchFeed(AuthSession session) async {

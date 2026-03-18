@@ -1,4 +1,4 @@
-part of turna_app;
+part of '../app/turna_app.dart';
 
 class TurnaPushManager {
   static const _lastPushTokenKey = 'turna_last_push_token';

@@ -1,4 +1,4 @@
-part of turna_app;
+part of '../../app/turna_app.dart';
 
 const List<Color> _kStatusTextBackgrounds = <Color>[
   Color(0xFF1F6FEB),

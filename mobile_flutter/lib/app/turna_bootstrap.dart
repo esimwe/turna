@@ -1,4 +1,4 @@
-part of turna_app;
+part of 'turna_app.dart';
 
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {

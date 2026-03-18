@@ -1,4 +1,4 @@
-part of turna_app;
+part of '../app/turna_app.dart';
 
 Widget buildTurnaSessionExpiredRedirect(VoidCallback onSessionExpired) {
   WidgetsBinding.instance.addPostFrameCallback((_) => onSessionExpired());

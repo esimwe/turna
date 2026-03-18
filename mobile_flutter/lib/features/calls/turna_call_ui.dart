@@ -1,4 +1,4 @@
-part of turna_app;
+part of '../../app/turna_app.dart';
 
 class CallsPage extends StatefulWidget {
   const CallsPage({
@@ -845,29 +845,28 @@ class _GroupCallPageState extends State<GroupCallPage> {
                       'Mikrofon',
                       style: TextStyle(fontWeight: FontWeight.w700),
                     ),
-                    RadioListTile<String>(
-                      value: 'EVERYONE',
+                    RadioGroup<String>(
                       groupValue: microphonePolicy,
-                      onChanged: (value) => setModalState(
-                        () => microphonePolicy = value ?? 'EVERYONE',
+                      onChanged: (value) {
+                        if (value == null) return;
+                        setModalState(() => microphonePolicy = value);
+                      },
+                      child: Column(
+                        children: const [
+                          RadioListTile<String>(
+                            value: 'EVERYONE',
+                            title: Text('Herkes konuşabilir'),
+                          ),
+                          RadioListTile<String>(
+                            value: 'ADMINS_ONLY',
+                            title: Text('Sadece yönetici rolleri konuşabilir'),
+                          ),
+                          RadioListTile<String>(
+                            value: 'LISTEN_ONLY',
+                            title: Text('Dinleme modu'),
+                          ),
+                        ],
                       ),
-                      title: const Text('Herkes konuşabilir'),
-                    ),
-                    RadioListTile<String>(
-                      value: 'ADMINS_ONLY',
-                      groupValue: microphonePolicy,
-                      onChanged: (value) => setModalState(
-                        () => microphonePolicy = value ?? 'ADMINS_ONLY',
-                      ),
-                      title: const Text('Sadece yönetici rolleri konuşabilir'),
-                    ),
-                    RadioListTile<String>(
-                      value: 'LISTEN_ONLY',
-                      groupValue: microphonePolicy,
-                      onChanged: (value) => setModalState(
-                        () => microphonePolicy = value ?? 'LISTEN_ONLY',
-                      ),
-                      title: const Text('Dinleme modu'),
                     ),
                     if (widget.connect.type == TurnaCallType.video) ...[
                       const SizedBox(height: 4),
@@ -875,31 +874,30 @@ class _GroupCallPageState extends State<GroupCallPage> {
                         'Kamera',
                         style: TextStyle(fontWeight: FontWeight.w700),
                       ),
-                      RadioListTile<String>(
-                        value: 'EVERYONE',
+                      RadioGroup<String>(
                         groupValue: cameraPolicy,
-                        onChanged: (value) => setModalState(
-                          () => cameraPolicy = value ?? 'EVERYONE',
+                        onChanged: (value) {
+                          if (value == null) return;
+                          setModalState(() => cameraPolicy = value);
+                        },
+                        child: Column(
+                          children: const [
+                            RadioListTile<String>(
+                              value: 'EVERYONE',
+                              title: Text('Herkes kamera açabilir'),
+                            ),
+                            RadioListTile<String>(
+                              value: 'ADMINS_ONLY',
+                              title: Text(
+                                'Sadece yönetici rolleri kamera açabilir',
+                              ),
+                            ),
+                            RadioListTile<String>(
+                              value: 'DISABLED',
+                              title: Text('Kameraları kapat'),
+                            ),
+                          ],
                         ),
-                        title: const Text('Herkes kamera açabilir'),
-                      ),
-                      RadioListTile<String>(
-                        value: 'ADMINS_ONLY',
-                        groupValue: cameraPolicy,
-                        onChanged: (value) => setModalState(
-                          () => cameraPolicy = value ?? 'ADMINS_ONLY',
-                        ),
-                        title: const Text(
-                          'Sadece yönetici rolleri kamera açabilir',
-                        ),
-                      ),
-                      RadioListTile<String>(
-                        value: 'DISABLED',
-                        groupValue: cameraPolicy,
-                        onChanged: (value) => setModalState(
-                          () => cameraPolicy = value ?? 'DISABLED',
-                        ),
-                        title: const Text('Kameraları kapat'),
                       ),
                     ],
                     const SizedBox(height: 8),
@@ -1128,17 +1126,17 @@ class _GroupCallPageState extends State<GroupCallPage> {
         itemBuilder: (context, index) => _buildParticipantTile(items[index]),
       );
     }
+    final spotlightItem = spotlight;
 
     return Column(
       children: [
-        if (spotlight != null)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-            child: SizedBox(
-              height: useSpotlight ? 240 : 180,
-              child: _buildParticipantTile(spotlight, spotlight: true),
-            ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+          child: SizedBox(
+            height: useSpotlight ? 240 : 180,
+            child: _buildParticipantTile(spotlightItem, spotlight: true),
           ),
+        ),
         Expanded(
           child: GridView.builder(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),

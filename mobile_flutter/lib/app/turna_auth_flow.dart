@@ -1,4 +1,4 @@
-part of turna_app;
+part of 'turna_app.dart';
 
 enum _TurnaAuthStep { welcome, phone, otp }
 

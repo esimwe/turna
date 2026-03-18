@@ -1,4 +1,4 @@
-part of turna_app;
+part of '../app/turna_app.dart';
 
 class TurnaLocalStore {
   static const String _dbName = 'turna_local_store_v1.db';

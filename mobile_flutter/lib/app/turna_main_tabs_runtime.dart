@@ -1,4 +1,4 @@
-part of turna_app;
+part of 'turna_app.dart';
 
 mixin _TurnaMainTabsRuntime on State<MainTabs> {
   ValueNotifier<int> get _inboxUpdateNotifier;
@@ -142,7 +142,7 @@ mixin _TurnaMainTabsRuntime on State<MainTabs> {
     final sizeBytes = item.sizeBytes > 0 ? item.sizeBytes : await file.length();
 
     if (kind != ChatAttachmentKind.file) {
-      final prepared = await prepareTurnaInlineMediaAttachment(
+      final prepared = await _prepareTurnaInlineMediaAttachment(
         MediaComposerSeed(
           kind: kind,
           file: XFile(file.path, name: fileName, mimeType: contentType),

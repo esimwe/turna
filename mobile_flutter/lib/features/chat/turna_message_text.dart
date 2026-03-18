@@ -56,32 +56,6 @@ class ParsedTurnaMessageText {
   final bool deletedForEveryone;
 }
 
-class _PinnedMessageDraft {
-  const _PinnedMessageDraft({
-    required this.messageId,
-    required this.senderLabel,
-    required this.previewText,
-  });
-
-  final String messageId;
-  final String senderLabel;
-  final String previewText;
-
-  Map<String, dynamic> toMap() => {
-    'messageId': messageId,
-    'senderLabel': senderLabel,
-    'previewText': previewText,
-  };
-
-  factory _PinnedMessageDraft.fromMap(Map<String, dynamic> map) {
-    return _PinnedMessageDraft(
-      messageId: (map['messageId'] ?? '').toString(),
-      senderLabel: (map['senderLabel'] ?? '').toString(),
-      previewText: (map['previewText'] ?? '').toString(),
-    );
-  }
-}
-
 ParsedTurnaMessageText parseTurnaMessageText(String raw) {
   if (raw.trim() == _kTurnaDeletedEveryoneMarker) {
     return const ParsedTurnaMessageText(

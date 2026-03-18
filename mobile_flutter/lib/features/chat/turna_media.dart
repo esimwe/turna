@@ -1,4 +1,4 @@
-part of turna_app;
+part of '../../app/turna_app.dart';
 
 class _TurnaMediaComposerPage extends StatelessWidget {
   const _TurnaMediaComposerPage({
@@ -122,7 +122,7 @@ Future<List<MediaComposerSeed>> buildTurnaMediaComposerSeeds(
   return seeds;
 }
 
-Future<_PreparedComposerAttachment> prepareTurnaInlineMediaAttachment(
+Future<_PreparedComposerAttachment> _prepareTurnaInlineMediaAttachment(
   MediaComposerSeed seed, {
   MediaComposerQuality quality = MediaComposerQuality.standard,
 }) async {

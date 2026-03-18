@@ -102,6 +102,7 @@ Future<bool> authenticateLockedChatAccess(
 
 class TurnaAppLockOverlay extends StatelessWidget {
   const TurnaAppLockOverlay({
+    super.key,
     required this.busy,
     required this.unlockMethodLabel,
     required this.onUnlock,
