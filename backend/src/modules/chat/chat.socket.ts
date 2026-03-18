@@ -9,11 +9,14 @@ import {
   assertUserCanSendMessagesById
 } from "../../lib/user-access.js";
 import {
+  buildPresencePayloadForViewer,
+} from "../../lib/user-privacy.js";
+import {
   buildUserPresencePayload,
   chatRoom,
   emitChatMessage,
-  emitPresenceUpdate,
   emitChatStatus,
+  emitUserEvent,
   emitGroupTypingState,
   emitInboxUpdate,
   getActiveChatUserIds,
@@ -47,9 +50,17 @@ async function notifyPresenceAudience(userId: string): Promise<void> {
   if (audienceUserIds.length === 0) return;
 
   const lastSeenAt = await chatService.getUserLastSeenAt(userId);
-  emitPresenceUpdate(
-    audienceUserIds,
-    await buildUserPresencePayload(userId, lastSeenAt)
+  const basePayload = await buildUserPresencePayload(userId, lastSeenAt);
+  await Promise.all(
+    audienceUserIds.map(async (viewerUserId) => {
+      const payload = await buildPresencePayloadForViewer({
+        ownerUserId: userId,
+        viewerUserId,
+        online: basePayload.online,
+        lastSeenAt: basePayload.lastSeenAt
+      });
+      emitUserEvent([viewerUserId], "user:presence", payload);
+    })
   );
 }
 
@@ -58,9 +69,15 @@ async function sendDirectPeerPresenceSnapshot(socket: Socket, chatId: string, us
   if (!peerUserId) return;
 
   const lastSeenAt = await chatService.getUserLastSeenAt(peerUserId);
+  const basePayload = await buildUserPresencePayload(peerUserId, lastSeenAt);
   socket.emit(
     "user:presence",
-    await buildUserPresencePayload(peerUserId, lastSeenAt)
+    await buildPresencePayloadForViewer({
+      ownerUserId: peerUserId,
+      viewerUserId: userId,
+      online: basePayload.online,
+      lastSeenAt: basePayload.lastSeenAt
+    })
   );
 }
 
@@ -420,14 +437,8 @@ export function registerChatSocket(io: Server): void {
       if (!becameOffline) return;
 
       try {
-        const lastSeenAt = await chatService.updateUserLastSeen(userId);
-        const audienceUserIds = await chatService.getPresenceAudienceUserIds(userId);
-        if (audienceUserIds.length === 0) return;
-
-        emitPresenceUpdate(
-          audienceUserIds,
-          await buildUserPresencePayload(userId, lastSeenAt)
-        );
+        await chatService.updateUserLastSeen(userId);
+        await notifyPresenceAudience(userId);
       } catch (error) {
         logError("presence announce on disconnect failed", error);
       }

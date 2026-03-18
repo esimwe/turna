@@ -7,6 +7,7 @@ import {
   getBlockedUserIdsByUser,
   setUserBlocked
 } from "../../lib/user-relationship.js";
+import { canRequesterAddUserToGroup } from "../../lib/user-privacy.js";
 import type {
   AppChatType,
   ChatBanSummary,
@@ -2149,6 +2150,16 @@ export class ChatService {
     });
     if (users.length !== missingMemberIds.length) {
       throw new Error("group_member_not_found");
+    }
+
+    for (const memberUserId of missingMemberIds) {
+      const allowed = await canRequesterAddUserToGroup(
+        input.requesterUserId,
+        memberUserId
+      );
+      if (!allowed) {
+        throw new Error("group_member_privacy_restricted");
+      }
     }
 
     await prisma.chatMember.createMany({

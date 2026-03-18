@@ -240,6 +240,7 @@ model User {
   statusItems           StatusItem[]       @relation("StatusAuthor")
   statusViews           StatusView[]       @relation("StatusViewer")
   statusPreference      StatusPreference?
+  privacyPreference     UserPrivacyPreference?
   submittedReports      ReportCase[]       @relation("SubmittedReports")
   reportsAgainst        ReportCase[]       @relation("ReportedUsers")
   createdChatInviteLinks ChatInviteLink[]  @relation("ChatInviteLinkCreator")
@@ -270,6 +271,19 @@ model User {
   communityReportsAgainst CommunityReport[] @relation("CommunityReportTarget")
 
   @@index([accountStatus])
+}
+
+enum UserPrivacyAudience {
+  EVERYONE
+  MY_CONTACTS
+  EXCLUDED_CONTACTS
+  NOBODY
+  ONLY_SHARED_WITH
+}
+
+enum UserOnlineVisibility {
+  EVERYONE
+  SAME_AS_LAST_SEEN
 }
 
 model UserContact {
@@ -498,6 +512,28 @@ model StatusPreference {
   updatedAt      DateTime          @updatedAt
 
   user           User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model UserPrivacyPreference {
+  userId                     String               @id
+  lastSeenMode               UserPrivacyAudience  @default(EVERYONE)
+  lastSeenTargetUserIds      Json?
+  onlineMode                 UserOnlineVisibility @default(EVERYONE)
+  profilePhotoMode           UserPrivacyAudience  @default(EVERYONE)
+  profilePhotoTargetUserIds  Json?
+  aboutMode                  UserPrivacyAudience  @default(MY_CONTACTS)
+  aboutTargetUserIds         Json?
+  linksMode                  UserPrivacyAudience  @default(MY_CONTACTS)
+  linksTargetUserIds         Json?
+  groupsMode                 UserPrivacyAudience  @default(EVERYONE)
+  groupsTargetUserIds        Json?
+  statusAllowReshare         Boolean              @default(false)
+  createdAt                  DateTime             @default(now())
+  updatedAt                  DateTime             @updatedAt
+
+  user                       User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([updatedAt(sort: Desc)])
 }
 
 model Message {

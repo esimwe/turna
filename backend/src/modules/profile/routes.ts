@@ -6,6 +6,16 @@ import { logError } from "../../lib/logger.js";
 import { otpService } from "../auth/otp.service.js";
 import { prisma } from "../../lib/prisma.js";
 import {
+  DEFAULT_USER_PRIVACY_PREFERENCE,
+  buildViewerScopedProfilePrivacy,
+  filterPrivacyTargetUserIdsToContacts,
+  getUserPrivacyPreference,
+  parsePrivacyStringArray,
+  type UserPrivacyPreferenceRecord,
+  userOnlineVisibilityValues,
+  userPrivacyAudienceValues
+} from "../../lib/user-privacy.js";
+import {
   assertObjectExists,
   createAvatarUploadUrl,
   deleteObject,
@@ -119,6 +129,20 @@ const usernameAvailabilityQuerySchema = z.object({
   username: normalizedUsernameSchema
 });
 
+const privacyAudienceApiValues = [
+  "everyone",
+  "my_contacts",
+  "excluded_contacts",
+  "nobody",
+  "only_shared_with"
+] as const;
+const onlineVisibilityApiValues = ["everyone", "same_as_last_seen"] as const;
+const groupPrivacyAudienceApiValues = [
+  "everyone",
+  "my_contacts",
+  "excluded_contacts"
+] as const;
+
 const syncContactsSchema = z.object({
   contacts: z.array(
     z.object({
@@ -126,6 +150,31 @@ const syncContactsSchema = z.object({
       phones: z.array(z.string().trim().min(3).max(40)).max(20)
     })
   ).max(5000)
+});
+
+const privacyAudienceSchema = z.enum(privacyAudienceApiValues);
+const onlineVisibilitySchema = z.enum(onlineVisibilityApiValues);
+
+const privacyAudienceSettingSchema = z.object({
+  mode: privacyAudienceSchema,
+  targetUserIds: z.array(z.string().trim().min(1).max(255)).max(500).default([])
+});
+
+const groupPrivacySettingSchema = z.object({
+  mode: z.enum(groupPrivacyAudienceApiValues),
+  targetUserIds: z.array(z.string().trim().min(1).max(255)).max(500).default([])
+});
+
+const updatePrivacySchema = z.object({
+  lastSeen: privacyAudienceSettingSchema,
+  online: z.object({
+    mode: onlineVisibilitySchema
+  }),
+  profilePhoto: privacyAudienceSettingSchema,
+  about: privacyAudienceSettingSchema,
+  links: privacyAudienceSettingSchema,
+  groups: groupPrivacySettingSchema,
+  statusAllowReshare: z.boolean().default(false)
 });
 
 const USERNAME_CHANGE_WINDOW_DAYS = 14;
@@ -136,6 +185,81 @@ function normalizeStringList(value: unknown): string[] {
   return value
     .map((item) => (typeof item === "string" ? item.trim() : ""))
     .filter((item) => item.length > 0);
+}
+
+function toApiPrivacyAudience(
+  value: (typeof userPrivacyAudienceValues)[number]
+): "everyone" | "my_contacts" | "excluded_contacts" | "nobody" | "only_shared_with" {
+  switch (value) {
+    case "MY_CONTACTS":
+      return "my_contacts";
+    case "EXCLUDED_CONTACTS":
+      return "excluded_contacts";
+    case "NOBODY":
+      return "nobody";
+    case "ONLY_SHARED_WITH":
+      return "only_shared_with";
+    default:
+      return "everyone";
+  }
+}
+
+function toDbPrivacyAudience(
+  value: "everyone" | "my_contacts" | "excluded_contacts" | "nobody" | "only_shared_with"
+): (typeof userPrivacyAudienceValues)[number] {
+  switch (value) {
+    case "my_contacts":
+      return "MY_CONTACTS";
+    case "excluded_contacts":
+      return "EXCLUDED_CONTACTS";
+    case "nobody":
+      return "NOBODY";
+    case "only_shared_with":
+      return "ONLY_SHARED_WITH";
+    default:
+      return "EVERYONE";
+  }
+}
+
+function toApiOnlineVisibility(
+  value: (typeof userOnlineVisibilityValues)[number]
+): "everyone" | "same_as_last_seen" {
+  return value === "SAME_AS_LAST_SEEN" ? "same_as_last_seen" : "everyone";
+}
+
+function toDbOnlineVisibility(
+  value: "everyone" | "same_as_last_seen"
+): (typeof userOnlineVisibilityValues)[number] {
+  return value === "same_as_last_seen" ? "SAME_AS_LAST_SEEN" : "EVERYONE";
+}
+
+function buildPrivacyDto(preference: UserPrivacyPreferenceRecord) {
+  return {
+    lastSeen: {
+      mode: toApiPrivacyAudience(preference.lastSeenMode),
+      targetUserIds: preference.lastSeenTargetUserIds
+    },
+    online: {
+      mode: toApiOnlineVisibility(preference.onlineMode)
+    },
+    profilePhoto: {
+      mode: toApiPrivacyAudience(preference.profilePhotoMode),
+      targetUserIds: preference.profilePhotoTargetUserIds
+    },
+    about: {
+      mode: toApiPrivacyAudience(preference.aboutMode),
+      targetUserIds: preference.aboutTargetUserIds
+    },
+    links: {
+      mode: toApiPrivacyAudience(preference.linksMode),
+      targetUserIds: preference.linksTargetUserIds
+    },
+    groups: {
+      mode: toApiPrivacyAudience(preference.groupsMode),
+      targetUserIds: preference.groupsTargetUserIds
+    },
+    statusAllowReshare: preference.statusAllowReshare
+  };
 }
 
 const profileSelect = {
@@ -217,7 +341,7 @@ function toProfileDto(
   };
 }
 
-function toPublicProfileDto(
+async function toPublicProfileDto(
   req: Request,
   user: {
     id: string;
@@ -234,21 +358,31 @@ function toPublicProfileDto(
     socialLinks?: unknown;
     createdAt: Date;
     updatedAt: Date;
-  }
+  },
+  viewerUserId: string
 ) {
+  const rawAvatarUrl = user.avatarUrl ? buildAvatarUrl(req, user.id, user.updatedAt) : null;
+  const scoped = await buildViewerScopedProfilePrivacy({
+    ownerUserId: user.id,
+    viewerUserId,
+    about: user.about,
+    avatarUrl: rawAvatarUrl,
+    socialLinks: normalizeStringList(user.socialLinks)
+  });
+
   return {
     id: user.id,
     displayName: user.displayName,
     username: user.username,
     phone: user.phone,
-    about: user.about,
-    avatarUrl: user.avatarUrl ? buildAvatarUrl(req, user.id, user.updatedAt) : null,
+    about: scoped.about,
+    avatarUrl: scoped.avatarUrl,
     city: user.city,
     country: user.country,
     expertise: user.expertise,
     communityRole: user.communityRole,
     interests: normalizeStringList(user.interests),
-    socialLinks: normalizeStringList(user.socialLinks),
+    socialLinks: scoped.socialLinks,
     createdAt: user.createdAt.toISOString(),
     updatedAt: user.updatedAt.toISOString()
   };
@@ -322,6 +456,16 @@ profileRouter.get("/me", requireAuth, async (req, res) => {
   }
 
   res.json({ data: toProfileDto(req, user) });
+});
+
+profileRouter.get("/privacy", requireAuth, async (req, res) => {
+  try {
+    const preference = await getUserPrivacyPreference(req.authUserId!);
+    res.json({ data: buildPrivacyDto(preference) });
+  } catch (error) {
+    logError("profile privacy get failed", error);
+    res.status(500).json({ error: "failed_to_load_privacy_settings" });
+  }
 });
 
 profileRouter.get("/username-availability", requireAuth, async (req, res) => {
@@ -480,7 +624,110 @@ profileRouter.get("/users/:userId", requireAuth, async (req, res) => {
     return;
   }
 
-  res.json({ data: toPublicProfileDto(req, user) });
+  res.json({ data: await toPublicProfileDto(req, user, req.authUserId!) });
+});
+
+profileRouter.put("/privacy", requireAuth, async (req, res) => {
+  const parsed = updatePrivacySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
+    return;
+  }
+
+  try {
+    const [
+      lastSeenTargetUserIds,
+      profilePhotoTargetUserIds,
+      aboutTargetUserIds,
+      linksTargetUserIds,
+      groupsTargetUserIds
+    ] = await Promise.all([
+      filterPrivacyTargetUserIdsToContacts(
+        req.authUserId!,
+        parsed.data.lastSeen.targetUserIds
+      ),
+      filterPrivacyTargetUserIdsToContacts(
+        req.authUserId!,
+        parsed.data.profilePhoto.targetUserIds
+      ),
+      filterPrivacyTargetUserIdsToContacts(req.authUserId!, parsed.data.about.targetUserIds),
+      filterPrivacyTargetUserIdsToContacts(req.authUserId!, parsed.data.links.targetUserIds),
+      filterPrivacyTargetUserIdsToContacts(req.authUserId!, parsed.data.groups.targetUserIds)
+    ]);
+
+    const updated = await (
+      prisma as unknown as { userPrivacyPreference: any }
+    ).userPrivacyPreference.upsert({
+      where: { userId: req.authUserId! },
+      create: {
+        userId: req.authUserId!,
+        lastSeenMode: toDbPrivacyAudience(parsed.data.lastSeen.mode),
+        lastSeenTargetUserIds,
+        onlineMode: toDbOnlineVisibility(parsed.data.online.mode),
+        profilePhotoMode: toDbPrivacyAudience(parsed.data.profilePhoto.mode),
+        profilePhotoTargetUserIds,
+        aboutMode: toDbPrivacyAudience(parsed.data.about.mode),
+        aboutTargetUserIds,
+        linksMode: toDbPrivacyAudience(parsed.data.links.mode),
+        linksTargetUserIds,
+        groupsMode: toDbPrivacyAudience(parsed.data.groups.mode),
+        groupsTargetUserIds,
+        statusAllowReshare: parsed.data.statusAllowReshare
+      },
+      update: {
+        lastSeenMode: toDbPrivacyAudience(parsed.data.lastSeen.mode),
+        lastSeenTargetUserIds,
+        onlineMode: toDbOnlineVisibility(parsed.data.online.mode),
+        profilePhotoMode: toDbPrivacyAudience(parsed.data.profilePhoto.mode),
+        profilePhotoTargetUserIds,
+        aboutMode: toDbPrivacyAudience(parsed.data.about.mode),
+        aboutTargetUserIds,
+        linksMode: toDbPrivacyAudience(parsed.data.links.mode),
+        linksTargetUserIds,
+        groupsMode: toDbPrivacyAudience(parsed.data.groups.mode),
+        groupsTargetUserIds,
+        statusAllowReshare: parsed.data.statusAllowReshare
+      },
+      select: {
+        lastSeenMode: true,
+        lastSeenTargetUserIds: true,
+        onlineMode: true,
+        profilePhotoMode: true,
+        profilePhotoTargetUserIds: true,
+        aboutMode: true,
+        aboutTargetUserIds: true,
+        linksMode: true,
+        linksTargetUserIds: true,
+        groupsMode: true,
+        groupsTargetUserIds: true,
+        statusAllowReshare: true
+      }
+    });
+
+    res.json({
+      data: buildPrivacyDto({
+        lastSeenMode: updated.lastSeenMode ?? DEFAULT_USER_PRIVACY_PREFERENCE.lastSeenMode,
+        lastSeenTargetUserIds: parsePrivacyStringArray(updated.lastSeenTargetUserIds),
+        onlineMode: updated.onlineMode ?? DEFAULT_USER_PRIVACY_PREFERENCE.onlineMode,
+        profilePhotoMode:
+          updated.profilePhotoMode ?? DEFAULT_USER_PRIVACY_PREFERENCE.profilePhotoMode,
+        profilePhotoTargetUserIds: parsePrivacyStringArray(
+          updated.profilePhotoTargetUserIds
+        ),
+        aboutMode: updated.aboutMode ?? DEFAULT_USER_PRIVACY_PREFERENCE.aboutMode,
+        aboutTargetUserIds: parsePrivacyStringArray(updated.aboutTargetUserIds),
+        linksMode: updated.linksMode ?? DEFAULT_USER_PRIVACY_PREFERENCE.linksMode,
+        linksTargetUserIds: parsePrivacyStringArray(updated.linksTargetUserIds),
+        groupsMode: updated.groupsMode ?? DEFAULT_USER_PRIVACY_PREFERENCE.groupsMode,
+        groupsTargetUserIds: parsePrivacyStringArray(updated.groupsTargetUserIds),
+        statusAllowReshare:
+          updated.statusAllowReshare ?? DEFAULT_USER_PRIVACY_PREFERENCE.statusAllowReshare
+      })
+    });
+  } catch (error) {
+    logError("profile privacy update failed", error);
+    res.status(500).json({ error: "failed_to_update_privacy_settings" });
+  }
 });
 
 profileRouter.post("/users/:userId/report", requireAuth, async (req, res) => {

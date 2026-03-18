@@ -12,6 +12,7 @@ import {
   isStorageConfigured
 } from "../../lib/storage.js";
 import { requireAuth, requireMessagingAccess } from "../../middleware/auth.js";
+import { buildViewerScopedProfilePrivacy } from "../../lib/user-privacy.js";
 import { buildAvatarUrl } from "../profile/avatar-url.js";
 import { findLookupDisplayName } from "../profile/contact-lookup.js";
 import { normalizeUsername } from "../profile/username.js";
@@ -918,15 +919,30 @@ chatRouter.post("/:chatId/block", requireAuth, async (req, res) => {
 chatRouter.get("/directory/list", requireAuth, async (req, res) => {
   const userId = req.authUserId!;
   const users = await chatService.getUserDirectory(userId);
+  const data = await Promise.all(
+    users.map(async (user) => {
+      const rawAvatarUrl = user.avatarKey
+        ? buildAvatarUrl(req, user.id, new Date(user.updatedAt))
+        : null;
+      const scoped = await buildViewerScopedProfilePrivacy({
+        ownerUserId: user.id,
+        viewerUserId: userId,
+        about: user.about,
+        avatarUrl: rawAvatarUrl,
+        socialLinks: []
+      });
+      return {
+        id: user.id,
+        displayName: user.displayName,
+        username: user.username,
+        phone: user.phone,
+        about: scoped.about,
+        avatarUrl: scoped.avatarUrl
+      };
+    })
+  );
   res.json({
-    data: users.map((user) => ({
-      id: user.id,
-      displayName: user.displayName,
-      username: user.username,
-      phone: user.phone,
-      about: user.about,
-      avatarUrl: user.avatarKey ? buildAvatarUrl(req, user.id, new Date(user.updatedAt)) : null
-    }))
+    data
   });
 });
 
@@ -969,20 +985,33 @@ chatRouter.get("/directory/contacts", requireAuth, async (req, res) => {
     }
   });
 
-  const matchedUsers = users
-    .map((user: any) => {
+  const matchedUsers = (
+    await Promise.all(
+      users.map(async (user: any) => {
       const contactName = findLookupDisplayName(user.phone, labelsByKey);
       if (!contactName) return null;
+      const rawAvatarUrl = user.avatarUrl
+        ? buildAvatarUrl(req, user.id, user.updatedAt)
+        : null;
+      const scoped = await buildViewerScopedProfilePrivacy({
+        ownerUserId: user.id,
+        viewerUserId: ownerId,
+        about: user.about,
+        avatarUrl: rawAvatarUrl,
+        socialLinks: []
+      });
       return {
         id: user.id,
         displayName: user.displayName,
         contactName,
         username: user.username,
         phone: user.phone,
-        about: user.about,
-        avatarUrl: user.avatarUrl ? buildAvatarUrl(req, user.id, user.updatedAt) : null
+        about: scoped.about,
+        avatarUrl: scoped.avatarUrl
       };
-    })
+      })
+    )
+  )
     .filter((item: any): item is NonNullable<typeof item> => item != null)
     .sort((left: any, right: any) => {
       const labelCompare = left.contactName.localeCompare(right.contactName, "tr");
@@ -1086,14 +1115,22 @@ chatRouter.get("/directory/lookup", requireAuth, async (req, res) => {
     return;
   }
 
+  const rawAvatarUrl = user.avatarUrl ? buildAvatarUrl(req, user.id, user.updatedAt) : null;
+  const scoped = await buildViewerScopedProfilePrivacy({
+    ownerUserId: user.id,
+    viewerUserId: req.authUserId!,
+    about: user.about,
+    avatarUrl: rawAvatarUrl,
+    socialLinks: []
+  });
   res.json({
     data: {
       id: user.id,
       displayName: user.displayName,
       username: user.username,
       phone: user.phone,
-      about: user.about,
-      avatarUrl: user.avatarUrl ? buildAvatarUrl(req, user.id, user.updatedAt) : null
+      about: scoped.about,
+      avatarUrl: scoped.avatarUrl
     }
   });
 });
@@ -1203,6 +1240,7 @@ chatRouter.post("/:chatId/members", requireAuth, requireMessagingAccess, async (
           res.status(403).json({ error: error.message });
           return;
         case "group_member_add_not_allowed":
+        case "group_member_privacy_restricted":
           res.status(403).json({ error: error.message });
           return;
         case "group_not_found":
