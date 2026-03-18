@@ -137,9 +137,9 @@ class _ChatAttachmentViewerPageState extends State<ChatAttachmentViewerPage> {
         attachment: _currentItem.attachment,
         currentChatId: widget.currentChatId,
         resolveFile: () => _resolveFile(_currentItem),
-        saveLabel: _attachmentHasImageContent(_currentItem.attachment)
+        saveLabel: turnaAttachmentHasImageContent(_currentItem.attachment)
             ? 'Goruntuyu kaydet'
-            : (_attachmentHasVideoContent(_currentItem.attachment)
+            : (turnaAttachmentHasVideoContent(_currentItem.attachment)
                   ? 'Videoyu kaydet'
                   : 'Dosyayi kaydet'),
         onSave: _saveResolvedMedia,
@@ -224,7 +224,7 @@ class _ChatAttachmentViewerPageState extends State<ChatAttachmentViewerPage> {
   Future<void> _maybeOpenInitialVideoFullscreen() async {
     if (_didHandleInitialVideoFullscreen ||
         !widget.autoOpenInitialVideoFullscreen ||
-        !_isVideoAttachment(_currentItem.attachment) ||
+        !isTurnaVideoAttachment(_currentItem.attachment) ||
         !mounted) {
       return;
     }
@@ -234,7 +234,7 @@ class _ChatAttachmentViewerPageState extends State<ChatAttachmentViewerPage> {
 
   Future<void> _openCurrentVideoFullscreen() async {
     final item = _currentItem;
-    if (!_isVideoAttachment(item.attachment)) return;
+    if (!isTurnaVideoAttachment(item.attachment)) return;
     try {
       final cachedFile = await TurnaLocalMediaCache.getOrDownloadFile(
         cacheKey: item.cacheKey,
@@ -335,7 +335,7 @@ class _ChatAttachmentViewerPageState extends State<ChatAttachmentViewerPage> {
                 ),
               ),
               clipBehavior: Clip.antiAlias,
-              child: _isVideoAttachment(item.attachment)
+              child: isTurnaVideoAttachment(item.attachment)
                   ? _TurnaVideoThumbnail(
                       cacheKey: item.cacheKey,
                       url: item.url,
@@ -419,7 +419,7 @@ class _ChatAttachmentViewerPageState extends State<ChatAttachmentViewerPage> {
               itemBuilder: (context, index) => _TurnaAttachmentPageAsset(
                 item: _items[index],
                 authToken: widget.session.token,
-                onOpenFullscreen: _isVideoAttachment(_items[index].attachment)
+                onOpenFullscreen: isTurnaVideoAttachment(_items[index].attachment)
                     ? _openCurrentVideoFullscreen
                     : null,
               ),
@@ -513,10 +513,10 @@ class _ChatDocumentAttachmentPageState
   }
 
   String get _saveLabel {
-    if (_attachmentHasImageContent(widget.attachment)) {
+    if (turnaAttachmentHasImageContent(widget.attachment)) {
       return 'Goruntuyu kaydet';
     }
-    if (_attachmentHasVideoContent(widget.attachment)) {
+    if (turnaAttachmentHasVideoContent(widget.attachment)) {
       return 'Videoyu kaydet';
     }
     return 'Dosyayi kaydet';
@@ -524,8 +524,8 @@ class _ChatDocumentAttachmentPageState
 
   Future<void> _saveFile(File file) async {
     try {
-      if (_attachmentHasImageContent(widget.attachment) ||
-          _attachmentHasVideoContent(widget.attachment)) {
+      if (turnaAttachmentHasImageContent(widget.attachment) ||
+          turnaAttachmentHasVideoContent(widget.attachment)) {
         await TurnaMediaBridge.saveToGallery(
           path: file.path,
           mimeType: widget.attachment.contentType,
@@ -603,7 +603,7 @@ class _ChatDocumentAttachmentPageState
 
   @override
   Widget build(BuildContext context) {
-    final useDarkChrome = _attachmentHasVideoContent(widget.attachment);
+    final useDarkChrome = turnaAttachmentHasVideoContent(widget.attachment);
     final backgroundColor = useDarkChrome ? Colors.black : Colors.white;
     final foregroundColor = useDarkChrome ? Colors.white : Colors.black87;
     return Scaffold(
@@ -667,16 +667,16 @@ class _ChatDocumentAttachmentPageState
             );
           }
 
-          if (_attachmentHasVideoContent(widget.attachment)) {
+          if (turnaAttachmentHasVideoContent(widget.attachment)) {
             return _TurnaInlineVideoPreviewSurface(
               file: file,
               onOpenFullscreen: () => _openVideoFullscreen(file),
             );
           }
-          if (_attachmentHasPdfContent(widget.attachment)) {
+          if (turnaAttachmentHasPdfContent(widget.attachment)) {
             return _TurnaPdfDocumentSurface(file: file);
           }
-          if (_attachmentHasImageContent(widget.attachment)) {
+          if (turnaAttachmentHasImageContent(widget.attachment)) {
             return InteractiveViewer(
               minScale: 0.8,
               maxScale: 4,
@@ -887,13 +887,13 @@ class _TurnaAttachmentShareSheetState
   }
 
   Widget _buildPreview(File? file) {
-    if (file != null && _attachmentHasImageContent(widget.attachment)) {
+    if (file != null && turnaAttachmentHasImageContent(widget.attachment)) {
       return ClipRRect(
         borderRadius: BorderRadius.circular(18),
         child: Image.file(file, fit: BoxFit.cover),
       );
     }
-    final extension = _attachmentFileExtension(widget.attachment);
+    final extension = turnaAttachmentFileExtension(widget.attachment);
     final badge = extension.isEmpty ? 'DOSYA' : extension.toUpperCase();
     return Container(
       decoration: BoxDecoration(
@@ -914,7 +914,7 @@ class _TurnaAttachmentShareSheetState
   }
 
   String _metaLabel() {
-    final extension = _attachmentFileExtension(widget.attachment);
+    final extension = turnaAttachmentFileExtension(widget.attachment);
     return '${formatBytesLabel(widget.attachment.sizeBytes)}${extension.isEmpty ? '' : ' • $extension'}';
   }
 
@@ -1203,7 +1203,7 @@ class _TurnaAttachmentPageAsset extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (_isVideoAttachment(item.attachment)) {
+    if (isTurnaVideoAttachment(item.attachment)) {
       return _TurnaAttachmentVideoSurface(
         item: item,
         authToken: authToken,
@@ -1897,7 +1897,7 @@ class _TurnaGenericFilePreviewSurface extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final extension = _attachmentFileExtension(attachment);
+    final extension = turnaAttachmentFileExtension(attachment);
     final badge = extension.isEmpty ? 'DOSYA' : extension.toUpperCase();
     return Center(
       child: Padding(
@@ -2157,24 +2157,6 @@ typedef _MediaComposerPreparedSend =
       ChatAttachmentTransferMode transferMode,
     );
 
-class _MediaCropPreset {
-  const _MediaCropPreset({
-    required this.id,
-    required this.label,
-    this.aspectRatio,
-    this.useOriginalAspect = false,
-    this.fullImage = false,
-    this.freeform = false,
-  });
-
-  final String id;
-  final String label;
-  final double? aspectRatio;
-  final bool useOriginalAspect;
-  final bool fullImage;
-  final bool freeform;
-}
-
 enum _MediaComposerCropHandle { topLeft, topRight, bottomLeft, bottomRight }
 
 class _MediaComposerPage extends StatefulWidget {
@@ -2302,16 +2284,16 @@ class _MediaComposerPageState extends State<_MediaComposerPage> {
         : Size(base.width, base.height);
   }
 
-  _MediaCropPreset _cropPresetForId(String id) {
-    return _kComposerCropPresets.firstWhere(
+  MediaCropPreset _cropPresetForId(String id) {
+    return kComposerCropPresets.firstWhere(
       (preset) => preset.id == id,
-      orElse: () => _kComposerCropPresets.first,
+      orElse: () => kComposerCropPresets.first,
     );
   }
 
   double _resolvedCropAspectRatio(
     _MediaComposerItem item,
-    _MediaCropPreset preset,
+    MediaCropPreset preset,
   ) {
     if (preset.useOriginalAspect) {
       final size = _rotatedSourceSize(item);
@@ -2322,7 +2304,7 @@ class _MediaComposerPageState extends State<_MediaComposerPage> {
 
   Rect _cropRectForPreset(
     _MediaComposerItem item,
-    _MediaCropPreset preset, {
+    MediaCropPreset preset, {
     Offset? center,
   }) {
     if (preset.fullImage) return kComposerFullCropRectNormalized;
@@ -3669,7 +3651,7 @@ class _MediaComposerPageState extends State<_MediaComposerPage> {
                       onSelected: (value) =>
                           _applyCropPreset(_cropPresetForId(value)),
                       color: const Color(0xFF1A1F1D),
-                      itemBuilder: (_) => _kComposerCropPresets
+                      itemBuilder: (_) => kComposerCropPresets
                           .map(
                             (preset) => PopupMenuItem<String>(
                               value: preset.id,

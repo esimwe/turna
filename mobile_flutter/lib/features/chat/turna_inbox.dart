@@ -134,10 +134,10 @@ class _ChatsPageState extends State<ChatsPage> {
 
     final chats = inbox.chats;
     final folders = inbox.folders;
-    final archivedChats = _prioritizeFavoritedChats(
+    final archivedChats = prioritizeTurnaFavoritedChats(
       chats.where((chat) => chat.isArchived),
     );
-    final activeChats = _prioritizeFavoritedChats(
+    final activeChats = prioritizeTurnaFavoritedChats(
       chats.where((chat) => !chat.isArchived),
     );
     final scopedChats = switch (_selectedFilterId) {
@@ -484,7 +484,7 @@ class _ChatsPageState extends State<ChatsPage> {
 
   Future<void> _toggleLockChat(ChatPreview chat) async {
     if (_bulkActionBusy) return;
-    final authenticated = await _authenticateLockedChatAccess(
+    final authenticated = await authenticateLockedChatAccess(
       context,
       chatName: chat.name,
       actionLabel: chat.isLocked
@@ -1395,7 +1395,7 @@ class _ArchivedChatsPageState extends State<ArchivedChatsPage> {
       return _cachedArchivedChats!;
     }
 
-    final archivedChats = _prioritizeFavoritedChats(
+    final archivedChats = prioritizeTurnaFavoritedChats(
       inbox.chats.where((chat) => chat.isArchived),
     );
     _cachedArchivedInbox = inbox;
@@ -1475,7 +1475,7 @@ class _ArchivedChatsPageState extends State<ArchivedChatsPage> {
 
   Future<void> _toggleLockChat(ChatPreview chat) async {
     if (_actionBusy) return;
-    final authenticated = await _authenticateLockedChatAccess(
+    final authenticated = await authenticateLockedChatAccess(
       context,
       chatName: chat.name,
       actionLabel: chat.isLocked

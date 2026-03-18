@@ -2,81 +2,6 @@ part of turna_app;
 
 enum _TurnaAuthStep { welcome, phone, otp }
 
-class _TurnaCountry {
-  const _TurnaCountry({
-    required this.iso,
-    required this.name,
-    required this.dialCode,
-  });
-
-  final String iso;
-  final String name;
-  final String dialCode;
-}
-
-const List<_TurnaCountry> _kTurnaCountries = [
-  _TurnaCountry(iso: 'TR', name: 'Türkiye', dialCode: '+90'),
-  _TurnaCountry(iso: 'GB', name: 'Birleşik Krallık', dialCode: '+44'),
-  _TurnaCountry(iso: 'US', name: 'Amerika Birleşik Devletleri', dialCode: '+1'),
-  _TurnaCountry(iso: 'CA', name: 'Kanada', dialCode: '+1'),
-  _TurnaCountry(iso: 'DE', name: 'Almanya', dialCode: '+49'),
-  _TurnaCountry(iso: 'FR', name: 'Fransa', dialCode: '+33'),
-  _TurnaCountry(iso: 'NL', name: 'Hollanda', dialCode: '+31'),
-  _TurnaCountry(iso: 'BE', name: 'Belçika', dialCode: '+32'),
-  _TurnaCountry(iso: 'CH', name: 'İsviçre', dialCode: '+41'),
-  _TurnaCountry(iso: 'AT', name: 'Avusturya', dialCode: '+43'),
-  _TurnaCountry(iso: 'ES', name: 'İspanya', dialCode: '+34'),
-  _TurnaCountry(iso: 'IT', name: 'İtalya', dialCode: '+39'),
-  _TurnaCountry(iso: 'IE', name: 'İrlanda', dialCode: '+353'),
-  _TurnaCountry(iso: 'SE', name: 'İsveç', dialCode: '+46'),
-  _TurnaCountry(iso: 'NO', name: 'Norveç', dialCode: '+47'),
-  _TurnaCountry(iso: 'DK', name: 'Danimarka', dialCode: '+45'),
-  _TurnaCountry(iso: 'FI', name: 'Finlandiya', dialCode: '+358'),
-  _TurnaCountry(iso: 'PL', name: 'Polonya', dialCode: '+48'),
-  _TurnaCountry(iso: 'CZ', name: 'Çekya', dialCode: '+420'),
-  _TurnaCountry(iso: 'RO', name: 'Romanya', dialCode: '+40'),
-  _TurnaCountry(iso: 'BG', name: 'Bulgaristan', dialCode: '+359'),
-  _TurnaCountry(iso: 'GR', name: 'Yunanistan', dialCode: '+30'),
-  _TurnaCountry(iso: 'CY', name: 'Kibris', dialCode: '+357'),
-  _TurnaCountry(iso: 'UA', name: 'Ukrayna', dialCode: '+380'),
-  _TurnaCountry(iso: 'RU', name: 'Rusya', dialCode: '+7'),
-  _TurnaCountry(iso: 'AZ', name: 'Azerbaycan', dialCode: '+994'),
-  _TurnaCountry(iso: 'GE', name: 'Gurcistan', dialCode: '+995'),
-  _TurnaCountry(iso: 'AM', name: 'Ermenistan', dialCode: '+374'),
-  _TurnaCountry(iso: 'AE', name: 'Birleşik Arap Emirlikleri', dialCode: '+971'),
-  _TurnaCountry(iso: 'SA', name: 'Suudi Arabistan', dialCode: '+966'),
-  _TurnaCountry(iso: 'QA', name: 'Katar', dialCode: '+974'),
-  _TurnaCountry(iso: 'KW', name: 'Kuveyt', dialCode: '+965'),
-  _TurnaCountry(iso: 'BH', name: 'Bahreyn', dialCode: '+973'),
-  _TurnaCountry(iso: 'OM', name: 'Umman', dialCode: '+968'),
-  _TurnaCountry(iso: 'IQ', name: 'Irak', dialCode: '+964'),
-  _TurnaCountry(iso: 'JO', name: 'Ürdün', dialCode: '+962'),
-  _TurnaCountry(iso: 'LB', name: 'Lübnan', dialCode: '+961'),
-  _TurnaCountry(iso: 'EG', name: 'Mısır', dialCode: '+20'),
-  _TurnaCountry(iso: 'TN', name: 'Tunus', dialCode: '+216'),
-  _TurnaCountry(iso: 'DZ', name: 'Cezayir', dialCode: '+213'),
-  _TurnaCountry(iso: 'MA', name: 'Fas', dialCode: '+212'),
-  _TurnaCountry(iso: 'PK', name: 'Pakistan', dialCode: '+92'),
-  _TurnaCountry(iso: 'IN', name: 'Hindistan', dialCode: '+91'),
-  _TurnaCountry(iso: 'CN', name: 'Çin', dialCode: '+86'),
-  _TurnaCountry(iso: 'JP', name: 'Japonya', dialCode: '+81'),
-  _TurnaCountry(iso: 'KR', name: 'Güney Kore', dialCode: '+82'),
-  _TurnaCountry(iso: 'ID', name: 'Endonezya', dialCode: '+62'),
-  _TurnaCountry(iso: 'MY', name: 'Malezya', dialCode: '+60'),
-  _TurnaCountry(iso: 'SG', name: 'Singapur', dialCode: '+65'),
-  _TurnaCountry(iso: 'TH', name: 'Tayland', dialCode: '+66'),
-  _TurnaCountry(iso: 'VN', name: 'Vietnam', dialCode: '+84'),
-  _TurnaCountry(iso: 'AU', name: 'Avustralya', dialCode: '+61'),
-  _TurnaCountry(iso: 'NZ', name: 'Yeni Zelanda', dialCode: '+64'),
-  _TurnaCountry(iso: 'BR', name: 'Brezilya', dialCode: '+55'),
-  _TurnaCountry(iso: 'AR', name: 'Arjantin', dialCode: '+54'),
-  _TurnaCountry(iso: 'MX', name: 'Meksika', dialCode: '+52'),
-  _TurnaCountry(iso: 'ZA', name: 'Güney Afrika', dialCode: '+27'),
-  _TurnaCountry(iso: 'NG', name: 'Nijerya', dialCode: '+234'),
-  _TurnaCountry(iso: 'KE', name: 'Kenya', dialCode: '+254'),
-  _TurnaCountry(iso: 'ET', name: 'Etiyopya', dialCode: '+251'),
-];
-
 class TurnaPhoneAuthPage extends StatefulWidget {
   const TurnaPhoneAuthPage({super.key, required this.onAuthenticated});
 
@@ -97,7 +22,7 @@ class _TurnaPhoneAuthPageState extends State<TurnaPhoneAuthPage> {
   final FocusNode _otpFocusNode = FocusNode();
 
   _TurnaAuthStep _step = _TurnaAuthStep.welcome;
-  _TurnaCountry? _selectedCountry;
+  TurnaCountry? _selectedCountry;
   String? _requestedPhone;
   bool _requestingOtp = false;
   bool _verifyingOtp = false;
@@ -143,7 +68,7 @@ class _TurnaPhoneAuthPageState extends State<TurnaPhoneAuthPage> {
     final byIso = savedIso == null
         ? null
         : () {
-            final matches = _kTurnaCountries
+            final matches = kTurnaCountries
                 .where((item) => item.iso == savedIso)
                 .toList();
             return matches.isEmpty ? null : matches.first;
@@ -161,11 +86,11 @@ class _TurnaPhoneAuthPageState extends State<TurnaPhoneAuthPage> {
     }
   }
 
-  _TurnaCountry _detectFallbackCountry() {
+  TurnaCountry _detectFallbackCountry() {
     final localeCountryCode = ui.PlatformDispatcher.instance.locale.countryCode
         ?.toUpperCase();
     if (localeCountryCode != null) {
-      final matches = _kTurnaCountries
+      final matches = kTurnaCountries
           .where((item) => item.iso == localeCountryCode)
           .toList();
       final byIso = matches.isEmpty ? null : matches.first;
@@ -173,7 +98,7 @@ class _TurnaPhoneAuthPageState extends State<TurnaPhoneAuthPage> {
         return byIso;
       }
     }
-    return _kTurnaCountries.firstWhere((item) => item.iso == 'TR');
+    return kTurnaCountries.firstWhere((item) => item.iso == 'TR');
   }
 
   String get _dialCode =>
@@ -199,7 +124,7 @@ class _TurnaPhoneAuthPageState extends State<TurnaPhoneAuthPage> {
     }
 
     final current = _selectedCountry;
-    final matching = _kTurnaCountries
+    final matching = kTurnaCountries
         .where((item) => item.dialCode == '+$normalized')
         .toList();
 
@@ -240,7 +165,7 @@ class _TurnaPhoneAuthPageState extends State<TurnaPhoneAuthPage> {
     }
   }
 
-  Future<void> _persistCountrySelection(_TurnaCountry? country) async {
+  Future<void> _persistCountrySelection(TurnaCountry? country) async {
     final prefs = await SharedPreferences.getInstance();
     if (country == null) {
       await prefs.remove(_savedCountryIsoKey);
@@ -296,7 +221,7 @@ class _TurnaPhoneAuthPageState extends State<TurnaPhoneAuthPage> {
   }
 
   Future<void> _pickCountry() async {
-    final picked = await showModalBottomSheet<_TurnaCountry>(
+    final picked = await showModalBottomSheet<TurnaCountry>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
@@ -437,7 +362,7 @@ class _TurnaPhoneAuthPageState extends State<TurnaPhoneAuthPage> {
 
     try {
       final result = await AuthApi.verifyOtp(phone: requestedPhone, code: code);
-      await result.session.save();
+      await TurnaAuthSessionStore.save(result.session);
       if (!mounted) return;
       Navigator.of(context, rootNavigator: true).pop();
       widget.onAuthenticated(result.session);
@@ -1139,7 +1064,7 @@ class _TurnaCountryPickerSheetState extends State<_TurnaCountryPickerSheet> {
   @override
   Widget build(BuildContext context) {
     final query = _searchController.text.trim().toLowerCase();
-    final items = _kTurnaCountries.where((item) {
+    final items = kTurnaCountries.where((item) {
       if (query.isEmpty) return true;
       return item.name.toLowerCase().contains(query) ||
           item.iso.toLowerCase().contains(query) ||
@@ -1402,7 +1327,7 @@ class _TurnaProfileOnboardingPageState
         clearAvatarUrl: updatedProfile.avatarUrl == null,
         needsOnboarding: false,
       );
-      await updatedSession.save();
+      await TurnaAuthSessionStore.save(updatedSession);
       if (!mounted) return;
       widget.onCompleted(updatedSession);
     } catch (error) {

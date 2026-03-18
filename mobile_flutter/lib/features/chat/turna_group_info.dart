@@ -402,9 +402,9 @@ class _TurnaGroupMessageResultTile extends StatelessWidget {
     }
     if (message.attachments.isEmpty) return 'Mesaj';
     final first = message.attachments.first;
-    if (_isImageAttachment(first)) return 'Fotoğraf';
-    if (_isVideoAttachment(first)) return 'Video';
-    if (_isAudioAttachment(first)) return 'Ses kaydı';
+    if (isTurnaImageAttachment(first)) return 'Fotoğraf';
+    if (isTurnaVideoAttachment(first)) return 'Video';
+    if (isTurnaAudioAttachment(first)) return 'Ses kaydı';
     return first.fileName?.trim().isNotEmpty == true
         ? first.fileName!.trim()
         : 'Dosya';
@@ -413,9 +413,9 @@ class _TurnaGroupMessageResultTile extends StatelessWidget {
   IconData _leadingIcon() {
     if (message.attachments.isNotEmpty) {
       final first = message.attachments.first;
-      if (_isImageAttachment(first)) return Icons.photo_library_outlined;
-      if (_isVideoAttachment(first)) return Icons.videocam_outlined;
-      if (_isAudioAttachment(first)) return Icons.mic_none_rounded;
+      if (isTurnaImageAttachment(first)) return Icons.photo_library_outlined;
+      if (isTurnaVideoAttachment(first)) return Icons.videocam_outlined;
+      if (isTurnaAudioAttachment(first)) return Icons.mic_none_rounded;
       return Icons.insert_drive_file_outlined;
     }
     final text = message.text.toLowerCase();

@@ -81,7 +81,7 @@ class _LockedChatAccessGateState extends State<_LockedChatAccessGate> {
   Future<void> _authenticate() async {
     if (_authStarted || !mounted || _authorized) return;
     _authStarted = true;
-    final authenticated = await _authenticateLockedChatAccess(
+    final authenticated = await authenticateLockedChatAccess(
       context,
       chatName: widget.chat.name,
       actionLabel: 'acmak icin',
@@ -1691,9 +1691,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     }
     if (msg.attachments.isEmpty) return 'Mesaj';
     final first = msg.attachments.first;
-    if (_isAudioAttachment(first)) return 'Ses kaydı';
-    if (_isImageAttachment(first)) return 'Fotoğraf';
-    if (_isVideoAttachment(first)) return 'Video';
+    if (isTurnaAudioAttachment(first)) return 'Ses kaydı';
+    if (isTurnaImageAttachment(first)) return 'Fotoğraf';
+    if (isTurnaVideoAttachment(first)) return 'Video';
     return 'Dosya';
   }
 
@@ -1733,7 +1733,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   ChatAttachment? _replyVisualAttachmentForMessage(ChatMessage? message) {
     if (message == null) return null;
     for (final attachment in message.attachments) {
-      if (_isImageAttachment(attachment) || _isVideoAttachment(attachment)) {
+      if (isTurnaImageAttachment(attachment) ||
+          isTurnaVideoAttachment(attachment)) {
         return attachment;
       }
     }
@@ -2119,8 +2120,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         continue;
       }
       for (final attachment in message.attachments) {
-        if (!_isImageAttachment(attachment) &&
-            !_isVideoAttachment(attachment)) {
+        if (!isTurnaImageAttachment(attachment) &&
+            !isTurnaVideoAttachment(attachment)) {
           continue;
         }
         final url = attachment.url?.trim() ?? '';
@@ -2443,9 +2444,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     if (parsed.contact != null) return 'Kişi';
     if (msg.attachments.isNotEmpty) {
       final first = msg.attachments.first;
-      if (_isAudioAttachment(first)) return 'Ses kaydı';
-      if (_isImageAttachment(first)) return 'Fotoğraf';
-      if (_isVideoAttachment(first)) return 'Video';
+      if (isTurnaAudioAttachment(first)) return 'Ses kaydı';
+      if (isTurnaImageAttachment(first)) return 'Fotoğraf';
+      if (isTurnaVideoAttachment(first)) return 'Video';
       return 'Belge';
     }
     return 'Mesaj';
@@ -2468,7 +2469,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         MapEntry('Ek sayısı', '${msg.attachments.length}'),
       if (totalBytes > 0) MapEntry('Boyut', _formatFileSize(totalBytes)),
       if (msg.attachments.length == 1 &&
-          _isAudioAttachment(msg.attachments.first) &&
+          isTurnaAudioAttachment(msg.attachments.first) &&
           (msg.attachments.first.durationSeconds ?? 0) > 0)
         MapEntry(
           'Süre',
@@ -2818,12 +2819,13 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     final canEdit = _canEditMessage(msg, parsed: parsed);
     final visualAttachment =
         attachment != null &&
-            (_isImageAttachment(attachment) || _isVideoAttachment(attachment))
+            (isTurnaImageAttachment(attachment) ||
+                isTurnaVideoAttachment(attachment))
         ? attachment
         : msg.attachments.cast<ChatAttachment?>().firstWhere(
             (item) =>
                 item != null &&
-                (_isImageAttachment(item) || _isVideoAttachment(item)),
+                (isTurnaImageAttachment(item) || isTurnaVideoAttachment(item)),
             orElse: () => null,
           );
     await showModalBottomSheet<void>(
@@ -3443,10 +3445,10 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     final hasContact = contactPayload != null;
     final hasSingleAudioAttachment =
         visibleAttachments.length == 1 &&
-        _isAudioAttachment(visibleAttachments.first);
+        isTurnaAudioAttachment(visibleAttachments.first);
     final hasSingleVisualAttachment =
         visibleAttachments.length == 1 &&
-        !_isAudioAttachment(visibleAttachments.first) &&
+        !isTurnaAudioAttachment(visibleAttachments.first) &&
         visibleAttachments.first.kind != ChatAttachmentKind.file;
     final hasError =
         !isDeletedPlaceholder &&
@@ -3664,8 +3666,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                   attachments: visibleAttachments,
                   mine: mine,
                   onTap: (attachment) {
-                    if (_isImageAttachment(attachment) ||
-                        _isVideoAttachment(attachment)) {
+                    if (isTurnaImageAttachment(attachment) ||
+                        isTurnaVideoAttachment(attachment)) {
                       return _openMediaAttachment(msg, attachment);
                     }
                     return _openAttachment(attachment);
@@ -5247,7 +5249,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       return;
     }
 
-    if (_isImageAttachment(attachment) || _isVideoAttachment(attachment)) {
+    if (isTurnaImageAttachment(attachment) ||
+        isTurnaVideoAttachment(attachment)) {
       await Navigator.push(
         context,
         MaterialPageRoute(
@@ -5262,7 +5265,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
               ),
             ],
             initialIndex: 0,
-            autoOpenInitialVideoFullscreen: _isVideoAttachment(attachment),
+            autoOpenInitialVideoFullscreen: isTurnaVideoAttachment(attachment),
           ),
         ),
       );
@@ -5320,7 +5323,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
           session: widget.session,
           items: itemsToOpen,
           initialIndex: initialIndex < 0 ? 0 : initialIndex,
-          autoOpenInitialVideoFullscreen: _isVideoAttachment(attachment),
+          autoOpenInitialVideoFullscreen: isTurnaVideoAttachment(attachment),
           formatTimestamp: _formatViewerDateTime,
           isStarred: (message) => _starredMessageIds.contains(message.id),
           onReply: (message) async {
@@ -6173,7 +6176,7 @@ class _ReplySnippetThumbnail extends StatelessWidget {
       child: SizedBox(
         width: 52,
         height: 52,
-        child: _isVideoAttachment(attachment)
+        child: isTurnaVideoAttachment(attachment)
             ? Stack(
                 fit: StackFit.expand,
                 children: [
@@ -7402,7 +7405,7 @@ class _ChatAttachmentList extends StatelessWidget {
 
     return Column(
       children: attachments.map<Widget>((attachment) {
-        if (_isAudioAttachment(attachment)) {
+        if (isTurnaAudioAttachment(attachment)) {
           return _VoiceMessageBubble(
             attachment: attachment,
             mine: mine,
@@ -7416,7 +7419,7 @@ class _ChatAttachmentList extends StatelessWidget {
           );
         }
 
-        if (_isImageAttachment(attachment)) {
+        if (isTurnaImageAttachment(attachment)) {
           final imageUrl = attachment.url?.trim() ?? '';
           final transferBadge = buildTransferBadge(attachment);
           return Padding(
@@ -7493,7 +7496,7 @@ class _ChatAttachmentList extends StatelessWidget {
           );
         }
 
-        final isVideo = _isVideoAttachment(attachment);
+        final isVideo = isTurnaVideoAttachment(attachment);
         if (isVideo) {
           final transferBadge = buildTransferBadge(attachment);
           return Padding(
@@ -7611,7 +7614,7 @@ class _ChatAttachmentList extends StatelessWidget {
           );
         }
 
-        final extension = _attachmentFileExtension(attachment);
+        final extension = turnaAttachmentFileExtension(attachment);
         final extensionBadge = extension.isEmpty
             ? 'DOSYA'
             : extension.toUpperCase();

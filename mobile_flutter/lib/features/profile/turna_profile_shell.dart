@@ -325,7 +325,7 @@ class _TurnaPrivacyPageState extends State<TurnaPrivacyPage> {
 
   Future<void> _toggleAppLock(bool nextValue) async {
     if (_busy) return;
-    final authenticated = await _authenticateTurnaDeviceAccess(
+    final authenticated = await authenticateTurnaDeviceAccess(
       context,
       localizedReason: nextValue
           ? 'Turna uygulama kilidini açmak için cihaz doğrulaması gerekiyor.'
@@ -362,7 +362,7 @@ class _TurnaPrivacyPageState extends State<TurnaPrivacyPage> {
 
   @override
   Widget build(BuildContext context) {
-    final unlockMethodLabel = _turnaDeviceUnlockMethodLabel();
+    final unlockMethodLabel = turnaDeviceUnlockMethodLabel();
     return Scaffold(
       appBar: AppBar(title: const Text('Gizlilik')),
       backgroundColor: TurnaColors.backgroundSoft,
@@ -1974,7 +1974,7 @@ class _ProfilePageState extends State<ProfilePage> {
         avatarUrl: profile.avatarUrl,
         clearAvatarUrl: profile.avatarUrl == null,
       );
-      await updatedSession.save();
+      await TurnaAuthSessionStore.save(updatedSession);
       await TurnaProfileLocalCache.saveSelfProfile(profile);
       if (!mounted) return;
       _applyProfile(profile);
@@ -2082,7 +2082,7 @@ class _ProfilePageState extends State<ProfilePage> {
       avatarUrl: updatedProfile.avatarUrl,
       clearAvatarUrl: updatedProfile.avatarUrl == null,
     );
-    await updatedSession.save();
+    await TurnaAuthSessionStore.save(updatedSession);
     await TurnaProfileLocalCache.saveSelfProfile(updatedProfile);
     await TurnaUserProfileLocalCache.save(updatedProfile);
     widget.onProfileUpdated(updatedSession);
@@ -3757,7 +3757,8 @@ class _ConversationMediaPageState extends State<ConversationMediaPage> {
       final createdAt = _messageTimestamp(message);
 
       for (final attachment in message.attachments) {
-        if (_isImageAttachment(attachment) || _isVideoAttachment(attachment)) {
+        if (isTurnaImageAttachment(attachment) ||
+            isTurnaVideoAttachment(attachment)) {
           mediaItems.add(
             _ConversationMediaItem(
               message: message,
@@ -3767,7 +3768,7 @@ class _ConversationMediaPageState extends State<ConversationMediaPage> {
           );
           continue;
         }
-        if (!_isAudioAttachment(attachment)) {
+        if (!isTurnaAudioAttachment(attachment)) {
           documentItems.add(
             _ConversationDocumentItem(
               message: message,
@@ -3926,7 +3927,9 @@ class _ConversationMediaPageState extends State<ConversationMediaPage> {
           session: widget.session,
           items: itemsToOpen,
           initialIndex: initialIndex < 0 ? 0 : initialIndex,
-          autoOpenInitialVideoFullscreen: _isVideoAttachment(item.attachment),
+          autoOpenInitialVideoFullscreen: isTurnaVideoAttachment(
+            item.attachment,
+          ),
           formatTimestamp: _formatViewerTimestamp,
         ),
       ),
@@ -4051,7 +4054,7 @@ class _ConversationMediaPageState extends State<ConversationMediaPage> {
     }
 
     final hasVideo = _mediaItems.any(
-      (item) => _isVideoAttachment(item.attachment),
+      (item) => isTurnaVideoAttachment(item.attachment),
     );
     final footerLabel = hasVideo
         ? '${_mediaItems.length} Medya'
@@ -4278,7 +4281,7 @@ class _ConversationMediaTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final attachment = item.attachment;
     final imageUrl = attachment.url?.trim() ?? '';
-    final isVideo = _isVideoAttachment(attachment);
+    final isVideo = isTurnaVideoAttachment(attachment);
 
     return DecoratedBox(
       decoration: const BoxDecoration(color: Color(0xFFE6E9EE)),
