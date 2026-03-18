@@ -3401,7 +3401,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
   Widget build(BuildContext context) {
     final profile = _profile;
     final name = profile?.displayName ?? widget.fallbackName;
-    final avatarUrl = profile?.avatarUrl ?? widget.fallbackAvatarUrl;
+    final avatarUrl = profile?.avatarUrl;
 
     if (_loading && profile == null) {
       return Scaffold(

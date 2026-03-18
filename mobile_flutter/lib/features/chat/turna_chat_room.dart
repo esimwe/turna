@@ -248,6 +248,11 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       _isGroupChat ? null : _cachedChatDetail;
   String? get _peerUserId =>
       ChatApi.extractPeerUserId(widget.chat.chatId, widget.session.userId);
+  String? get _directAvatarUrl => _isGroupChat
+      ? null
+      : (_cachedDirectDetail != null
+            ? _cachedDirectDetail!.avatarUrl
+            : widget.chat.avatarUrl);
   String? get _groupAvatarUrl =>
       _cachedGroupDetail?.avatarUrl ?? widget.chat.avatarUrl;
   int get _groupMemberCount =>
@@ -544,7 +549,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
           session: widget.session,
           userId: peerUserId,
           fallbackName: _chatDisplayName,
-          fallbackAvatarUrl: widget.chat.avatarUrl,
+          fallbackAvatarUrl: _directAvatarUrl,
           callCoordinator: widget.callCoordinator,
           onSessionExpired: widget.onSessionExpired,
         ),
@@ -5611,7 +5616,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                     label: _chatDisplayName,
                     avatarUrl: _isGroupChat
                         ? _groupAvatarUrl
-                        : widget.chat.avatarUrl,
+                        : _directAvatarUrl,
                     authToken: widget.session.token,
                     radius: 19,
                   ),
