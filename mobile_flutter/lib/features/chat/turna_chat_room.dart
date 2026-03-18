@@ -19,12 +19,14 @@ class ChatRoomPage extends StatefulWidget {
     required this.session,
     required this.callCoordinator,
     required this.onSessionExpired,
+    this.initialFocusMessageId,
   });
 
   final ChatPreview chat;
   final AuthSession session;
   final TurnaCallCoordinator callCoordinator;
   final VoidCallback onSessionExpired;
+  final String? initialFocusMessageId;
 
   @override
   State<ChatRoomPage> createState() => _ChatRoomPageState();
@@ -35,11 +37,17 @@ PageRoute<void> buildChatRoomRoute({
   required AuthSession session,
   required TurnaCallCoordinator callCoordinator,
   required VoidCallback onSessionExpired,
+  String? initialFocusMessageId,
 }) {
   return MaterialPageRoute(
     settings: RouteSettings(
       name: kChatRoomRouteName,
-      arguments: {'chatId': chat.chatId},
+      arguments: {
+        'chatId': chat.chatId,
+        if (initialFocusMessageId != null &&
+            initialFocusMessageId.trim().isNotEmpty)
+          'messageId': initialFocusMessageId.trim(),
+      },
     ),
     builder: (_) => _LockedChatAccessGate(
       chat: chat,
@@ -48,6 +56,7 @@ PageRoute<void> buildChatRoomRoute({
         session: session,
         callCoordinator: callCoordinator,
         onSessionExpired: onSessionExpired,
+        initialFocusMessageId: initialFocusMessageId,
       ),
     ),
   );
@@ -218,6 +227,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   Timer? _messageHighlightTimer;
   Timer? _messageExpiryTimer;
   String? _highlightedMessageId;
+  String? _pendingInitialFocusMessageId;
+  bool _initialFocusInProgress = false;
   PageRoute<dynamic>? _route;
   Timer? _voiceRecordTimer;
   String? _voiceRecordingPath;
@@ -263,8 +274,6 @@ class _ChatRoomPageState extends State<ChatRoomPage>
 
   String get _securityBannerSeenKey =>
       'turna_security_banner_seen_${widget.session.userId}_${widget.chat.chatId}';
-  String get _starredMessagesKey =>
-      'turna_starred_messages_${widget.chat.chatId}';
   String get _softDeletedMessagesKey =>
       'turna_soft_deleted_messages_${widget.chat.chatId}';
   String get _deletedMessagesKey =>
@@ -369,6 +378,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     _controller.addListener(_handleComposerChanged);
     _composerFocusNode.addListener(_handleComposerFocusChanged);
     _scrollController.addListener(_handleScroll);
+    _pendingInitialFocusMessageId = widget.initialFocusMessageId?.trim();
     _loadLocalMessageState();
     unawaited(_loadSecurityBannerState());
     _messageExpiryTimer = Timer.periodic(const Duration(seconds: 30), (_) {
@@ -391,6 +401,11 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     if (!_isGroupChat) {
       unawaited(_restorePeerCallHistoryFromDiskCache());
       unawaited(_loadPeerCallHistory());
+    }
+    if ((_pendingInitialFocusMessageId ?? '').isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        unawaited(_consumeInitialFocusMessage());
+      });
     }
   }
 
@@ -447,6 +462,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       if (shouldSnapToBottom) {
         WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
       }
+    }
+    if ((_pendingInitialFocusMessageId ?? '').isNotEmpty) {
+      unawaited(_consumeInitialFocusMessage());
     }
   }
 
@@ -1561,13 +1579,16 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   Future<void> _loadLocalMessageState() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final starred = prefs.getStringList(_starredMessagesKey) ?? const [];
+      final starred = await TurnaStarredMessagesLocalCache.load(
+        widget.session.userId,
+        widget.chat.chatId,
+      );
       final softDeleted =
           prefs.getStringList(_softDeletedMessagesKey) ?? const [];
       final deleted = prefs.getStringList(_deletedMessagesKey) ?? const [];
       if (!mounted) return;
       setState(() {
-        _starredMessageIds = starred.toSet();
+        _starredMessageIds = starred;
         _softDeletedMessageIds = softDeleted.toSet();
         _deletedMessageIds = deleted.toSet();
       });
@@ -1577,8 +1598,11 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   }
 
   Future<void> _persistStarredMessages() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList(_starredMessagesKey, _starredMessageIds.toList());
+    await TurnaStarredMessagesLocalCache.save(
+      widget.session.userId,
+      widget.chat.chatId,
+      _starredMessageIds,
+    );
   }
 
   Future<void> _persistSoftDeletedMessages() async {
@@ -3159,7 +3183,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     );
 
     var loadAttempt = 0;
-    while (targetIndex == -1 && _client.hasMore && loadAttempt < 8) {
+    while (targetIndex == -1 && _client.hasMore && loadAttempt < 12) {
       await _client.loadOlderMessages();
       loadAttempt += 1;
       await _waitForNextFrame();
@@ -3171,9 +3195,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
 
     if (targetIndex == -1) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Yanıtlanan mesaj bulunamadı.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Mesaj bulunamadı.')));
       return;
     }
 
@@ -3229,6 +3253,23 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         );
         return;
       }
+    }
+  }
+
+  Future<void> _consumeInitialFocusMessage() async {
+    final messageId = _pendingInitialFocusMessageId?.trim();
+    if (messageId == null || messageId.isEmpty || _initialFocusInProgress) {
+      return;
+    }
+
+    _initialFocusInProgress = true;
+    try {
+      await _scrollToReplyTarget(messageId);
+    } finally {
+      if (_pendingInitialFocusMessageId == messageId) {
+        _pendingInitialFocusMessageId = null;
+      }
+      _initialFocusInProgress = false;
     }
   }
 

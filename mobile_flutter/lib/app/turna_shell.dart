@@ -203,6 +203,7 @@ class _MainTabsState extends State<MainTabs>
       ),
       _ => SettingsPage(
         session: widget.session,
+        callCoordinator: _callCoordinator,
         onSessionUpdated: widget.onSessionUpdated,
         onLogout: _handleSessionExpired,
       ),

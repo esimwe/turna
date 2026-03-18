@@ -288,6 +288,124 @@ class TurnaChatHistoryLocalCache {
   }
 }
 
+class TurnaStarredMessagesLocalCache {
+  static const String _prefix = 'turna_starred_messages_v2_';
+  static const String _legacyPrefix = 'turna_starred_messages_';
+  static final Map<String, Set<String>> _warm = <String, Set<String>>{};
+
+  static String _cacheId(String userId, String chatId) => '$userId::$chatId';
+
+  static String _key(String userId, String chatId) {
+    final raw = utf8.encode('$userId|$chatId');
+    return '$_prefix${base64UrlEncode(raw)}';
+  }
+
+  static String _legacyKey(String chatId) => '$_legacyPrefix$chatId';
+
+  static Set<String>? peek(String userId, String chatId) {
+    final cached = _warm[_cacheId(userId, chatId)];
+    if (cached == null) return null;
+    return Set<String>.from(cached);
+  }
+
+  static Future<Set<String>> load(String userId, String chatId) async {
+    final warm = peek(userId, chatId);
+    if (warm != null) return warm;
+
+    final prefs = await SharedPreferences.getInstance();
+    final stored = prefs.getStringList(_key(userId, chatId));
+    final legacy = prefs.getStringList(_legacyKey(chatId));
+    final ids = <String>{...?stored, ...?stored == null ? legacy : null}
+      ..removeWhere((item) => item.trim().isEmpty);
+    _warm[_cacheId(userId, chatId)] = ids;
+    return Set<String>.from(ids);
+  }
+
+  static Future<void> save(
+    String userId,
+    String chatId,
+    Iterable<String> messageIds,
+  ) async {
+    final normalized = messageIds
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty)
+        .toSet();
+    _warm[_cacheId(userId, chatId)] = normalized;
+
+    final prefs = await SharedPreferences.getInstance();
+    final key = _key(userId, chatId);
+    if (normalized.isEmpty) {
+      await prefs.remove(key);
+      return;
+    }
+    await prefs.setStringList(key, normalized.toList());
+  }
+
+  static Future<void> migrateLegacyForChats(
+    String userId,
+    Iterable<String> chatIds,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    for (final chatId in chatIds) {
+      final key = _key(userId, chatId);
+      if (prefs.containsKey(key)) continue;
+      final legacy = prefs.getStringList(_legacyKey(chatId));
+      if (legacy == null || legacy.isEmpty) continue;
+      final normalized = legacy
+          .map((item) => item.trim())
+          .where((item) => item.isNotEmpty)
+          .toSet();
+      if (normalized.isEmpty) continue;
+      _warm[_cacheId(userId, chatId)] = normalized;
+      await prefs.setStringList(key, normalized.toList());
+    }
+  }
+
+  static Future<Map<String, Set<String>>> loadAll(
+    String userId, {
+    Iterable<String>? knownChatIds,
+  }) async {
+    if (knownChatIds != null) {
+      await migrateLegacyForChats(userId, knownChatIds);
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final result = <String, Set<String>>{};
+    for (final key in prefs.getKeys()) {
+      if (!key.startsWith(_prefix)) continue;
+      final encoded = key.substring(_prefix.length);
+      try {
+        final decoded = utf8.decode(
+          base64Url.decode(base64Url.normalize(encoded)),
+        );
+        final separatorIndex = decoded.indexOf('|');
+        if (separatorIndex <= 0 || separatorIndex >= decoded.length - 1) {
+          continue;
+        }
+        final ownerId = decoded.substring(0, separatorIndex);
+        final chatId = decoded.substring(separatorIndex + 1);
+        if (ownerId != userId || chatId.isEmpty) continue;
+        final ids = prefs
+            .getStringList(key)
+            ?.map((item) => item.trim())
+            .where((item) => item.isNotEmpty)
+            .toSet();
+        if (ids == null || ids.isEmpty) continue;
+        result[chatId] = ids;
+        _warm[_cacheId(userId, chatId)] = ids;
+      } catch (_) {
+        continue;
+      }
+    }
+    return result;
+  }
+
+  static Future<int> countForChat(String userId, String chatId) async {
+    final ids = await load(userId, chatId);
+    return ids.length;
+  }
+}
+
 class TurnaAuthSessionStore {
   static const _tokenKey = 'turna_auth_token';
   static const _userIdKey = 'turna_auth_user_id';

@@ -4,11 +4,13 @@ class SettingsPage extends StatefulWidget {
   const SettingsPage({
     super.key,
     required this.session,
+    required this.callCoordinator,
     required this.onSessionUpdated,
     required this.onLogout,
   });
 
   final AuthSession session;
+  final TurnaCallCoordinator callCoordinator;
   final void Function(AuthSession session) onSessionUpdated;
   final VoidCallback onLogout;
 
@@ -18,12 +20,14 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   late TurnaUserProfile _profile;
+  int _allStarredMessageCount = 0;
 
   @override
   void initState() {
     super.initState();
     _profile = _profileFromSession(widget.session);
     unawaited(_loadCachedProfile());
+    unawaited(_loadStarredMessageCount());
   }
 
   @override
@@ -33,6 +37,7 @@ class _SettingsPageState extends State<SettingsPage> {
     if (oldWidget.session.userId != widget.session.userId ||
         oldWidget.session.token != widget.session.token) {
       unawaited(_loadCachedProfile());
+      unawaited(_loadStarredMessageCount());
     }
   }
 
@@ -49,6 +54,7 @@ class _SettingsPageState extends State<SettingsPage> {
     setState(() {
       _profile = _profileFromSession(widget.session, previous: _profile);
     });
+    unawaited(_loadStarredMessageCount());
   }
 
   Future<void> _openProfileEditor() async {
@@ -67,6 +73,23 @@ class _SettingsPageState extends State<SettingsPage> {
     if (!mounted || cached == null) return;
     setState(() {
       _profile = _profileFromSession(widget.session, previous: cached);
+    });
+  }
+
+  Future<void> _loadStarredMessageCount() async {
+    ChatInboxData? inbox = TurnaChatInboxLocalCache.peek(widget.session.userId);
+    inbox ??= await TurnaChatInboxLocalCache.load(widget.session.userId);
+    final chatIds = inbox?.chats.map((chat) => chat.chatId) ?? const <String>[];
+    final starred = await TurnaStarredMessagesLocalCache.loadAll(
+      widget.session.userId,
+      knownChatIds: chatIds,
+    );
+    if (!mounted) return;
+    setState(() {
+      _allStarredMessageCount = starred.values.fold<int>(
+        0,
+        (sum, ids) => sum + ids.length,
+      );
     });
   }
 
@@ -97,9 +120,26 @@ class _SettingsPageState extends State<SettingsPage> {
                   fontWeight: FontWeight.w500,
                 ),
               ),
-              trailing: Icon(
-                Icons.chevron_right_rounded,
-                color: Colors.black.withValues(alpha: 0.34),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if ((actions[index].trailingText ?? '').trim().isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: Text(
+                        actions[index].trailingText!,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: TurnaColors.textMuted,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  Icon(
+                    Icons.chevron_right_rounded,
+                    color: Colors.black.withValues(alpha: 0.34),
+                  ),
+                ],
               ),
               onTap: actions[index].onTap,
             ),
@@ -219,8 +259,16 @@ class _SettingsPageState extends State<SettingsPage> {
               _SettingsMenuAction(
                 icon: Icons.star_border_rounded,
                 label: 'Yıldızlı',
-                onTap: () =>
-                    _openPage(const PlaceholderPage(title: 'Yıldızlı')),
+                trailingText: _allStarredMessageCount > 0
+                    ? '$_allStarredMessageCount'
+                    : null,
+                onTap: () => _openPage(
+                  TurnaStarredMessagesPage(
+                    session: widget.session,
+                    callCoordinator: widget.callCoordinator,
+                    onSessionExpired: widget.onLogout,
+                  ),
+                ),
               ),
               _SettingsMenuAction(
                 icon: Icons.devices_outlined,
@@ -1382,11 +1430,13 @@ class _SettingsMenuAction {
     required this.icon,
     required this.label,
     required this.onTap,
+    this.trailingText,
   });
 
   final IconData icon;
   final String label;
   final VoidCallback onTap;
+  final String? trailingText;
 }
 
 class _TurnaBottomBar extends StatelessWidget {
@@ -3057,6 +3107,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
   TurnaUserProfile? _profile;
   _UserConversationStats? _conversationStats;
   TurnaChatDetail? _chatDetail;
+  int _starredMessageCount = 0;
   bool _loading = false;
   bool _statsLoading = true;
   bool _chatLockEnabled = false;
@@ -3081,6 +3132,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
     );
     unawaited(_loadCachedState());
     unawaited(_refreshData());
+    unawaited(_loadStarredMessageCount());
   }
 
   Future<void> _refreshData() async {
@@ -3088,6 +3140,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
       _loadProfile(),
       _loadConversationStats(),
       _loadChatDetail(),
+      _loadStarredMessageCount(),
     ]);
   }
 
@@ -3197,6 +3250,15 @@ class _UserProfilePageState extends State<UserProfilePage> {
     } catch (_) {}
   }
 
+  Future<void> _loadStarredMessageCount() async {
+    final count = await TurnaStarredMessagesLocalCache.countForChat(
+      widget.session.userId,
+      _conversationChatId,
+    );
+    if (!mounted) return;
+    setState(() => _starredMessageCount = count);
+  }
+
   _UserConversationStats _buildConversationStats(List<ChatMessage> messages) {
     var attachmentCount = 0;
     var totalBytes = 0;
@@ -3289,6 +3351,39 @@ class _UserProfilePageState extends State<UserProfilePage> {
         context,
       ).showSnackBar(SnackBar(content: Text(error.toString())));
     }
+  }
+
+  ChatPreview _buildConversationPreview(String displayName, String? avatarUrl) {
+    final phone = _profile?.phone?.trim();
+    return ChatPreview(
+      chatId: _conversationChatId,
+      name: displayName,
+      message: '',
+      time: '',
+      chatType: TurnaChatType.direct,
+      avatarUrl: avatarUrl,
+      phone: phone == null || phone.isEmpty ? null : phone,
+      peerId: widget.userId,
+    );
+  }
+
+  Future<void> _openConversationStarredMessages(
+    String displayName,
+    String? avatarUrl,
+  ) async {
+    await Navigator.push<void>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => TurnaStarredMessagesPage(
+          session: widget.session,
+          chat: _buildConversationPreview(displayName, avatarUrl),
+          callCoordinator: widget.callCoordinator,
+          onSessionExpired: widget.onSessionExpired,
+        ),
+      ),
+    );
+    if (!mounted) return;
+    unawaited(_loadStarredMessageCount());
   }
 
   String _formatConversationCount() {
@@ -3494,9 +3589,9 @@ class _UserProfilePageState extends State<UserProfilePage> {
               ),
               _UserProfileRow(
                 icon: Icons.star_border_rounded,
-                title: 'Yildizli',
-                trailingText: 'Yok',
-                onTap: () => _showPlaceholderAction('Yildizli mesajlar'),
+                title: 'Yıldızlı',
+                trailingText: '$_starredMessageCount',
+                onTap: () => _openConversationStarredMessages(name, avatarUrl),
               ),
             ],
           ),
@@ -3554,6 +3649,979 @@ class _UserProfilePageState extends State<UserProfilePage> {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _TurnaStarredMessageEntry {
+  const _TurnaStarredMessageEntry({required this.chat, required this.message});
+
+  final ChatPreview chat;
+  final ChatMessage message;
+}
+
+enum _TurnaStarredDeleteAction { forMe, forEveryone }
+
+class TurnaStarredMessagesPage extends StatefulWidget {
+  const TurnaStarredMessagesPage({
+    super.key,
+    required this.session,
+    required this.callCoordinator,
+    required this.onSessionExpired,
+    this.chat,
+  });
+
+  final AuthSession session;
+  final TurnaCallCoordinator callCoordinator;
+  final VoidCallback onSessionExpired;
+  final ChatPreview? chat;
+
+  @override
+  State<TurnaStarredMessagesPage> createState() =>
+      _TurnaStarredMessagesPageState();
+}
+
+class _TurnaStarredMessagesPageState extends State<TurnaStarredMessagesPage> {
+  List<_TurnaStarredMessageEntry> _entries = const [];
+  bool _loading = true;
+  String? _error;
+
+  bool get _isSingleChatMode => widget.chat != null;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_load());
+  }
+
+  Future<void> _load() async {
+    if (mounted) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
+
+    try {
+      final entries = _isSingleChatMode
+          ? await _loadEntriesForChat(widget.chat!)
+          : await _loadEntriesForAllChats();
+      if (!mounted) return;
+      setState(() {
+        _entries = entries;
+        _loading = false;
+      });
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _entries = const [];
+        _loading = false;
+        _error = error.toString();
+      });
+    }
+  }
+
+  Future<List<_TurnaStarredMessageEntry>> _loadEntriesForAllChats() async {
+    ChatInboxData? inbox = TurnaChatInboxLocalCache.peek(widget.session.userId);
+    inbox ??= await TurnaChatInboxLocalCache.load(widget.session.userId);
+    try {
+      inbox = await ChatApi.fetchChats(widget.session);
+    } on TurnaUnauthorizedException {
+      rethrow;
+    } catch (_) {}
+
+    final knownChatIds = inbox?.chats.map((chat) => chat.chatId) ?? const [];
+    final starredByChat = await TurnaStarredMessagesLocalCache.loadAll(
+      widget.session.userId,
+      knownChatIds: knownChatIds,
+    );
+    final chatIndex = <String, ChatPreview>{
+      for (final chat in inbox?.chats ?? const <ChatPreview>[])
+        chat.chatId: chat,
+    };
+    final entries = <_TurnaStarredMessageEntry>[];
+
+    for (final entry in starredByChat.entries) {
+      final chat =
+          chatIndex[entry.key] ?? await _buildFallbackChatPreview(entry.key);
+      if (chat == null) continue;
+      entries.addAll(
+        await _loadEntriesForChat(chat, presetStarredIds: entry.value),
+      );
+    }
+
+    entries.sort(
+      (a, b) =>
+          compareTurnaTimestamps(b.message.createdAt, a.message.createdAt),
+    );
+    return entries;
+  }
+
+  Future<ChatPreview?> _buildFallbackChatPreview(String chatId) async {
+    var detail = TurnaChatDetailLocalCache.peek(widget.session.userId, chatId);
+    detail ??= await TurnaChatDetailLocalCache.load(
+      widget.session.userId,
+      chatId,
+    );
+    if (detail == null) {
+      try {
+        detail = await ChatApi.fetchChatDetail(widget.session, chatId);
+      } on TurnaUnauthorizedException {
+        rethrow;
+      } catch (_) {}
+    }
+    if (detail == null) return null;
+
+    final phone =
+        detail.chatType == TurnaChatType.direct &&
+            detail.title.trim().startsWith('+')
+        ? detail.title.trim()
+        : null;
+    return ChatPreview(
+      chatId: chatId,
+      name: TurnaContactsDirectory.resolveDisplayLabel(
+        phone: phone,
+        fallbackName: detail.title,
+      ),
+      message: '',
+      time: '',
+      chatType: detail.chatType,
+      memberPreviewNames: detail.memberPreviewNames,
+      phone: phone,
+      avatarUrl: detail.avatarUrl,
+      memberCount: detail.memberCount,
+      myRole: detail.myRole,
+      description: detail.description,
+      isPublic: detail.isPublic,
+    );
+  }
+
+  Future<List<_TurnaStarredMessageEntry>> _loadEntriesForChat(
+    ChatPreview chat, {
+    Set<String>? presetStarredIds,
+  }) async {
+    final targetIds =
+        presetStarredIds ??
+        await TurnaStarredMessagesLocalCache.load(
+          widget.session.userId,
+          chat.chatId,
+        );
+    if (targetIds.isEmpty) return const [];
+
+    final foundById = <String, ChatMessage>{};
+
+    void collect(Iterable<ChatMessage> messages) {
+      for (final message in messages) {
+        if (targetIds.contains(message.id)) {
+          foundById[message.id] = message;
+        }
+      }
+    }
+
+    collect(
+      await TurnaChatHistoryLocalCache.load(widget.session.userId, chat.chatId),
+    );
+
+    String? before;
+    var hasMore = true;
+    var pageCount = 0;
+    while (foundById.length < targetIds.length && hasMore && pageCount < 12) {
+      final page = await ChatApi.fetchMessagesPage(
+        widget.session.token,
+        chat.chatId,
+        cacheOwnerId: widget.session.userId,
+        before: before,
+        limit: 100,
+      );
+      collect(page.items);
+      hasMore = page.hasMore;
+      before = page.nextBefore;
+      pageCount += 1;
+      if (page.items.isEmpty) break;
+    }
+
+    if (foundById.length != targetIds.length) {
+      await TurnaStarredMessagesLocalCache.save(
+        widget.session.userId,
+        chat.chatId,
+        foundById.keys,
+      );
+    }
+
+    final entries = foundById.values
+        .map(
+          (message) => _TurnaStarredMessageEntry(chat: chat, message: message),
+        )
+        .toList();
+    entries.sort(
+      (a, b) =>
+          compareTurnaTimestamps(b.message.createdAt, a.message.createdAt),
+    );
+    return entries;
+  }
+
+  String _senderLabelFor(_TurnaStarredMessageEntry entry) {
+    if (entry.message.senderId == widget.session.userId) return 'Siz';
+    final displayName = entry.message.senderDisplayName?.trim();
+    if (displayName != null && displayName.isNotEmpty) return displayName;
+    return entry.chat.name;
+  }
+
+  String? _chatLabelFor(_TurnaStarredMessageEntry entry) {
+    if (_isSingleChatMode) return null;
+    final name = entry.chat.name.trim();
+    return name.isEmpty ? null : name;
+  }
+
+  String? _avatarUrlFor(_TurnaStarredMessageEntry entry) {
+    if (entry.message.senderId == widget.session.userId) {
+      return resolveTurnaSessionAvatarUrl(widget.session);
+    }
+    return entry.chat.avatarUrl;
+  }
+
+  String _previewTextFor(ChatMessage message) {
+    if ((message.systemType ?? '').trim().isNotEmpty) {
+      final text = sanitizeTurnaChatPreviewText(message.text);
+      return text.trim().isNotEmpty ? text.trim() : 'Sistem mesajı';
+    }
+    final parsed = parseTurnaMessageText(message.text);
+    if (parsed.location != null) return parsed.location!.previewLabel;
+    if (parsed.contact != null) return parsed.contact!.previewLabel;
+    final text = sanitizeTurnaChatPreviewText(message.text).trim();
+    if (text.isNotEmpty) return text;
+    if (message.attachments.isEmpty) return 'Mesaj';
+    final first = message.attachments.first;
+    if (isTurnaAudioAttachment(first)) return 'Ses kaydı';
+    if (isTurnaImageAttachment(first)) return 'Fotoğraf';
+    if (isTurnaVideoAttachment(first)) return 'Video';
+    return 'Dosya';
+  }
+
+  String? _copyableTextFor(ChatMessage message) {
+    final text = parseTurnaMessageText(message.text).text.trim();
+    return text.isEmpty ? null : text;
+  }
+
+  String _formatStarredDayLabel(String iso) {
+    final dt = parseTurnaLocalDateTime(iso);
+    if (dt == null) return '';
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final messageDay = DateTime(dt.year, dt.month, dt.day);
+    final diffDays = today.difference(messageDay).inDays;
+    if (diffDays == 0) return 'Bugün';
+    if (diffDays == 1) return 'Dün';
+    if (diffDays > 1 && diffDays < 7) {
+      const labels = <String>[
+        'Pazartesi',
+        'Salı',
+        'Çarşamba',
+        'Perşembe',
+        'Cuma',
+        'Cumartesi',
+        'Pazar',
+      ];
+      return labels[dt.weekday - 1];
+    }
+    final dd = dt.day.toString().padLeft(2, '0');
+    final mm = dt.month.toString().padLeft(2, '0');
+    return '$dd.$mm.${dt.year}';
+  }
+
+  Future<void> _openEntry(_TurnaStarredMessageEntry entry) async {
+    await Navigator.push<void>(
+      context,
+      buildChatRoomRoute(
+        chat: entry.chat,
+        session: widget.session,
+        callCoordinator: widget.callCoordinator,
+        onSessionExpired: widget.onSessionExpired,
+        initialFocusMessageId: entry.message.id,
+      ),
+    );
+    if (!mounted) return;
+    unawaited(_load());
+  }
+
+  Future<void> _copyEntryText(_TurnaStarredMessageEntry entry) async {
+    final text = _copyableTextFor(entry.message);
+    if (text == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Kopyalanacak metin yok.')));
+      return;
+    }
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Mesaj kopyalandı.')));
+  }
+
+  Future<void> _removeStarFromEntry(
+    _TurnaStarredMessageEntry entry, {
+    bool showSnackBar = true,
+  }) async {
+    final ids = await TurnaStarredMessagesLocalCache.load(
+      widget.session.userId,
+      entry.chat.chatId,
+    );
+    ids.remove(entry.message.id);
+    await TurnaStarredMessagesLocalCache.save(
+      widget.session.userId,
+      entry.chat.chatId,
+      ids,
+    );
+    if (!mounted) return;
+    setState(() {
+      _entries = _entries
+          .where(
+            (item) =>
+                item.chat.chatId != entry.chat.chatId ||
+                item.message.id != entry.message.id,
+          )
+          .toList(growable: false);
+    });
+    if (!showSnackBar) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Yıldız kaldırıldı.')));
+  }
+
+  static const List<String> _starredReactionOptions = <String>[
+    '👍',
+    '❤️',
+    '😂',
+    '🔥',
+    '👏',
+    '😮',
+    '😢',
+    '🙏',
+  ];
+
+  bool _canPinEntry(_TurnaStarredMessageEntry entry) {
+    return entry.chat.chatType == TurnaChatType.group;
+  }
+
+  bool _entryHasMyReaction(_TurnaStarredMessageEntry entry, String emoji) {
+    return entry.message.reactions.any(
+      (reaction) =>
+          reaction.emoji == emoji &&
+          reaction.userIds.contains(widget.session.userId),
+    );
+  }
+
+  Future<void> _replaceEntryMessage(
+    _TurnaStarredMessageEntry entry,
+    ChatMessage updatedMessage,
+  ) async {
+    await TurnaChatHistoryLocalCache.mergePage(
+      widget.session.userId,
+      entry.chat.chatId,
+      [updatedMessage],
+    );
+    if (!mounted) return;
+    setState(() {
+      _entries = _entries
+          .map(
+            (item) =>
+                item.chat.chatId == entry.chat.chatId &&
+                    item.message.id == entry.message.id
+                ? _TurnaStarredMessageEntry(
+                    chat: item.chat,
+                    message: updatedMessage,
+                  )
+                : item,
+          )
+          .toList(growable: false);
+    });
+  }
+
+  Future<void> _togglePinEntry(_TurnaStarredMessageEntry entry) async {
+    if (!_canPinEntry(entry)) return;
+    final nextPinned = !entry.message.isPinned;
+    try {
+      if (nextPinned) {
+        await ChatApi.pinMessage(widget.session, messageId: entry.message.id);
+      } else {
+        await ChatApi.unpinMessage(widget.session, messageId: entry.message.id);
+      }
+      final updatedMessage = entry.message.copyWith(isPinned: nextPinned);
+      await _replaceEntryMessage(entry, updatedMessage);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            nextPinned ? 'Mesaj sabitlendi.' : 'Sabitleme kaldırıldı.',
+          ),
+        ),
+      );
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
+  Future<void> _toggleReactionEntry(
+    _TurnaStarredMessageEntry entry,
+    String emoji,
+  ) async {
+    try {
+      final updatedMessage = _entryHasMyReaction(entry, emoji)
+          ? await ChatApi.removeReaction(
+              widget.session,
+              messageId: entry.message.id,
+              emoji: emoji,
+            )
+          : await ChatApi.addReaction(
+              widget.session,
+              messageId: entry.message.id,
+              emoji: emoji,
+            );
+      await _replaceEntryMessage(entry, updatedMessage);
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Tepki güncellendi.')));
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
+  Future<void> _showReactionPickerForEntry(
+    _TurnaStarredMessageEntry entry,
+  ) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 18, 16, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Tepki seç',
+                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 14),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  children: _starredReactionOptions.map((emoji) {
+                    final selected = _entryHasMyReaction(entry, emoji);
+                    return InkWell(
+                      borderRadius: BorderRadius.circular(18),
+                      onTap: () async {
+                        Navigator.pop(sheetContext);
+                        await _toggleReactionEntry(entry, emoji);
+                      },
+                      child: Container(
+                        width: 52,
+                        height: 52,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: selected
+                              ? TurnaColors.primary50
+                              : TurnaColors.backgroundMuted,
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(
+                            color: selected
+                                ? TurnaColors.primary
+                                : TurnaColors.border,
+                          ),
+                        ),
+                        child: Text(
+                          emoji,
+                          style: const TextStyle(fontSize: 24),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _forwardEntry(_TurnaStarredMessageEntry entry) async {
+    final targetChat = await Navigator.push<ChatPreview>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ForwardMessagePickerPage(
+          session: widget.session,
+          currentChatId: entry.chat.chatId,
+          callCoordinator: widget.callCoordinator,
+          onSessionExpired: widget.onSessionExpired,
+        ),
+      ),
+    );
+    if (!mounted || targetChat == null) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(content: Text('${targetChat.name} sohbetine iletiliyor...')),
+      );
+
+    try {
+      final parsed = parseTurnaMessageText(entry.message.text);
+      final drafts = <OutgoingAttachmentDraft>[];
+      for (final attachment in entry.message.attachments) {
+        final file = await TurnaLocalMediaCache.getOrDownloadFile(
+          cacheKey: 'attachment:${attachment.objectKey}',
+          url: attachment.url?.trim() ?? '',
+          authToken: widget.session.token,
+        );
+        if (file == null) {
+          throw TurnaApiException('İletilecek ek yüklenemedi.');
+        }
+        final bytes = await file.readAsBytes();
+        final upload = await ChatApi.createAttachmentUpload(
+          widget.session,
+          chatId: targetChat.chatId,
+          kind: attachment.kind,
+          contentType: attachment.contentType,
+          fileName: attachment.fileName ?? 'dosya',
+        );
+        final uploadRes = await http.put(
+          Uri.parse(upload.uploadUrl),
+          headers: upload.headers,
+          body: bytes,
+        );
+        if (uploadRes.statusCode >= 400) {
+          throw TurnaApiException('İletilecek ek yüklenemedi.');
+        }
+        drafts.add(
+          OutgoingAttachmentDraft(
+            objectKey: upload.objectKey,
+            kind: attachment.kind,
+            transferMode: attachment.transferMode,
+            fileName: attachment.fileName,
+            contentType: attachment.contentType,
+            sizeBytes: attachment.sizeBytes > 0
+                ? attachment.sizeBytes
+                : bytes.length,
+            width: attachment.width,
+            height: attachment.height,
+            durationSeconds: attachment.durationSeconds,
+          ),
+        );
+      }
+
+      await ChatApi.sendMessage(
+        widget.session,
+        chatId: targetChat.chatId,
+        text: parsed.text.trim().isEmpty ? null : parsed.text.trim(),
+        attachments: drafts,
+      );
+      if (!mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(content: Text('${targetChat.name} sohbetine iletildi.')),
+        );
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
+  Future<void> _deleteEntry(_TurnaStarredMessageEntry entry) async {
+    final action = await showModalBottomSheet<_TurnaStarredDeleteAction>(
+      context: context,
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.delete_outline_rounded),
+                title: const Text('Benden sil'),
+                onTap: () =>
+                    Navigator.pop(context, _TurnaStarredDeleteAction.forMe),
+              ),
+              if (entry.message.senderId == widget.session.userId)
+                ListTile(
+                  leading: const Icon(Icons.delete_sweep_outlined),
+                  title: const Text('Herkesten sil'),
+                  onTap: () => Navigator.pop(
+                    context,
+                    _TurnaStarredDeleteAction.forEveryone,
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+    if (action == null) return;
+
+    try {
+      if (action == _TurnaStarredDeleteAction.forEveryone) {
+        final updated = await ChatApi.deleteMessageForEveryone(
+          widget.session,
+          messageId: entry.message.id,
+        );
+        await TurnaChatHistoryLocalCache.mergePage(
+          widget.session.userId,
+          entry.chat.chatId,
+          [updated],
+        );
+      } else {
+        final prefs = await SharedPreferences.getInstance();
+        final key = 'turna_soft_deleted_messages_${entry.chat.chatId}';
+        final nextIds = <String>{
+          ...(prefs.getStringList(key) ?? const <String>[]),
+          entry.message.id,
+        };
+        await prefs.setStringList(key, nextIds.toList());
+      }
+
+      await _removeStarFromEntry(entry, showSnackBar: false);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            action == _TurnaStarredDeleteAction.forEveryone
+                ? 'Mesaj herkesten silindi.'
+                : 'Mesaj bu cihazdan silindi.',
+          ),
+        ),
+      );
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
+  Future<void> _reportEntry(_TurnaStarredMessageEntry entry) async {
+    final reason = await showModalBottomSheet<String>(
+      context: context,
+      builder: (sheetContext) {
+        const reasons = ['Spam', 'Taciz', 'Uygunsuz içerik', 'Sahte hesap'];
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (final item in reasons)
+                ListTile(
+                  title: Text(item),
+                  onTap: () => Navigator.pop(sheetContext, item),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+    if (reason == null || !mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('Şikayet kaydedildi: $reason')));
+  }
+
+  Future<void> _showEntryActions(_TurnaStarredMessageEntry entry) async {
+    final copyText = _copyableTextFor(entry.message);
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.forward_outlined),
+                title: const Text('İlet'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _forwardEntry(entry);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.copy_all_outlined),
+                title: const Text('Kopyala'),
+                enabled: copyText != null,
+                onTap: copyText == null
+                    ? null
+                    : () {
+                        Navigator.pop(sheetContext);
+                        _copyEntryText(entry);
+                      },
+              ),
+              ListTile(
+                leading: const Icon(Icons.star_outline_rounded),
+                title: const Text('Yıldızı kaldır'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _removeStarFromEntry(entry);
+                },
+              ),
+              if (_canPinEntry(entry))
+                ListTile(
+                  leading: Icon(
+                    entry.message.isPinned
+                        ? Icons.push_pin_rounded
+                        : Icons.push_pin_outlined,
+                  ),
+                  title: Text(
+                    entry.message.isPinned ? 'Sabitlemeyi kaldır' : 'Sabitle',
+                  ),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    _togglePinEntry(entry);
+                  },
+                ),
+              ListTile(
+                leading: const Icon(Icons.emoji_emotions_outlined),
+                title: const Text('Tepki ver'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _showReactionPickerForEntry(entry);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.flag_outlined),
+                title: const Text('Şikayet Et'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _reportEntry(entry);
+                },
+              ),
+              ListTile(
+                leading: const Icon(
+                  Icons.delete_outline_rounded,
+                  color: TurnaColors.error,
+                ),
+                title: const Text(
+                  'Sil',
+                  style: TextStyle(color: TurnaColors.error),
+                ),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _deleteEntry(entry);
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildPreviewBubble(_TurnaStarredMessageEntry entry) {
+    final mine = entry.message.senderId == widget.session.userId;
+    return Align(
+      alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.of(context).size.width * 0.68,
+        ),
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+        decoration: BoxDecoration(
+          color: mine ? TurnaColors.chatOutgoing : TurnaColors.chatIncoming,
+          borderRadius: BorderRadius.only(
+            topLeft: const Radius.circular(TurnaChatTokens.bubbleRadius),
+            topRight: const Radius.circular(TurnaChatTokens.bubbleRadius),
+            bottomLeft: Radius.circular(
+              mine
+                  ? TurnaChatTokens.bubbleRadiusTail
+                  : TurnaChatTokens.bubbleRadius,
+            ),
+            bottomRight: Radius.circular(
+              mine
+                  ? TurnaChatTokens.bubbleRadius
+                  : TurnaChatTokens.bubbleRadiusTail,
+            ),
+          ),
+          boxShadow: const [TurnaColors.shadowBubble],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              _previewTextFor(entry.message),
+              style: TextStyle(
+                fontSize: 15.5,
+                height: 1.26,
+                color: mine
+                    ? TurnaColors.chatOutgoingText
+                    : TurnaColors.chatIncomingText,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Align(
+              alignment: Alignment.centerRight,
+              child: _MessageMetaFooter(
+                timeLabel: formatTurnaLocalClock(entry.message.createdAt),
+                mine: mine,
+                status: entry.message.status,
+                edited: entry.message.isEdited,
+                starred: true,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEntry(_TurnaStarredMessageEntry entry) {
+    final senderLabel = _senderLabelFor(entry);
+    final chatLabel = _chatLabelFor(entry);
+    return InkWell(
+      onTap: () => _openEntry(entry),
+      onLongPress: () => _showEntryActions(entry),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                _ProfileAvatar(
+                  label: senderLabel,
+                  avatarUrl: _avatarUrlFor(entry),
+                  authToken: widget.session.token,
+                  radius: 18,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        senderLabel,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: TurnaColors.text,
+                        ),
+                      ),
+                      if (chatLabel != null) ...[
+                        const SizedBox(height: 1),
+                        Text(
+                          chatLabel,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 12.5,
+                            color: TurnaColors.textMuted,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Text(
+                  _formatStarredDayLabel(entry.message.createdAt),
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: TurnaColors.textMuted,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            _buildPreviewBubble(entry),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: TurnaColors.backgroundSoft,
+      appBar: AppBar(
+        backgroundColor: TurnaColors.backgroundSoft,
+        surfaceTintColor: Colors.transparent,
+        centerTitle: true,
+        title: const Text(
+          'Yıldızlı',
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : _error != null
+          ? Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      _error!,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: TurnaColors.textMuted),
+                    ),
+                    const SizedBox(height: 12),
+                    FilledButton(
+                      onPressed: _load,
+                      child: const Text('Tekrar dene'),
+                    ),
+                  ],
+                ),
+              ),
+            )
+          : _entries.isEmpty
+          ? const _CenteredState(
+              icon: Icons.star_border_rounded,
+              title: 'Henüz yıldızlı mesaj yok',
+              message:
+                  'Mesajlara uzun basıp yıldız eklediğinde burada görünecek.',
+            )
+          : RefreshIndicator(
+              onRefresh: _load,
+              child: ListView.separated(
+                padding: const EdgeInsets.only(top: 8, bottom: 24),
+                itemCount: _entries.length,
+                separatorBuilder: (_, _) => Divider(
+                  height: 1,
+                  indent: 58,
+                  endIndent: 16,
+                  color: Colors.black.withValues(alpha: 0.07),
+                ),
+                itemBuilder: (context, index) => _buildEntry(_entries[index]),
+              ),
+            ),
     );
   }
 }
