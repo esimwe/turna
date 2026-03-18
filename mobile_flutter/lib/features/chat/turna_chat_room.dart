@@ -795,7 +795,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
 
   String _stripLinksFromText(String text) {
     return text
-        .replaceAll(_kTurnaSharedUrlPattern, '')
+        .replaceAll(kTurnaSharedUrlPattern, '')
         .replaceAll(RegExp(r'\s+'), ' ')
         .trim();
   }
@@ -855,7 +855,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                 : TurnaColors.chatIncomingText),
       fontStyle: deletedPlaceholder ? FontStyle.italic : FontStyle.normal,
     );
-    final matches = _kTurnaSharedUrlPattern.allMatches(text).toList();
+    final matches = kTurnaSharedUrlPattern.allMatches(text).toList();
     if (matches.isEmpty) {
       return Text(text, style: baseStyle);
     }

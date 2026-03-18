@@ -2435,7 +2435,7 @@ class _MediaComposerPageState extends State<_MediaComposerPage> {
     });
   }
 
-  void _applyCropPreset(_MediaCropPreset preset) {
+  void _applyCropPreset(MediaCropPreset preset) {
     if (!_currentItem.isImage) return;
     final currentCenter = _currentWorkingCropRect.center;
     setState(() {

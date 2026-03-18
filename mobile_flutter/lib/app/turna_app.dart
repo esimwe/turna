@@ -11,6 +11,7 @@ import 'package:audioplayers/audioplayers.dart' as ap;
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_contacts/flutter_contacts.dart' hide Event;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';

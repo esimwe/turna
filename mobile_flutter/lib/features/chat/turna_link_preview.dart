@@ -2,7 +2,7 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
-final RegExp _kTurnaSharedUrlPattern = RegExp(
+final RegExp kTurnaSharedUrlPattern = RegExp(
   r'((?:(?:https?:\/\/)|(?:www\.))?(?<!@)(?:[a-z0-9-]+\.)+[a-z]{2,}(?:[\/?#][^\s<]*)?)',
   caseSensitive: false,
 );
@@ -30,7 +30,7 @@ Uri? parseTurnaSharedUrl(String raw) {
 List<Uri> extractTurnaUrls(String text) {
   final found = <Uri>[];
   final seen = <String>{};
-  for (final match in _kTurnaSharedUrlPattern.allMatches(text)) {
+  for (final match in kTurnaSharedUrlPattern.allMatches(text)) {
     final uri = parseTurnaSharedUrl(match.group(0) ?? '');
     if (uri == null) continue;
     final key = uri.toString();

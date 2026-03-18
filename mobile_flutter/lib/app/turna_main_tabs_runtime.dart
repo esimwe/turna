@@ -1,6 +1,16 @@
 part of turna_app;
 
-mixin _TurnaMainTabsRuntime on _MainTabsState {
+mixin _TurnaMainTabsRuntime on State<MainTabs> {
+  ValueNotifier<int> get _inboxUpdateNotifier;
+  TurnaCallCoordinator get _callCoordinator;
+  bool get _openingPushChat;
+  set _openingPushChat(bool value);
+  String? get _lastPushOpenedChatId;
+  set _lastPushOpenedChatId(String? value);
+
+  void focusChatsTab();
+  void _handleSessionExpired();
+
   ChatPreview? _findChatPreview(ChatInboxData? inbox, String chatId) {
     if (inbox == null) return null;
     for (final chat in inbox.chats) {

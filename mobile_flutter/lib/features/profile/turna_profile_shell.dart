@@ -4390,7 +4390,7 @@ class _ConversationLinkTile extends StatelessWidget {
             ? preview!.title.trim()
             : host;
         final messageText = item.messageText
-            .replaceAll(_kTurnaSharedUrlPattern, '')
+            .replaceAll(kTurnaSharedUrlPattern, '')
             .replaceAll(RegExp(r'\s+'), ' ')
             .trim();
 
