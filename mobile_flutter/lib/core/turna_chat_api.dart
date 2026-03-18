@@ -273,6 +273,36 @@ class ChatApi {
     }
   }
 
+  static Future<TurnaChatDetail> updateDirectMessageExpiration(
+    AuthSession session, {
+    required String chatId,
+    required int? messageExpirationSeconds,
+  }) async {
+    try {
+      final res = await http.put(
+        Uri.parse('$kBackendBaseUrl/api/chats/$chatId/message-expiration'),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'messageExpirationSeconds': messageExpirationSeconds,
+        }),
+      );
+      _throwIfApiError(res);
+
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = map['data'] as Map<String, dynamic>? ?? const {};
+      final detail = TurnaChatDetail.fromMap(data);
+      await TurnaChatDetailLocalCache.save(session.userId, detail);
+      return detail;
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Süreli mesaj ayarı güncellenemedi.');
+    }
+  }
+
   static Future<void> updateGroupMemberRole(
     AuthSession session, {
     required String chatId,
@@ -906,13 +936,18 @@ class ChatApi {
 
       final map = jsonDecode(res.body) as Map<String, dynamic>;
       final data = (map['data'] as List<dynamic>? ?? const []);
-      return data
+      final contacts = data
           .whereType<Map>()
           .map(
             (item) =>
                 TurnaRegisteredContact.fromMap(Map<String, dynamic>.from(item)),
           )
           .toList();
+      await cacheTurnaKnownContactUserIds(
+        session.userId,
+        contacts.map((item) => item.id),
+      );
+      return contacts;
     } on TurnaApiException {
       rethrow;
     } catch (_) {

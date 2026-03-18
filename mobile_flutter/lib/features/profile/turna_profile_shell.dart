@@ -3056,6 +3056,7 @@ class UserProfilePage extends StatefulWidget {
 class _UserProfilePageState extends State<UserProfilePage> {
   TurnaUserProfile? _profile;
   _UserConversationStats? _conversationStats;
+  TurnaChatDetail? _chatDetail;
   bool _loading = false;
   bool _statsLoading = true;
   bool _chatLockEnabled = false;
@@ -3074,16 +3075,28 @@ class _UserProfilePageState extends State<UserProfilePage> {
           displayName: widget.fallbackName,
           avatarUrl: widget.fallbackAvatarUrl,
         );
+    _chatDetail = TurnaChatDetailLocalCache.peek(
+      widget.session.userId,
+      _conversationChatId,
+    );
     unawaited(_loadCachedState());
     unawaited(_refreshData());
   }
 
   Future<void> _refreshData() async {
-    await Future.wait([_loadProfile(), _loadConversationStats()]);
+    await Future.wait([
+      _loadProfile(),
+      _loadConversationStats(),
+      _loadChatDetail(),
+    ]);
   }
 
   Future<void> _loadCachedState() async {
     final cachedProfile = await TurnaUserProfileLocalCache.load(widget.userId);
+    final cachedDetail = await TurnaChatDetailLocalCache.load(
+      widget.session.userId,
+      _conversationChatId,
+    );
     final cachedMessages = await TurnaChatHistoryLocalCache.load(
       widget.session.userId,
       _conversationChatId,
@@ -3092,6 +3105,9 @@ class _UserProfilePageState extends State<UserProfilePage> {
     setState(() {
       if (cachedProfile != null) {
         _profile = cachedProfile;
+      }
+      if (cachedDetail != null) {
+        _chatDetail = cachedDetail;
       }
       if (cachedMessages.isNotEmpty) {
         _conversationStats = _buildConversationStats(cachedMessages);
@@ -3167,6 +3183,20 @@ class _UserProfilePageState extends State<UserProfilePage> {
     }
   }
 
+  Future<void> _loadChatDetail() async {
+    try {
+      final detail = await ChatApi.fetchChatDetail(
+        widget.session,
+        _conversationChatId,
+      );
+      if (!mounted) return;
+      setState(() => _chatDetail = detail);
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (_) {}
+  }
+
   _UserConversationStats _buildConversationStats(List<ChatMessage> messages) {
     var attachmentCount = 0;
     var totalBytes = 0;
@@ -3218,6 +3248,47 @@ class _UserProfilePageState extends State<UserProfilePage> {
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text('$label yakinda eklenecek.')));
+  }
+
+  String _messageExpirationSummary() {
+    return formatTurnaMessageExpirationLabel(
+      _chatDetail?.messageExpirationSeconds,
+    );
+  }
+
+  Future<void> _openConversationMessageExpiration() async {
+    final result = await Navigator.push<int?>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => _TurnaMessageExpirationSelectionPage(
+          title: 'Süreli mesajlar',
+          prompt: 'Bu sohbette yeni mesajlar ne kadar süre sonra kaybolsun?',
+          initialSeconds: _chatDetail?.messageExpirationSeconds,
+          footerText:
+              'Bu ayar değiştirildikten sonra gönderilen yeni mesajlar seçtiğiniz sürenin sonunda bu sohbetten kaldırılır. Mevcut mesajlar etkilenmez.',
+        ),
+      ),
+    );
+    final currentSeconds = _chatDetail?.messageExpirationSeconds;
+    if (result == currentSeconds) return;
+
+    try {
+      final detail = await ChatApi.updateDirectMessageExpiration(
+        widget.session,
+        chatId: _conversationChatId,
+        messageExpirationSeconds: result,
+      );
+      if (!mounted) return;
+      setState(() => _chatDetail = detail);
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
   }
 
   String _formatConversationCount() {
@@ -3456,8 +3527,8 @@ class _UserProfilePageState extends State<UserProfilePage> {
               _UserProfileRow(
                 icon: Icons.timer_outlined,
                 title: 'Sureli mesajlar',
-                trailingText: 'Kapali',
-                onTap: () => _showPlaceholderAction('Sureli mesajlar'),
+                trailingText: _messageExpirationSummary(),
+                onTap: _openConversationMessageExpiration,
               ),
               _UserProfileSwitchRow(
                 icon: Icons.lock_outline_rounded,

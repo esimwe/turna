@@ -19,6 +19,7 @@ class _TurnaPrivacyPageState extends State<TurnaPrivacyPage> {
   TurnaStatusPrivacySettings _statusPrivacy = TurnaStatusPrivacySettings(
     mode: TurnaStatusPrivacyMode.myContacts,
   );
+  bool _silenceUnknownCallers = false;
   bool _appLockEnabled = false;
   bool _loading = true;
   bool _busy = false;
@@ -35,12 +36,14 @@ class _TurnaPrivacyPageState extends State<TurnaPrivacyPage> {
         loadTurnaAppLockEnabledPreference(),
         ProfileApi.fetchPrivacySettings(widget.session),
         TurnaStatusApi.fetchPrivacySettings(widget.session),
+        loadTurnaSilenceUnknownCallersPreference(widget.session.userId),
       ]);
       if (!mounted) return;
       setState(() {
         _appLockEnabled = results[0] as bool;
         _privacy = results[1] as TurnaPrivacySettings;
         _statusPrivacy = results[2] as TurnaStatusPrivacySettings;
+        _silenceUnknownCallers = results[3] as bool;
         _loading = false;
       });
     } on TurnaUnauthorizedException {
@@ -153,6 +156,28 @@ class _TurnaPrivacyPageState extends State<TurnaPrivacyPage> {
     }
   }
 
+  Future<void> _saveCallPrivacy(bool silenceUnknownCallers) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await setTurnaSilenceUnknownCallersPreference(
+        widget.session.userId,
+        silenceUnknownCallers,
+      );
+      if (!mounted) return;
+      setState(() {
+        _silenceUnknownCallers = silenceUnknownCallers;
+        _busy = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
   Future<void> _openLastSeenPage() async {
     final result = await Navigator.push<_TurnaLastSeenPrivacyResult>(
       context,
@@ -240,6 +265,41 @@ class _TurnaPrivacyPageState extends State<TurnaPrivacyPage> {
     await _saveStatusSettings(result);
   }
 
+  Future<void> _openCallsPage() async {
+    final result = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => _TurnaCallsPrivacyPage(
+          initialSilenceUnknownCallers: _silenceUnknownCallers,
+        ),
+      ),
+    );
+    if (result == null || result == _silenceUnknownCallers) return;
+    await _saveCallPrivacy(result);
+  }
+
+  Future<void> _openDefaultMessageDurationPage() async {
+    final result = await Navigator.push<int?>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => _TurnaMessageExpirationSelectionPage(
+          title: 'Varsayılan mesaj süresi',
+          prompt: 'Yeni sohbetlere şu süreli mesaj süresi ayarıyla başlayın:',
+          initialSeconds: _privacy.defaultMessageExpirationSeconds,
+          footerText:
+              'Bu özellik açıldığında tüm yeni bireysel sohbetler, seçtiğiniz süre dolduğunda kaybolacak süreli mesajlarla başlatılır. Mevcut sohbetleriniz bu ayardan etkilenmez.',
+        ),
+      ),
+    );
+    if (result == _privacy.defaultMessageExpirationSeconds) return;
+    await _savePrivacySettings(
+      _privacy.copyWith(
+        defaultMessageExpirationSeconds: result,
+        clearDefaultMessageExpirationSeconds: result == null,
+      ),
+    );
+  }
+
   TurnaPrivacyAudienceSetting _settingForField(_TurnaPrivacyField field) {
     return switch (field) {
       _TurnaPrivacyField.profilePhoto => _privacy.profilePhoto,
@@ -278,10 +338,10 @@ class _TurnaPrivacyPageState extends State<TurnaPrivacyPage> {
     }
   }
 
-  void _showPlaceholder(String title) {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text('$title yakında eklenecek.')));
+  String _defaultMessageDurationLabel() {
+    return formatTurnaMessageExpirationLabel(
+      _privacy.defaultMessageExpirationSeconds,
+    );
   }
 
   @override
@@ -297,6 +357,35 @@ class _TurnaPrivacyPageState extends State<TurnaPrivacyPage> {
               child: ListView(
                 padding: const EdgeInsets.fromLTRB(16, 14, 16, 28),
                 children: [
+                  _UserProfileGroupCard(
+                    children: [
+                      _UserProfileSwitchRow(
+                        icon: Icons.lock_outline_rounded,
+                        title: 'Uygulama Kilidi',
+                        subtitle:
+                            'Turna açılırken $unlockMethodLabel ile doğrulama iste.',
+                        value: _appLockEnabled,
+                        onChanged: _busy ? (_) {} : _toggleAppLock,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: const Text(
+                      'Bu ayar açıkken Turna her açıldığında ve uygulama arka plandan geri geldiğinde cihaz doğrulaması ister.',
+                      style: TextStyle(
+                        fontSize: 13.5,
+                        height: 1.45,
+                        color: TurnaColors.textMuted,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 18),
                   _TurnaPrivacyCard(
                     children: [
                       _TurnaPrivacyMenuRow(
@@ -339,33 +428,8 @@ class _TurnaPrivacyPageState extends State<TurnaPrivacyPage> {
                   _TurnaPrivacyCard(
                     children: [
                       _TurnaPrivacyMenuRow(
-                        title: 'Canlı konum',
-                        trailingText: 'Yok',
-                        onTap: () => _showPlaceholder('Canlı konum'),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 6),
-                    child: Text(
-                      'Canlı konumunuzu paylaştığınız sohbetlerin listesi.',
-                      style: TextStyle(
-                        fontSize: 12.5,
-                        color: TurnaColors.textMuted,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 18),
-                  _TurnaPrivacyCard(
-                    children: [
-                      _TurnaPrivacyMenuRow(
                         title: 'Aramalar',
-                        onTap: () => _showPlaceholder('Aramalar'),
-                      ),
-                      _TurnaPrivacyMenuRow(
-                        title: 'Kişiler',
-                        onTap: () => _showPlaceholder('Kişiler'),
+                        onTap: _openCallsPage,
                       ),
                     ],
                   ),
@@ -386,9 +450,8 @@ class _TurnaPrivacyPageState extends State<TurnaPrivacyPage> {
                     children: [
                       _TurnaPrivacyMenuRow(
                         title: 'Varsayılan mesaj süresi',
-                        trailingText: 'Kapalı',
-                        onTap: () =>
-                            _showPlaceholder('Varsayılan mesaj süresi'),
+                        trailingText: _defaultMessageDurationLabel(),
+                        onTap: _openDefaultMessageDurationPage,
                       ),
                     ],
                   ),
@@ -399,35 +462,6 @@ class _TurnaPrivacyPageState extends State<TurnaPrivacyPage> {
                       'Yeni sohbetlere, ayarladığınız süre dolduğunda kaybolacak süreli mesajlarla başlayın.',
                       style: TextStyle(
                         fontSize: 12.5,
-                        color: TurnaColors.textMuted,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 18),
-                  _UserProfileGroupCard(
-                    children: [
-                      _UserProfileSwitchRow(
-                        icon: Icons.lock_outline_rounded,
-                        title: 'Uygulama Kilidi',
-                        subtitle:
-                            'Turna açılırken $unlockMethodLabel ile doğrulama iste.',
-                        value: _appLockEnabled,
-                        onChanged: _busy ? (_) {} : _toggleAppLock,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(18),
-                    ),
-                    child: const Text(
-                      'Bu ayar açıkken Turna her açıldığında ve uygulama arka plandan geri geldiğinde cihaz doğrulaması ister.',
-                      style: TextStyle(
-                        fontSize: 13.5,
-                        height: 1.45,
                         color: TurnaColors.textMuted,
                       ),
                     ),
@@ -782,6 +816,256 @@ class _TurnaStatusPrivacyEditorResult {
 
   final TurnaStatusPrivacySettings settings;
   final bool allowReshare;
+}
+
+class _TurnaCallsPrivacyPage extends StatefulWidget {
+  const _TurnaCallsPrivacyPage({required this.initialSilenceUnknownCallers});
+
+  final bool initialSilenceUnknownCallers;
+
+  @override
+  State<_TurnaCallsPrivacyPage> createState() => _TurnaCallsPrivacyPageState();
+}
+
+class _TurnaCallsPrivacyPageState extends State<_TurnaCallsPrivacyPage> {
+  late bool _silenceUnknownCallers;
+
+  @override
+  void initState() {
+    super.initState();
+    _silenceUnknownCallers = widget.initialSilenceUnknownCallers;
+  }
+
+  void _closePage() {
+    Navigator.of(context).pop(_silenceUnknownCallers);
+  }
+
+  Future<void> _showMoreInfo() async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Aramalar'),
+          content: const Text(
+            'Bu ayar açıkken, kişilerinizde olmayan Turna kullanıcılarından gelen aramalar zil ve tam ekran arama ekranı göstermeden sessize alınır. Arama kaydı Aramalar sekmesinde görünmeye devam eder.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Tamam'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) {
+          _closePage();
+        }
+      },
+      child: Scaffold(
+        backgroundColor: TurnaColors.backgroundSoft,
+        appBar: AppBar(
+          leading: BackButton(onPressed: _closePage),
+          title: const Text('Aramalar'),
+        ),
+        body: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 28),
+          children: [
+            _TurnaPrivacyCard(
+              children: [
+                _TurnaPrivacySwitchRow(
+                  title: 'Bilinmeyen kullanıcıları sessize al',
+                  value: _silenceUnknownCallers,
+                  onChanged: (value) {
+                    setState(() => _silenceUnknownCallers = value);
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              child: RichText(
+                text: TextSpan(
+                  style: const TextStyle(
+                    fontSize: 12.5,
+                    height: 1.32,
+                    color: TurnaColors.textMuted,
+                  ),
+                  children: [
+                    const TextSpan(
+                      text:
+                          'Bilinmeyen kullanıcılardan gelen aramalar sessize alınır. Bu aramalar Aramalar sekmesinde görünmeye devam eder. ',
+                    ),
+                    WidgetSpan(
+                      alignment: PlaceholderAlignment.baseline,
+                      baseline: TextBaseline.alphabetic,
+                      child: GestureDetector(
+                        onTap: _showMoreInfo,
+                        child: const Text(
+                          'Daha fazla bilgi',
+                          style: TextStyle(
+                            fontSize: 12.5,
+                            color: TurnaColors.primary,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TurnaMessageExpirationSelectionPage extends StatefulWidget {
+  const _TurnaMessageExpirationSelectionPage({
+    required this.title,
+    required this.prompt,
+    required this.initialSeconds,
+    required this.footerText,
+  });
+
+  final String title;
+  final String prompt;
+  final int? initialSeconds;
+  final String footerText;
+
+  @override
+  State<_TurnaMessageExpirationSelectionPage> createState() =>
+      _TurnaMessageExpirationSelectionPageState();
+}
+
+class _TurnaMessageExpirationSelectionPageState
+    extends State<_TurnaMessageExpirationSelectionPage> {
+  late TurnaMessageExpirationOption _selection;
+
+  @override
+  void initState() {
+    super.initState();
+    _selection = TurnaMessageExpirationOptionX.fromSeconds(
+      widget.initialSeconds,
+    );
+  }
+
+  void _closePage() {
+    Navigator.of(context).pop(_selection.seconds);
+  }
+
+  Future<void> _showMoreInfo() async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Süreli mesajlar'),
+          content: const Text(
+            'Seçtiğiniz süre, bu ayar geçerli olduktan sonra gönderilen yeni mesajlar için uygulanır. Süre dolduğunda mesajlar bu sohbetten kaldırılır.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Tamam'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildOption(TurnaMessageExpirationOption option) {
+    return _TurnaPrivacyOptionRow(
+      title: option.label,
+      selected: _selection == option,
+      onTap: () => setState(() => _selection = option),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) {
+          _closePage();
+        }
+      },
+      child: Scaffold(
+        backgroundColor: TurnaColors.backgroundSoft,
+        appBar: AppBar(
+          leading: BackButton(onPressed: _closePage),
+          title: Text(widget.title),
+        ),
+        body: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 28),
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              child: Text(
+                widget.prompt,
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: TurnaColors.textMuted,
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            _TurnaPrivacyCard(
+              children: [
+                _buildOption(TurnaMessageExpirationOption.twentyFourHours),
+                _buildOption(TurnaMessageExpirationOption.sevenDays),
+                _buildOption(TurnaMessageExpirationOption.ninetyDays),
+                _buildOption(TurnaMessageExpirationOption.off),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              child: RichText(
+                text: TextSpan(
+                  style: const TextStyle(
+                    fontSize: 12.5,
+                    height: 1.32,
+                    color: TurnaColors.textMuted,
+                  ),
+                  children: [
+                    TextSpan(text: '${widget.footerText} '),
+                    WidgetSpan(
+                      alignment: PlaceholderAlignment.baseline,
+                      baseline: TextBaseline.alphabetic,
+                      child: GestureDetector(
+                        onTap: _showMoreInfo,
+                        child: const Text(
+                          'Daha fazla bilgi',
+                          style: TextStyle(
+                            fontSize: 12.5,
+                            color: TurnaColors.primary,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _TurnaStatusPrivacyPage extends StatefulWidget {
@@ -1236,6 +1520,46 @@ class _TurnaPrivacyOptionRow extends StatelessWidget {
         ],
       ),
       onTap: onTap,
+    );
+  }
+}
+
+class _TurnaPrivacySwitchRow extends StatelessWidget {
+  const _TurnaPrivacySwitchRow({
+    required this.title,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final String title;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 12, 10),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              title,
+              style: const TextStyle(
+                fontSize: 16,
+                color: Color(0xFF202124),
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Switch.adaptive(
+            value: value,
+            onChanged: onChanged,
+            activeThumbColor: TurnaColors.primary,
+            activeTrackColor: TurnaColors.primary100,
+          ),
+        ],
+      ),
     );
   }
 }

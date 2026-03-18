@@ -268,6 +268,7 @@ class TurnaPrivacySettings {
     required this.about,
     required this.links,
     required this.groups,
+    required this.defaultMessageExpirationSeconds,
     required this.statusAllowReshare,
   });
 
@@ -277,6 +278,7 @@ class TurnaPrivacySettings {
   final TurnaPrivacyAudienceSetting about;
   final TurnaPrivacyAudienceSetting links;
   final TurnaPrivacyAudienceSetting groups;
+  final int? defaultMessageExpirationSeconds;
   final bool statusAllowReshare;
 
   factory TurnaPrivacySettings.defaults() {
@@ -291,6 +293,7 @@ class TurnaPrivacySettings {
       about: TurnaPrivacyAudienceSetting(mode: TurnaPrivacyAudience.myContacts),
       links: TurnaPrivacyAudienceSetting(mode: TurnaPrivacyAudience.myContacts),
       groups: TurnaPrivacyAudienceSetting(mode: TurnaPrivacyAudience.everyone),
+      defaultMessageExpirationSeconds: null,
       statusAllowReshare: false,
     );
   }
@@ -332,6 +335,8 @@ class TurnaPrivacySettings {
       groups: groupsMap.isEmpty
           ? defaults.groups
           : TurnaPrivacyAudienceSetting.fromMap(groupsMap),
+      defaultMessageExpirationSeconds:
+          (map['defaultMessageExpirationSeconds'] as num?)?.toInt(),
       statusAllowReshare: map['statusAllowReshare'] == true,
     );
   }
@@ -343,6 +348,8 @@ class TurnaPrivacySettings {
     TurnaPrivacyAudienceSetting? about,
     TurnaPrivacyAudienceSetting? links,
     TurnaPrivacyAudienceSetting? groups,
+    int? defaultMessageExpirationSeconds,
+    bool clearDefaultMessageExpirationSeconds = false,
     bool? statusAllowReshare,
   }) {
     return TurnaPrivacySettings(
@@ -352,6 +359,10 @@ class TurnaPrivacySettings {
       about: about ?? this.about,
       links: links ?? this.links,
       groups: groups ?? this.groups,
+      defaultMessageExpirationSeconds: clearDefaultMessageExpirationSeconds
+          ? null
+          : (defaultMessageExpirationSeconds ??
+                this.defaultMessageExpirationSeconds),
       statusAllowReshare: statusAllowReshare ?? this.statusAllowReshare,
     );
   }
@@ -363,6 +374,7 @@ class TurnaPrivacySettings {
     'about': about.toMap(),
     'links': links.toMap(),
     'groups': groups.toMap(),
+    'defaultMessageExpirationSeconds': defaultMessageExpirationSeconds,
     'statusAllowReshare': statusAllowReshare,
   };
 }

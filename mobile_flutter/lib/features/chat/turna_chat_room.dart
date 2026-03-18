@@ -216,6 +216,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   bool _hasCachedTimelineEntries = false;
   int _lastRenderedTimelineCount = 0;
   Timer? _messageHighlightTimer;
+  Timer? _messageExpiryTimer;
   String? _highlightedMessageId;
   PageRoute<dynamic>? _route;
   Timer? _voiceRecordTimer;
@@ -228,12 +229,12 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   static const int _resolvedMessageTextCacheLimit = 256;
 
   bool get _isGroupChat => widget.chat.chatType == TurnaChatType.group;
-  TurnaChatDetail? get _cachedGroupDetail => _isGroupChat
-      ? TurnaChatDetailLocalCache.peek(
-          widget.session.userId,
-          widget.chat.chatId,
-        )
-      : null;
+  TurnaChatDetail? get _cachedChatDetail =>
+      TurnaChatDetailLocalCache.peek(widget.session.userId, widget.chat.chatId);
+  TurnaChatDetail? get _cachedGroupDetail =>
+      _isGroupChat ? _cachedChatDetail : null;
+  TurnaChatDetail? get _cachedDirectDetail =>
+      _isGroupChat ? null : _cachedChatDetail;
   String? get _peerUserId =>
       ChatApi.extractPeerUserId(widget.chat.chatId, widget.session.userId);
   String? get _groupAvatarUrl =>
@@ -370,6 +371,12 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     _scrollController.addListener(_handleScroll);
     _loadLocalMessageState();
     unawaited(_loadSecurityBannerState());
+    _messageExpiryTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (!mounted) return;
+      _hasCachedDisplayMessages = false;
+      _hasCachedTimelineEntries = false;
+      setState(() {});
+    });
     if (_isGroupChat) {
       unawaited(_loadPinnedMessages());
       unawaited(_loadGroupDetail());
@@ -377,6 +384,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       unawaited(_loadMentionCandidates());
     }
     if (!_isGroupChat) {
+      unawaited(_loadDirectChatDetail());
       _restorePeerCallHistoryFromWarmCache();
     }
     unawaited(TurnaContactsDirectory.ensureLoaded());
@@ -580,6 +588,66 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       if (!mounted) return;
       widget.onSessionExpired();
     } catch (_) {}
+  }
+
+  Future<void> _loadDirectChatDetail() async {
+    if (_isGroupChat) return;
+    try {
+      await ChatApi.fetchChatDetail(widget.session, widget.chat.chatId);
+      if (!mounted) return;
+      setState(() {});
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (_) {}
+  }
+
+  Future<void> _openDefaultMessageExpirationBannerEditor() async {
+    final detail = _cachedDirectDetail;
+    if (_isGroupChat ||
+        detail == null ||
+        detail.usesDefaultMessageExpiration != true) {
+      return;
+    }
+
+    final currentSeconds = detail.messageExpirationSeconds;
+    final result = await Navigator.push<int?>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => _TurnaMessageExpirationSelectionPage(
+          title: 'Varsayılan mesaj süresi',
+          prompt: 'Yeni sohbetlere şu süreli mesaj süresi ayarıyla başlayın:',
+          initialSeconds: currentSeconds,
+          footerText:
+              'Bu ayarı değiştirdiğinizde varsayılan süreyi kullanan yeni sohbetler ve buna bağlı sohbetleriniz birlikte güncellenir.',
+        ),
+      ),
+    );
+    if (result == currentSeconds) return;
+
+    try {
+      final currentPrivacy = await ProfileApi.fetchPrivacySettings(
+        widget.session,
+      );
+      await ProfileApi.updatePrivacySettings(
+        widget.session,
+        currentPrivacy.copyWith(
+          defaultMessageExpirationSeconds: result,
+          clearDefaultMessageExpirationSeconds: result == null,
+        ),
+      );
+      await ChatApi.fetchChatDetail(widget.session, widget.chat.chatId);
+      if (!mounted) return;
+      setState(() {});
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
   }
 
   Future<void> _loadActiveGroupCallState() async {
@@ -1764,6 +1832,14 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     return systemType == 'admin_notice' || systemType == 'admin_notice_silent';
   }
 
+  bool _isMessageExpired(ChatMessage message) {
+    final expiresAt = message.expiresAt?.trim();
+    if (expiresAt == null || expiresAt.isEmpty) return false;
+    final parsed = DateTime.tryParse(expiresAt);
+    if (parsed == null) return false;
+    return !parsed.isAfter(DateTime.now());
+  }
+
   String _systemMessageText(ChatMessage msg) {
     switch ((msg.systemType ?? '').trim()) {
       case 'admin_notice':
@@ -1813,6 +1889,12 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         return 'Grup bilgileri güncellendi';
       case 'group_settings_updated':
         return 'Grup ayarları güncellendi';
+      case 'direct_message_expiration_updated':
+        final seconds = (msg.systemPayload?['messageExpirationSeconds'] as num?)
+            ?.toInt();
+        return seconds == null
+            ? 'Süreli mesajlar kapatıldı'
+            : 'Süreli mesajlar ${formatTurnaMessageExpirationLabel(seconds)} olarak ayarlandı';
       case 'group_role_updated':
         final member = (msg.systemPayload?['memberDisplayName'] ?? '')
             .toString()
@@ -3011,7 +3093,11 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     }
 
     _cachedDisplayMessages = _client.messages.reversed
-        .where((message) => !_deletedMessageIds.contains(message.id))
+        .where(
+          (message) =>
+              !_deletedMessageIds.contains(message.id) &&
+              !_isMessageExpired(message),
+        )
         .toList(growable: false);
     _cachedMessagesRevision = _client.messagesRevision;
     _cachedDeletedMessageIdsRef = _deletedMessageIds;
@@ -3410,6 +3496,74 @@ class _ChatRoomPageState extends State<ChatRoomPage>
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  String? _messageExpirationBannerText() {
+    final detail = _cachedDirectDetail;
+    final seconds = detail?.messageExpirationSeconds;
+    if (_isGroupChat ||
+        detail == null ||
+        detail.usesDefaultMessageExpiration != true ||
+        seconds == null) {
+      return null;
+    }
+
+    final durationText = switch (seconds) {
+      86400 => '24 saat',
+      604800 => '7 gün',
+      7776000 => '90 gün',
+      _ => formatTurnaMessageExpirationLabel(seconds),
+    };
+    return 'Sohbet içerisindeki mesajlar için varsayılan süre kullanılmaktadır. Tüm yeni mesajlar gönderildikten $durationText sonra bu sohbette kaybolacak. Kendi varsayılan sürenizi güncellemek için dokunun.';
+  }
+
+  Widget _buildMessageExpirationBanner() {
+    final text = _messageExpirationBannerText();
+    if (text == null) return const SizedBox.shrink();
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      child: Material(
+        color: const Color(0xFFE7F8EE),
+        borderRadius: BorderRadius.circular(18),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(18),
+          onTap: _openDefaultMessageExpirationBannerEditor,
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: const Color(0xFFBFE3CB)),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Padding(
+                  padding: EdgeInsets.only(top: 1),
+                  child: Icon(
+                    Icons.timer_outlined,
+                    size: 16,
+                    color: Color(0xFF216C45),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    text,
+                    style: const TextStyle(
+                      fontSize: 12.5,
+                      height: 1.35,
+                      color: Color(0xFF216C45),
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -5364,6 +5518,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     _scrollController.removeListener(_handleScroll);
     _scrollController.dispose();
     _voiceRecordTimer?.cancel();
+    _messageExpiryTimer?.cancel();
     unawaited(_voiceRecorder.cancel());
     unawaited(_voiceRecorder.dispose());
     _messageHighlightTimer?.cancel();
@@ -5597,6 +5752,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                   ),
                 ),
               if (_showSecurityBanner) _buildSecurityBanner(),
+              if (_messageExpirationBannerText() != null)
+                _buildMessageExpirationBanner(),
               Expanded(
                 child: Stack(
                   children: [

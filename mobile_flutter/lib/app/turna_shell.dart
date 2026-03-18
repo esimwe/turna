@@ -142,6 +142,19 @@ class _MainTabsState extends State<MainTabs>
       returnChat.chatId,
     );
     Future<void>(() async {
+      if (await shouldTurnaSilenceIncomingCaller(
+        activeUserId: widget.session.userId,
+        callerUserId: incoming.call.callerId,
+      )) {
+        turnaLog('incoming call silenced', {
+          'callId': incoming.call.id,
+          'callerId': incoming.call.callerId,
+        });
+        if (mounted) {
+          _activeIncomingCallId = null;
+        }
+        return;
+      }
       final navigator = kTurnaNavigatorKey.currentState;
       if (!mounted || navigator == null) return;
       try {

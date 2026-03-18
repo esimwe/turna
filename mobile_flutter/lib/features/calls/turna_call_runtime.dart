@@ -54,6 +54,7 @@ class TurnaNativeCallManager {
     _session = session;
     _coordinator = coordinator;
     _onSessionExpired = onSessionExpired;
+    await setTurnaCallPreferencesActiveUserId(session.userId);
     if (Platform.isAndroid) {
       await _requestAndroidPermissions();
     }
@@ -87,6 +88,7 @@ class TurnaNativeCallManager {
     _suppressedEndEvents.clear();
     _shownIncomingCalls.clear();
     _activeCallId = null;
+    await setTurnaCallPreferencesActiveUserId(null);
     await TurnaSecureStateStore.delete(_lastVoipPushTokenKey);
     await TurnaSecureStateStore.delete(_pendingActionKey);
   }
@@ -442,6 +444,14 @@ class TurnaNativeCallManager {
     if (callId == null || callId.isEmpty) return;
     if (_shownIncomingCalls.contains(callId)) return;
     if (Platform.isIOS) {
+      return;
+    }
+    final callerId = (payload['callerId'] ?? '').toString();
+    if (await shouldTurnaSilenceIncomingCaller(callerUserId: callerId)) {
+      turnaLog('native incoming call silenced', {
+        'callId': callId,
+        'callerId': callerId,
+      });
       return;
     }
 

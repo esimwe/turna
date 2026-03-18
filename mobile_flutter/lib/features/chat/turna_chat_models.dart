@@ -8,6 +8,58 @@ enum TurnaChatType { direct, group }
 
 enum TurnaChatCollectionType { media, docs, links }
 
+enum TurnaMessageExpirationOption {
+  off,
+  twentyFourHours,
+  sevenDays,
+  ninetyDays,
+}
+
+extension TurnaMessageExpirationOptionX on TurnaMessageExpirationOption {
+  static TurnaMessageExpirationOption fromSeconds(int? seconds) {
+    switch (seconds) {
+      case 86400:
+        return TurnaMessageExpirationOption.twentyFourHours;
+      case 604800:
+        return TurnaMessageExpirationOption.sevenDays;
+      case 7776000:
+        return TurnaMessageExpirationOption.ninetyDays;
+      default:
+        return TurnaMessageExpirationOption.off;
+    }
+  }
+
+  int? get seconds {
+    switch (this) {
+      case TurnaMessageExpirationOption.twentyFourHours:
+        return 24 * 60 * 60;
+      case TurnaMessageExpirationOption.sevenDays:
+        return 7 * 24 * 60 * 60;
+      case TurnaMessageExpirationOption.ninetyDays:
+        return 90 * 24 * 60 * 60;
+      case TurnaMessageExpirationOption.off:
+        return null;
+    }
+  }
+
+  String get label {
+    switch (this) {
+      case TurnaMessageExpirationOption.twentyFourHours:
+        return '24 Saat';
+      case TurnaMessageExpirationOption.sevenDays:
+        return '7 Gün';
+      case TurnaMessageExpirationOption.ninetyDays:
+        return '90 Gün';
+      case TurnaMessageExpirationOption.off:
+        return 'Kapalı';
+    }
+  }
+}
+
+String formatTurnaMessageExpirationLabel(int? seconds) {
+  return TurnaMessageExpirationOptionX.fromSeconds(seconds).label;
+}
+
 class ChatPreview {
   ChatPreview({
     required this.chatId,
@@ -134,6 +186,8 @@ class TurnaChatDetail {
     this.whoCanAddMembers = 'ADMIN_ONLY',
     this.whoCanStartCalls = 'EDITOR_ONLY',
     this.historyVisibleToNewMembers = true,
+    this.messageExpirationSeconds,
+    this.usesDefaultMessageExpiration = false,
     this.myCanSend = true,
     this.myIsMuted = false,
     this.myMutedUntil,
@@ -158,6 +212,8 @@ class TurnaChatDetail {
   final String whoCanAddMembers;
   final String whoCanStartCalls;
   final bool historyVisibleToNewMembers;
+  final int? messageExpirationSeconds;
+  final bool usesDefaultMessageExpiration;
   final bool myCanSend;
   final bool myIsMuted;
   final String? myMutedUntil;
@@ -180,6 +236,9 @@ class TurnaChatDetail {
     String? whoCanAddMembers,
     String? whoCanStartCalls,
     bool? historyVisibleToNewMembers,
+    int? messageExpirationSeconds,
+    bool clearMessageExpirationSeconds = false,
+    bool? usesDefaultMessageExpiration,
     bool? myCanSend,
     bool? myIsMuted,
     String? myMutedUntil,
@@ -205,6 +264,11 @@ class TurnaChatDetail {
       whoCanStartCalls: whoCanStartCalls ?? this.whoCanStartCalls,
       historyVisibleToNewMembers:
           historyVisibleToNewMembers ?? this.historyVisibleToNewMembers,
+      messageExpirationSeconds: clearMessageExpirationSeconds
+          ? null
+          : (messageExpirationSeconds ?? this.messageExpirationSeconds),
+      usesDefaultMessageExpiration:
+          usesDefaultMessageExpiration ?? this.usesDefaultMessageExpiration,
       myCanSend: myCanSend ?? this.myCanSend,
       myIsMuted: myIsMuted ?? this.myIsMuted,
       myMutedUntil: myMutedUntil ?? this.myMutedUntil,
@@ -245,6 +309,9 @@ class TurnaChatDetail {
       whoCanStartCalls:
           _turnaChatNullableString(map['whoCanStartCalls']) ?? 'EDITOR_ONLY',
       historyVisibleToNewMembers: map['historyVisibleToNewMembers'] != false,
+      messageExpirationSeconds: (map['messageExpirationSeconds'] as num?)
+          ?.toInt(),
+      usesDefaultMessageExpiration: map['usesDefaultMessageExpiration'] == true,
       myCanSend: map['myCanSend'] != false,
       myIsMuted: map['myIsMuted'] == true,
       myMutedUntil: _turnaChatNullableString(map['myMutedUntil']),
@@ -272,6 +339,8 @@ class TurnaChatDetail {
       'whoCanAddMembers': whoCanAddMembers,
       'whoCanStartCalls': whoCanStartCalls,
       'historyVisibleToNewMembers': historyVisibleToNewMembers,
+      'messageExpirationSeconds': messageExpirationSeconds,
+      'usesDefaultMessageExpiration': usesDefaultMessageExpiration,
       'myCanSend': myCanSend,
       'myIsMuted': myIsMuted,
       'myMutedUntil': myMutedUntil,
@@ -735,6 +804,7 @@ class ChatMessage {
     this.reactions = const [],
     this.isPinned = false,
     this.attachments = const [],
+    this.expiresAt,
     this.errorText,
   });
 
@@ -754,6 +824,7 @@ class ChatMessage {
   final List<ChatMessageReaction> reactions;
   final bool isPinned;
   final List<ChatAttachment> attachments;
+  final String? expiresAt;
   final String? errorText;
 
   ChatMessage copyWith({
@@ -773,6 +844,7 @@ class ChatMessage {
     List<ChatMessageReaction>? reactions,
     bool? isPinned,
     List<ChatAttachment>? attachments,
+    String? expiresAt,
     String? errorText,
     bool clearErrorText = false,
   }) {
@@ -793,6 +865,7 @@ class ChatMessage {
       reactions: reactions ?? this.reactions,
       isPinned: isPinned ?? this.isPinned,
       attachments: attachments ?? this.attachments,
+      expiresAt: expiresAt ?? this.expiresAt,
       errorText: clearErrorText ? null : (errorText ?? this.errorText),
     );
   }
@@ -845,6 +918,7 @@ class ChatMessage {
             (item) => ChatAttachment.fromMap(Map<String, dynamic>.from(item)),
           )
           .toList(),
+      expiresAt: _turnaChatNullableString(map['expiresAt']),
     );
   }
 
@@ -868,6 +942,7 @@ class ChatMessage {
       'attachments': attachments
           .map((attachment) => attachment.toMap())
           .toList(),
+      'expiresAt': expiresAt,
       'errorText': errorText,
     };
   }
@@ -920,6 +995,7 @@ class ChatMessage {
             (item) => ChatAttachment.fromMap(Map<String, dynamic>.from(item)),
           )
           .toList(),
+      expiresAt: _turnaChatNullableString(map['expiresAt']),
       errorText: _turnaChatNullableString(map['errorText']),
     );
   }
