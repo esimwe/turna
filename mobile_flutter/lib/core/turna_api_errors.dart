@@ -100,6 +100,8 @@ String turnaExtractApiErrorMessage(String body, int statusCode) {
         return 'Seçilen üyelerden biri bulunamadı.';
       case 'group_member_add_not_allowed':
         return 'Bu gruba üye ekleme yetkin yok.';
+      case 'group_member_privacy_restricted':
+        return 'Seçtiğin kişilerden biri gizlilik ayarı nedeniyle gruplara eklenemiyor.';
       case 'group_invite_not_allowed':
         return 'Bu grupta davet bağlantısı yönetme yetkin yok.';
       case 'group_invite_not_found':

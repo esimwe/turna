@@ -1,6 +1,39 @@
 part of '../app/turna_app.dart';
 
 class ProfileApi {
+  static Future<TurnaPrivacySettings> fetchPrivacySettings(
+    AuthSession session,
+  ) async {
+    final res = await http.get(
+      Uri.parse('$kBackendBaseUrl/api/profile/privacy'),
+      headers: {'Authorization': 'Bearer ${session.token}'},
+    );
+    _throwIfApiError(res, label: 'fetchPrivacySettings');
+
+    final map = jsonDecode(res.body) as Map<String, dynamic>;
+    final data = map['data'] as Map<String, dynamic>? ?? const {};
+    return TurnaPrivacySettings.fromMap(data);
+  }
+
+  static Future<TurnaPrivacySettings> updatePrivacySettings(
+    AuthSession session,
+    TurnaPrivacySettings settings,
+  ) async {
+    final res = await http.put(
+      Uri.parse('$kBackendBaseUrl/api/profile/privacy'),
+      headers: {
+        'Authorization': 'Bearer ${session.token}',
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode(settings.toMap()),
+    );
+    _throwIfApiError(res, label: 'updatePrivacySettings');
+
+    final map = jsonDecode(res.body) as Map<String, dynamic>;
+    final data = map['data'] as Map<String, dynamic>? ?? const {};
+    return TurnaPrivacySettings.fromMap(data);
+  }
+
   static Future<TurnaUserProfile> fetchMe(AuthSession session) async {
     try {
       final res = await http.get(

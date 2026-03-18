@@ -89,6 +89,7 @@ part '../features/calls/turna_calls.dart';
 part '../features/calls/turna_call_runtime.dart';
 part '../features/calls/turna_call_ui.dart';
 part '../features/profile/turna_profile_shell.dart';
+part '../features/profile/turna_privacy.dart';
 part '../features/status/turna_status.dart';
 part '../features/status/turna_status_domain.dart';
 part '../features/status/turna_status_feed.dart';
