@@ -6,6 +6,10 @@ import flutter_callkit_incoming
 
 final class TurnaCallBridge {
   private let pendingActionDefaultsKey = "turna_pending_native_call_action"
+  private let activeUserDefaultsKey = "turna_call_preferences_active_user_id"
+  private let silenceUnknownCallersKeyPrefix = "turna_call_silence_unknown_callers"
+  private let knownContactIdsKeyPrefix = "turna_call_known_contact_ids"
+  private let knownContactIdsReadyKeyPrefix = "turna_call_known_contact_ids_ready"
   private var voipRegistry: PKPushRegistry?
 
   func configureVoipRegistry(delegate: PKPushRegistryDelegate) {
@@ -64,6 +68,17 @@ final class TurnaCallBridge {
       return
     }
 
+    let callerId = (payloadData["callerId"] as? String) ?? ""
+    if shouldSilenceUnknownCaller(callerId: callerId) {
+      TurnaLogger.info(
+        "call",
+        "incoming voip push silenced",
+        details: ["callId": callId, "callerId": callerId]
+      )
+      completion()
+      return
+    }
+
     let callerName =
       (payloadData["nameCaller"] as? String) ??
       (payloadData["callerDisplayName"] as? String) ??
@@ -103,6 +118,40 @@ final class TurnaCallBridge {
     UserDefaults.standard.set(raw, forKey: pendingActionDefaultsKey)
     UserDefaults.standard.synchronize()
     TurnaLogger.debug("call", "persisted pending action", details: ["action": action])
+  }
+
+  private func shouldSilenceUnknownCaller(callerId: String) -> Bool {
+    guard !callerId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      return false
+    }
+    guard
+      let activeUserId = UserDefaults.standard.string(forKey: activeUserDefaultsKey)?
+        .trimmingCharacters(in: .whitespacesAndNewlines),
+      !activeUserId.isEmpty
+    else {
+      return false
+    }
+
+    let silenceUnknownCallersKey = scopedDefaultsKey(
+      prefix: silenceUnknownCallersKeyPrefix,
+      userId: activeUserId
+    )
+    guard UserDefaults.standard.bool(forKey: silenceUnknownCallersKey) else {
+      return false
+    }
+
+    let readyKey = scopedDefaultsKey(prefix: knownContactIdsReadyKeyPrefix, userId: activeUserId)
+    guard UserDefaults.standard.bool(forKey: readyKey) else {
+      return false
+    }
+
+    let contactIdsKey = scopedDefaultsKey(prefix: knownContactIdsKeyPrefix, userId: activeUserId)
+    let knownContactIds = Set(UserDefaults.standard.stringArray(forKey: contactIdsKey) ?? [])
+    return !knownContactIds.contains(callerId)
+  }
+
+  private func scopedDefaultsKey(prefix: String, userId: String) -> String {
+    "\(prefix):\(userId)"
   }
 
   private func applicationStateDescription() -> String {

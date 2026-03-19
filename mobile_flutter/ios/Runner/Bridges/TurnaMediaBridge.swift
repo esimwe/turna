@@ -40,6 +40,16 @@ final class TurnaMediaBridge: NSObject, VNDocumentCameraViewControllerDelegate {
           return
         }
         self.shareFile(path: path, result: result)
+      case "shareText":
+        guard
+          let args = call.arguments as? [String: Any],
+          let text = args["text"] as? String,
+          !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+          result(FlutterError(code: "invalid_args", message: "Paylaşım metni gerekli.", details: nil))
+          return
+        }
+        self.shareText(text: text, result: result)
       case "saveToGallery":
         guard
           let args = call.arguments as? [String: Any],
@@ -181,6 +191,36 @@ final class TurnaMediaBridge: NSObject, VNDocumentCameraViewControllerDelegate {
         return
       }
       let activity = UIActivityViewController(activityItems: [fileURL], applicationActivities: nil)
+      activity.completionWithItemsHandler = { _, _, _, _ in
+        result(nil)
+      }
+      if let popover = activity.popoverPresentationController {
+        popover.sourceView = controller.view
+        popover.sourceRect = CGRect(
+          x: controller.view.bounds.midX,
+          y: controller.view.bounds.maxY - 40,
+          width: 1,
+          height: 1
+        )
+      }
+      controller.present(activity, animated: true)
+    }
+  }
+
+  private func shareText(text: String, result: @escaping FlutterResult) {
+    let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !normalized.isEmpty else {
+      result(FlutterError(code: "invalid_args", message: "Paylaşım metni gerekli.", details: nil))
+      return
+    }
+
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      guard let controller = self.topMostViewControllerProvider() else {
+        result(FlutterError(code: "missing_view", message: "Paylaşım ekranı açılamadı.", details: nil))
+        return
+      }
+      let activity = UIActivityViewController(activityItems: [normalized], applicationActivities: nil)
       activity.completionWithItemsHandler = { _, _, _, _ in
         result(nil)
       }
