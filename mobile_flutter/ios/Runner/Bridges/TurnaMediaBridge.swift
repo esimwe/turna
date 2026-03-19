@@ -12,6 +12,7 @@ final class TurnaMediaBridge: NSObject, VNDocumentCameraViewControllerDelegate {
   private var statusCameraChannel: FlutterMethodChannel?
   private var pendingStatusCameraResult: FlutterResult?
   private var pendingDocumentScanResult: FlutterResult?
+  private var pendingQrScanResult: FlutterResult?
   private var pendingVideoProcessResult: FlutterResult?
 
   init(topMostViewControllerProvider: @escaping () -> UIViewController?) {
@@ -87,6 +88,8 @@ final class TurnaMediaBridge: NSObject, VNDocumentCameraViewControllerDelegate {
         )
       case "scanDocument":
         self.presentDocumentScanner(result: result)
+      case "scanQrCode":
+        self.presentQrScanner(result: result)
       case "getPdfPageCount":
         guard
           let args = call.arguments as? [String: Any],
@@ -446,6 +449,40 @@ final class TurnaMediaBridge: NSObject, VNDocumentCameraViewControllerDelegate {
     }
   }
 
+  private func presentQrScanner(result: @escaping FlutterResult) {
+    guard pendingQrScanResult == nil else {
+      result(FlutterError(code: "busy", message: "QR tarayıcı zaten açık.", details: nil))
+      return
+    }
+
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      guard let controller = self.topMostViewControllerProvider() else {
+        result(FlutterError(code: "missing_view", message: "Tarayıcı açılamadı.", details: nil))
+        return
+      }
+
+      self.pendingQrScanResult = result
+      let scanner = TurnaQrScannerViewController()
+      let navigationController = UINavigationController(rootViewController: scanner)
+      navigationController.modalPresentationStyle = .fullScreen
+      navigationController.isModalInPresentation = true
+      scanner.onFinish = { [weak self] value, error in
+        guard let self else { return }
+        let pending = self.pendingQrScanResult
+        self.pendingQrScanResult = nil
+        if let error {
+          pending?(
+            FlutterError(code: "qr_scan_failed", message: error.localizedDescription, details: nil)
+          )
+        } else {
+          pending?(value)
+        }
+      }
+      controller.present(navigationController, animated: true)
+    }
+  }
+
   func documentCameraViewControllerDidCancel(_ controller: VNDocumentCameraViewController) {
     controller.dismiss(animated: true) { [weak self] in
       self?.finishDocumentScan(payload: nil, error: nil)
@@ -629,5 +666,243 @@ final class TurnaMediaBridge: NSObject, VNDocumentCameraViewControllerDelegate {
     }
 
     return ""
+  }
+}
+
+final class TurnaQrScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsDelegate {
+  var onFinish: ((String?, Error?) -> Void)?
+
+  private let captureSession = AVCaptureSession()
+  private let sessionQueue = DispatchQueue(label: "turna.qr.scanner")
+  private var previewLayer: AVCaptureVideoPreviewLayer?
+  private var hasConfiguredSession = false
+  private var hasFinished = false
+
+  private let previewContainer = UIView()
+  private let headerCard = UIView()
+  private let titleLabel = UILabel()
+  private let subtitleLabel = UILabel()
+  private let helperLabel = UILabel()
+
+  override func viewDidLoad() {
+    super.viewDidLoad()
+
+    view.backgroundColor = .black
+    title = "QR kodunu tara"
+    navigationItem.leftBarButtonItem = UIBarButtonItem(
+      title: "İptal",
+      style: .plain,
+      target: self,
+      action: #selector(cancelTapped)
+    )
+
+    previewContainer.translatesAutoresizingMaskIntoConstraints = false
+    view.addSubview(previewContainer)
+
+    headerCard.translatesAutoresizingMaskIntoConstraints = false
+    headerCard.backgroundColor = UIColor(white: 1.0, alpha: 0.92)
+    headerCard.layer.cornerRadius = 22
+    headerCard.layer.cornerCurve = .continuous
+    view.addSubview(headerCard)
+
+    titleLabel.translatesAutoresizingMaskIntoConstraints = false
+    titleLabel.text = "web.turna.im veya masaüstü Turna ekranını aç."
+    titleLabel.font = UIFont.systemFont(ofSize: 17, weight: .semibold)
+    titleLabel.textColor = .black
+    titleLabel.numberOfLines = 0
+    titleLabel.textAlignment = .center
+    headerCard.addSubview(titleLabel)
+
+    subtitleLabel.translatesAutoresizingMaskIntoConstraints = false
+    subtitleLabel.text =
+      "QR kodu göründüğünde okut. Onay verdiğinde web oturumu otomatik açılır."
+    subtitleLabel.font = UIFont.systemFont(ofSize: 14, weight: .regular)
+    subtitleLabel.textColor = UIColor(white: 0.34, alpha: 1.0)
+    subtitleLabel.numberOfLines = 0
+    subtitleLabel.textAlignment = .center
+    headerCard.addSubview(subtitleLabel)
+
+    helperLabel.translatesAutoresizingMaskIntoConstraints = false
+    helperLabel.text = "QR kodunu çerçevenin içine getir."
+    helperLabel.font = UIFont.systemFont(ofSize: 14, weight: .medium)
+    helperLabel.textColor = .white
+    helperLabel.textAlignment = .center
+    helperLabel.numberOfLines = 0
+    view.addSubview(helperLabel)
+
+    NSLayoutConstraint.activate([
+      previewContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+      previewContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+      previewContainer.topAnchor.constraint(equalTo: view.topAnchor),
+      previewContainer.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+
+      headerCard.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 16),
+      headerCard.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
+      headerCard.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+
+      titleLabel.topAnchor.constraint(equalTo: headerCard.topAnchor, constant: 18),
+      titleLabel.leadingAnchor.constraint(equalTo: headerCard.leadingAnchor, constant: 18),
+      titleLabel.trailingAnchor.constraint(equalTo: headerCard.trailingAnchor, constant: -18),
+
+      subtitleLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 8),
+      subtitleLabel.leadingAnchor.constraint(equalTo: headerCard.leadingAnchor, constant: 18),
+      subtitleLabel.trailingAnchor.constraint(equalTo: headerCard.trailingAnchor, constant: -18),
+      subtitleLabel.bottomAnchor.constraint(equalTo: headerCard.bottomAnchor, constant: -18),
+
+      helperLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
+      helperLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
+      helperLabel.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -30),
+    ])
+  }
+
+  override func viewDidAppear(_ animated: Bool) {
+    super.viewDidAppear(animated)
+    startIfNeeded()
+  }
+
+  override func viewWillDisappear(_ animated: Bool) {
+    super.viewWillDisappear(animated)
+    stopSession()
+  }
+
+  override func viewDidLayoutSubviews() {
+    super.viewDidLayoutSubviews()
+    previewLayer?.frame = previewContainer.bounds
+  }
+
+  @objc private func cancelTapped() {
+    finish(value: nil, error: nil)
+  }
+
+  private func startIfNeeded() {
+    guard !hasConfiguredSession else {
+      sessionQueue.async { [weak self] in
+        self?.captureSession.startRunning()
+      }
+      return
+    }
+
+    switch AVCaptureDevice.authorizationStatus(for: .video) {
+    case .authorized:
+      configureSessionAndStart()
+    case .notDetermined:
+      AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
+        DispatchQueue.main.async {
+          guard let self else { return }
+          if granted {
+            self.configureSessionAndStart()
+          } else {
+            self.finish(
+              value: nil,
+              error: NSError(
+                domain: "turna.qr",
+                code: -2,
+                userInfo: [NSLocalizedDescriptionKey: "Kamera izni verilmedi."]
+              )
+            )
+          }
+        }
+      }
+    default:
+      finish(
+        value: nil,
+        error: NSError(
+          domain: "turna.qr",
+          code: -3,
+          userInfo: [NSLocalizedDescriptionKey: "Kamera izni verilmedi."]
+        )
+      )
+    }
+  }
+
+  private func configureSessionAndStart() {
+    guard !hasConfiguredSession else { return }
+    hasConfiguredSession = true
+
+    sessionQueue.async { [weak self] in
+      guard let self else { return }
+
+      self.captureSession.beginConfiguration()
+      self.captureSession.sessionPreset = .high
+
+      guard
+        let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
+      else {
+        DispatchQueue.main.async {
+          self.finish(
+            value: nil,
+            error: NSError(
+              domain: "turna.qr",
+              code: -4,
+              userInfo: [NSLocalizedDescriptionKey: "Kamera açılamadı."]
+            )
+          )
+        }
+        return
+      }
+
+      do {
+        let input = try AVCaptureDeviceInput(device: device)
+        if self.captureSession.canAddInput(input) {
+          self.captureSession.addInput(input)
+        }
+
+        let output = AVCaptureMetadataOutput()
+        if self.captureSession.canAddOutput(output) {
+          self.captureSession.addOutput(output)
+          output.setMetadataObjectsDelegate(self, queue: DispatchQueue.main)
+          output.metadataObjectTypes = [.qr]
+        }
+      } catch {
+        DispatchQueue.main.async {
+          self.finish(value: nil, error: error)
+        }
+        return
+      }
+
+      self.captureSession.commitConfiguration()
+
+      DispatchQueue.main.async {
+        let previewLayer = AVCaptureVideoPreviewLayer(session: self.captureSession)
+        previewLayer.videoGravity = .resizeAspectFill
+        previewLayer.frame = self.previewContainer.bounds
+        self.previewContainer.layer.insertSublayer(previewLayer, at: 0)
+        self.previewLayer = previewLayer
+      }
+
+      self.captureSession.startRunning()
+    }
+  }
+
+  func metadataOutput(
+    _ output: AVCaptureMetadataOutput,
+    didOutput metadataObjects: [AVMetadataObject],
+    from connection: AVCaptureConnection
+  ) {
+    guard
+      let object = metadataObjects.first as? AVMetadataMachineReadableCodeObject,
+      object.type == .qr,
+      let value = object.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+      !value.isEmpty
+    else {
+      return
+    }
+    finish(value: value, error: nil)
+  }
+
+  private func stopSession() {
+    sessionQueue.async { [weak self] in
+      guard let self, self.captureSession.isRunning else { return }
+      self.captureSession.stopRunning()
+    }
+  }
+
+  private func finish(value: String?, error: Error?) {
+    guard !hasFinished else { return }
+    hasFinished = true
+    stopSession()
+    dismiss(animated: true) { [weak self] in
+      self?.onFinish?(value, error)
+    }
   }
 }
