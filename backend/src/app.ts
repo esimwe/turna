@@ -1,3 +1,4 @@
+import path from "node:path";
 import cors from "cors";
 import express from "express";
 import helmet from "helmet";
@@ -16,6 +17,8 @@ import { statusRouter } from "./modules/status/routes.js";
 export function createApp() {
   const app = express();
   const adminPublicDir = fileURLToPath(new URL("../public/admin", import.meta.url));
+  const webPublicDir = fileURLToPath(new URL("../public/web", import.meta.url));
+  const webIndexFile = path.join(webPublicDir, "index.html");
 
   if (env.TRUST_PROXY) {
     app.set("trust proxy", 1);
@@ -43,6 +46,7 @@ export function createApp() {
   app.use("/api/calls/livekit/webhook", express.text({ type: "*/*", limit: "256kb" }));
   app.use(express.json({ limit: "2mb" }));
   app.use("/admin", express.static(adminPublicDir));
+  app.use("/web", express.static(webPublicDir, { index: false }));
 
   app.use("/api", healthRouter);
   app.use("/api/auth", authRouter);
@@ -53,6 +57,41 @@ export function createApp() {
   app.use("/api/communities", communityRouter);
   app.use("/api/push", pushRouter);
   app.use("/api/statuses", statusRouter);
+  app.get("/web", (_req, res) => {
+    res.sendFile(webIndexFile);
+  });
+  app.get("/web/*", (req, res, next) => {
+    if (path.extname(req.path)) {
+      next();
+      return;
+    }
+    res.sendFile(webIndexFile);
+  });
+  app.use((req, res, next) => {
+    const host = (req.hostname || req.get("host") || "").split(":")[0].toLowerCase();
+    if (!host.startsWith("web.")) {
+      next();
+      return;
+    }
+    if (
+      req.path.startsWith("/api") ||
+      req.path.startsWith("/admin") ||
+      req.path.startsWith("/socket.io") ||
+      req.path.startsWith("/web")
+    ) {
+      next();
+      return;
+    }
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      next();
+      return;
+    }
+    if (path.extname(req.path)) {
+      next();
+      return;
+    }
+    res.sendFile(webIndexFile);
+  });
 
   return app;
 }

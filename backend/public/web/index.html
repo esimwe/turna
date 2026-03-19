@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Turna Web</title>
+    <link rel="stylesheet" href="/web/styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="topbar">
+        <a class="brand" href="/web">
+          <img src="/web/assets/turna-icon.png" alt="Turna" />
+          <span>Turna</span>
+        </a>
+        <div id="connection-chip" class="connection-chip">Hazır</div>
+      </header>
+
+      <main class="page-content">
+        <section id="login-view" class="login-view">
+          <div class="login-card">
+            <div class="login-copy">
+              <p class="eyebrow">Turna Web</p>
+              <h1>Giriş yapmak için tara</h1>
+              <ol class="step-list">
+                <li>Telefonunda Turna uygulamasını aç.</li>
+                <li><strong>Siz &gt; Bağlı cihazlar &gt; Cihaz bağla</strong> yoluna gir.</li>
+                <li>QR kodu okut, onay ver ve sohbete webden devam et.</li>
+              </ol>
+              <div class="note-card">
+                <p id="qr-status-title" class="note-title">QR hazırlanıyor</p>
+                <p id="qr-status-text" class="note-text">
+                  Kod oluşturulur oluşturulmaz burada görünecek.
+                </p>
+              </div>
+              <div class="login-actions">
+                <button id="refresh-qr-button" class="ghost-button" type="button">
+                  QR'ı yenile
+                </button>
+                <a id="download-qr-link" class="ghost-link" download="turna-web-qr.png">
+                  QR'ı indir
+                </a>
+              </div>
+            </div>
+
+            <div class="qr-panel">
+              <div class="qr-frame">
+                <canvas
+                  id="qr-canvas"
+                  class="qr-canvas"
+                  width="320"
+                  height="320"
+                  aria-label="Turna Web QR"
+                ></canvas>
+              </div>
+              <p class="qr-caption">Telefon numarası ile giriş yok. Sadece QR ile bağlanır.</p>
+            </div>
+          </div>
+        </section>
+
+        <section id="app-view" class="app-view hidden">
+          <aside class="chat-sidebar">
+            <div class="sidebar-header">
+              <div>
+                <p class="eyebrow">Turna Web</p>
+                <h2>Sohbetler</h2>
+              </div>
+              <button id="logout-button" class="ghost-button" type="button">Çıkış yap</button>
+            </div>
+
+            <div class="sidebar-meta">
+              <div id="current-user-name" class="current-user-name">Turna</div>
+              <div id="sidebar-status" class="sidebar-status">Sohbetler arka planda yenileniyor.</div>
+            </div>
+
+            <div id="chat-list" class="chat-list"></div>
+          </aside>
+
+          <section class="chat-stage">
+            <header class="chat-header">
+              <div class="chat-header-copy">
+                <div id="active-chat-name" class="active-chat-name">Sohbet seç</div>
+                <div id="active-chat-meta" class="active-chat-meta">
+                  Sol listeden bir sohbet aç.
+                </div>
+              </div>
+              <button id="refresh-chats-button" class="ghost-button" type="button">
+                Yenile
+              </button>
+            </header>
+
+            <div id="message-list" class="message-list empty">
+              <div class="empty-state">
+                <h3>Sohbet seç</h3>
+                <p>Mesajlar burada görünecek.</p>
+              </div>
+            </div>
+
+            <form id="composer-form" class="composer" autocomplete="off">
+              <textarea
+                id="composer-input"
+                class="composer-input"
+                rows="1"
+                maxlength="4000"
+                placeholder="Mesaj yaz"
+              ></textarea>
+              <button id="composer-send" class="primary-button" type="submit">Gönder</button>
+            </form>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <script src="/web/vendor/qrcode.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <script type="module" src="/web/app.js"></script>
+  </body>
+</html>
