@@ -40,10 +40,22 @@ class TurnaStatusApi {
 
       final map = jsonDecode(res.body) as Map<String, dynamic>;
       final data = map['data'] as Map<String, dynamic>? ?? const {};
-      return TurnaStatusPrivacySettings.fromMap(data);
+      final settings = TurnaStatusPrivacySettings.fromMap(data);
+      await TurnaPrivacySettingsLocalCache.saveStatus(session.userId, settings);
+      return settings;
+    } on TurnaUnauthorizedException {
+      rethrow;
     } on TurnaApiException {
+      final cached = await TurnaPrivacySettingsLocalCache.loadStatus(
+        session.userId,
+      );
+      if (cached != null) return cached;
       rethrow;
     } catch (_) {
+      final cached = await TurnaPrivacySettingsLocalCache.loadStatus(
+        session.userId,
+      );
+      if (cached != null) return cached;
       throw TurnaApiException('Durum gizliliği yüklenemedi.');
     }
   }
@@ -69,7 +81,9 @@ class TurnaStatusApi {
 
       final map = jsonDecode(res.body) as Map<String, dynamic>;
       final data = map['data'] as Map<String, dynamic>? ?? const {};
-      return TurnaStatusPrivacySettings.fromMap(data);
+      final settings = TurnaStatusPrivacySettings.fromMap(data);
+      await TurnaPrivacySettingsLocalCache.saveStatus(session.userId, settings);
+      return settings;
     } on TurnaApiException {
       rethrow;
     } catch (_) {

@@ -23,6 +23,10 @@ class TurnaMediaBridge {
     });
   }
 
+  static Future<void> shareText({required String text}) async {
+    await _channel.invokeMethod('shareText', {'text': text});
+  }
+
   static Future<void> saveFile({
     required String path,
     String? mimeType,

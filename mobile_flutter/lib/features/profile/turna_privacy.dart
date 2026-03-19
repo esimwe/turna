@@ -21,13 +21,30 @@ class _TurnaPrivacyPageState extends State<TurnaPrivacyPage> {
   );
   bool _silenceUnknownCallers = false;
   bool _appLockEnabled = false;
-  bool _loading = true;
   bool _busy = false;
 
   @override
   void initState() {
     super.initState();
+    unawaited(_restoreLocalState());
     unawaited(_load());
+  }
+
+  Future<void> _restoreLocalState() async {
+    final results = await Future.wait<Object?>([
+      loadTurnaAppLockEnabledPreference(),
+      TurnaPrivacySettingsLocalCache.load(widget.session.userId),
+      TurnaPrivacySettingsLocalCache.loadStatus(widget.session.userId),
+      loadTurnaSilenceUnknownCallersPreference(widget.session.userId),
+    ]);
+    if (!mounted) return;
+    setState(() {
+      _appLockEnabled = results[0] as bool? ?? false;
+      _privacy = results[1] as TurnaPrivacySettings? ?? _privacy;
+      _statusPrivacy =
+          results[2] as TurnaStatusPrivacySettings? ?? _statusPrivacy;
+      _silenceUnknownCallers = results[3] as bool? ?? false;
+    });
   }
 
   Future<void> _load() async {
@@ -44,7 +61,6 @@ class _TurnaPrivacyPageState extends State<TurnaPrivacyPage> {
         _privacy = results[1] as TurnaPrivacySettings;
         _statusPrivacy = results[2] as TurnaStatusPrivacySettings;
         _silenceUnknownCallers = results[3] as bool;
-        _loading = false;
       });
     } on TurnaUnauthorizedException {
       if (!mounted) return;
@@ -52,7 +68,6 @@ class _TurnaPrivacyPageState extends State<TurnaPrivacyPage> {
       Navigator.of(context).maybePop();
     } catch (error) {
       if (!mounted) return;
-      setState(() => _loading = false);
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(error.toString())));
@@ -350,125 +365,114 @@ class _TurnaPrivacyPageState extends State<TurnaPrivacyPage> {
     return Scaffold(
       appBar: AppBar(title: const Text('Gizlilik')),
       backgroundColor: TurnaColors.backgroundSoft,
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : IgnorePointer(
-              ignoring: _busy,
-              child: ListView(
-                padding: const EdgeInsets.fromLTRB(16, 14, 16, 28),
-                children: [
-                  _UserProfileGroupCard(
-                    children: [
-                      _UserProfileSwitchRow(
-                        icon: Icons.lock_outline_rounded,
-                        title: 'Uygulama Kilidi',
-                        subtitle:
-                            'Turna açılırken $unlockMethodLabel ile doğrulama iste.',
-                        value: _appLockEnabled,
-                        onChanged: _busy ? (_) {} : _toggleAppLock,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(18),
-                    ),
-                    child: const Text(
-                      'Bu ayar açıkken Turna her açıldığında ve uygulama arka plandan geri geldiğinde cihaz doğrulaması ister.',
-                      style: TextStyle(
-                        fontSize: 13.5,
-                        height: 1.45,
-                        color: TurnaColors.textMuted,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 18),
-                  _TurnaPrivacyCard(
-                    children: [
-                      _TurnaPrivacyMenuRow(
-                        title: 'Son görülme ve çevrimiçi',
-                        trailingText: _lastSeenSummary(),
-                        onTap: _openLastSeenPage,
-                      ),
-                      _TurnaPrivacyMenuRow(
-                        title: 'Profil resmi',
-                        trailingText: _privacy.profilePhoto.mode.label,
-                        onTap: () =>
-                            _openAudiencePage(_TurnaPrivacyField.profilePhoto),
-                      ),
-                      _TurnaPrivacyMenuRow(
-                        title: 'Hakkımda',
-                        trailingText: _privacy.about.mode.label,
-                        onTap: () =>
-                            _openAudiencePage(_TurnaPrivacyField.about),
-                      ),
-                      _TurnaPrivacyMenuRow(
-                        title: 'Bağlantılar',
-                        trailingText: _privacy.links.mode.label,
-                        onTap: () =>
-                            _openAudiencePage(_TurnaPrivacyField.links),
-                      ),
-                      _TurnaPrivacyMenuRow(
-                        title: 'Gruplar',
-                        trailingText: _privacy.groups.mode.label,
-                        onTap: () =>
-                            _openAudiencePage(_TurnaPrivacyField.groups),
-                      ),
-                      _TurnaPrivacyMenuRow(
-                        title: 'Durum',
-                        trailingText: _statusSummary(),
-                        onTap: _openStatusPage,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 18),
-                  _TurnaPrivacyCard(
-                    children: [
-                      _TurnaPrivacyMenuRow(
-                        title: 'Aramalar',
-                        onTap: _openCallsPage,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 18),
-                  const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 6),
-                    child: Text(
-                      'Süreli mesajlar',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: TurnaColors.textMuted,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  _TurnaPrivacyCard(
-                    children: [
-                      _TurnaPrivacyMenuRow(
-                        title: 'Varsayılan mesaj süresi',
-                        trailingText: _defaultMessageDurationLabel(),
-                        onTap: _openDefaultMessageDurationPage,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 6),
-                    child: Text(
-                      'Yeni sohbetlere, ayarladığınız süre dolduğunda kaybolacak süreli mesajlarla başlayın.',
-                      style: TextStyle(
-                        fontSize: 12.5,
-                        color: TurnaColors.textMuted,
-                      ),
-                    ),
-                  ),
-                ],
+      body: IgnorePointer(
+        ignoring: _busy,
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 28),
+          children: [
+            _UserProfileGroupCard(
+              children: [
+                _UserProfileSwitchRow(
+                  icon: Icons.lock_outline_rounded,
+                  title: 'Uygulama Kilidi',
+                  subtitle:
+                      'Turna açılırken $unlockMethodLabel ile doğrulama iste.',
+                  value: _appLockEnabled,
+                  onChanged: _busy ? (_) {} : _toggleAppLock,
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(18),
+              ),
+              child: const Text(
+                'Bu ayar açıkken Turna her açıldığında ve uygulama arka plandan geri geldiğinde cihaz doğrulaması ister.',
+                style: TextStyle(
+                  fontSize: 13.5,
+                  height: 1.45,
+                  color: TurnaColors.textMuted,
+                ),
               ),
             ),
+            const SizedBox(height: 18),
+            _TurnaPrivacyCard(
+              children: [
+                _TurnaPrivacyMenuRow(
+                  title: 'Son görülme ve çevrimiçi',
+                  trailingText: _lastSeenSummary(),
+                  onTap: _openLastSeenPage,
+                ),
+                _TurnaPrivacyMenuRow(
+                  title: 'Profil resmi',
+                  trailingText: _privacy.profilePhoto.mode.label,
+                  onTap: () =>
+                      _openAudiencePage(_TurnaPrivacyField.profilePhoto),
+                ),
+                _TurnaPrivacyMenuRow(
+                  title: 'Hakkımda',
+                  trailingText: _privacy.about.mode.label,
+                  onTap: () => _openAudiencePage(_TurnaPrivacyField.about),
+                ),
+                _TurnaPrivacyMenuRow(
+                  title: 'Bağlantılar',
+                  trailingText: _privacy.links.mode.label,
+                  onTap: () => _openAudiencePage(_TurnaPrivacyField.links),
+                ),
+                _TurnaPrivacyMenuRow(
+                  title: 'Gruplar',
+                  trailingText: _privacy.groups.mode.label,
+                  onTap: () => _openAudiencePage(_TurnaPrivacyField.groups),
+                ),
+                _TurnaPrivacyMenuRow(
+                  title: 'Durum',
+                  trailingText: _statusSummary(),
+                  onTap: _openStatusPage,
+                ),
+              ],
+            ),
+            const SizedBox(height: 18),
+            _TurnaPrivacyCard(
+              children: [
+                _TurnaPrivacyMenuRow(title: 'Aramalar', onTap: _openCallsPage),
+              ],
+            ),
+            const SizedBox(height: 18),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 6),
+              child: Text(
+                'Süreli mesajlar',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: TurnaColors.textMuted,
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            _TurnaPrivacyCard(
+              children: [
+                _TurnaPrivacyMenuRow(
+                  title: 'Varsayılan mesaj süresi',
+                  trailingText: _defaultMessageDurationLabel(),
+                  onTap: _openDefaultMessageDurationPage,
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 6),
+              child: Text(
+                'Yeni sohbetlere, ayarladığınız süre dolduğunda kaybolacak süreli mesajlarla başlayın.',
+                style: TextStyle(fontSize: 12.5, color: TurnaColors.textMuted),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -1254,12 +1258,16 @@ class _TurnaPrivacyTargetSelectionPageState
   final TextEditingController _searchController = TextEditingController();
   List<TurnaRegisteredContact> _contacts = const <TurnaRegisteredContact>[];
   late Set<String> _selectedUserIds;
-  bool _loading = true;
 
   @override
   void initState() {
     super.initState();
     _selectedUserIds = widget.initialSelectedUserIds.toSet();
+    final warm = TurnaRegisteredContactsLocalCache.peek(widget.session.userId);
+    if (warm != null) {
+      _contacts = warm;
+    }
+    unawaited(_restoreCachedContacts());
     unawaited(_load());
   }
 
@@ -1275,7 +1283,6 @@ class _TurnaPrivacyTargetSelectionPageState
       if (!mounted) return;
       setState(() {
         _contacts = contacts;
-        _loading = false;
       });
     } on TurnaUnauthorizedException {
       if (!mounted) return;
@@ -1283,11 +1290,18 @@ class _TurnaPrivacyTargetSelectionPageState
       Navigator.of(context).maybePop();
     } catch (error) {
       if (!mounted) return;
-      setState(() => _loading = false);
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(error.toString())));
     }
+  }
+
+  Future<void> _restoreCachedContacts() async {
+    final cached = await TurnaRegisteredContactsLocalCache.load(
+      widget.session.userId,
+    );
+    if (!mounted || cached == null) return;
+    setState(() => _contacts = cached);
   }
 
   Iterable<TurnaRegisteredContact> get _filteredContacts {
@@ -1322,79 +1336,77 @@ class _TurnaPrivacyTargetSelectionPageState
           leading: BackButton(onPressed: _closePage),
           title: Text(widget.title),
         ),
-        body: _loading
-            ? const Center(child: CircularProgressIndicator())
-            : ListView(
-                padding: const EdgeInsets.fromLTRB(16, 14, 16, 28),
-                children: [
-                  TextField(
-                    controller: _searchController,
-                    onChanged: (_) => setState(() {}),
-                    decoration: InputDecoration(
-                      hintText: 'Kişi ara',
-                      prefixIcon: const Icon(Icons.search_rounded),
-                      filled: true,
-                      fillColor: Colors.white,
-                      border: OutlineInputBorder(
+        body: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 28),
+          children: [
+            TextField(
+              controller: _searchController,
+              onChanged: (_) => setState(() {}),
+              decoration: InputDecoration(
+                hintText: 'Kişi ara',
+                prefixIcon: const Icon(Icons.search_rounded),
+                filled: true,
+                fillColor: Colors.white,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(18),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            if (_contacts.isEmpty)
+              Container(
+                padding: const EdgeInsets.all(18),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(18),
+                ),
+                child: Text(
+                  widget.emptyStateLabel,
+                  style: const TextStyle(color: TurnaColors.textMuted),
+                ),
+              )
+            else
+              ..._filteredContacts.map((contact) {
+                final selected = _selectedUserIds.contains(contact.id);
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Material(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(18),
+                    child: CheckboxListTile(
+                      value: selected,
+                      onChanged: (value) {
+                        setState(() {
+                          if (value == true) {
+                            _selectedUserIds.add(contact.id);
+                          } else {
+                            _selectedUserIds.remove(contact.id);
+                          }
+                        });
+                      },
+                      controlAffinity: ListTileControlAffinity.trailing,
+                      shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(18),
-                        borderSide: BorderSide.none,
+                      ),
+                      secondary: _ProfileAvatar(
+                        label: contact.resolvedTitle,
+                        avatarUrl: contact.avatarUrl,
+                        authToken: widget.session.token,
+                        radius: 20,
+                      ),
+                      title: Text(contact.resolvedTitle),
+                      subtitle: Text(
+                        contact.username?.trim().isNotEmpty == true
+                            ? '@${contact.username}'
+                            : (contact.phone ?? 'Turna kullanıcısı'),
                       ),
                     ),
                   ),
-                  const SizedBox(height: 12),
-                  if (_contacts.isEmpty)
-                    Container(
-                      padding: const EdgeInsets.all(18),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(18),
-                      ),
-                      child: Text(
-                        widget.emptyStateLabel,
-                        style: const TextStyle(color: TurnaColors.textMuted),
-                      ),
-                    )
-                  else
-                    ..._filteredContacts.map((contact) {
-                      final selected = _selectedUserIds.contains(contact.id);
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
-                        child: Material(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(18),
-                          child: CheckboxListTile(
-                            value: selected,
-                            onChanged: (value) {
-                              setState(() {
-                                if (value == true) {
-                                  _selectedUserIds.add(contact.id);
-                                } else {
-                                  _selectedUserIds.remove(contact.id);
-                                }
-                              });
-                            },
-                            controlAffinity: ListTileControlAffinity.trailing,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(18),
-                            ),
-                            secondary: _ProfileAvatar(
-                              label: contact.resolvedTitle,
-                              avatarUrl: contact.avatarUrl,
-                              authToken: widget.session.token,
-                              radius: 20,
-                            ),
-                            title: Text(contact.resolvedTitle),
-                            subtitle: Text(
-                              contact.username?.trim().isNotEmpty == true
-                                  ? '@${contact.username}'
-                                  : (contact.phone ?? 'Turna kullanıcısı'),
-                            ),
-                          ),
-                        ),
-                      );
-                    }),
-                ],
-              ),
+                );
+              }),
+          ],
+        ),
       ),
     );
   }

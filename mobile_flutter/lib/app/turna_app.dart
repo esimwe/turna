@@ -97,3 +97,39 @@ part '../features/status/turna_status_feed.dart';
 part '../features/status/turna_status_viewer.dart';
 
 const String kChatRoomRouteName = 'chat-room';
+
+class CircularProgressIndicator extends StatelessWidget {
+  const CircularProgressIndicator({
+    super.key,
+    this.value,
+    this.backgroundColor,
+    this.color,
+    this.valueColor,
+    this.strokeWidth = 4.0,
+    this.semanticsLabel,
+    this.semanticsValue,
+    this.strokeCap,
+    this.strokeAlign,
+    this.trackGap,
+    this.constraints,
+    this.padding,
+  });
+
+  final double? value;
+  final Color? backgroundColor;
+  final Color? color;
+  final Animation<Color?>? valueColor;
+  final double strokeWidth;
+  final String? semanticsLabel;
+  final String? semanticsValue;
+  final StrokeCap? strokeCap;
+  final double? strokeAlign;
+  final double? trackGap;
+  final BoxConstraints? constraints;
+  final EdgeInsetsGeometry? padding;
+
+  @override
+  Widget build(BuildContext context) {
+    return const SizedBox.shrink();
+  }
+}

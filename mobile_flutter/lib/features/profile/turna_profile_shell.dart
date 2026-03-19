@@ -3678,7 +3678,6 @@ class TurnaStarredMessagesPage extends StatefulWidget {
 
 class _TurnaStarredMessagesPageState extends State<TurnaStarredMessagesPage> {
   List<_TurnaStarredMessageEntry> _entries = const [];
-  bool _loading = true;
   String? _error;
 
   bool get _isSingleChatMode => widget.chat != null;
@@ -3686,16 +3685,24 @@ class _TurnaStarredMessagesPageState extends State<TurnaStarredMessagesPage> {
   @override
   void initState() {
     super.initState();
+    unawaited(_restoreLocalEntries());
     unawaited(_load());
   }
 
-  Future<void> _load() async {
-    if (mounted) {
+  Future<void> _restoreLocalEntries() async {
+    try {
+      final entries = _isSingleChatMode
+          ? await _loadEntriesForChat(widget.chat!, localOnly: true)
+          : await _loadEntriesForAllChats(localOnly: true);
+      if (!mounted) return;
       setState(() {
-        _loading = true;
-        _error = null;
+        _entries = entries;
       });
-    }
+    } catch (_) {}
+  }
+
+  Future<void> _load() async {
+    if (mounted) setState(() => _error = null);
 
     try {
       final entries = _isSingleChatMode
@@ -3704,7 +3711,6 @@ class _TurnaStarredMessagesPageState extends State<TurnaStarredMessagesPage> {
       if (!mounted) return;
       setState(() {
         _entries = entries;
-        _loading = false;
       });
     } on TurnaUnauthorizedException {
       if (!mounted) return;
@@ -3712,21 +3718,25 @@ class _TurnaStarredMessagesPageState extends State<TurnaStarredMessagesPage> {
     } catch (error) {
       if (!mounted) return;
       setState(() {
-        _entries = const [];
-        _loading = false;
-        _error = error.toString();
+        if (_entries.isEmpty) {
+          _error = error.toString();
+        }
       });
     }
   }
 
-  Future<List<_TurnaStarredMessageEntry>> _loadEntriesForAllChats() async {
+  Future<List<_TurnaStarredMessageEntry>> _loadEntriesForAllChats({
+    bool localOnly = false,
+  }) async {
     ChatInboxData? inbox = TurnaChatInboxLocalCache.peek(widget.session.userId);
     inbox ??= await TurnaChatInboxLocalCache.load(widget.session.userId);
-    try {
-      inbox = await ChatApi.fetchChats(widget.session);
-    } on TurnaUnauthorizedException {
-      rethrow;
-    } catch (_) {}
+    if (!localOnly) {
+      try {
+        inbox = await ChatApi.fetchChats(widget.session);
+      } on TurnaUnauthorizedException {
+        rethrow;
+      } catch (_) {}
+    }
 
     final knownChatIds = inbox?.chats.map((chat) => chat.chatId) ?? const [];
     final starredByChat = await TurnaStarredMessagesLocalCache.loadAll(
@@ -3741,10 +3751,15 @@ class _TurnaStarredMessagesPageState extends State<TurnaStarredMessagesPage> {
 
     for (final entry in starredByChat.entries) {
       final chat =
-          chatIndex[entry.key] ?? await _buildFallbackChatPreview(entry.key);
+          chatIndex[entry.key] ??
+          await _buildFallbackChatPreview(entry.key, localOnly: localOnly);
       if (chat == null) continue;
       entries.addAll(
-        await _loadEntriesForChat(chat, presetStarredIds: entry.value),
+        await _loadEntriesForChat(
+          chat,
+          presetStarredIds: entry.value,
+          localOnly: localOnly,
+        ),
       );
     }
 
@@ -3755,13 +3770,16 @@ class _TurnaStarredMessagesPageState extends State<TurnaStarredMessagesPage> {
     return entries;
   }
 
-  Future<ChatPreview?> _buildFallbackChatPreview(String chatId) async {
+  Future<ChatPreview?> _buildFallbackChatPreview(
+    String chatId, {
+    bool localOnly = false,
+  }) async {
     var detail = TurnaChatDetailLocalCache.peek(widget.session.userId, chatId);
     detail ??= await TurnaChatDetailLocalCache.load(
       widget.session.userId,
       chatId,
     );
-    if (detail == null) {
+    if (detail == null && !localOnly) {
       try {
         detail = await ChatApi.fetchChatDetail(widget.session, chatId);
       } on TurnaUnauthorizedException {
@@ -3797,6 +3815,7 @@ class _TurnaStarredMessagesPageState extends State<TurnaStarredMessagesPage> {
   Future<List<_TurnaStarredMessageEntry>> _loadEntriesForChat(
     ChatPreview chat, {
     Set<String>? presetStarredIds,
+    bool localOnly = false,
   }) async {
     final targetIds =
         presetStarredIds ??
@@ -3819,6 +3838,20 @@ class _TurnaStarredMessagesPageState extends State<TurnaStarredMessagesPage> {
     collect(
       await TurnaChatHistoryLocalCache.load(widget.session.userId, chat.chatId),
     );
+
+    if (localOnly) {
+      final entries = foundById.values
+          .map(
+            (message) =>
+                _TurnaStarredMessageEntry(chat: chat, message: message),
+          )
+          .toList();
+      entries.sort(
+        (a, b) =>
+            compareTurnaTimestamps(b.message.createdAt, a.message.createdAt),
+      );
+      return entries;
+    }
 
     String? before;
     var hasMore = true;
@@ -4573,9 +4606,7 @@ class _TurnaStarredMessagesPageState extends State<TurnaStarredMessagesPage> {
           style: TextStyle(fontWeight: FontWeight.w600),
         ),
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : _error != null
+      body: _error != null && _entries.isEmpty
           ? Center(
               child: Padding(
                 padding: const EdgeInsets.all(24),

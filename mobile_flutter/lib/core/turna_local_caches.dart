@@ -212,6 +212,161 @@ class TurnaStatusFeedLocalCache {
   }
 }
 
+class TurnaPrivacySettingsLocalCache {
+  static const String _privacyPrefix = 'turna_privacy_settings_v1_';
+  static const String _statusPrefix = 'turna_status_privacy_settings_v1_';
+  static final Map<String, TurnaPrivacySettings> _warmPrivacy =
+      <String, TurnaPrivacySettings>{};
+  static final Map<String, TurnaStatusPrivacySettings> _warmStatus =
+      <String, TurnaStatusPrivacySettings>{};
+
+  static String _privacyKey(String userId) => '$_privacyPrefix$userId';
+
+  static String _statusKey(String userId) => '$_statusPrefix$userId';
+
+  static TurnaPrivacySettings? peek(String userId) => _warmPrivacy[userId];
+
+  static TurnaStatusPrivacySettings? peekStatus(String userId) =>
+      _warmStatus[userId];
+
+  static Future<TurnaPrivacySettings?> load(String userId) async {
+    final warm = peek(userId);
+    if (warm != null) return warm;
+
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_privacyKey(userId));
+    if (raw == null || raw.trim().isEmpty) return null;
+    try {
+      final decoded = jsonDecode(raw) as Map<String, dynamic>;
+      final settings = TurnaPrivacySettings.fromMap(decoded);
+      _warmPrivacy[userId] = settings;
+      return settings;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<TurnaStatusPrivacySettings?> loadStatus(String userId) async {
+    final warm = peekStatus(userId);
+    if (warm != null) return warm;
+
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_statusKey(userId));
+    if (raw == null || raw.trim().isEmpty) return null;
+    try {
+      final decoded = jsonDecode(raw) as Map<String, dynamic>;
+      final settings = TurnaStatusPrivacySettings.fromMap(decoded);
+      _warmStatus[userId] = settings;
+      return settings;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<void> save(String userId, TurnaPrivacySettings settings) async {
+    _warmPrivacy[userId] = settings;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_privacyKey(userId), jsonEncode(settings.toMap()));
+  }
+
+  static Future<void> saveStatus(
+    String userId,
+    TurnaStatusPrivacySettings settings,
+  ) async {
+    _warmStatus[userId] = settings;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _statusKey(userId),
+      jsonEncode({
+        'mode': settings.mode.wireValue,
+        'targetUserIds': settings.targetUserIds,
+        'mutedUserIds': settings.mutedUserIds,
+      }),
+    );
+  }
+
+  static Future<void> clearAll() async {
+    _warmPrivacy.clear();
+    _warmStatus.clear();
+    final prefs = await SharedPreferences.getInstance();
+    final keys = prefs.getKeys().where(
+      (key) => key.startsWith(_privacyPrefix) || key.startsWith(_statusPrefix),
+    );
+    for (final key in keys) {
+      await prefs.remove(key);
+    }
+  }
+}
+
+class TurnaRegisteredContactsLocalCache {
+  static const String _prefix = 'turna_registered_contacts_v1_';
+  static final Map<String, List<TurnaRegisteredContact>> _warm =
+      <String, List<TurnaRegisteredContact>>{};
+
+  static String _key(String userId) => '$_prefix$userId';
+
+  static List<TurnaRegisteredContact>? peek(String userId) => _warm[userId];
+
+  static Future<List<TurnaRegisteredContact>?> load(String userId) async {
+    final warm = peek(userId);
+    if (warm != null) return warm;
+
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_key(userId));
+    if (raw == null || raw.trim().isEmpty) return null;
+    try {
+      final decoded = jsonDecode(raw) as List<dynamic>;
+      final contacts = decoded
+          .whereType<Map>()
+          .map(
+            (item) =>
+                TurnaRegisteredContact.fromMap(Map<String, dynamic>.from(item)),
+          )
+          .toList(growable: false);
+      _warm[userId] = contacts;
+      return contacts;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<void> save(
+    String userId,
+    Iterable<TurnaRegisteredContact> contacts,
+  ) async {
+    final normalized = contacts.toList(growable: false);
+    _warm[userId] = normalized;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _key(userId),
+      jsonEncode(
+        normalized
+            .map(
+              (contact) => {
+                'id': contact.id,
+                'displayName': contact.displayName,
+                'contactName': contact.contactName,
+                'username': contact.username,
+                'phone': contact.phone,
+                'about': contact.about,
+                'avatarUrl': contact.avatarUrl,
+              },
+            )
+            .toList(growable: false),
+      ),
+    );
+  }
+
+  static Future<void> clearAll() async {
+    _warm.clear();
+    final prefs = await SharedPreferences.getInstance();
+    final keys = prefs.getKeys().where((key) => key.startsWith(_prefix));
+    for (final key in keys) {
+      await prefs.remove(key);
+    }
+  }
+}
+
 class TurnaChatDetailLocalCache {
   static const String _prefix = 'turna_chat_detail_v1_';
   static final Map<String, TurnaChatDetail> _warm = <String, TurnaChatDetail>{};

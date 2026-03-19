@@ -4,15 +4,29 @@ class ProfileApi {
   static Future<TurnaPrivacySettings> fetchPrivacySettings(
     AuthSession session,
   ) async {
-    final res = await http.get(
-      Uri.parse('$kBackendBaseUrl/api/profile/privacy'),
-      headers: {'Authorization': 'Bearer ${session.token}'},
-    );
-    _throwIfApiError(res, label: 'fetchPrivacySettings');
+    try {
+      final res = await http.get(
+        Uri.parse('$kBackendBaseUrl/api/profile/privacy'),
+        headers: {'Authorization': 'Bearer ${session.token}'},
+      );
+      _throwIfApiError(res, label: 'fetchPrivacySettings');
 
-    final map = jsonDecode(res.body) as Map<String, dynamic>;
-    final data = map['data'] as Map<String, dynamic>? ?? const {};
-    return TurnaPrivacySettings.fromMap(data);
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = map['data'] as Map<String, dynamic>? ?? const {};
+      final settings = TurnaPrivacySettings.fromMap(data);
+      await TurnaPrivacySettingsLocalCache.save(session.userId, settings);
+      return settings;
+    } on TurnaUnauthorizedException {
+      rethrow;
+    } on TurnaApiException {
+      final cached = await TurnaPrivacySettingsLocalCache.load(session.userId);
+      if (cached != null) return cached;
+      rethrow;
+    } catch (_) {
+      final cached = await TurnaPrivacySettingsLocalCache.load(session.userId);
+      if (cached != null) return cached;
+      throw TurnaApiException('Gizlilik ayarları yüklenemedi.');
+    }
   }
 
   static Future<TurnaPrivacySettings> updatePrivacySettings(
@@ -31,7 +45,9 @@ class ProfileApi {
 
     final map = jsonDecode(res.body) as Map<String, dynamic>;
     final data = map['data'] as Map<String, dynamic>? ?? const {};
-    return TurnaPrivacySettings.fromMap(data);
+    final updated = TurnaPrivacySettings.fromMap(data);
+    await TurnaPrivacySettingsLocalCache.save(session.userId, updated);
+    return updated;
   }
 
   static Future<TurnaUserProfile> fetchMe(AuthSession session) async {

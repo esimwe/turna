@@ -943,14 +943,25 @@ class ChatApi {
                 TurnaRegisteredContact.fromMap(Map<String, dynamic>.from(item)),
           )
           .toList();
+      await TurnaRegisteredContactsLocalCache.save(session.userId, contacts);
       await cacheTurnaKnownContactUserIds(
         session.userId,
         contacts.map((item) => item.id),
       );
       return contacts;
+    } on TurnaUnauthorizedException {
+      rethrow;
     } on TurnaApiException {
+      final cached = await TurnaRegisteredContactsLocalCache.load(
+        session.userId,
+      );
+      if (cached != null) return cached;
       rethrow;
     } catch (_) {
+      final cached = await TurnaRegisteredContactsLocalCache.load(
+        session.userId,
+      );
+      if (cached != null) return cached;
       throw TurnaApiException('Rehber kişileri yüklenemedi.');
     }
   }

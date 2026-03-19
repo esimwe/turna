@@ -1,6 +1,6 @@
 part of '../../app/turna_app.dart';
 
-enum _OwnStatusAction { forward, save, delete }
+enum _OwnStatusAction { forward, share, save, delete }
 
 class StatusViewerPage extends StatefulWidget {
   const StatusViewerPage({
@@ -252,6 +252,23 @@ class _StatusViewerPageState extends State<StatusViewerPage> {
     ).showSnackBar(const SnackBar(content: Text('Durum cihaza kaydedildi.')));
   }
 
+  Future<void> _shareOwnStatus(TurnaStatusItem item) async {
+    if (item.isText) {
+      final text = item.text?.trim() ?? '';
+      if (text.isEmpty) {
+        throw TurnaApiException('Paylaşılacak durum metni bulunamadı.');
+      }
+      await TurnaMediaBridge.shareText(text: text);
+      return;
+    }
+
+    final file = await _downloadStatusFile(item);
+    await TurnaMediaBridge.shareFile(
+      path: file.path,
+      mimeType: item.contentType,
+    );
+  }
+
   Future<OutgoingAttachmentDraft> _uploadOwnStatusToChat(
     TurnaStatusItem item,
     ChatPreview targetChat,
@@ -411,6 +428,9 @@ class _StatusViewerPageState extends State<StatusViewerPage> {
         case _OwnStatusAction.forward:
           await _forwardOwnStatus(item);
           break;
+        case _OwnStatusAction.share:
+          await _shareOwnStatus(item);
+          break;
         case _OwnStatusAction.save:
           await _saveOwnStatus(item);
           break;
@@ -443,6 +463,15 @@ class _StatusViewerPageState extends State<StatusViewerPage> {
           contentPadding: EdgeInsets.zero,
           leading: Icon(Icons.forward_outlined),
           title: Text('İlet'),
+        ),
+      ),
+      const PopupMenuItem<_OwnStatusAction>(
+        value: _OwnStatusAction.share,
+        child: ListTile(
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          leading: Icon(Icons.share_outlined),
+          title: Text('Paylaş'),
         ),
       ),
       if (!item.isText)
@@ -904,7 +933,6 @@ class _StatusPrivacySettingsPageState extends State<StatusPrivacySettingsPage> {
   List<TurnaRegisteredContact> _contacts = const <TurnaRegisteredContact>[];
   late TurnaStatusPrivacyMode _mode;
   late Set<String> _selectedUserIds;
-  bool _loading = true;
   bool _saving = false;
 
   @override
@@ -912,6 +940,11 @@ class _StatusPrivacySettingsPageState extends State<StatusPrivacySettingsPage> {
     super.initState();
     _mode = widget.initialSettings.mode;
     _selectedUserIds = widget.initialSettings.targetUserIds.toSet();
+    final warm = TurnaRegisteredContactsLocalCache.peek(widget.session.userId);
+    if (warm != null) {
+      _contacts = warm;
+    }
+    unawaited(_restoreCachedContacts());
     unawaited(_load());
   }
 
@@ -927,7 +960,6 @@ class _StatusPrivacySettingsPageState extends State<StatusPrivacySettingsPage> {
       if (!mounted) return;
       setState(() {
         _contacts = contacts;
-        _loading = false;
       });
     } on TurnaUnauthorizedException {
       if (!mounted) return;
@@ -935,11 +967,18 @@ class _StatusPrivacySettingsPageState extends State<StatusPrivacySettingsPage> {
       Navigator.pop(context);
     } catch (error) {
       if (!mounted) return;
-      setState(() => _loading = false);
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(error.toString())));
     }
+  }
+
+  Future<void> _restoreCachedContacts() async {
+    final cached = await TurnaRegisteredContactsLocalCache.load(
+      widget.session.userId,
+    );
+    if (!mounted || cached == null) return;
+    setState(() => _contacts = cached);
   }
 
   Future<void> _save() async {
@@ -991,7 +1030,7 @@ class _StatusPrivacySettingsPageState extends State<StatusPrivacySettingsPage> {
         title: const Text('Durum gizliliği'),
         actions: [
           TextButton(
-            onPressed: _loading || _saving ? null : _save,
+            onPressed: _saving ? null : _save,
             child: Text(
               _saving ? 'Kaydediliyor...' : 'Kaydet',
               style: const TextStyle(fontWeight: FontWeight.w700),
@@ -999,108 +1038,104 @@ class _StatusPrivacySettingsPageState extends State<StatusPrivacySettingsPage> {
           ),
         ],
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : ListView(
-              padding: const EdgeInsets.fromLTRB(16, 14, 16, 28),
-              children: [
-                _StatusPrivacyOptionTile(
-                  title: 'Kişilerim',
-                  subtitle:
-                      'Durumlarını rehberindeki kayıtlı Turna kullanıcıları görür.',
-                  selected: _mode == TurnaStatusPrivacyMode.myContacts,
-                  onTap: () =>
-                      setState(() => _mode = TurnaStatusPrivacyMode.myContacts),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 28),
+        children: [
+          _StatusPrivacyOptionTile(
+            title: 'Kişilerim',
+            subtitle:
+                'Durumlarını rehberindeki kayıtlı Turna kullanıcıları görür.',
+            selected: _mode == TurnaStatusPrivacyMode.myContacts,
+            onTap: () =>
+                setState(() => _mode = TurnaStatusPrivacyMode.myContacts),
+          ),
+          const SizedBox(height: 10),
+          _StatusPrivacyOptionTile(
+            title: 'Hariç tutulanlar',
+            subtitle: 'Rehberinden seçtiklerin dışında herkes görür.',
+            selected: _mode == TurnaStatusPrivacyMode.excludedContacts,
+            onTap: () =>
+                setState(() => _mode = TurnaStatusPrivacyMode.excludedContacts),
+          ),
+          const SizedBox(height: 10),
+          _StatusPrivacyOptionTile(
+            title: 'Sadece paylaştıklarım',
+            subtitle: 'Durumu sadece seçtiğin kişiler görür.',
+            selected: _mode == TurnaStatusPrivacyMode.onlySharedWith,
+            onTap: () =>
+                setState(() => _mode = TurnaStatusPrivacyMode.onlySharedWith),
+          ),
+          if (_needsSelection) ...[
+            const SizedBox(height: 18),
+            TextField(
+              controller: _searchController,
+              onChanged: (_) => setState(() {}),
+              decoration: InputDecoration(
+                hintText: 'Kişi ara',
+                prefixIcon: const Icon(Icons.search_rounded),
+                filled: true,
+                fillColor: Colors.white,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(18),
+                  borderSide: BorderSide.none,
                 ),
-                const SizedBox(height: 10),
-                _StatusPrivacyOptionTile(
-                  title: 'Hariç tutulanlar',
-                  subtitle: 'Rehberinden seçtiklerin dışında herkes görür.',
-                  selected: _mode == TurnaStatusPrivacyMode.excludedContacts,
-                  onTap: () => setState(
-                    () => _mode = TurnaStatusPrivacyMode.excludedContacts,
-                  ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            if (_contacts.isEmpty)
+              Container(
+                padding: const EdgeInsets.all(18),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(20),
                 ),
-                const SizedBox(height: 10),
-                _StatusPrivacyOptionTile(
-                  title: 'Sadece paylaştıklarım',
-                  subtitle: 'Durumu sadece seçtiğin kişiler görür.',
-                  selected: _mode == TurnaStatusPrivacyMode.onlySharedWith,
-                  onTap: () => setState(
-                    () => _mode = TurnaStatusPrivacyMode.onlySharedWith,
-                  ),
+                child: const Text(
+                  'Seçilebilir kişi görünmüyor. Rehberini senkronladıktan sonra burada kayıtlı Turna kullanıcılarını seçebilirsin.',
+                  style: TextStyle(color: TurnaColors.textMuted),
                 ),
-                if (_needsSelection) ...[
-                  const SizedBox(height: 18),
-                  TextField(
-                    controller: _searchController,
-                    onChanged: (_) => setState(() {}),
-                    decoration: InputDecoration(
-                      hintText: 'Kişi ara',
-                      prefixIcon: const Icon(Icons.search_rounded),
-                      filled: true,
-                      fillColor: Colors.white,
-                      border: OutlineInputBorder(
+              )
+            else
+              ..._filteredContacts.map((contact) {
+                final selected = _selectedUserIds.contains(contact.id);
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Material(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(18),
+                    child: CheckboxListTile(
+                      value: selected,
+                      onChanged: (value) {
+                        setState(() {
+                          if (value == true) {
+                            _selectedUserIds.add(contact.id);
+                          } else {
+                            _selectedUserIds.remove(contact.id);
+                          }
+                        });
+                      },
+                      controlAffinity: ListTileControlAffinity.trailing,
+                      shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(18),
-                        borderSide: BorderSide.none,
+                      ),
+                      secondary: _ProfileAvatar(
+                        label: contact.resolvedTitle,
+                        avatarUrl: contact.avatarUrl,
+                        authToken: widget.session.token,
+                        radius: 20,
+                      ),
+                      title: Text(contact.resolvedTitle),
+                      subtitle: Text(
+                        contact.username?.trim().isNotEmpty == true
+                            ? '@${contact.username}'
+                            : (contact.phone ?? 'Turna kullanıcısı'),
                       ),
                     ),
                   ),
-                  const SizedBox(height: 12),
-                  if (_contacts.isEmpty)
-                    Container(
-                      padding: const EdgeInsets.all(18),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: const Text(
-                        'Seçilebilir kişi görünmüyor. Rehberini senkronladıktan sonra burada kayıtlı Turna kullanıcılarını seçebilirsin.',
-                        style: TextStyle(color: TurnaColors.textMuted),
-                      ),
-                    )
-                  else
-                    ..._filteredContacts.map((contact) {
-                      final selected = _selectedUserIds.contains(contact.id);
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
-                        child: Material(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(18),
-                          child: CheckboxListTile(
-                            value: selected,
-                            onChanged: (value) {
-                              setState(() {
-                                if (value == true) {
-                                  _selectedUserIds.add(contact.id);
-                                } else {
-                                  _selectedUserIds.remove(contact.id);
-                                }
-                              });
-                            },
-                            controlAffinity: ListTileControlAffinity.trailing,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(18),
-                            ),
-                            secondary: _ProfileAvatar(
-                              label: contact.resolvedTitle,
-                              avatarUrl: contact.avatarUrl,
-                              authToken: widget.session.token,
-                              radius: 20,
-                            ),
-                            title: Text(contact.resolvedTitle),
-                            subtitle: Text(
-                              contact.username?.trim().isNotEmpty == true
-                                  ? '@${contact.username}'
-                                  : (contact.phone ?? 'Turna kullanıcısı'),
-                            ),
-                          ),
-                        ),
-                      );
-                    }),
-                ],
-              ],
-            ),
+                );
+              }),
+          ],
+        ],
+      ),
     );
   }
 }

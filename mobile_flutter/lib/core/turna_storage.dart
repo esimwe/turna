@@ -527,6 +527,8 @@ class TurnaLocalStateReset {
     TurnaUserProfileLocalCache._warmProfiles.clear();
     TurnaChatInboxLocalCache._warmInboxes.clear();
     await TurnaStatusFeedLocalCache.clearAll();
+    await TurnaPrivacySettingsLocalCache.clearAll();
+    await TurnaRegisteredContactsLocalCache.clearAll();
     TurnaChatDetailLocalCache._warm.clear();
     TurnaChatHistoryLocalCache._warm.clear();
     TurnaCallHistoryLocalCache._warm.clear();

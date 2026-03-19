@@ -17,6 +17,9 @@ ThemeData buildTurnaAppTheme() {
       foregroundColor: TurnaColors.text,
       centerTitle: false,
     ),
+    progressIndicatorTheme: const ProgressIndicatorThemeData(
+      color: Colors.transparent,
+    ),
     dividerColor: TurnaColors.divider,
   );
 }
