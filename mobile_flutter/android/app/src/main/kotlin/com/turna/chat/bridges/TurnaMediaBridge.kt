@@ -23,6 +23,9 @@ import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.Transformer
 import androidx.media3.transformer.VideoEncoderSettings
+import com.google.mlkit.vision.barcode.common.Barcode
+import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanning
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanningResult
@@ -39,6 +42,7 @@ class TurnaMediaBridge(
 ) {
     private var mediaChannel: MethodChannel? = null
     private var pendingDocumentScanResult: MethodChannel.Result? = null
+    private var pendingQrScanResult: MethodChannel.Result? = null
     private var pendingVideoProcessResult: MethodChannel.Result? = null
 
     fun configure(
@@ -103,6 +107,12 @@ class TurnaMediaBridge(
                 "scanDocument" -> {
                     activity.runOnUiThread {
                         presentDocumentScanner(result)
+                    }
+                }
+
+                "scanQrCode" -> {
+                    activity.runOnUiThread {
+                        presentQrScanner(result)
                     }
                 }
 
@@ -507,6 +517,37 @@ class TurnaMediaBridge(
         val height: Int,
         val durationSeconds: Int,
     )
+
+    private fun presentQrScanner(result: MethodChannel.Result) {
+        if (pendingQrScanResult != null) {
+            result.error("busy", "QR tarayıcı zaten açık.", null)
+            return
+        }
+
+        val options =
+            GmsBarcodeScannerOptions
+                .Builder()
+                .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
+                .enableAutoZoom()
+                .build()
+        pendingQrScanResult = result
+        GmsBarcodeScanning
+            .getClient(activity, options)
+            .startScan()
+            .addOnSuccessListener { barcode ->
+                val pending = pendingQrScanResult ?: return@addOnSuccessListener
+                pendingQrScanResult = null
+                pending.success(barcode.rawValue?.trim()?.takeIf { it.isNotEmpty() })
+            }.addOnCanceledListener {
+                val pending = pendingQrScanResult ?: return@addOnCanceledListener
+                pendingQrScanResult = null
+                pending.success(null)
+            }.addOnFailureListener { error ->
+                val pending = pendingQrScanResult ?: return@addOnFailureListener
+                pendingQrScanResult = null
+                pending.error("qr_scan_failed", error.message ?: "QR kodu okunamadı.", null)
+            }
+    }
 
     private fun presentDocumentScanner(result: MethodChannel.Result) {
         if (pendingDocumentScanResult != null) {

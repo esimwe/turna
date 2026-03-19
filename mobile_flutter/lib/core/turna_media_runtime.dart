@@ -47,6 +47,13 @@ class TurnaMediaBridge {
     return TurnaDocumentScanResult.fromMap(Map<String, dynamic>.from(payload));
   }
 
+  static Future<String?> scanQrCode() async {
+    final payload = await _channel.invokeMethod<String>('scanQrCode');
+    final text = payload?.trim();
+    if (text == null || text.isEmpty) return null;
+    return text;
+  }
+
   static Future<TurnaProcessedVideoResult> processVideo({
     required String path,
     required ChatAttachmentTransferMode transferMode,

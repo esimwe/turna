@@ -289,8 +289,12 @@ class _SettingsPageState extends State<SettingsPage> {
               _SettingsMenuAction(
                 icon: Icons.devices_outlined,
                 label: 'Bağlı cihazlar',
-                onTap: () =>
-                    _openPage(const PlaceholderPage(title: 'Bağlı cihazlar')),
+                onTap: () => _openPage(
+                  TurnaLinkedDevicesPage(
+                    session: widget.session,
+                    onSessionExpired: widget.onLogout,
+                  ),
+                ),
               ),
             ]),
             const SizedBox(height: 18),
@@ -5897,6 +5901,670 @@ class _SecurityNotificationsPageState extends State<SecurityNotificationsPage> {
             title: const Text('Show Security notifications on this device'),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _TurnaLinkedWebQrPayload {
+  const _TurnaLinkedWebQrPayload({
+    required this.requestId,
+    required this.secret,
+  });
+
+  final String requestId;
+  final String secret;
+
+  static _TurnaLinkedWebQrPayload? tryParse(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return null;
+
+    final uri = Uri.tryParse(trimmed);
+    if (uri != null && uri.scheme == 'turna' && uri.host == 'web-login') {
+      final requestId = uri.queryParameters['requestId']?.trim() ?? '';
+      final secret = uri.queryParameters['secret']?.trim() ?? '';
+      if (requestId.isNotEmpty && secret.isNotEmpty) {
+        return _TurnaLinkedWebQrPayload(requestId: requestId, secret: secret);
+      }
+    }
+
+    try {
+      final decoded = jsonDecode(trimmed);
+      if (decoded is Map) {
+        final requestId = decoded['requestId']?.toString().trim() ?? '';
+        final secret = decoded['secret']?.toString().trim() ?? '';
+        if (requestId.isNotEmpty && secret.isNotEmpty) {
+          return _TurnaLinkedWebQrPayload(requestId: requestId, secret: secret);
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+}
+
+class TurnaLinkedDevicesPage extends StatefulWidget {
+  const TurnaLinkedDevicesPage({
+    super.key,
+    required this.session,
+    required this.onSessionExpired,
+  });
+
+  final AuthSession session;
+  final VoidCallback onSessionExpired;
+
+  @override
+  State<TurnaLinkedDevicesPage> createState() => _TurnaLinkedDevicesPageState();
+}
+
+class _TurnaLinkedDevicesPageState extends State<TurnaLinkedDevicesPage> {
+  List<TurnaLinkedDeviceSession> _sessions = const [];
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_load());
+  }
+
+  Future<void> _load() async {
+    try {
+      final sessions = await AuthApi.fetchLinkedDevices(widget.session);
+      if (!mounted) return;
+      setState(() {
+        _sessions = sessions;
+        _error = null;
+      });
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _error = error.toString();
+      });
+    }
+  }
+
+  Future<void> _openScanner() async {
+    final linked = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => TurnaLinkedDevicesScannerPage(
+          session: widget.session,
+          onSessionExpired: widget.onSessionExpired,
+        ),
+      ),
+    );
+    if (!mounted || linked != true) return;
+    unawaited(_load());
+  }
+
+  String _formatRelativeSeen(String iso) {
+    final dt = parseTurnaLocalDateTime(iso);
+    if (dt == null) return 'Az önce';
+    final diff = DateTime.now().difference(dt);
+    if (diff.inSeconds < 60) return 'Az önce';
+    if (diff.inMinutes < 60) return '${diff.inMinutes} dk önce';
+    if (diff.inHours < 24) return 'Bugün ${formatTurnaLocalClock(iso)}';
+    if (diff.inDays == 1) return 'Dün ${formatTurnaLocalClock(iso)}';
+    final dd = dt.day.toString().padLeft(2, '0');
+    final mm = dt.month.toString().padLeft(2, '0');
+    return '$dd.$mm.${dt.year}';
+  }
+
+  String _formatConnectedAt(String iso) {
+    final dt = parseTurnaLocalDateTime(iso);
+    if (dt == null) return '';
+    final dd = dt.day.toString().padLeft(2, '0');
+    final mm = dt.month.toString().padLeft(2, '0');
+    final hh = dt.hour.toString().padLeft(2, '0');
+    final min = dt.minute.toString().padLeft(2, '0');
+    return '$dd.$mm.${dt.year} • $hh:$min';
+  }
+
+  IconData _iconForSession(TurnaLinkedDeviceSession session) {
+    final source = '${session.deviceLabel} ${session.userAgent ?? ''}'
+        .toLowerCase();
+    if (source.contains('mac') || source.contains('safari')) {
+      return Icons.laptop_mac_rounded;
+    }
+    if (source.contains('windows') || source.contains('edge')) {
+      return Icons.laptop_windows_rounded;
+    }
+    if (source.contains('linux')) {
+      return Icons.computer_rounded;
+    }
+    if (source.contains('chrome') ||
+        source.contains('firefox') ||
+        source.contains('opera') ||
+        source.contains('browser')) {
+      return Icons.language_rounded;
+    }
+    return Icons.devices_rounded;
+  }
+
+  Future<void> _removeSession(TurnaLinkedDeviceSession session) async {
+    final confirmed = await showModalBottomSheet<bool>(
+      context: context,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(
+                  Icons.link_off_rounded,
+                  color: TurnaColors.error,
+                ),
+                title: const Text(
+                  'Bu cihazın bağlantısını kaldır',
+                  style: TextStyle(color: TurnaColors.error),
+                ),
+                subtitle: Text(session.deviceLabel),
+                onTap: () => Navigator.pop(sheetContext, true),
+              ),
+              ListTile(
+                leading: const Icon(Icons.close_rounded),
+                title: const Text('Vazgeç'),
+                onTap: () => Navigator.pop(sheetContext, false),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+    if (confirmed != true) return;
+
+    try {
+      await AuthApi.revokeLinkedDevice(widget.session, sessionId: session.id);
+      if (!mounted) return;
+      setState(() {
+        _sessions = _sessions
+            .where((item) => item.id != session.id)
+            .toList(growable: false);
+      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Bağlı cihaz kaldırıldı.')));
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
+  Widget _buildHero() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(24, 18, 24, 8),
+      child: Column(
+        children: [
+          Container(
+            width: 116,
+            height: 116,
+            decoration: BoxDecoration(
+              color: const Color(0xFFEAF8EE),
+              borderRadius: BorderRadius.circular(32),
+            ),
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                Positioned(
+                  left: 18,
+                  top: 24,
+                  child: Icon(
+                    Icons.phone_iphone_rounded,
+                    size: 34,
+                    color: TurnaColors.primary.withValues(alpha: 0.88),
+                  ),
+                ),
+                Positioned(
+                  right: 16,
+                  bottom: 20,
+                  child: Icon(
+                    Icons.laptop_mac_rounded,
+                    size: 40,
+                    color: TurnaColors.primary,
+                  ),
+                ),
+                Container(
+                  width: 38,
+                  height: 38,
+                  decoration: const BoxDecoration(
+                    color: Colors.white,
+                    shape: BoxShape.circle,
+                    boxShadow: [TurnaColors.shadowBubble],
+                  ),
+                  child: const Icon(
+                    Icons.lock_rounded,
+                    color: TurnaColors.primary,
+                    size: 20,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 18),
+          const Text(
+            "Turna'yı başka cihazlarda da kullan",
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 28,
+              fontWeight: FontWeight.w800,
+              color: TurnaColors.text,
+              height: 1.08,
+            ),
+          ),
+          const SizedBox(height: 10),
+          const Text(
+            'Web oturumu açmak için bilgisayarındaki Turna QR kodunu tara. Onay verdiğinde web otomatik giriş yapar.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 14.5,
+              height: 1.35,
+              color: TurnaColors.textMuted,
+            ),
+          ),
+          const SizedBox(height: 14),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.lock_rounded,
+                  size: 15,
+                  color: TurnaColors.textMuted,
+                ),
+                SizedBox(width: 6),
+                Flexible(
+                  child: Text(
+                    'Bağlı oturumların tamamı cihaz bazlı yönetilir.',
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      color: TurnaColors.textMuted,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSessionTile(TurnaLinkedDeviceSession session) {
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 2),
+      leading: Container(
+        width: 42,
+        height: 42,
+        decoration: BoxDecoration(
+          color: const Color(0xFFEAF8EE),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Icon(_iconForSession(session), color: TurnaColors.primary),
+      ),
+      title: Text(
+        session.deviceLabel,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(fontWeight: FontWeight.w700),
+      ),
+      subtitle: Padding(
+        padding: const EdgeInsets.only(top: 4),
+        child: Text(
+          'Son aktif ${_formatRelativeSeen(session.lastSeenAt)}\nBağlandı ${_formatConnectedAt(session.createdAt)}',
+          style: const TextStyle(
+            fontSize: 12.5,
+            height: 1.35,
+            color: TurnaColors.textMuted,
+          ),
+        ),
+      ),
+      trailing: IconButton(
+        onPressed: () => _removeSession(session),
+        icon: const Icon(Icons.link_off_rounded),
+        color: TurnaColors.textMuted,
+        tooltip: 'Bağlantıyı kaldır',
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: TurnaColors.backgroundSoft,
+      appBar: AppBar(
+        backgroundColor: TurnaColors.backgroundSoft,
+        surfaceTintColor: Colors.transparent,
+        centerTitle: true,
+        title: const Text(
+          'Bağlı cihazlar',
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
+      ),
+      body: SafeArea(
+        top: false,
+        child: Column(
+          children: [
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.only(bottom: 20),
+                children: [
+                  _buildHero(),
+                  if (_sessions.isNotEmpty) ...[
+                    const Padding(
+                      padding: EdgeInsets.fromLTRB(20, 18, 20, 8),
+                      child: Text(
+                        'Bağlı web oturumları',
+                        style: TextStyle(
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w700,
+                          color: TurnaColors.textMuted,
+                        ),
+                      ),
+                    ),
+                    Container(
+                      margin: const EdgeInsets.symmetric(horizontal: 16),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(18),
+                      ),
+                      child: Column(
+                        children: [
+                          for (
+                            var index = 0;
+                            index < _sessions.length;
+                            index++
+                          ) ...[
+                            if (index > 0)
+                              Divider(
+                                height: 1,
+                                indent: 74,
+                                endIndent: 16,
+                                color: Colors.black.withValues(alpha: 0.06),
+                              ),
+                            _buildSessionTile(_sessions[index]),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ] else if ((_error ?? '').trim().isNotEmpty) ...[
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(24, 8, 24, 0),
+                      child: Text(
+                        _error!,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: TurnaColors.textMuted),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 18),
+              child: SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: _openScanner,
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size.fromHeight(54),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                  ),
+                  child: const Text('Cihaz bağla'),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class TurnaLinkedDevicesScannerPage extends StatefulWidget {
+  const TurnaLinkedDevicesScannerPage({
+    super.key,
+    required this.session,
+    required this.onSessionExpired,
+  });
+
+  final AuthSession session;
+  final VoidCallback onSessionExpired;
+
+  @override
+  State<TurnaLinkedDevicesScannerPage> createState() =>
+      _TurnaLinkedDevicesScannerPageState();
+}
+
+class _TurnaLinkedDevicesScannerPageState
+    extends State<TurnaLinkedDevicesScannerPage> {
+  bool _started = false;
+  bool _busy = false;
+  String? _message;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_startScan());
+    });
+  }
+
+  Future<void> _startScan() async {
+    if (_busy) return;
+    setState(() {
+      _started = true;
+      _busy = true;
+      _message = null;
+    });
+
+    try {
+      final raw = await TurnaMediaBridge.scanQrCode();
+      if (!mounted) return;
+      if (raw == null) {
+        Navigator.pop(context, false);
+        return;
+      }
+
+      final payload = _TurnaLinkedWebQrPayload.tryParse(raw);
+      if (payload == null) {
+        setState(() {
+          _busy = false;
+          _message = 'Bu QR kodu Turna Web için geçerli değil.';
+        });
+        return;
+      }
+
+      final approved = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) {
+          return AlertDialog(
+            title: const Text('Turna Web bağlansın mı?'),
+            content: const Text(
+              'Bu QR kodunu onayladığında bilgisayardaki Turna Web otomatik giriş yapar.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('İptal'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: const Text('Bağla'),
+              ),
+            ],
+          );
+        },
+      );
+      if (approved != true) {
+        if (!mounted) return;
+        setState(() => _busy = false);
+        return;
+      }
+
+      final result = await AuthApi.confirmWebLogin(
+        widget.session,
+        requestId: payload.requestId,
+        secret: payload.secret,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '${result.deviceLabel} için giriş yapıldı. Web oturumu açıldı.',
+          ),
+        ),
+      );
+      Navigator.pop(context, true);
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _message = error.toString();
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.white,
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        leading: TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('İptal'),
+        ),
+        leadingWidth: 72,
+        centerTitle: true,
+        title: const Text(
+          'QR kodunu tara',
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
+      ),
+      body: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 10, 20, 24),
+          child: Column(
+            children: [
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(18),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF6F7F8),
+                  borderRadius: BorderRadius.circular(18),
+                ),
+                child: const Column(
+                  children: [
+                    Text(
+                      'web.turna.im adresini veya masaüstü Turna ekranını aç.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: TurnaColors.text,
+                      ),
+                    ),
+                    SizedBox(height: 8),
+                    Text(
+                      'QR kodu göründüğünde kamera açılır. Kodu okutup onay verdiğinde web otomatik giriş yapar.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 13.5,
+                        height: 1.35,
+                        color: TurnaColors.textMuted,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 24),
+              Expanded(
+                child: Center(
+                  child: Container(
+                    width: double.infinity,
+                    constraints: const BoxConstraints(maxWidth: 360),
+                    padding: const EdgeInsets.all(24),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF6F7F8),
+                      borderRadius: BorderRadius.circular(28),
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 180,
+                          height: 180,
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(28),
+                          ),
+                          child: const Icon(
+                            Icons.qr_code_scanner_rounded,
+                            size: 76,
+                            color: TurnaColors.primary,
+                          ),
+                        ),
+                        const SizedBox(height: 18),
+                        Text(
+                          _message ??
+                              (_started
+                                  ? 'Kamera açıldıktan sonra QR kodunu okut.'
+                                  : 'QR tarayıcı hazır.'),
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            height: 1.35,
+                            color: TurnaColors.textMuted,
+                          ),
+                        ),
+                        const SizedBox(height: 18),
+                        SizedBox(
+                          width: double.infinity,
+                          child: FilledButton(
+                            onPressed: _busy ? null : _startScan,
+                            style: FilledButton.styleFrom(
+                              minimumSize: const Size.fromHeight(50),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                            ),
+                            child: Text(_busy ? 'Kamera açık' : 'Tamam'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              const Text(
+                'Telefon numarasıyla web girişi yok. Bu akış sadece QR ile çalışır.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 13, color: TurnaColors.textMuted),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
