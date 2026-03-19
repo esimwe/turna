@@ -1,6 +1,10 @@
 const storageKey = "turna_web_session_v1";
 const activeChatStorageKey = "turna_web_active_chat_v1";
 const qrPollIntervalMs = 2000;
+const turnaReplyMarkerPattern = /^\[\[turna-reply:([A-Za-z0-9_-]+)\]\]\n?/;
+const turnaLocationMarkerPattern = /^\[\[turna-location:([A-Za-z0-9_-]+)\]\]\n?/;
+const turnaContactMarkerPattern = /^\[\[turna-contact:([A-Za-z0-9_-]+)\]\]\n?/;
+const turnaDeletedEveryoneMarker = "[[turna-deleted-everyone]]";
 
 const state = {
   session: null,
@@ -130,10 +134,14 @@ function setSidebarStatus(text) {
 }
 
 function escapeHtml(value) {
-  return value
+  return String(value)
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;");
+}
+
+function escapeAttr(value) {
+  return escapeHtml(value).replaceAll('"', "&quot;").replaceAll("'", "&#39;");
 }
 
 function formatClock(iso) {
@@ -178,23 +186,307 @@ function buildInitials(label) {
   return parts.map((item) => item[0].toUpperCase()).join("");
 }
 
+function decodeBase64Url(encoded) {
+  try {
+    const normalized = encoded.replaceAll("-", "+").replaceAll("_", "/");
+    const padded = `${normalized}${"=".repeat((4 - (normalized.length % 4 || 4)) % 4)}`;
+    const binary = atob(padded);
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    return new TextDecoder().decode(bytes);
+  } catch {
+    return null;
+  }
+}
+
+function parseTurnaMessageText(rawValue) {
+  const raw = String(rawValue || "");
+  if (raw.trim() === turnaDeletedEveryoneMarker) {
+    return {
+      text: "Silindi.",
+      deletedForEveryone: true,
+      reply: null,
+      location: null,
+      contact: null
+    };
+  }
+
+  let working = raw;
+  let reply = null;
+
+  const replyMatch = working.match(turnaReplyMarkerPattern);
+  if (replyMatch) {
+    const decoded = decodeBase64Url(replyMatch[1]);
+    if (decoded) {
+      try {
+        reply = JSON.parse(decoded);
+        working = working.slice(replyMatch[0].length);
+      } catch {
+        return {
+          text: raw,
+          deletedForEveryone: false,
+          reply: null,
+          location: null,
+          contact: null
+        };
+      }
+    }
+  }
+
+  const locationMatch = working.match(turnaLocationMarkerPattern);
+  if (locationMatch) {
+    const decoded = decodeBase64Url(locationMatch[1]);
+    if (decoded) {
+      try {
+        return {
+          text: working.slice(locationMatch[0].length).trimStart(),
+          deletedForEveryone: false,
+          reply,
+          location: JSON.parse(decoded),
+          contact: null
+        };
+      } catch {
+        return {
+          text: raw,
+          deletedForEveryone: false,
+          reply: null,
+          location: null,
+          contact: null
+        };
+      }
+    }
+  }
+
+  const contactMatch = working.match(turnaContactMarkerPattern);
+  if (contactMatch) {
+    const decoded = decodeBase64Url(contactMatch[1]);
+    if (decoded) {
+      try {
+        return {
+          text: working.slice(contactMatch[0].length).trimStart(),
+          deletedForEveryone: false,
+          reply,
+          location: null,
+          contact: JSON.parse(decoded)
+        };
+      } catch {
+        return {
+          text: raw,
+          deletedForEveryone: false,
+          reply: null,
+          location: null,
+          contact: null
+        };
+      }
+    }
+  }
+
+  return {
+    text: working,
+    deletedForEveryone: false,
+    reply,
+    location: null,
+    contact: null
+  };
+}
+
+function formatLocationCoordinates(latitude, longitude) {
+  const lat = Number(latitude);
+  const lng = Number(longitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return "";
+  return `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+}
+
 function describeMessage(message) {
-  const text = (message?.text || "").trim();
+  const parsed = parseTurnaMessageText(message?.text || "");
+  if (parsed.deletedForEveryone) return parsed.text;
+  if (parsed.location) {
+    if (parsed.location.live) {
+      return parsed.location.endedAt ? "Canlı konum (sona erdi)" : "Canlı konum";
+    }
+    const title = String(parsed.location.title || "").trim();
+    return title || "Konum";
+  }
+  if (parsed.contact) {
+    const label = String(parsed.contact.displayName || "").trim();
+    return label || "Kişi";
+  }
+  const text = parsed.text.trim();
   if (text) return text;
   if (!Array.isArray(message?.attachments) || message.attachments.length === 0) {
     return "Mesaj";
   }
   const first = message.attachments[0];
-  if (first.kind === "image") return "Fotoğraf";
-  if (first.kind === "video") return "Video";
+  if (isImageAttachment(first)) return "Fotoğraf";
+  if (isVideoAttachment(first)) return "Video";
   return first.fileName?.trim() || "Dosya";
 }
 
 function describeAttachment(attachment) {
   if (!attachment) return "Ek";
-  if (attachment.kind === "image") return "Fotoğraf";
-  if (attachment.kind === "video") return "Video";
+  if (isImageAttachment(attachment)) return "Fotoğraf";
+  if (isVideoAttachment(attachment)) return "Video";
   return attachment.fileName?.trim() || "Dosya";
+}
+
+function isImageAttachment(attachment) {
+  const contentType = String(attachment?.contentType || "").toLowerCase();
+  if (String(attachment?.kind || "").toLowerCase() === "file") return false;
+  return contentType.startsWith("image/");
+}
+
+function isVideoAttachment(attachment) {
+  const contentType = String(attachment?.contentType || "").toLowerCase();
+  if (String(attachment?.kind || "").toLowerCase() === "file") return false;
+  return contentType.startsWith("video/");
+}
+
+function formatBytesLabel(bytes) {
+  const size = Number(bytes || 0);
+  if (!Number.isFinite(size) || size <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let value = size;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value >= 10 || unitIndex === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unitIndex]}`;
+}
+
+function renderReplyMarkup(parsed) {
+  if (!parsed?.reply) return "";
+  const sender = String(parsed.reply.senderLabel || "Mesaj").trim() || "Mesaj";
+  const preview = String(parsed.reply.previewText || "").trim() || "Yanıtlanan mesaj";
+  return `
+    <div class="reply-card">
+      <div class="reply-card-title">${escapeHtml(sender)}</div>
+      <div class="reply-card-text">${escapeHtml(preview)}</div>
+    </div>
+  `;
+}
+
+function renderLocationMarkup(location) {
+  if (!location) return "";
+  const title = String(location.live ? "Canlı konum" : location.title || "Konum").trim() || "Konum";
+  const subtitle = location.live
+    ? (location.endedAt ? "Paylaşım sona erdi" : "Canlı paylaşım")
+    : String(location.subtitle || "").trim() || formatLocationCoordinates(location.latitude, location.longitude);
+  const mapUrl = `https://maps.google.com/?q=${encodeURIComponent(
+    `${location.latitude},${location.longitude}`
+  )}`;
+  return `
+    <a class="rich-card rich-card-location" href="${escapeAttr(mapUrl)}" target="_blank" rel="noreferrer">
+      <div class="rich-card-icon">📍</div>
+      <div class="rich-card-copy">
+        <div class="rich-card-title">${escapeHtml(title)}</div>
+        <div class="rich-card-text">${escapeHtml(subtitle || "Haritada aç")}</div>
+      </div>
+    </a>
+  `;
+}
+
+function renderContactMarkup(contact) {
+  if (!contact) return "";
+  const phones = Array.isArray(contact.phones) ? contact.phones.filter(Boolean) : [];
+  const title = String(contact.displayName || "Kişi").trim() || "Kişi";
+  const subtitle = phones.length === 0
+    ? "Paylaşılan kişi"
+    : phones.length === 1
+      ? phones[0]
+      : `${phones[0]} ve ${phones.length - 1} numara daha`;
+  const primaryPhone = phones[0] ? `tel:${phones[0].replaceAll(/\s+/g, "")}` : "";
+  const tagName = primaryPhone ? "a" : "div";
+  const linkAttrs = primaryPhone
+    ? ` href="${escapeAttr(primaryPhone)}" target="_blank" rel="noreferrer"`
+    : "";
+  return `
+    <${tagName} class="rich-card rich-card-contact"${linkAttrs}>
+      <div class="rich-card-icon">👤</div>
+      <div class="rich-card-copy">
+        <div class="rich-card-title">${escapeHtml(title)}</div>
+        <div class="rich-card-text">${escapeHtml(subtitle)}</div>
+      </div>
+    </${tagName}>
+  `;
+}
+
+function renderAttachmentMarkup(attachment) {
+  const url = String(attachment?.url || "").trim();
+  if (isImageAttachment(attachment) && url) {
+    return `
+      <a class="message-media-link" href="${escapeAttr(url)}" target="_blank" rel="noreferrer">
+        <img class="message-image" src="${escapeAttr(url)}" alt="${escapeAttr(describeAttachment(attachment))}" loading="lazy" />
+      </a>
+    `;
+  }
+  if (isVideoAttachment(attachment) && url) {
+    return `
+      <video class="message-video" controls preload="metadata" playsinline>
+        <source src="${escapeAttr(url)}" type="${escapeAttr(attachment.contentType || "video/mp4")}" />
+      </video>
+    `;
+  }
+  const fileName = String(attachment?.fileName || describeAttachment(attachment)).trim() || "Dosya";
+  const fileMeta = formatBytesLabel(attachment?.sizeBytes);
+  if (url) {
+    return `
+      <a class="file-card" href="${escapeAttr(url)}" target="_blank" rel="noreferrer">
+        <span class="file-card-icon">↗</span>
+        <span class="file-card-copy">
+          <span class="file-card-title">${escapeHtml(fileName)}</span>
+          <span class="file-card-meta">${escapeHtml(fileMeta)}</span>
+        </span>
+      </a>
+    `;
+  }
+  return `
+    <div class="file-card">
+      <span class="file-card-icon">↗</span>
+      <span class="file-card-copy">
+        <span class="file-card-title">${escapeHtml(fileName)}</span>
+        <span class="file-card-meta">${escapeHtml(fileMeta)}</span>
+      </span>
+    </div>
+  `;
+}
+
+function renderMessageBody(message) {
+  const parsed = parseTurnaMessageText(message?.text || "");
+  const blocks = [];
+
+  if (parsed.reply) {
+    blocks.push(renderReplyMarkup(parsed));
+  }
+  if (parsed.location) {
+    blocks.push(renderLocationMarkup(parsed.location));
+  }
+  if (parsed.contact) {
+    blocks.push(renderContactMarkup(parsed.contact));
+  }
+
+  const text = parsed.text.trim();
+  if (text || parsed.deletedForEveryone) {
+    blocks.push(
+      `<div class="message-text${parsed.deletedForEveryone ? " message-deleted" : ""}">${escapeHtml(
+        parsed.deletedForEveryone ? "Silindi." : text
+      )}</div>`
+    );
+  }
+
+  const attachments = Array.isArray(message?.attachments) ? message.attachments : [];
+  if (attachments.length > 0) {
+    blocks.push(`
+      <div class="message-attachments">
+        ${attachments.map((attachment) => renderAttachmentMarkup(attachment)).join("")}
+      </div>
+    `);
+  }
+
+  if (blocks.length === 0) {
+    blocks.push(`<div class="message-text">${escapeHtml(describeMessage(message))}</div>`);
+  }
+
+  return blocks.join("");
 }
 
 function buildBrowserLabel() {
@@ -341,6 +633,8 @@ function renderChatList() {
 
 function renderMessages() {
   const chatId = state.activeChatId;
+  const shouldStickToBottom =
+    refs.messageList.scrollHeight - refs.messageList.scrollTop - refs.messageList.clientHeight < 120;
   if (!chatId) {
     refs.messageList.classList.add("empty");
     refs.messageList.innerHTML = `
@@ -373,20 +667,11 @@ function renderMessages() {
           const senderLabel = mine
             ? "Siz"
             : (message.senderDisplayName || state.activeChatDetail?.title || "Turna").trim();
-          const attachmentMarkup = Array.isArray(message.attachments)
-            ? message.attachments
-                .map(
-                  (attachment) =>
-                    `<div class="attachment-chip">${escapeHtml(describeAttachment(attachment))}</div>`
-                )
-                .join("")
-            : "";
           return `
             <div class="message-row${mine ? " mine" : ""}">
               <article class="message-bubble">
                 ${mine ? "" : `<div class="message-sender">${escapeHtml(senderLabel)}</div>`}
-                <div class="message-text">${escapeHtml(describeMessage(message))}</div>
-                ${attachmentMarkup}
+                ${renderMessageBody(message)}
                 <div class="message-meta">${escapeHtml(formatClock(message.createdAt))}</div>
               </article>
             </div>
@@ -395,6 +680,9 @@ function renderMessages() {
         .join("")}
     </div>
   `;
+  if (shouldStickToBottom) {
+    requestAnimationFrame(scrollMessagesToBottom);
+  }
 }
 
 function scrollMessagesToBottom() {
