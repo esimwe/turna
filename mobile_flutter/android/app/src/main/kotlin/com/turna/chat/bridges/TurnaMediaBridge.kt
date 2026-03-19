@@ -59,6 +59,15 @@ class TurnaMediaBridge(
                     }
                 }
 
+                "shareText" -> {
+                    val text = call.argument<String>("text")
+                    if (text.isNullOrBlank()) {
+                        result.error("invalid_args", "Paylaşım metni gerekli.", null)
+                    } else {
+                        shareText(text, result)
+                    }
+                }
+
                 "saveToGallery" -> {
                     val path = call.argument<String>("path")
                     val mimeType = call.argument<String>("mimeType")
@@ -182,6 +191,29 @@ class TurnaMediaBridge(
                     type = mimeType?.takeIf { it.isNotBlank() } ?: "*/*"
                     putExtra(Intent.EXTRA_STREAM, uri)
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+            activity.startActivity(Intent.createChooser(intent, "Paylaş"))
+            result.success(null)
+        } catch (error: Throwable) {
+            result.error("share_failed", error.message, null)
+        }
+    }
+
+    private fun shareText(
+        text: String,
+        result: MethodChannel.Result,
+    ) {
+        val normalized = text.trim()
+        if (normalized.isEmpty()) {
+            result.error("invalid_args", "Paylaşım metni gerekli.", null)
+            return
+        }
+
+        try {
+            val intent =
+                Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_TEXT, normalized)
                 }
             activity.startActivity(Intent.createChooser(intent, "Paylaş"))
             result.success(null)
