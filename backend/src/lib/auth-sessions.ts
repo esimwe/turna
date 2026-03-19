@@ -4,6 +4,21 @@ import { emitSessionRevoked } from "../modules/chat/chat.realtime.js";
 
 const prismaAuthSession = (prisma as unknown as { authSession: any }).authSession;
 
+export interface AuthSessionContext {
+  deviceId: string | null;
+  platform: string | null;
+  deviceModel: string | null;
+  osVersion: string | null;
+  appVersion: string | null;
+  localeTag: string | null;
+  regionCode: string | null;
+  connectionType: string | null;
+  countryIso: string | null;
+  ipCountryIso: string | null;
+  ipAddress: string | null;
+  userAgent: string | null;
+}
+
 function firstHeaderValue(value: string | string[] | undefined): string | null {
   if (Array.isArray(value)) {
     return value[0]?.trim() || null;
@@ -68,6 +83,47 @@ export function getRequestIpCountryIso(req: Request): string | null {
   return headerValue?.toUpperCase() ?? null;
 }
 
+function normalizeSessionValue(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed?.length ? trimmed : null;
+}
+
+export function buildAuthSessionContextFromRequest(req: Request): AuthSessionContext {
+  return {
+    deviceId: normalizeSessionValue(getRequestDeviceId(req)),
+    platform: normalizeSessionValue(getRequestPlatform(req)),
+    deviceModel: normalizeSessionValue(getRequestDeviceModel(req)),
+    osVersion: normalizeSessionValue(getRequestOsVersion(req)),
+    appVersion: normalizeSessionValue(getRequestAppVersion(req)),
+    localeTag: normalizeSessionValue(getRequestLocaleTag(req)),
+    regionCode: normalizeSessionValue(getRequestRegionCode(req)),
+    connectionType: normalizeSessionValue(getRequestConnectionType(req)),
+    countryIso: normalizeSessionValue(getRequestCountryIso(req)),
+    ipCountryIso: normalizeSessionValue(getRequestIpCountryIso(req)),
+    ipAddress: normalizeSessionValue(getRequestIp(req)),
+    userAgent: normalizeSessionValue(getRequestUserAgent(req))
+  };
+}
+
+function buildPersistableAuthSessionContext(
+  context: Partial<AuthSessionContext> | null | undefined
+): AuthSessionContext {
+  return {
+    deviceId: normalizeSessionValue(context?.deviceId ?? null),
+    platform: normalizeSessionValue(context?.platform ?? null),
+    deviceModel: normalizeSessionValue(context?.deviceModel ?? null),
+    osVersion: normalizeSessionValue(context?.osVersion ?? null),
+    appVersion: normalizeSessionValue(context?.appVersion ?? null),
+    localeTag: normalizeSessionValue(context?.localeTag ?? null),
+    regionCode: normalizeSessionValue(context?.regionCode ?? null),
+    connectionType: normalizeSessionValue(context?.connectionType ?? null),
+    countryIso: normalizeSessionValue(context?.countryIso ?? null),
+    ipCountryIso: normalizeSessionValue(context?.ipCountryIso ?? null),
+    ipAddress: normalizeSessionValue(context?.ipAddress ?? null),
+    userAgent: normalizeSessionValue(context?.userAgent ?? null)
+  };
+}
+
 async function revokeSessionIds(sessionIds: string[], reason: string): Promise<number> {
   if (sessionIds.length === 0) return 0;
 
@@ -91,9 +147,9 @@ async function revokeSessionIds(sessionIds: string[], reason: string): Promise<n
   return result.count;
 }
 
-export async function createAuthSessionForRequest(
+export async function createAuthSession(
   userId: string,
-  req: Request,
+  context: Partial<AuthSessionContext> | null | undefined,
   options: {
     revokeExisting?: boolean;
     revokeReason?: string;
@@ -118,20 +174,20 @@ export async function createAuthSessionForRequest(
   return prismaAuthSession.create({
     data: {
       userId,
-      deviceId: getRequestDeviceId(req),
-      platform: getRequestPlatform(req),
-      deviceModel: getRequestDeviceModel(req),
-      osVersion: getRequestOsVersion(req),
-      appVersion: getRequestAppVersion(req),
-      localeTag: getRequestLocaleTag(req),
-      regionCode: getRequestRegionCode(req),
-      connectionType: getRequestConnectionType(req),
-      countryIso: getRequestCountryIso(req),
-      ipCountryIso: getRequestIpCountryIso(req),
-      ipAddress: getRequestIp(req),
-      userAgent: getRequestUserAgent(req)
+      ...buildPersistableAuthSessionContext(context)
     }
   });
+}
+
+export async function createAuthSessionForRequest(
+  userId: string,
+  req: Request,
+  options: {
+    revokeExisting?: boolean;
+    revokeReason?: string;
+  } = {}
+) {
+  return createAuthSession(userId, buildAuthSessionContextFromRequest(req), options);
 }
 
 export async function revokeAuthSession(sessionId: string, reason: string): Promise<void> {
