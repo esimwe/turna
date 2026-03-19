@@ -20,11 +20,14 @@ class _CallsPageState extends State<CallsPage> {
   int _refreshTick = 0;
   String? _startingCallHistoryId;
   late Future<List<TurnaCallHistoryItem>> _callsFuture;
+  List<TurnaCallHistoryItem>? _cachedCalls;
 
   @override
   void initState() {
     super.initState();
+    _cachedCalls = TurnaCallHistoryLocalCache.peek(widget.session.userId);
     _callsFuture = _buildCallsFuture();
+    unawaited(_restoreCachedCalls());
     widget.callCoordinator.addListener(_onCallUpdate);
   }
 
@@ -33,7 +36,9 @@ class _CallsPageState extends State<CallsPage> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.session.userId != widget.session.userId ||
         oldWidget.session.token != widget.session.token) {
+      _cachedCalls = TurnaCallHistoryLocalCache.peek(widget.session.userId);
       _reloadCalls();
+      unawaited(_restoreCachedCalls());
     }
   }
 
@@ -50,6 +55,12 @@ class _CallsPageState extends State<CallsPage> {
 
   Future<List<TurnaCallHistoryItem>> _buildCallsFuture() {
     return CallApi.fetchCalls(widget.session, refreshTick: _refreshTick);
+  }
+
+  Future<void> _restoreCachedCalls() async {
+    final cached = await TurnaCallHistoryLocalCache.load(widget.session.userId);
+    if (!mounted || cached.isEmpty || _cachedCalls != null) return;
+    setState(() => _cachedCalls = cached);
   }
 
   void _reloadCalls() {
@@ -169,12 +180,14 @@ class _CallsPageState extends State<CallsPage> {
       appBar: AppBar(title: const Text('Aramalar')),
       body: FutureBuilder<List<TurnaCallHistoryItem>>(
         future: _callsFuture,
+        initialData: _cachedCalls,
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
+          final calls = snapshot.data ?? _cachedCalls;
+          if (snapshot.hasData) {
+            _cachedCalls = snapshot.data;
           }
 
-          if (snapshot.hasError) {
+          if (snapshot.hasError && calls == null) {
             final error = snapshot.error;
             final isAuthError = error is TurnaUnauthorizedException;
             if (isAuthError) {
@@ -189,8 +202,8 @@ class _CallsPageState extends State<CallsPage> {
             );
           }
 
-          final calls = snapshot.data ?? const [];
-          if (calls.isEmpty) {
+          final visibleCalls = calls ?? const <TurnaCallHistoryItem>[];
+          if (visibleCalls.isEmpty) {
             return const _CenteredState(
               icon: Icons.call_outlined,
               title: 'Henüz arama yok',
@@ -202,7 +215,7 @@ class _CallsPageState extends State<CallsPage> {
             onRefresh: () async => _reloadCalls(),
             child: ListView.separated(
               physics: const AlwaysScrollableScrollPhysics(),
-              itemCount: calls.length,
+              itemCount: visibleCalls.length,
               separatorBuilder: (context, index) => const Divider(
                 height: 1,
                 indent: 76,
@@ -210,7 +223,7 @@ class _CallsPageState extends State<CallsPage> {
                 color: Color(0x12000000),
               ),
               itemBuilder: (context, index) {
-                final item = calls[index];
+                final item = visibleCalls[index];
                 final isStartingCall = _startingCallHistoryId == item.id;
                 final isMissed =
                     item.status == TurnaCallStatus.missed ||

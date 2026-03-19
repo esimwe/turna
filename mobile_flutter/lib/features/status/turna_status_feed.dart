@@ -19,10 +19,21 @@ class _StatusesPageState extends State<StatusesPage> {
   TurnaStatusFeedData? _cachedFeed;
   bool _actionBusy = false;
 
+  static final TurnaStatusFeedData _placeholderFeed = TurnaStatusFeedData(
+    mine: TurnaStatusMySummary(count: 0),
+    privacy: TurnaStatusPrivacySettings(
+      mode: TurnaStatusPrivacyMode.myContacts,
+    ),
+    updates: const <TurnaStatusAuthorSummary>[],
+    mutedUpdates: const <TurnaStatusAuthorSummary>[],
+  );
+
   @override
   void initState() {
     super.initState();
+    _cachedFeed = TurnaStatusFeedLocalCache.peek(widget.session.userId);
     _feedFuture = _buildFeedFuture();
+    unawaited(_restoreCachedFeed());
   }
 
   @override
@@ -30,13 +41,22 @@ class _StatusesPageState extends State<StatusesPage> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.session.token != widget.session.token ||
         oldWidget.session.userId != widget.session.userId) {
-      _cachedFeed = null;
+      _cachedFeed = TurnaStatusFeedLocalCache.peek(widget.session.userId);
       _feedFuture = _buildFeedFuture();
+      unawaited(_restoreCachedFeed());
     }
   }
 
   Future<TurnaStatusFeedData> _buildFeedFuture() {
     return TurnaStatusApi.fetchFeed(widget.session);
+  }
+
+  Future<void> _restoreCachedFeed() async {
+    final cached = await TurnaStatusFeedLocalCache.load(widget.session.userId);
+    if (!mounted || cached == null || _cachedFeed != null) return;
+    setState(() {
+      _cachedFeed = cached;
+    });
   }
 
   void _scheduleReload() {
@@ -172,19 +192,17 @@ class _StatusesPageState extends State<StatusesPage> {
           ),
           body: Builder(
             builder: (context) {
-              if (data == null &&
-                  snapshot.connectionState == ConnectionState.waiting) {
-                return const Center(child: CircularProgressIndicator());
-              }
-              if (data == null) {
+              if (snapshot.hasError && data == null) {
                 return _StatusErrorView(
                   title: 'Durumlar yüklenemedi',
                   onRetry: _reload,
                 );
               }
 
-              final updates = data.updates;
-              final mutedUpdates = data.mutedUpdates;
+              final feed = data ?? _placeholderFeed;
+              final ready = data != null;
+              final updates = feed.updates;
+              final mutedUpdates = feed.mutedUpdates;
 
               return RefreshIndicator(
                 onRefresh: _reload,
@@ -194,15 +212,20 @@ class _StatusesPageState extends State<StatusesPage> {
                   children: [
                     _MyStatusTile(
                       session: widget.session,
-                      summary: data.mine,
+                      summary: feed.mine,
+                      enabled: ready,
                       onTap: () {
-                        if (data.mine.hasStatuses) {
+                        if (!ready) return;
+                        if (feed.mine.hasStatuses) {
                           _openUserFeed(widget.session.userId);
                           return;
                         }
-                        _openCapturePage(data.privacy);
+                        _openCapturePage(feed.privacy);
                       },
-                      onAdd: () => _openCapturePage(data.privacy),
+                      onAdd: () {
+                        if (!ready) return;
+                        _openCapturePage(feed.privacy);
+                      },
                     ),
                     const SizedBox(height: 18),
                     if (updates.isNotEmpty) ...[
@@ -222,7 +245,11 @@ class _StatusesPageState extends State<StatusesPage> {
                     ],
                     if (updates.isEmpty && mutedUpdates.isEmpty)
                       _StatusEmptyView(
-                        onCreate: () => _openCapturePage(data.privacy),
+                        enabled: ready,
+                        onCreate: () {
+                          if (!ready) return;
+                          _openCapturePage(feed.privacy);
+                        },
                       ),
                     if (mutedUpdates.isNotEmpty) ...[
                       const SizedBox(height: 12),
@@ -257,12 +284,14 @@ class _MyStatusTile extends StatelessWidget {
     required this.summary,
     required this.onTap,
     required this.onAdd,
+    this.enabled = true,
   });
 
   final AuthSession session;
   final TurnaStatusMySummary summary;
   final VoidCallback onTap;
   final VoidCallback onAdd;
+  final bool enabled;
 
   @override
   Widget build(BuildContext context) {
@@ -275,7 +304,7 @@ class _MyStatusTile extends StatelessWidget {
       borderRadius: BorderRadius.circular(22),
       child: InkWell(
         borderRadius: BorderRadius.circular(22),
-        onTap: onTap,
+        onTap: enabled ? onTap : null,
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Row(
@@ -294,12 +323,14 @@ class _MyStatusTile extends StatelessWidget {
                     right: -2,
                     bottom: -2,
                     child: GestureDetector(
-                      onTap: onAdd,
+                      onTap: enabled ? onAdd : null,
                       child: Container(
                         width: 24,
                         height: 24,
                         decoration: BoxDecoration(
-                          color: TurnaColors.primary,
+                          color: enabled
+                              ? TurnaColors.primary
+                              : TurnaColors.textMuted,
                           shape: BoxShape.circle,
                           border: Border.all(color: Colors.white, width: 2),
                         ),
@@ -517,9 +548,10 @@ class _StatusSectionLabel extends StatelessWidget {
 }
 
 class _StatusEmptyView extends StatelessWidget {
-  const _StatusEmptyView({required this.onCreate});
+  const _StatusEmptyView({required this.onCreate, this.enabled = true});
 
   final VoidCallback onCreate;
+  final bool enabled;
 
   @override
   Widget build(BuildContext context) {
@@ -565,7 +597,7 @@ class _StatusEmptyView extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           FilledButton.icon(
-            onPressed: onCreate,
+            onPressed: enabled ? onCreate : null,
             icon: const Icon(Icons.add_rounded),
             label: const Text('Durum paylaş'),
           ),

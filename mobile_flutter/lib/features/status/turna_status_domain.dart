@@ -10,11 +10,20 @@ class TurnaStatusApi {
       ChatApi._throwIfApiError(res);
 
       final map = jsonDecode(res.body) as Map<String, dynamic>;
-      final data = map['data'] as Map<String, dynamic>? ?? const {};
+      final data = Map<String, dynamic>.from(
+        map['data'] as Map<String, dynamic>? ?? const {},
+      );
+      await TurnaStatusFeedLocalCache.save(session.userId, data);
       return TurnaStatusFeedData.fromMap(data);
+    } on TurnaUnauthorizedException {
+      rethrow;
     } on TurnaApiException {
+      final cached = await TurnaStatusFeedLocalCache.load(session.userId);
+      if (cached != null) return cached;
       rethrow;
     } catch (_) {
+      final cached = await TurnaStatusFeedLocalCache.load(session.userId);
+      if (cached != null) return cached;
       throw TurnaApiException('Durumlar yüklenemedi.');
     }
   }
@@ -236,6 +245,20 @@ class TurnaStatusApi {
       rethrow;
     } catch (_) {
       throw TurnaApiException('Durumu görenler yüklenemedi.');
+    }
+  }
+
+  static Future<void> deleteStatus(AuthSession session, String statusId) async {
+    try {
+      final res = await http.delete(
+        Uri.parse('$kBackendBaseUrl/api/statuses/$statusId'),
+        headers: {'Authorization': 'Bearer ${session.token}'},
+      );
+      ChatApi._throwIfApiError(res);
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Durum silinemedi.');
     }
   }
 

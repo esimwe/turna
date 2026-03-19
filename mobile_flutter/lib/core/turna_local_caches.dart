@@ -168,6 +168,50 @@ class TurnaChatInboxLocalCache {
   }
 }
 
+class TurnaStatusFeedLocalCache {
+  static const String _prefix = 'turna_status_feed_v1_';
+  static final Map<String, TurnaStatusFeedData> _warm =
+      <String, TurnaStatusFeedData>{};
+
+  static String _key(String userId) => '$_prefix$userId';
+
+  static TurnaStatusFeedData? peek(String userId) => _warm[userId];
+
+  static Future<TurnaStatusFeedData?> load(String userId) async {
+    final warm = peek(userId);
+    if (warm != null) return warm;
+
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_key(userId));
+    if (raw == null || raw.trim().isEmpty) return null;
+    try {
+      final decoded = jsonDecode(raw) as Map<String, dynamic>;
+      final feed = TurnaStatusFeedData.fromMap(decoded);
+      _warm[userId] = feed;
+      return feed;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<void> save(String userId, Map<String, dynamic> rawData) async {
+    final normalized = Map<String, dynamic>.from(rawData);
+    _warm[userId] = TurnaStatusFeedData.fromMap(normalized);
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_key(userId), jsonEncode(normalized));
+  }
+
+  static Future<void> clearAll() async {
+    _warm.clear();
+    final prefs = await SharedPreferences.getInstance();
+    final keys = prefs.getKeys().where((key) => key.startsWith(_prefix));
+    for (final key in keys) {
+      await prefs.remove(key);
+    }
+  }
+}
+
 class TurnaChatDetailLocalCache {
   static const String _prefix = 'turna_chat_detail_v1_';
   static final Map<String, TurnaChatDetail> _warm = <String, TurnaChatDetail>{};

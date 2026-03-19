@@ -1,5 +1,7 @@
 part of '../../app/turna_app.dart';
 
+enum _OwnStatusAction { forward, save, delete }
+
 class StatusViewerPage extends StatefulWidget {
   const StatusViewerPage({
     super.key,
@@ -30,6 +32,24 @@ class _StatusViewerPageState extends State<StatusViewerPage> {
   void initState() {
     super.initState();
     _feedFuture = TurnaStatusApi.fetchUserFeed(widget.session, widget.userId);
+  }
+
+  @override
+  void didUpdateWidget(covariant StatusViewerPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.userId == widget.userId &&
+        oldWidget.session.userId == widget.session.userId &&
+        oldWidget.session.token == widget.session.token) {
+      return;
+    }
+    _imageTimer?.cancel();
+    _imageTimer = null;
+    _progress = 0;
+    _index = 0;
+    _feed = null;
+    _statusMarkedBusy = false;
+    _feedFuture = TurnaStatusApi.fetchUserFeed(widget.session, widget.userId);
+    unawaited(_disposeVideo());
   }
 
   @override
@@ -70,7 +90,7 @@ class _StatusViewerPageState extends State<StatusViewerPage> {
   void _startImageTimer() {
     _imageTimer?.cancel();
     const totalMs = 5000;
-    var elapsed = 0;
+    var elapsed = (_progress.clamp(0, 1) * totalMs).round();
     _imageTimer = Timer.periodic(const Duration(milliseconds: 50), (timer) {
       elapsed += 50;
       if (!mounted) return;
@@ -82,6 +102,31 @@ class _StatusViewerPageState extends State<StatusViewerPage> {
         _goNext();
       }
     });
+  }
+
+  Future<void> _pausePlayback() async {
+    _imageTimer?.cancel();
+    _imageTimer = null;
+    final controller = _videoController;
+    if (controller != null && controller.value.isInitialized) {
+      await controller.pause();
+    }
+  }
+
+  Future<void> _resumePlayback() async {
+    final feed = _feed;
+    if (feed == null || feed.items.isEmpty || !mounted) return;
+    final item = feed.items[_index];
+    if (item.isVideo) {
+      final controller = _videoController;
+      if (controller != null && controller.value.isInitialized) {
+        await controller.play();
+        return;
+      }
+      await _prepareVideo(item);
+      return;
+    }
+    _startImageTimer();
   }
 
   Future<void> _disposeVideo() async {
@@ -171,7 +216,260 @@ class _StatusViewerPageState extends State<StatusViewerPage> {
     unawaited(_activateCurrentItem());
   }
 
+  Future<File> _downloadStatusFile(TurnaStatusItem item) async {
+    final url = item.url?.trim() ?? '';
+    if (url.isEmpty) {
+      throw TurnaApiException('Durum medyası bulunamadı.');
+    }
+
+    final cacheKey = 'status:${item.objectKey ?? item.id}';
+    final cachedFile = await TurnaLocalMediaCache.getOrDownloadFile(
+      cacheKey: cacheKey,
+      url: url,
+      authToken: widget.session.token,
+    );
+    if (cachedFile == null) {
+      throw TurnaApiException('Durum indirilemedi.');
+    }
+
+    return TurnaLocalMediaCache.prepareMediaFile(
+      cacheKey: cacheKey,
+      sourceFile: cachedFile,
+      mimeType: item.contentType,
+      fileName: item.fileName,
+    );
+  }
+
+  Future<void> _saveOwnStatus(TurnaStatusItem item) async {
+    final file = await _downloadStatusFile(item);
+    await TurnaMediaBridge.saveToGallery(
+      path: file.path,
+      mimeType: item.contentType,
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Durum cihaza kaydedildi.')));
+  }
+
+  Future<OutgoingAttachmentDraft> _uploadOwnStatusToChat(
+    TurnaStatusItem item,
+    ChatPreview targetChat,
+  ) async {
+    final file = await _downloadStatusFile(item);
+    if (!await file.exists()) {
+      throw TurnaApiException('Durum dosyası bulunamadı.');
+    }
+
+    final fileName = item.fileName?.trim().isNotEmpty == true
+        ? item.fileName!.trim()
+        : file.uri.pathSegments.last;
+    final contentType = item.contentType?.trim().isNotEmpty == true
+        ? item.contentType!.trim()
+        : (item.isVideo ? 'video/mp4' : 'image/jpeg');
+    final upload = await ChatApi.createAttachmentUpload(
+      widget.session,
+      chatId: targetChat.chatId,
+      kind: item.isVideo ? ChatAttachmentKind.video : ChatAttachmentKind.image,
+      contentType: contentType,
+      fileName: fileName,
+    );
+
+    final sizeBytes = item.sizeBytes ?? await file.length();
+    final request = http.StreamedRequest('PUT', Uri.parse(upload.uploadUrl));
+    request.headers.addAll(upload.headers);
+    request.contentLength = sizeBytes;
+    final responseFuture = request.send();
+    await file.openRead().pipe(request.sink);
+    final uploadRes = await responseFuture;
+    if (uploadRes.statusCode >= 400) {
+      throw TurnaApiException('Durum iletilemedi.');
+    }
+
+    return OutgoingAttachmentDraft(
+      objectKey: upload.objectKey,
+      kind: item.isVideo ? ChatAttachmentKind.video : ChatAttachmentKind.image,
+      transferMode: ChatAttachmentTransferMode.standard,
+      fileName: fileName,
+      contentType: contentType,
+      sizeBytes: sizeBytes,
+      width: item.width,
+      height: item.height,
+      durationSeconds: item.durationSeconds,
+    );
+  }
+
+  Future<void> _forwardOwnStatus(TurnaStatusItem item) async {
+    final targetChat = await Navigator.push<ChatPreview>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ForwardMessagePickerPage(
+          session: widget.session,
+          currentChatId: '',
+          title: 'İlet',
+        ),
+      ),
+    );
+    if (!mounted || targetChat == null) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(content: Text('${targetChat.name} sohbetine iletiliyor...')),
+      );
+
+    if (item.isText) {
+      final text = item.text?.trim() ?? '';
+      if (text.isEmpty) {
+        messenger
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            const SnackBar(content: Text('İletilecek durum metni bulunamadı.')),
+          );
+        return;
+      }
+      await ChatApi.sendMessage(
+        widget.session,
+        chatId: targetChat.chatId,
+        text: text,
+      );
+    } else {
+      final draft = await _uploadOwnStatusToChat(item, targetChat);
+      await ChatApi.sendMessage(
+        widget.session,
+        chatId: targetChat.chatId,
+        attachments: [draft],
+      );
+    }
+
+    if (!mounted) return;
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(content: Text('${targetChat.name} sohbetine iletildi.')),
+      );
+  }
+
+  Future<void> _deleteOwnStatus(TurnaStatusItem item) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Durumu sil'),
+        content: const Text('Bu durum herkes için kaldırılacak.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Vazgeç'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Sil'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) {
+      await _resumePlayback();
+      return;
+    }
+
+    await TurnaStatusApi.deleteStatus(widget.session, item.id);
+    await TurnaLocalMediaCache.remove('status:${item.objectKey ?? item.id}');
+
+    final feed = _feed;
+    if (feed == null || !mounted) return;
+    final nextItems = feed.items
+        .where((entry) => entry.id != item.id)
+        .toList(growable: false);
+    if (nextItems.isEmpty) {
+      Navigator.pop(context);
+      return;
+    }
+
+    setState(() {
+      _feed = TurnaStatusUserFeed(
+        own: feed.own,
+        user: feed.user,
+        items: nextItems,
+      );
+      if (_index >= nextItems.length) {
+        _index = nextItems.length - 1;
+      }
+      _progress = 0;
+    });
+    await _activateCurrentItem();
+  }
+
+  Future<void> _handleOwnStatusAction(
+    TurnaStatusItem item,
+    _OwnStatusAction action,
+  ) async {
+    await _pausePlayback();
+    try {
+      switch (action) {
+        case _OwnStatusAction.forward:
+          await _forwardOwnStatus(item);
+          break;
+        case _OwnStatusAction.save:
+          await _saveOwnStatus(item);
+          break;
+        case _OwnStatusAction.delete:
+          await _deleteOwnStatus(item);
+          return;
+      }
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+      return;
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+
+    await _resumePlayback();
+  }
+
+  List<PopupMenuEntry<_OwnStatusAction>> _buildOwnStatusMenuItems(
+    TurnaStatusItem item,
+  ) {
+    return <PopupMenuEntry<_OwnStatusAction>>[
+      const PopupMenuItem<_OwnStatusAction>(
+        value: _OwnStatusAction.forward,
+        child: ListTile(
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          leading: Icon(Icons.forward_outlined),
+          title: Text('İlet'),
+        ),
+      ),
+      if (!item.isText)
+        const PopupMenuItem<_OwnStatusAction>(
+          value: _OwnStatusAction.save,
+          child: ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.save_alt_rounded),
+            title: Text('Kaydet'),
+          ),
+        ),
+      const PopupMenuDivider(height: 1),
+      const PopupMenuItem<_OwnStatusAction>(
+        value: _OwnStatusAction.delete,
+        child: ListTile(
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          leading: Icon(Icons.delete_outline_rounded, color: TurnaColors.error),
+          title: Text('Sil', style: TextStyle(color: TurnaColors.error)),
+        ),
+      ),
+    ];
+  }
+
   Future<void> _showViewers(TurnaStatusItem item) async {
+    await _pausePlayback();
     try {
       final viewers = await TurnaStatusApi.fetchViewers(
         widget.session,
@@ -249,6 +547,8 @@ class _StatusViewerPageState extends State<StatusViewerPage> {
         context,
       ).showSnackBar(SnackBar(content: Text(error.toString())));
     }
+    if (!mounted) return;
+    await _resumePlayback();
   }
 
   @override
@@ -258,8 +558,8 @@ class _StatusViewerPageState extends State<StatusViewerPage> {
       body: FutureBuilder<TurnaStatusUserFeed>(
         future: _feedFuture,
         builder: (context, snapshot) {
-          final feed = snapshot.data ?? _feed;
-          if (snapshot.hasData && _feed != snapshot.data) {
+          final feed = _feed ?? snapshot.data;
+          if (_feed == null && snapshot.hasData) {
             _feed = snapshot.data;
             WidgetsBinding.instance.addPostFrameCallback((_) {
               if (!mounted) return;
@@ -274,7 +574,9 @@ class _StatusViewerPageState extends State<StatusViewerPage> {
             );
           }
 
-          if (snapshot.hasError || feed == null || feed.items.isEmpty) {
+          if ((snapshot.hasError && feed == null) ||
+              feed == null ||
+              feed.items.isEmpty) {
             return Center(
               child: Padding(
                 padding: const EdgeInsets.all(24),
@@ -389,6 +691,26 @@ class _StatusViewerPageState extends State<StatusViewerPage> {
                           ],
                         ),
                       ),
+                      if (feed.own)
+                        PopupMenuButton<_OwnStatusAction>(
+                          tooltip: 'Durum seçenekleri',
+                          color: Colors.white,
+                          icon: const Icon(
+                            Icons.more_horiz_rounded,
+                            color: Colors.white,
+                          ),
+                          onOpened: () {
+                            unawaited(_pausePlayback());
+                          },
+                          onCanceled: () {
+                            unawaited(_resumePlayback());
+                          },
+                          itemBuilder: (context) =>
+                              _buildOwnStatusMenuItems(item),
+                          onSelected: (action) {
+                            unawaited(_handleOwnStatusAction(item, action));
+                          },
+                        ),
                       IconButton(
                         onPressed: _close,
                         icon: const Icon(

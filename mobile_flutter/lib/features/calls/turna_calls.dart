@@ -59,7 +59,11 @@ class CallApi {
           .toList();
       await TurnaCallHistoryLocalCache.save(session.userId, items);
       return items;
+    } on TurnaUnauthorizedException {
+      rethrow;
     } on TurnaApiException {
+      final cached = await TurnaCallHistoryLocalCache.load(session.userId);
+      if (cached.isNotEmpty) return cached;
       rethrow;
     } catch (_) {
       final cached = await TurnaCallHistoryLocalCache.load(session.userId);

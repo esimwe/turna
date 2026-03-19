@@ -1,5 +1,21 @@
 part of '../../app/turna_app.dart';
 
+Future<_PreparedComposerAttachment> _prepareTurnaProfileAvatarUpload(
+  XFile file,
+) async {
+  final seed = buildTurnaMediaComposerSeed(
+    file,
+    forcedKind: ChatAttachmentKind.image,
+  );
+  if (seed == null) {
+    throw TurnaApiException('Desteklenmeyen görsel formatı.');
+  }
+  return _prepareTurnaInlineImageAttachment(
+    seed,
+    quality: MediaComposerQuality.standard,
+  );
+}
+
 class SettingsPage extends StatefulWidget {
   const SettingsPage({
     super.key,
@@ -2042,34 +2058,13 @@ class _ProfilePageState extends State<ProfilePage> {
     ).showSnackBar(SnackBar(content: Text(successMessage)));
   }
 
-  String? _guessImageContentType(String fileName) {
-    final lower = fileName.toLowerCase();
-    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
-    if (lower.endsWith('.png')) return 'image/png';
-    if (lower.endsWith('.webp')) return 'image/webp';
-    if (lower.endsWith('.gif')) return 'image/gif';
-    if (lower.endsWith('.heic')) return 'image/heic';
-    if (lower.endsWith('.heif')) return 'image/heif';
-    return null;
-  }
-
   Future<void> _pickAvatar() async {
     final previousAvatarUrl = resolveTurnaSessionAvatarUrl(
       widget.session,
       overrideAvatarUrl: _profile?.avatarUrl,
     );
-    final file = await _imagePicker.pickImage(
-      source: ImageSource.gallery,
-      imageQuality: 88,
-      maxWidth: 1400,
-    );
+    final file = await _imagePicker.pickImage(source: ImageSource.gallery);
     if (file == null) return;
-
-    final contentType = _guessImageContentType(file.name);
-    if (contentType == null) {
-      setState(() => _error = 'Desteklenmeyen görsel formatı.');
-      return;
-    }
 
     setState(() {
       _avatarBusy = true;
@@ -2077,17 +2072,17 @@ class _ProfilePageState extends State<ProfilePage> {
     });
 
     try {
+      final prepared = await _prepareTurnaProfileAvatarUpload(file);
       final upload = await ProfileApi.createAvatarUpload(
         widget.session,
-        contentType: contentType,
-        fileName: file.name,
+        contentType: prepared.contentType,
+        fileName: prepared.fileName,
       );
 
-      final bytes = await file.readAsBytes();
       final uploadRes = await http.put(
         Uri.parse(upload.uploadUrl),
         headers: upload.headers,
-        body: bytes,
+        body: prepared.bytes,
       );
       if (uploadRes.statusCode >= 400) {
         throw TurnaApiException('Avatar yüklenemedi.');
