@@ -1112,6 +1112,59 @@ statusRouter.get("/:statusId/viewers", requireAuth, async (req, res) => {
   }
 });
 
+statusRouter.delete("/:statusId", requireAuth, async (req, res) => {
+  await cleanupExpiredStatuses();
+
+  const parsed = statusIdParamSchema.safeParse(req.params);
+  if (!parsed.success) {
+    res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
+    return;
+  }
+
+  try {
+    const row = await prismaStatusItem.findUnique({
+      where: { id: parsed.data.statusId },
+      select: {
+        id: true,
+        authorId: true,
+        objectKey: true,
+        expiresAt: true
+      }
+    });
+
+    if (!row || row.expiresAt <= new Date()) {
+      res.status(404).json({ error: "status_not_found" });
+      return;
+    }
+
+    if (row.authorId !== req.authUserId!) {
+      res.status(403).json({ error: "forbidden_status_delete" });
+      return;
+    }
+
+    await prismaStatusItem.delete({
+      where: { id: row.id }
+    });
+
+    const objectKey = row.objectKey?.trim();
+    if (objectKey) {
+      deleteObject(objectKey).catch((error: unknown) => {
+        logError("status object delete failed", error);
+      });
+    }
+
+    res.json({
+      data: {
+        deleted: true,
+        id: row.id
+      }
+    });
+  } catch (error) {
+    logError("status delete failed", error);
+    res.status(500).json({ error: "failed_to_delete_status" });
+  }
+});
+
 statusRouter.post("/users/:userId/mute", requireAuth, async (req, res) => {
   const parsedParams = userIdParamSchema.safeParse(req.params);
   const parsedBody = setStatusMutedSchema.safeParse(req.body);
