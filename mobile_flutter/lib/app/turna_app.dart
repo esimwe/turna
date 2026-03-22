@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+import 'package:archive/archive.dart';
 import 'package:camera/camera.dart' as cam;
 import 'package:audioplayers/audioplayers.dart' as ap;
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -79,6 +80,7 @@ part '../core/turna_local_caches.dart';
 part '../core/turna_upload_models.dart';
 part '../features/chat/turna_inbox.dart';
 part '../features/chat/turna_chat_room.dart';
+part '../features/chat/turna_expression_packs.dart';
 part '../features/chat/turna_reaction_packs.dart';
 part '../features/chat/turna_scheduled_messages.dart';
 part '../features/chat/turna_group_info.dart';

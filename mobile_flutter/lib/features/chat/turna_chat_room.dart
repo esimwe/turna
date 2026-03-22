@@ -743,6 +743,42 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     _TurnaStickerSelection selection,
   ) async {
     if (_attachmentBusy || _composerActionBusy) return;
+
+    if (selection.sourceKind == TurnaExpressionPackSourceKind.remoteZip &&
+        (selection.relativeAssetPath?.trim().isNotEmpty ?? false)) {
+      final cachedFile =
+          await TurnaExpressionPackCatalogLoader.resolveCachedAsset(
+            packId: selection.packId,
+            version: selection.version,
+            relativePath: selection.relativeAssetPath!.trim(),
+          );
+      if (cachedFile == null) {
+        throw TurnaApiException('Sticker paketi bu cihazda henüz hazır değil.');
+      }
+
+      switch (selection.assetType) {
+        case TurnaExpressionAssetType.staticPng:
+        case TurnaExpressionAssetType.staticWebp:
+          await _sendPickedAttachment(
+            kind: ChatAttachmentKind.image,
+            fileName:
+                'sticker-${selection.packId}-${selection.stickerId}.${selection.assetType == TurnaExpressionAssetType.staticPng ? 'png' : 'webp'}',
+            contentType:
+                selection.assetType == TurnaExpressionAssetType.staticPng
+                ? 'image/png'
+                : 'image/webp',
+            filePath: cachedFile.path,
+            sizeBytes: await cachedFile.length(),
+          );
+          return;
+        case TurnaExpressionAssetType.animatedLottie:
+        case TurnaExpressionAssetType.videoWebm:
+          throw TurnaApiException(
+            'Bu sticker formatı için gerçek render katmanı henüz açılmadı.',
+          );
+      }
+    }
+
     final bytes = await _renderComposerStickerPng(selection);
     await _sendPickedAttachment(
       kind: ChatAttachmentKind.image,

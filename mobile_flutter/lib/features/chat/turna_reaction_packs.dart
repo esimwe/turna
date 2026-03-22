@@ -835,12 +835,16 @@ class _TurnaStickerItem {
     required this.emoji,
     required this.label,
     required this.colors,
+    required this.assetType,
+    this.relativeAssetPath,
   });
 
   final String id;
   final String emoji;
   final String label;
   final List<Color> colors;
+  final TurnaExpressionAssetType assetType;
+  final String? relativeAssetPath;
 }
 
 class _TurnaStickerPack {
@@ -848,12 +852,16 @@ class _TurnaStickerPack {
     required this.id,
     required this.title,
     required this.subtitle,
+    required this.sourceKind,
+    required this.version,
     required this.items,
   });
 
   final String id;
   final String title;
   final String subtitle;
+  final TurnaExpressionPackSourceKind sourceKind;
+  final String version;
   final List<_TurnaStickerItem> items;
 }
 
@@ -865,6 +873,10 @@ class _TurnaStickerSelection {
     required this.emoji,
     required this.label,
     required this.colors,
+    required this.sourceKind,
+    required this.version,
+    required this.assetType,
+    this.relativeAssetPath,
   });
 
   final String packId;
@@ -873,6 +885,10 @@ class _TurnaStickerSelection {
   final String emoji;
   final String label;
   final List<Color> colors;
+  final TurnaExpressionPackSourceKind sourceKind;
+  final String version;
+  final TurnaExpressionAssetType assetType;
+  final String? relativeAssetPath;
 }
 
 class _TurnaStickerTab {
@@ -890,174 +906,6 @@ class _TurnaStickerTab {
   final List<_TurnaStickerItem> items;
   final _TurnaStickerPack? pack;
 }
-
-const List<_TurnaStickerPack> _turnaStickerPacks = <_TurnaStickerPack>[
-  _TurnaStickerPack(
-    id: 'moodies',
-    title: 'Moodies',
-    subtitle: 'Gunluk ruh halini renkli cikartmalarla yolla.',
-    items: <_TurnaStickerItem>[
-      _TurnaStickerItem(
-        id: 'smile',
-        emoji: '😊',
-        label: 'Tatli',
-        colors: <Color>[Color(0xFFFFE29F), Color(0xFFFFA99F)],
-      ),
-      _TurnaStickerItem(
-        id: 'love',
-        emoji: '🥰',
-        label: 'Ask',
-        colors: <Color>[Color(0xFFFFC3D8), Color(0xFFFF8FB2)],
-      ),
-      _TurnaStickerItem(
-        id: 'cool',
-        emoji: '😎',
-        label: 'Cool',
-        colors: <Color>[Color(0xFFB2F0FF), Color(0xFF79B8FF)],
-      ),
-      _TurnaStickerItem(
-        id: 'mindblown',
-        emoji: '🤯',
-        label: 'Sok',
-        colors: <Color>[Color(0xFFFFD8A8), Color(0xFFFF9E80)],
-      ),
-      _TurnaStickerItem(
-        id: 'party',
-        emoji: '🥳',
-        label: 'Kutla',
-        colors: <Color>[Color(0xFFE7C6FF), Color(0xFFC77DFF)],
-      ),
-      _TurnaStickerItem(
-        id: 'sleepy',
-        emoji: '😴',
-        label: 'Uyku',
-        colors: <Color>[Color(0xFFCDEBFF), Color(0xFF92A3FD)],
-      ),
-      _TurnaStickerItem(
-        id: 'cry',
-        emoji: '😭',
-        label: 'Agliyorum',
-        colors: <Color>[Color(0xFFAEE6FF), Color(0xFF71C9CE)],
-      ),
-      _TurnaStickerItem(
-        id: 'rage',
-        emoji: '😤',
-        label: 'Hirs',
-        colors: <Color>[Color(0xFFFFC6B3), Color(0xFFFF8A65)],
-      ),
-    ],
-  ),
-  _TurnaStickerPack(
-    id: 'cozy',
-    title: 'Cozy',
-    subtitle: 'Kahve, sakinlik ve yavas gunler icin mini set.',
-    items: <_TurnaStickerItem>[
-      _TurnaStickerItem(
-        id: 'coffee',
-        emoji: '☕️',
-        label: 'Kahve',
-        colors: <Color>[Color(0xFFFFE1C6), Color(0xFFC49A6C)],
-      ),
-      _TurnaStickerItem(
-        id: 'book',
-        emoji: '📚',
-        label: 'Okuma',
-        colors: <Color>[Color(0xFFD6E4FF), Color(0xFF8EA7E9)],
-      ),
-      _TurnaStickerItem(
-        id: 'headphones',
-        emoji: '🎧',
-        label: 'Muzik',
-        colors: <Color>[Color(0xFFD8FFF1), Color(0xFF6DDCCF)],
-      ),
-      _TurnaStickerItem(
-        id: 'leaf',
-        emoji: '🌿',
-        label: 'Sakin',
-        colors: <Color>[Color(0xFFDFF5D8), Color(0xFF8BC34A)],
-      ),
-      _TurnaStickerItem(
-        id: 'moon',
-        emoji: '🌙',
-        label: 'Gece',
-        colors: <Color>[Color(0xFFD8D8FF), Color(0xFF7B7BCE)],
-      ),
-      _TurnaStickerItem(
-        id: 'cloud',
-        emoji: '☁️',
-        label: 'Bulut',
-        colors: <Color>[Color(0xFFF2F6FF), Color(0xFFB6CCFE)],
-      ),
-      _TurnaStickerItem(
-        id: 'tea',
-        emoji: '🍵',
-        label: 'Mola',
-        colors: <Color>[Color(0xFFE8FFD7), Color(0xFFA5D6A7)],
-      ),
-      _TurnaStickerItem(
-        id: 'sparkles',
-        emoji: '✨',
-        label: 'Parla',
-        colors: <Color>[Color(0xFFFFF2B2), Color(0xFFFFD166)],
-      ),
-    ],
-  ),
-  _TurnaStickerPack(
-    id: 'hype',
-    title: 'Hype',
-    subtitle: 'Cevabi buyutmek istediginde kullan.',
-    items: <_TurnaStickerItem>[
-      _TurnaStickerItem(
-        id: 'rocket',
-        emoji: '🚀',
-        label: 'Ucalim',
-        colors: <Color>[Color(0xFFE0ECFF), Color(0xFF80B3FF)],
-      ),
-      _TurnaStickerItem(
-        id: 'fire',
-        emoji: '🔥',
-        label: 'Alev',
-        colors: <Color>[Color(0xFFFFD6A5), Color(0xFFFF7F51)],
-      ),
-      _TurnaStickerItem(
-        id: 'star',
-        emoji: '🌟',
-        label: 'Yildiz',
-        colors: <Color>[Color(0xFFFFF2A8), Color(0xFFFFC300)],
-      ),
-      _TurnaStickerItem(
-        id: 'boom',
-        emoji: '💥',
-        label: 'Boom',
-        colors: <Color>[Color(0xFFFFC6C6), Color(0xFFFF8A80)],
-      ),
-      _TurnaStickerItem(
-        id: 'clap',
-        emoji: '👏',
-        label: 'Bravo',
-        colors: <Color>[Color(0xFFFFE0B2), Color(0xFFFFB74D)],
-      ),
-      _TurnaStickerItem(
-        id: 'trophy',
-        emoji: '🏆',
-        label: 'Kupayi al',
-        colors: <Color>[Color(0xFFFFF1B8), Color(0xFFE0A800)],
-      ),
-      _TurnaStickerItem(
-        id: 'spark',
-        emoji: '⚡️',
-        label: 'Hiz',
-        colors: <Color>[Color(0xFFFFF7AE), Color(0xFFFFD54F)],
-      ),
-      _TurnaStickerItem(
-        id: 'party-popper',
-        emoji: '🎉',
-        label: 'Kutlama',
-        colors: <Color>[Color(0xFFFFD6E8), Color(0xFFFF9EC4)],
-      ),
-    ],
-  ),
-];
 
 class _TurnaComposerEmojiPanel extends StatefulWidget {
   const _TurnaComposerEmojiPanel({
@@ -1081,6 +929,7 @@ class _TurnaComposerEmojiPanel extends StatefulWidget {
 
 class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
   TurnaReactionPackCatalog? _catalog;
+  List<_TurnaStickerPack> _stickerPacks = const <_TurnaStickerPack>[];
   final List<String> _sessionRecentEmojis = <String>[];
   final List<String> _sessionRecentStickerIds = <String>[];
   String? _selectedTabId;
@@ -1182,7 +1031,7 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
         );
       }
     }
-    for (final pack in _turnaStickerPacks) {
+    for (final pack in _stickerPacks) {
       tabs.add(
         _TurnaStickerTab(
           id: pack.id,
@@ -1259,7 +1108,7 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
   }
 
   _TurnaStickerItem? _stickerItemById(String id) {
-    for (final pack in _turnaStickerPacks) {
+    for (final pack in _stickerPacks) {
       for (final item in pack.items) {
         if (item.id == id) return item;
       }
@@ -1274,9 +1123,17 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
     });
     try {
       final catalog = await ChatApi.fetchReactionPacks(widget.session);
+      List<_TurnaStickerPack> stickerPacks = const <_TurnaStickerPack>[];
+      try {
+        stickerPacks =
+            await TurnaExpressionPackCatalogLoader._loadStickerPacks();
+      } catch (error) {
+        turnaLog('expression pack manifest load skipped', error);
+      }
       if (!mounted) return;
       setState(() {
         _catalog = catalog;
+        _stickerPacks = stickerPacks;
         _loading = false;
         _syncSelectedTab();
         _syncSelectedStickerTab();
@@ -1515,7 +1372,7 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
     final selectedTab = _selectedStickerTab;
     final pack =
         selectedTab?.pack ??
-        _turnaStickerPacks.firstWhere(
+        _stickerPacks.firstWhere(
           (item) => item.items.any((entry) => entry.id == sticker.id),
         );
     setState(() {
@@ -1539,6 +1396,10 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
           emoji: sticker.emoji,
           label: sticker.label,
           colors: sticker.colors,
+          sourceKind: pack.sourceKind,
+          version: pack.version,
+          assetType: sticker.assetType,
+          relativeAssetPath: sticker.relativeAssetPath,
         ),
       );
     } catch (error) {
@@ -1791,6 +1652,23 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
     final title =
         selectedTab?.pack?.title ?? selectedTab?.label ?? 'Çıkartmalar';
     final subtitle = selectedTab?.pack?.subtitle;
+
+    if (_stickerPacks.isEmpty) {
+      return const <Widget>[
+        Expanded(
+          child: Center(
+            child: Padding(
+              padding: EdgeInsets.symmetric(horizontal: 24),
+              child: Text(
+                'Henüz kurulu sticker paketi bulunamadı.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: TurnaColors.textMuted),
+              ),
+            ),
+          ),
+        ),
+      ];
+    }
 
     return <Widget>[
       Padding(

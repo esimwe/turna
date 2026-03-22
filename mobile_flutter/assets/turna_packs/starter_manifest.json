@@ -1,0 +1,56 @@
+{
+  "catalogVersion": "2026.03.23",
+  "packs": [
+    {
+      "id": "moodies",
+      "title": "Moodies",
+      "subtitle": "Gunluk ruh halini renkli cikartmalarla yolla.",
+      "version": "1",
+      "sourceKind": "bundled_generated",
+      "items": [
+        { "id": "smile", "emoji": "😊", "label": "Tatli", "assetType": "static_png", "palette": ["#FFE29F", "#FFA99F"] },
+        { "id": "love", "emoji": "🥰", "label": "Ask", "assetType": "static_png", "palette": ["#FFC3D8", "#FF8FB2"] },
+        { "id": "cool", "emoji": "😎", "label": "Cool", "assetType": "static_png", "palette": ["#B2F0FF", "#79B8FF"] },
+        { "id": "mindblown", "emoji": "🤯", "label": "Sok", "assetType": "static_png", "palette": ["#FFD8A8", "#FF9E80"] },
+        { "id": "party", "emoji": "🥳", "label": "Kutla", "assetType": "static_png", "palette": ["#E7C6FF", "#C77DFF"] },
+        { "id": "sleepy", "emoji": "😴", "label": "Uyku", "assetType": "static_png", "palette": ["#CDEBFF", "#92A3FD"] },
+        { "id": "cry", "emoji": "😭", "label": "Agliyorum", "assetType": "static_png", "palette": ["#AEE6FF", "#71C9CE"] },
+        { "id": "rage", "emoji": "😤", "label": "Hirs", "assetType": "static_png", "palette": ["#FFC6B3", "#FF8A65"] }
+      ]
+    },
+    {
+      "id": "cozy",
+      "title": "Cozy",
+      "subtitle": "Kahve, sakinlik ve yavas gunler icin mini set.",
+      "version": "1",
+      "sourceKind": "bundled_generated",
+      "items": [
+        { "id": "coffee", "emoji": "☕️", "label": "Kahve", "assetType": "static_png", "palette": ["#FFE1C6", "#C49A6C"] },
+        { "id": "book", "emoji": "📚", "label": "Okuma", "assetType": "static_png", "palette": ["#D6E4FF", "#8EA7E9"] },
+        { "id": "headphones", "emoji": "🎧", "label": "Muzik", "assetType": "static_png", "palette": ["#D8FFF1", "#6DDCCF"] },
+        { "id": "leaf", "emoji": "🌿", "label": "Sakin", "assetType": "static_png", "palette": ["#DFF5D8", "#8BC34A"] },
+        { "id": "moon", "emoji": "🌙", "label": "Gece", "assetType": "static_png", "palette": ["#D8D8FF", "#7B7BCE"] },
+        { "id": "cloud", "emoji": "☁️", "label": "Bulut", "assetType": "static_png", "palette": ["#F2F6FF", "#B6CCFE"] },
+        { "id": "tea", "emoji": "🍵", "label": "Mola", "assetType": "static_png", "palette": ["#E8FFD7", "#A5D6A7"] },
+        { "id": "sparkles", "emoji": "✨", "label": "Parla", "assetType": "static_png", "palette": ["#FFF2B2", "#FFD166"] }
+      ]
+    },
+    {
+      "id": "hype",
+      "title": "Hype",
+      "subtitle": "Cevabi buyutmek istediginde kullan.",
+      "version": "1",
+      "sourceKind": "bundled_generated",
+      "items": [
+        { "id": "rocket", "emoji": "🚀", "label": "Ucalim", "assetType": "static_png", "palette": ["#E0ECFF", "#80B3FF"] },
+        { "id": "fire", "emoji": "🔥", "label": "Alev", "assetType": "static_png", "palette": ["#FFD6A5", "#FF7F51"] },
+        { "id": "star", "emoji": "🌟", "label": "Yildiz", "assetType": "static_png", "palette": ["#FFF2A8", "#FFC300"] },
+        { "id": "boom", "emoji": "💥", "label": "Boom", "assetType": "static_png", "palette": ["#FFC6C6", "#FF8A80"] },
+        { "id": "clap", "emoji": "👏", "label": "Bravo", "assetType": "static_png", "palette": ["#FFE0B2", "#FFB74D"] },
+        { "id": "trophy", "emoji": "🏆", "label": "Kupayi al", "assetType": "static_png", "palette": ["#FFF1B8", "#E0A800"] },
+        { "id": "spark", "emoji": "⚡️", "label": "Hiz", "assetType": "static_png", "palette": ["#FFF7AE", "#FFD54F"] },
+        { "id": "party-popper", "emoji": "🎉", "label": "Kutlama", "assetType": "static_png", "palette": ["#FFD6E8", "#FF9EC4"] }
+      ]
+    }
+  ]
+}
