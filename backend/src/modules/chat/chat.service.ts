@@ -87,6 +87,7 @@ const GROUP_MEMBER_BANNED_SYSTEM_TYPE = "group_member_banned";
 const GROUP_MEMBER_UNBANNED_SYSTEM_TYPE = "group_member_unbanned";
 const DIRECT_MESSAGE_EXPIRATION_UPDATED_SYSTEM_TYPE =
   "direct_message_expiration_updated";
+const SAVED_MESSAGES_TITLE = "Kendime Notlar";
 const MessageStatus = {
   sent: "sent",
   delivered: "delivered",
@@ -934,6 +935,33 @@ export class ChatService {
     return participants.find((participantId) => participantId !== userId) ?? null;
   }
 
+  private isSelfDirectChat(chatId: string, userId: string): boolean {
+    const participants = this.extractDirectParticipants(chatId);
+    if (!participants) return false;
+    return participants[0] === userId && participants[1] === userId;
+  }
+
+  private buildDirectChatTitle(input: {
+    viewerUserId: string;
+    peer:
+      | {
+          id?: string | null;
+          phone?: string | null;
+          displayName?: string | null;
+        }
+      | null;
+  }): string {
+    const peer = input.peer;
+    if (!peer || peer.id === input.viewerUserId) {
+      return SAVED_MESSAGES_TITLE;
+    }
+    return peer.phone ?? peer.displayName ?? "New Chat";
+  }
+
+  private async ensureSavedMessagesChat(userId: string): Promise<void> {
+    await this.ensureChatAccess(`direct_${userId}_${userId}`, userId);
+  }
+
   getDirectParticipants(chatId: string): string[] {
     const participants = this.extractDirectParticipants(chatId);
     return participants ? [...participants] : [];
@@ -1021,12 +1049,13 @@ export class ChatService {
 
     const participants = this.extractDirectParticipants(chatId);
     if (!participants || !participants.includes(userId)) return false;
+    const uniqueParticipants = Array.from(new Set(participants));
 
     const users = await prisma.user.findMany({
-      where: { id: { in: participants } },
+      where: { id: { in: uniqueParticipants } },
       select: { id: true }
     });
-    if (users.length !== 2) return false;
+    if (users.length !== uniqueParticipants.length) return false;
     const preference = await getUserPrivacyPreference(userId);
     const defaultMessageExpirationSeconds =
       preference.defaultMessageExpirationSeconds;
@@ -1041,12 +1070,14 @@ export class ChatService {
         defaultMessageExpirationUserId:
           defaultMessageExpirationSeconds != null ? userId : null,
         members: {
-          create: participants.map((participantId) => ({ userId: participantId }))
+          create: uniqueParticipants.map((participantId) => ({
+            userId: participantId
+          }))
         }
       },
       update: {
         members: {
-          connectOrCreate: participants.map((participantId) => ({
+          connectOrCreate: uniqueParticipants.map((participantId) => ({
             where: { chatId_userId: { chatId, userId: participantId } },
             create: { userId: participantId }
           }))
@@ -1067,6 +1098,9 @@ export class ChatService {
     if (chat?.type === ChatType.GROUP) {
       this.assertGroupRateLimit(payload.chatId, payload.senderId);
     }
+    const isSelfDirectMessage =
+      chat?.type === ChatType.DIRECT &&
+      this.isSelfDirectChat(payload.chatId, payload.senderId);
 
     const preparedAttachments = await this.prepareAttachments(
       payload.chatId,
@@ -1093,7 +1127,7 @@ export class ChatService {
           chatId: payload.chatId,
           senderId: payload.senderId,
           text: payload.text?.trim() ? payload.text.trim() : null,
-          status: MessageStatus.sent,
+          status: isSelfDirectMessage ? MessageStatus.read : MessageStatus.sent,
           expiresAt,
           attachments: preparedAttachments.length
             ? {
@@ -1807,6 +1841,8 @@ export class ChatService {
   }
 
   async getChatSummaries(userId: string): Promise<ChatSummary[]> {
+    await this.ensureSavedMessagesChat(userId);
+
     const memberships = await prisma.chatMember.findMany({
       where: { userId },
       select: {
@@ -1862,6 +1898,14 @@ export class ChatService {
       memberships.map(async (membership: any) => {
         const chat = membership.chat;
         const peer = chat.members.find((m: any) => m.userId !== userId)?.user;
+        const selfUser =
+          chat.type === ChatType.DIRECT
+            ? (chat.members.find((m: any) => m.userId === userId)?.user ?? null)
+            : null;
+        const directDisplayUser = peer ?? selfUser;
+        const isSelfDirect =
+          chat.type === ChatType.DIRECT &&
+          (!peer || directDisplayUser?.id === userId);
         const last = chat.messages.find((message: any) => !isSilentSystemType(message.systemType)) ?? null;
         const hiddenAt = membership.hiddenAt;
         const clearedAt = membership.clearedAt;
@@ -1906,7 +1950,10 @@ export class ChatService {
           title:
             chat.type === ChatType.GROUP
               ? chat.title?.trim() || "Yeni grup"
-              : peer?.phone ?? peer?.displayName ?? "New Chat",
+              : this.buildDirectChatTitle({
+                  viewerUserId: userId,
+                  peer: directDisplayUser
+                }),
           chatType: (chat.type === ChatType.GROUP ? "group" : "direct") as AppChatType,
           memberPreviewNames:
             chat.type === ChatType.GROUP
@@ -1926,17 +1973,26 @@ export class ChatService {
           })(),
           lastMessageAt: visibleLast ? visibleLast.createdAt.toISOString() : null,
           unreadCount,
-          peerId: chat.type === ChatType.DIRECT ? (peer?.id ?? null) : null,
-          peerAvatarKey: chat.type === ChatType.DIRECT ? (peer?.avatarUrl ?? null) : null,
+          peerId:
+            chat.type === ChatType.DIRECT && !isSelfDirect ? (peer?.id ?? null) : null,
+          peerAvatarKey:
+            chat.type === ChatType.DIRECT
+              ? (directDisplayUser?.avatarUrl ?? null)
+              : null,
           peerUpdatedAt:
-            chat.type === ChatType.DIRECT && peer?.updatedAt ? peer.updatedAt.toISOString() : null,
+            chat.type === ChatType.DIRECT && directDisplayUser?.updatedAt
+              ? directDisplayUser.updatedAt.toISOString()
+              : null,
           groupAvatarUrl: chat.type === ChatType.GROUP ? (chat.avatarUrl ?? null) : null,
           groupDescription: chat.type === ChatType.GROUP ? (chat.description ?? null) : null,
           memberCount: chat.members.length,
           myRole: chat.type === ChatType.GROUP ? membership.role : null,
           isPublic: chat.type === ChatType.GROUP ? chat.isPublic === true : false,
           isMuted: membership.muted,
-          isBlockedByMe: chat.type === ChatType.DIRECT && peer ? blockedPeerIds.has(peer.id) : false,
+          isBlockedByMe:
+            chat.type === ChatType.DIRECT && peer && !isSelfDirect
+              ? blockedPeerIds.has(peer.id)
+              : false,
           isArchived: membership.archivedAt != null,
           isFavorited: membership.favorited === true,
           isLocked: membership.locked === true,
@@ -2105,6 +2161,11 @@ export class ChatService {
     const peer = chat.type === ChatType.DIRECT
       ? chat.members.find((member: any) => member.userId !== userId)?.user ?? null
       : null;
+    const selfUser =
+      chat.type === ChatType.DIRECT
+        ? chat.members.find((member: any) => member.userId === userId)?.user ?? null
+        : null;
+    const directDisplayUser = peer ?? selfUser;
     const activeMute =
       chat.type === ChatType.GROUP ? await this.getActiveMute(chatId, userId) : null;
 
@@ -2114,14 +2175,17 @@ export class ChatService {
       title:
         chat.type === ChatType.GROUP
           ? chat.title?.trim() || "Yeni grup"
-          : peer?.phone ?? peer?.displayName ?? "New Chat",
+          : this.buildDirectChatTitle({
+              viewerUserId: userId,
+              peer: directDisplayUser
+            }),
       memberPreviewNames:
         chat.type === ChatType.GROUP ? buildGroupMemberPreviewNames(chat.members, userId) : [],
       description: chat.type === ChatType.GROUP ? (chat.description ?? null) : null,
       avatarUrl:
         chat.type === ChatType.GROUP
           ? (chat.avatarUrl ?? null)
-          : peer?.avatarUrl ?? null,
+          : directDisplayUser?.avatarUrl ?? null,
       createdByUserId: chat.createdByUserId ?? null,
       memberCount: chat.members.length,
       myRole: chat.type === ChatType.GROUP ? (myMembership?.role ?? null) : null,

@@ -510,7 +510,7 @@ chatRouter.get("/", requireAuth, async (req, res) => {
         chat.chatType === "group"
           ? await resolveGroupAvatarUrl(chat.groupAvatarUrl)
           : await resolveViewerScopedUserAvatarUrl(req, userId, {
-              ownerUserId: chat.peerId,
+              ownerUserId: chat.peerId ?? userId,
               avatarKey: chat.peerAvatarKey,
               updatedAt: chat.peerUpdatedAt ? new Date(chat.peerUpdatedAt) : null
             })
@@ -2343,10 +2343,16 @@ chatRouter.get("/:chatId", requireAuth, async (req, res) => {
           }
         }
       });
+      const selfUser = !peerMembership
+        ? await prisma.user.findUnique({
+            where: { id: req.authUserId! },
+            select: { updatedAt: true }
+          })
+        : null;
       avatarUrl = await resolveViewerScopedUserAvatarUrl(req, req.authUserId!, {
-        ownerUserId: peerMembership?.userId,
+        ownerUserId: peerMembership?.userId ?? req.authUserId!,
         avatarKey: detail.avatarUrl,
-        updatedAt: peerMembership?.user?.updatedAt ?? null
+        updatedAt: peerMembership?.user?.updatedAt ?? selfUser?.updatedAt ?? null
       });
     }
     res.json({
