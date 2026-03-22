@@ -253,6 +253,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   bool _attachmentBusy = false;
   bool _composerActionBusy = false;
   bool _hasComposerText = false;
+  bool _showComposerEmojiPanel = false;
   bool _loadingPeerCalls = false;
   bool _voiceRecording = false;
   bool _voiceRecordingLocked = false;
@@ -615,8 +616,46 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   }
 
   void _handleComposerFocusChanged() {
+    if (_composerFocusNode.hasFocus && _showComposerEmojiPanel) {
+      setState(() => _showComposerEmojiPanel = false);
+    }
     _refresh();
     _updateMentionSuggestions(_controller.text);
+  }
+
+  void _toggleComposerEmojiPanel() {
+    if (_showComposerEmojiPanel) {
+      setState(() => _showComposerEmojiPanel = false);
+      _composerFocusNode.requestFocus();
+      return;
+    }
+    FocusScope.of(context).unfocus();
+    setState(() => _showComposerEmojiPanel = true);
+  }
+
+  void _insertComposerEmoji(TurnaPackEmojiSelection selection) {
+    final value = _controller.value;
+    final text = value.text;
+    final currentSelection = value.selection;
+    var start = currentSelection.isValid
+        ? currentSelection.start.clamp(0, text.length).toInt()
+        : text.length;
+    var end = currentSelection.isValid
+        ? currentSelection.end.clamp(0, text.length).toInt()
+        : text.length;
+    if (start > end) {
+      final temp = start;
+      start = end;
+      end = temp;
+    }
+
+    final nextText = text.replaceRange(start, end, selection.emoji);
+    final nextOffset = start + selection.emoji.length;
+    _controller.value = TextEditingValue(
+      text: nextText,
+      selection: TextSelection.collapsed(offset: nextOffset),
+      composing: TextRange.empty,
+    );
   }
 
   _TurnaInlineTranslationState? _translationStateForMessage(
@@ -1461,7 +1500,10 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     }
 
     FocusScope.of(context).unfocus();
-    setState(() => _voiceRecorderBusy = true);
+    setState(() {
+      _voiceRecorderBusy = true;
+      _showComposerEmojiPanel = false;
+    });
 
     try {
       final hasPermission = await _voiceRecorder.hasPermission();
@@ -4784,6 +4826,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
 
   Widget _buildComposer() {
     final focused = _composerFocusNode.hasFocus;
+    final composerActive = focused || _showComposerEmojiPanel;
     final child = _voiceRecording
         ? SafeArea(
             top: false,
@@ -4972,17 +5015,17 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                               color: Colors.white,
                               borderRadius: BorderRadius.circular(24),
                               border: Border.all(
-                                color: focused
+                                color: composerActive
                                     ? TurnaColors.primary
                                     : TurnaColors.border,
-                                width: focused ? 1.4 : 1,
+                                width: composerActive ? 1.4 : 1,
                               ),
                               boxShadow: [
                                 BoxShadow(
                                   color: Colors.black.withValues(
-                                    alpha: focused ? 0.05 : 0.025,
+                                    alpha: composerActive ? 0.05 : 0.025,
                                   ),
-                                  blurRadius: focused ? 14 : 8,
+                                  blurRadius: composerActive ? 14 : 8,
                                   offset: const Offset(0, 1),
                                 ),
                               ],
@@ -5004,7 +5047,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                                     ),
                                     decoration: InputDecoration(
                                       hintText: _editingDraft == null
-                                          ? 'Mesaj'
+                                          ? 'Mesaj yazın'
                                           : 'Duzenlenmis mesaji yaz',
                                       border: InputBorder.none,
                                       contentPadding: const EdgeInsets.fromLTRB(
@@ -5016,7 +5059,28 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                                     ),
                                   ),
                                 ),
-                                const SizedBox(width: 10),
+                                SizedBox(
+                                  width: 40,
+                                  height: 40,
+                                  child: IconButton(
+                                    tooltip: _showComposerEmojiPanel
+                                        ? 'Klavyeyi aç'
+                                        : 'Emoji panelini aç',
+                                    onPressed:
+                                        _attachmentBusy ||
+                                            _composerActionBusy ||
+                                            _voiceRecorderBusy
+                                        ? null
+                                        : _toggleComposerEmojiPanel,
+                                    icon: Icon(
+                                      _showComposerEmojiPanel
+                                          ? Icons.keyboard_rounded
+                                          : Icons.emoji_emotions_outlined,
+                                    ),
+                                    color: TurnaColors.textMuted,
+                                    splashRadius: 20,
+                                  ),
+                                ),
                               ],
                             ),
                           ),
@@ -5103,6 +5167,27 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                         ),
                       ],
                     ),
+                  ClipRect(
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 180),
+                      curve: Curves.easeOutCubic,
+                      height: _showComposerEmojiPanel ? 310 : 0,
+                      margin: EdgeInsets.only(
+                        left: 48,
+                        right: 92,
+                        top: _showComposerEmojiPanel ? 10 : 0,
+                      ),
+                      child: IgnorePointer(
+                        ignoring: !_showComposerEmojiPanel,
+                        child: _TurnaComposerEmojiPanel(
+                          session: widget.session,
+                          visible: _showComposerEmojiPanel,
+                          onSessionExpired: widget.onSessionExpired,
+                          onSelectEmoji: _insertComposerEmoji,
+                        ),
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),

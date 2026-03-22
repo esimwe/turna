@@ -826,3 +826,599 @@ class _TurnaPackStyleBadge extends StatelessWidget {
     );
   }
 }
+
+class _TurnaComposerEmojiPanel extends StatefulWidget {
+  const _TurnaComposerEmojiPanel({
+    required this.session,
+    required this.visible,
+    required this.onSelectEmoji,
+    required this.onSessionExpired,
+  });
+
+  final AuthSession session;
+  final bool visible;
+  final ValueChanged<TurnaPackEmojiSelection> onSelectEmoji;
+  final VoidCallback onSessionExpired;
+
+  @override
+  State<_TurnaComposerEmojiPanel> createState() =>
+      _TurnaComposerEmojiPanelState();
+}
+
+class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
+  TurnaReactionPackCatalog? _catalog;
+  final List<String> _sessionRecentEmojis = <String>[];
+  String? _selectedTabId;
+  bool _loading = false;
+  bool _updatingPreferences = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.visible) {
+      unawaited(_load());
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _TurnaComposerEmojiPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!oldWidget.visible && widget.visible && _catalog == null && !_loading) {
+      unawaited(_load());
+    }
+  }
+
+  List<String> get _recentEmojis {
+    final merged = <String>[];
+    for (final emoji in _sessionRecentEmojis) {
+      if (!merged.contains(emoji)) {
+        merged.add(emoji);
+      }
+    }
+    for (final emoji
+        in _catalog?.preferences.recentEmojis ?? const <String>[]) {
+      if (!merged.contains(emoji)) {
+        merged.add(emoji);
+      }
+    }
+    return merged.take(16).toList();
+  }
+
+  List<_TurnaReactionPackTab> get _tabs {
+    final catalog = _catalog;
+    if (catalog == null) return const <_TurnaReactionPackTab>[];
+
+    final tabs = <_TurnaReactionPackTab>[];
+    if (catalog.preferences.favoriteEmojis.isNotEmpty) {
+      tabs.add(
+        _TurnaReactionPackTab(
+          id: 'favorites',
+          label: 'Favori',
+          emojis: catalog.preferences.favoriteEmojis,
+        ),
+      );
+    }
+    if (_recentEmojis.isNotEmpty) {
+      tabs.add(
+        _TurnaReactionPackTab(
+          id: 'recent',
+          label: 'Son',
+          emojis: _recentEmojis,
+        ),
+      );
+    }
+    for (final pack in catalog.packs.where(
+      (item) => item.unlocked && item.installed,
+    )) {
+      tabs.add(
+        _TurnaReactionPackTab(
+          id: pack.id,
+          label: pack.title,
+          emojis: pack.emojis,
+          pack: pack,
+        ),
+      );
+    }
+    return tabs;
+  }
+
+  void _syncSelectedTab() {
+    final tabs = _tabs;
+    if (tabs.isEmpty) {
+      _selectedTabId = null;
+      return;
+    }
+    if (!tabs.any((item) => item.id == _selectedTabId)) {
+      _selectedTabId = tabs.first.id;
+    }
+  }
+
+  _TurnaReactionPackTab? get _selectedTab {
+    final tabs = _tabs;
+    if (tabs.isEmpty) return null;
+    for (final tab in tabs) {
+      if (tab.id == _selectedTabId) return tab;
+    }
+    return tabs.first;
+  }
+
+  TurnaReactionPack? _packForEmoji(String emoji, {String? preferredPackId}) {
+    final catalog = _catalog;
+    if (catalog == null) return null;
+    if (preferredPackId != null) {
+      final preferred = catalog.packs.where((item) {
+        return item.id == preferredPackId &&
+            item.unlocked &&
+            item.emojis.contains(emoji);
+      });
+      if (preferred.isNotEmpty) return preferred.first;
+    }
+    final installed = catalog.packs.where(
+      (item) => item.unlocked && item.installed && item.emojis.contains(emoji),
+    );
+    if (installed.isNotEmpty) return installed.first;
+    final unlocked = catalog.packs.where(
+      (item) => item.unlocked && item.emojis.contains(emoji),
+    );
+    if (unlocked.isNotEmpty) return unlocked.first;
+    return null;
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final catalog = await ChatApi.fetchReactionPacks(widget.session);
+      if (!mounted) return;
+      setState(() {
+        _catalog = catalog;
+        _loading = false;
+        _syncSelectedTab();
+      });
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = error.toString();
+      });
+    }
+  }
+
+  Future<void> _updatePreferences({
+    List<String>? installedPackIds,
+    List<String>? favoriteEmojis,
+  }) async {
+    setState(() => _updatingPreferences = true);
+    try {
+      final catalog = await ChatApi.updateReactionPackPreferences(
+        widget.session,
+        installedPackIds: installedPackIds,
+        favoriteEmojis: favoriteEmojis,
+      );
+      if (!mounted) return;
+      setState(() {
+        _catalog = catalog;
+        _updatingPreferences = false;
+        _syncSelectedTab();
+      });
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _updatingPreferences = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
+  Future<void> _toggleFavorite(String emoji) async {
+    final catalog = _catalog;
+    if (catalog == null) return;
+    final favorites = [...catalog.preferences.favoriteEmojis];
+    if (favorites.contains(emoji)) {
+      favorites.remove(emoji);
+    } else {
+      favorites.insert(0, emoji);
+    }
+    await _updatePreferences(favoriteEmojis: favorites);
+  }
+
+  Future<void> _toggleInstalledPack(TurnaReactionPack pack) async {
+    if (!pack.unlocked) return;
+    final catalog = _catalog;
+    if (catalog == null) return;
+    final installed = [...catalog.preferences.installedPackIds];
+    if (installed.contains(pack.id)) {
+      if (installed.length <= 1) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('En az bir paket kurulu kalmalı.')),
+        );
+        return;
+      }
+      installed.remove(pack.id);
+    } else {
+      installed.add(pack.id);
+    }
+    await _updatePreferences(installedPackIds: installed);
+  }
+
+  Future<void> _openManagePacks() async {
+    final catalog = _catalog;
+    if (catalog == null) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (sheetContext) {
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            final latestCatalog = _catalog ?? catalog;
+            return SafeArea(
+              child: ListView(
+                shrinkWrap: true,
+                padding: const EdgeInsets.fromLTRB(18, 18, 18, 28),
+                children: [
+                  const Text(
+                    'Emoji paketleri',
+                    style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Kurulu paketler mesaj yazarken ve profil ruh halinda görünür.',
+                    style: TextStyle(
+                      fontSize: 13,
+                      height: 1.35,
+                      color: TurnaColors.textMuted,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  ...latestCatalog.packs.map((pack) {
+                    final accent = switch (pack.style) {
+                      TurnaReactionPackStyle.premium => const Color(0xFFFFF3D8),
+                      TurnaReactionPackStyle.community => const Color(
+                        0xFFE8F4ED,
+                      ),
+                      TurnaReactionPackStyle.standard => Colors.white,
+                    };
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 12),
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: accent,
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(
+                          color: pack.installed
+                              ? TurnaColors.primary
+                              : TurnaColors.border,
+                        ),
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Container(
+                            width: 46,
+                            height: 46,
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            child: Text(
+                              pack.emojis.isEmpty ? '🙂' : pack.emojis.first,
+                              style: const TextStyle(fontSize: 22),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        pack.title,
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    ),
+                                    _TurnaPackStyleBadge(style: pack.style),
+                                  ],
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  pack.subtitle,
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    height: 1.35,
+                                    color: TurnaColors.textMuted,
+                                  ),
+                                ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  '${pack.usageCount} kullanım',
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: TurnaColors.textMuted,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          if (!pack.unlocked)
+                            const Padding(
+                              padding: EdgeInsets.only(top: 10),
+                              child: Icon(
+                                Icons.lock_outline_rounded,
+                                color: TurnaColors.textMuted,
+                              ),
+                            )
+                          else
+                            Switch.adaptive(
+                              value: pack.installed,
+                              onChanged: _updatingPreferences
+                                  ? null
+                                  : (_) async {
+                                      setSheetState(() {});
+                                      await _toggleInstalledPack(pack);
+                                      if (!mounted) return;
+                                      setSheetState(() {});
+                                    },
+                            ),
+                        ],
+                      ),
+                    );
+                  }),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _handleEmojiTap(String emoji) {
+    final selectedTab = _selectedTab;
+    final pack = _packForEmoji(emoji, preferredPackId: selectedTab?.pack?.id);
+    if (pack == null) return;
+
+    setState(() {
+      _sessionRecentEmojis.remove(emoji);
+      _sessionRecentEmojis.insert(0, emoji);
+      if (_sessionRecentEmojis.length > 16) {
+        _sessionRecentEmojis.removeRange(16, _sessionRecentEmojis.length);
+      }
+    });
+    widget.onSelectEmoji(
+      TurnaPackEmojiSelection(packId: pack.id, emoji: emoji),
+    );
+  }
+
+  Widget _buildTabIcon(_TurnaReactionPackTab tab, bool selected) {
+    if (tab.id == 'favorites') {
+      return Icon(
+        Icons.star_rounded,
+        size: 18,
+        color: selected ? Colors.white : const Color(0xFFF4B400),
+      );
+    }
+    if (tab.id == 'recent') {
+      return Icon(
+        Icons.history_rounded,
+        size: 18,
+        color: selected ? Colors.white : TurnaColors.textMuted,
+      );
+    }
+    final packEmoji = (tab.pack?.emojis.isNotEmpty ?? false)
+        ? tab.pack!.emojis.first
+        : '🙂';
+    return Text(packEmoji, style: const TextStyle(fontSize: 20));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final selectedTab = _selectedTab;
+    final title = selectedTab?.pack?.title ?? selectedTab?.label ?? 'İfade';
+    final subtitle = selectedTab?.pack?.subtitle;
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(28),
+        border: Border.all(color: TurnaColors.border),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 12,
+            offset: const Offset(0, 1),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(28),
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 12, 10, 6),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: SizedBox(
+                      height: 44,
+                      child: ListView.separated(
+                        scrollDirection: Axis.horizontal,
+                        itemCount: _tabs.length,
+                        separatorBuilder: (_, _) => const SizedBox(width: 8),
+                        itemBuilder: (context, index) {
+                          final tab = _tabs[index];
+                          final selected = tab.id == _selectedTabId;
+                          return InkWell(
+                            onTap: () =>
+                                setState(() => _selectedTabId = tab.id),
+                            borderRadius: BorderRadius.circular(14),
+                            child: Ink(
+                              width: 42,
+                              height: 42,
+                              decoration: BoxDecoration(
+                                color: selected
+                                    ? TurnaColors.primary
+                                    : TurnaColors.backgroundMuted,
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(
+                                  color: selected
+                                      ? TurnaColors.primary
+                                      : TurnaColors.border,
+                                ),
+                              ),
+                              child: Center(
+                                child: _buildTabIcon(tab, selected),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: _updatingPreferences ? null : _openManagePacks,
+                    tooltip: 'Paketleri yönet',
+                    icon: const Icon(Icons.settings_outlined),
+                  ),
+                ],
+              ),
+            ),
+            if (_loading)
+              const Expanded(child: Center(child: CircularProgressIndicator()))
+            else if (_error != null)
+              Expanded(
+                child: Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          _error!,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: TurnaColors.textMuted),
+                        ),
+                        const SizedBox(height: 12),
+                        FilledButton(
+                          onPressed: _load,
+                          child: const Text('Tekrar dene'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              )
+            else if (_tabs.isEmpty)
+              const Expanded(
+                child: Center(
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 24),
+                    child: Text(
+                      'Kurulu emoji paketi bulunamadı.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: TurnaColors.textMuted),
+                    ),
+                  ),
+                ),
+              )
+            else ...[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(18, 2, 18, 12),
+                child: Column(
+                  children: [
+                    Text(
+                      title,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    if (subtitle != null && subtitle.trim().isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        subtitle,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          height: 1.35,
+                          color: TurnaColors.textMuted,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              Expanded(
+                child: GridView.builder(
+                  padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 5,
+                    mainAxisSpacing: 10,
+                    crossAxisSpacing: 10,
+                    childAspectRatio: 1.04,
+                  ),
+                  itemCount: selectedTab?.emojis.length ?? 0,
+                  itemBuilder: (context, index) {
+                    final emoji = selectedTab!.emojis[index];
+                    final isFavorite = _catalog!.preferences.favoriteEmojis
+                        .contains(emoji);
+                    return InkWell(
+                      onTap: () => _handleEmojiTap(emoji),
+                      onLongPress: () => _toggleFavorite(emoji),
+                      borderRadius: BorderRadius.circular(18),
+                      child: Ink(
+                        decoration: BoxDecoration(
+                          color: TurnaColors.backgroundMuted,
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(color: TurnaColors.border),
+                        ),
+                        child: Stack(
+                          children: [
+                            Center(
+                              child: Text(
+                                emoji,
+                                style: const TextStyle(fontSize: 28),
+                              ),
+                            ),
+                            if (isFavorite)
+                              const Positioned(
+                                top: 7,
+                                right: 7,
+                                child: Icon(
+                                  Icons.star_rounded,
+                                  size: 14,
+                                  color: Color(0xFFF4B400),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
