@@ -26,6 +26,10 @@ import {
   isStorageConfigured
 } from "../../lib/storage.js";
 import { requireAuth } from "../../middleware/auth.js";
+import {
+  assertReactionPackEmojiAllowed,
+  trackReactionPackUsage
+} from "../chat/reaction-packs.js";
 import { buildAvatarUrl } from "./avatar-url.js";
 import { buildCanonicalPhoneLookupKey, buildPhoneLookupKeys } from "./contact-lookup.js";
 import { isValidUsername, normalizeUsername } from "./username.js";
@@ -93,6 +97,15 @@ const completeOnboardingSchema = z.object({
   communityRole: nullableTrimmedString(120).optional(),
   interests: stringListSchema(12, 40).optional().default([]),
   socialLinks: stringListSchema(8, 255).optional().default([])
+});
+
+const updateMoodSchema = z.object({
+  about: nullableTrimmedString(160),
+  moodEmoji: z.preprocess((value) => {
+    if (typeof value !== "string") return value;
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }, z.string().min(1).max(16).nullable().optional())
 });
 
 const avatarUploadInitSchema = z.object({
@@ -285,6 +298,7 @@ const profileSelect = {
   phone: true,
   email: true,
   about: true,
+  moodEmoji: true,
   avatarUrl: true,
   city: true,
   country: true,
@@ -303,6 +317,7 @@ const publicProfileSelect = {
   username: true,
   phone: true,
   about: true,
+  moodEmoji: true,
   avatarUrl: true,
   city: true,
   country: true,
@@ -323,6 +338,7 @@ function toProfileDto(
     phone: string | null;
     email: string | null;
     about: string | null;
+    moodEmoji: string | null;
     avatarUrl: string | null;
     city: string | null;
     country: string | null;
@@ -342,6 +358,7 @@ function toProfileDto(
     phone: user.phone,
     email: user.email,
     about: user.about,
+    moodEmoji: user.moodEmoji,
     avatarUrl: user.avatarUrl ? buildAvatarUrl(req, user.id, user.updatedAt) : null,
     city: user.city,
     country: user.country,
@@ -365,6 +382,7 @@ async function toPublicProfileDto(
     username: string | null;
     phone: string | null;
     about: string | null;
+    moodEmoji: string | null;
     avatarUrl: string | null;
     city: string | null;
     country: string | null;
@@ -392,6 +410,7 @@ async function toPublicProfileDto(
     username: user.username,
     phone: user.phone,
     about: scoped.about,
+    moodEmoji: scoped.about == null ? null : user.moodEmoji,
     avatarUrl: scoped.avatarUrl,
     city: user.city,
     country: user.country,
@@ -620,6 +639,61 @@ profileRouter.put("/onboarding", requireAuth, async (req, res) => {
   });
 
   res.json({ data: toProfileDto(req, user) });
+});
+
+profileRouter.put("/me/mood", requireAuth, async (req, res) => {
+  const parsed = updateMoodSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
+    return;
+  }
+
+  const userId = req.authUserId!;
+  const about = parsed.data.about;
+  const moodEmoji = about ? parsed.data.moodEmoji ?? null : null;
+
+  try {
+    let packId: string | null = null;
+    if (moodEmoji != null) {
+      const pack = await assertReactionPackEmojiAllowed(userId, moodEmoji);
+      packId = pack.id;
+    }
+
+    const user = await prismaUser.update({
+      where: { id: userId },
+      data: {
+        about,
+        moodEmoji
+      },
+      select: profileSelect
+    });
+
+    if (packId != null && moodEmoji != null) {
+      await trackReactionPackUsage(userId, {
+        packId,
+        emoji: moodEmoji,
+        surface: "profile_mood"
+      });
+    }
+
+    res.json({ data: toProfileDto(req, user) });
+  } catch (error) {
+    if (error instanceof Error) {
+      switch (error.message) {
+        case "reaction_emoji_required":
+        case "reaction_pack_not_found":
+        case "reaction_pack_emoji_invalid":
+          res.status(400).json({ error: error.message });
+          return;
+        case "reaction_pack_locked":
+          res.status(403).json({ error: error.message });
+          return;
+      }
+    }
+
+    logError("profile mood update failed", error);
+    res.status(500).json({ error: "failed_to_update_profile_mood" });
+  }
 });
 
 profileRouter.get("/users/:userId", requireAuth, async (req, res) => {

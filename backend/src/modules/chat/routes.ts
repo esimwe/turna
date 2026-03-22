@@ -29,6 +29,12 @@ import {
   getActiveChatUserIds,
   getSocketsInUserRoom
 } from "./chat.realtime.js";
+import {
+  assertReactionPackEmojiAllowed,
+  listReactionPacksForUser,
+  trackReactionPackUsage,
+  updateReactionPackPreferences
+} from "./reaction-packs.js";
 import { chatService } from "./chat.service.js";
 
 export const chatRouter = Router();
@@ -146,7 +152,17 @@ const messageReactionSchema = z.object({
     .preprocess(
       (value) => (typeof value === "string" ? value.trim() : value),
       z.string().min(1).max(16)
+    ),
+  packId: z
+    .preprocess(
+      (value) => (typeof value === "string" ? value.trim() : value),
+      z.string().min(1).max(64).optional()
     )
+});
+
+const reactionPackPreferencesSchema = z.object({
+  installedPackIds: z.array(z.string().trim().min(1).max(64)).max(24).optional(),
+  favoriteEmojis: z.array(z.string().trim().min(1).max(16)).max(48).optional()
 });
 
 const bulkDeleteChatsSchema = z.object({
@@ -2375,6 +2391,35 @@ chatRouter.delete("/scheduled-messages/:scheduledMessageId", requireAuth, async 
   }
 });
 
+chatRouter.get("/reaction-packs", requireAuth, async (req, res) => {
+  try {
+    const data = await listReactionPacksForUser(req.authUserId!);
+    res.json({ data });
+  } catch (error) {
+    logError("reaction packs fetch failed", error);
+    res.status(500).json({ error: "failed_to_fetch_reaction_packs" });
+  }
+});
+
+chatRouter.put("/reaction-packs/preferences", requireAuth, async (req, res) => {
+  const parsed = reactionPackPreferencesSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
+    return;
+  }
+
+  try {
+    const data = await updateReactionPackPreferences(req.authUserId!, {
+      installedPackIds: parsed.data.installedPackIds,
+      favoriteEmojis: parsed.data.favoriteEmojis
+    });
+    res.json({ data });
+  } catch (error) {
+    logError("reaction pack preferences update failed", error);
+    res.status(500).json({ error: "failed_to_update_reaction_pack_preferences" });
+  }
+});
+
 chatRouter.get("/:chatId", requireAuth, async (req, res) => {
   const parsedParams = chatIdParamSchema.safeParse(req.params);
   if (!parsedParams.success) {
@@ -2789,6 +2834,11 @@ chatRouter.post("/messages/:messageId/reactions", requireAuth, async (req, res) 
 
   const userId = req.authUserId!;
   try {
+    const pack = await assertReactionPackEmojiAllowed(
+      userId,
+      parsedBody.data.emoji,
+      parsedBody.data.packId
+    );
     const message = await chatService.addReaction(
       parsedParams.data.messageId,
       userId,
@@ -2797,6 +2847,11 @@ chatRouter.post("/messages/:messageId/reactions", requireAuth, async (req, res) 
     const audience = await chatService.getTypingAudience(message.chatId, userId);
     const participants = await chatService.getChatParticipantIds(message.chatId);
     emitChatMessage(message.chatId, { ...message, chatType: audience.chatType }, participants);
+    await trackReactionPackUsage(userId, {
+      packId: pack.id,
+      emoji: parsedBody.data.emoji,
+      surface: "chat_reaction"
+    });
     res.json({ data: message });
   } catch (error) {
     if (error instanceof Error) {
@@ -2807,6 +2862,11 @@ chatRouter.post("/messages/:messageId/reactions", requireAuth, async (req, res) 
         case "reaction_emoji_required":
           res.status(400).json({ error: error.message });
           return;
+        case "reaction_pack_not_found":
+        case "reaction_pack_emoji_invalid":
+          res.status(400).json({ error: error.message });
+          return;
+        case "reaction_pack_locked":
         case "message_reaction_not_allowed":
         case "forbidden_chat_access":
           res.status(403).json({ error: error.message });

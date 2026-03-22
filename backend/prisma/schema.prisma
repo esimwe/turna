@@ -218,6 +218,7 @@ model User {
   email                 String?            @unique
   avatarUrl             String?
   about                 String?
+  moodEmoji             String?
   city                  String?
   country               String?
   expertise             String?
@@ -262,6 +263,8 @@ model User {
   mentionedInMessages   MessageMention[]   @relation("MessageMentionedUser")
   messageReactions      MessageReaction[]  @relation("MessageReactionUser")
   pinnedChatMessages    ChatPinnedMessage[] @relation("ChatPinnedMessageUser")
+  reactionPackPreference UserReactionPreference?
+  reactionPackUsageEvents ReactionPackUsageEvent[]
   communityMemberships  CommunityMembership[]
   communityMessages     CommunityMessage[]   @relation("CommunityMessageAuthor")
   communityTopics       CommunityTopic[]     @relation("CommunityTopicAuthor")
@@ -549,6 +552,34 @@ model UserPrivacyPreference {
   user                       User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([updatedAt(sort: Desc)])
+}
+
+model UserReactionPreference {
+  userId            String   @id
+  installedPackIds  Json?
+  favoriteEmojis    Json?
+  recentEmojis      Json?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([updatedAt(sort: Desc)])
+}
+
+model ReactionPackUsageEvent {
+  id        String   @id @default(uuid())
+  userId    String
+  packId    String
+  emoji     String
+  surface   String
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([packId, createdAt(sort: Desc)])
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([surface, createdAt(sort: Desc)])
 }
 
 model Message {
