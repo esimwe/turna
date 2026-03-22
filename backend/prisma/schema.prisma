@@ -45,6 +45,14 @@ enum MessageStatus {
   read
 }
 
+enum ScheduledMessageStatus {
+  PENDING
+  PROCESSING
+  SENT
+  CANCELED
+  FAILED
+}
+
 enum AttachmentKind {
   IMAGE
   VIDEO
@@ -228,6 +236,7 @@ model User {
   usernameChangeCount   Int                @default(0)
   lastSeenAt            DateTime?
   messages              Message[]
+  scheduledMessages     ScheduledMessage[]
   memberships           ChatMember[]
   devices               DeviceToken[]
   authSessions          AuthSession[]
@@ -324,6 +333,7 @@ model Chat {
   updatedAt           DateTime            @default(now()) @updatedAt
   members             ChatMember[]
   messages            Message[]
+  scheduledMessages   ScheduledMessage[]
   inviteLinks         ChatInviteLink[]
   joinRequests        ChatJoinRequest[]
   mutes               ChatMute[]
@@ -568,6 +578,28 @@ model Message {
   @@index([chatId, createdAt(sort: Desc)])
   @@index([chatId, systemType, createdAt(sort: Desc)])
   @@index([chatId, expiresAt])
+}
+
+model ScheduledMessage {
+  id               String                 @id @default(uuid())
+  chatId           String
+  senderId         String
+  text             String
+  silent           Boolean                @default(false)
+  scheduledFor     DateTime
+  status           ScheduledMessageStatus @default(PENDING)
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+  sentAt           DateTime?
+  canceledAt       DateTime?
+  lastError        String?
+  deliveredMessageId String?
+
+  chat             Chat                   @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  sender           User                   @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@index([status, scheduledFor])
+  @@index([chatId, senderId, status, scheduledFor(sort: Asc)])
 }
 
 model MessageMention {

@@ -6,6 +6,7 @@ import { env } from "./config/env.js";
 import { logError, logInfo, logWarn } from "./lib/logger.js";
 import { createRedisConnection, redis } from "./lib/redis.js";
 import { attachChatRealtime } from "./modules/chat/chat.realtime.js";
+import { startScheduledMessageDispatcher } from "./modules/chat/chat.scheduled.js";
 import { registerChatSocket } from "./modules/chat/chat.socket.js";
 import { attachCommunityRealtime } from "./modules/community/community.realtime.js";
 import { registerCommunitySocket } from "./modules/community/community.socket.js";
@@ -44,6 +45,7 @@ async function configureRedisBackedRealtime(): Promise<void> {
 
 async function bootstrapServer(): Promise<void> {
   await configureRedisBackedRealtime();
+  startScheduledMessageDispatcher();
   httpServer.listen(env.PORT, env.BIND_HOST, () => {
     logInfo(`backend listening on ${env.BIND_HOST}:${env.PORT}`);
   });

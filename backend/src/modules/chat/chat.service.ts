@@ -27,6 +27,7 @@ import type {
   ChatMemberSummary,
   ChatMuteSummary,
   ChatPinnedMessageSummary,
+  ScheduledMessageSummary,
   ChatSummary,
   DirectoryUser,
   SendMessageAttachmentInput,
@@ -215,6 +216,18 @@ type MessageRow = {
     height: number | null;
     durationSeconds: number | null;
   }>;
+};
+
+type ScheduledMessageRow = {
+  id: string;
+  chatId: string;
+  senderId: string;
+  text: string;
+  silent: boolean;
+  scheduledFor: Date;
+  createdAt: Date;
+  status: "PENDING" | "PROCESSING" | "SENT" | "CANCELED" | "FAILED";
+  lastError: string | null;
 };
 
 function isAllowedMessageExpirationSeconds(
@@ -647,6 +660,20 @@ async function toChatMessage(row: MessageRow): Promise<ChatMessage> {
     reactions,
     isPinned: row.pins.length > 0,
     attachments
+  };
+}
+
+function toScheduledMessageSummary(row: ScheduledMessageRow): ScheduledMessageSummary {
+  return {
+    id: row.id,
+    chatId: row.chatId,
+    senderId: row.senderId,
+    text: row.text,
+    silent: row.silent,
+    scheduledFor: row.scheduledFor.toISOString(),
+    createdAt: row.createdAt.toISOString(),
+    status: row.status === "FAILED" ? "FAILED" : "PENDING",
+    lastError: row.lastError?.trim() || null
   };
 }
 
@@ -1127,6 +1154,7 @@ export class ChatService {
           chatId: payload.chatId,
           senderId: payload.senderId,
           text: payload.text?.trim() ? payload.text.trim() : null,
+          systemPayload: payload.systemPayload ?? undefined,
           status: isSelfDirectMessage ? MessageStatus.read : MessageStatus.sent,
           expiresAt,
           attachments: preparedAttachments.length
@@ -1164,6 +1192,210 @@ export class ChatService {
     });
 
     return toChatMessage(message);
+  }
+
+  async scheduleMessage(input: {
+    chatId: string;
+    senderId: string;
+    text: string;
+    scheduledFor: string;
+    silent?: boolean;
+  }): Promise<ScheduledMessageSummary> {
+    const hasAccess = await this.ensureChatAccess(input.chatId, input.senderId);
+    if (!hasAccess) {
+      throw new Error("forbidden_chat_access");
+    }
+    await this.ensureCanInteract(input.chatId, input.senderId);
+
+    const text = input.text.trim();
+    if (!text) {
+      throw new Error("scheduled_message_text_required");
+    }
+
+    const scheduledFor = new Date(input.scheduledFor);
+    if (Number.isNaN(scheduledFor.getTime())) {
+      throw new Error("scheduled_message_invalid_time");
+    }
+
+    const now = Date.now();
+    if (scheduledFor.getTime() < now + 30 * 1000) {
+      throw new Error("scheduled_message_must_be_future");
+    }
+    if (scheduledFor.getTime() > now + 365 * 24 * 60 * 60 * 1000) {
+      throw new Error("scheduled_message_too_far");
+    }
+
+    const rows = await prisma.$queryRaw<ScheduledMessageRow[]>`
+      INSERT INTO "ScheduledMessage" (
+        "chatId",
+        "senderId",
+        "text",
+        "silent",
+        "scheduledFor",
+        "status",
+        "createdAt",
+        "updatedAt"
+      )
+      VALUES (
+        ${input.chatId},
+        ${input.senderId},
+        ${text},
+        ${input.silent === true},
+        ${scheduledFor},
+        'PENDING'::"ScheduledMessageStatus",
+        NOW(),
+        NOW()
+      )
+      RETURNING
+        "id",
+        "chatId",
+        "senderId",
+        "text",
+        "silent",
+        "scheduledFor",
+        "createdAt",
+        "status",
+        "lastError"
+    `;
+    const created = rows[0];
+    if (!created) {
+      throw new Error("failed_to_schedule_message");
+    }
+    return toScheduledMessageSummary(created);
+  }
+
+  async listScheduledMessages(
+    chatId: string,
+    requesterId: string
+  ): Promise<ScheduledMessageSummary[]> {
+    const hasAccess = await this.ensureChatAccess(chatId, requesterId);
+    if (!hasAccess) {
+      throw new Error("forbidden_chat_access");
+    }
+
+    const rows = await prisma.$queryRaw<ScheduledMessageRow[]>`
+      SELECT
+        "id",
+        "chatId",
+        "senderId",
+        "text",
+        "silent",
+        "scheduledFor",
+        "createdAt",
+        "status",
+        "lastError"
+      FROM "ScheduledMessage"
+      WHERE
+        "chatId" = ${chatId}
+        AND "senderId" = ${requesterId}
+        AND "status" IN (
+          'PENDING'::"ScheduledMessageStatus",
+          'FAILED'::"ScheduledMessageStatus"
+        )
+      ORDER BY
+        CASE WHEN "status" = 'FAILED'::"ScheduledMessageStatus" THEN 0 ELSE 1 END,
+        "scheduledFor" ASC
+    `;
+    return rows.map((row) => toScheduledMessageSummary(row));
+  }
+
+  async cancelScheduledMessage(
+    scheduledMessageId: string,
+    requesterId: string
+  ): Promise<void> {
+    const rows = await prisma.$queryRaw<Array<{ id: string }>>`
+      UPDATE "ScheduledMessage"
+      SET
+        "status" = 'CANCELED'::"ScheduledMessageStatus",
+        "canceledAt" = NOW(),
+        "updatedAt" = NOW()
+      WHERE
+        "id" = ${scheduledMessageId}
+        AND "senderId" = ${requesterId}
+        AND "status" IN (
+          'PENDING'::"ScheduledMessageStatus",
+          'FAILED'::"ScheduledMessageStatus"
+        )
+      RETURNING "id"
+    `;
+    if (rows.length === 0) {
+      throw new Error("scheduled_message_not_found");
+    }
+  }
+
+  async recoverStuckScheduledMessages(staleBefore: Date): Promise<void> {
+    await prisma.$executeRaw`
+      UPDATE "ScheduledMessage"
+      SET
+        "status" = 'PENDING'::"ScheduledMessageStatus",
+        "updatedAt" = NOW()
+      WHERE
+        "status" = 'PROCESSING'::"ScheduledMessageStatus"
+        AND "updatedAt" < ${staleBefore}
+    `;
+  }
+
+  async claimDueScheduledMessages(limit = 20): Promise<ScheduledMessageRow[]> {
+    const safeLimit = Math.max(1, Math.min(limit, 50));
+    const now = new Date();
+    return prisma.$queryRaw<ScheduledMessageRow[]>`
+      UPDATE "ScheduledMessage"
+      SET
+        "status" = 'PROCESSING'::"ScheduledMessageStatus",
+        "updatedAt" = NOW(),
+        "lastError" = NULL
+      WHERE "id" IN (
+        SELECT "id"
+        FROM "ScheduledMessage"
+        WHERE
+          "status" = 'PENDING'::"ScheduledMessageStatus"
+          AND "scheduledFor" <= ${now}
+        ORDER BY "scheduledFor" ASC
+        LIMIT ${safeLimit}
+        FOR UPDATE SKIP LOCKED
+      )
+      RETURNING
+        "id",
+        "chatId",
+        "senderId",
+        "text",
+        "silent",
+        "scheduledFor",
+        "createdAt",
+        "status",
+        "lastError"
+    `;
+  }
+
+  async markScheduledMessageSent(
+    scheduledMessageId: string,
+    deliveredMessageId: string
+  ): Promise<void> {
+    await prisma.$executeRaw`
+      UPDATE "ScheduledMessage"
+      SET
+        "status" = 'SENT'::"ScheduledMessageStatus",
+        "sentAt" = NOW(),
+        "updatedAt" = NOW(),
+        "deliveredMessageId" = ${deliveredMessageId},
+        "lastError" = NULL
+      WHERE "id" = ${scheduledMessageId}
+    `;
+  }
+
+  async markScheduledMessageFailed(
+    scheduledMessageId: string,
+    errorMessage: string
+  ): Promise<void> {
+    const normalizedError = errorMessage.trim().slice(0, 500) || "Mesaj gönderilemedi.";
+    await prisma.$executeRaw`
+      UPDATE "ScheduledMessage"
+      SET
+        "status" = 'FAILED'::"ScheduledMessageStatus",
+        "updatedAt" = NOW(),
+        "lastError" = ${normalizedError}
+      WHERE "id" = ${scheduledMessageId}
+    `;
   }
 
   async deleteMessageForEveryone(messageId: string, requesterId: string): Promise<ChatMessage> {

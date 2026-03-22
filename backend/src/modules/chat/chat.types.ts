@@ -5,6 +5,7 @@ export type AppChatType = "direct" | "group";
 export type ChatMemberRole = "OWNER" | "ADMIN" | "EDITOR" | "MEMBER";
 export type ChatPolicyScope = "OWNER_ONLY" | "ADMIN_ONLY" | "EDITOR_ONLY" | "EVERYONE";
 export type ChatJoinRequestStatus = "PENDING" | "APPROVED" | "REJECTED";
+export type ScheduledMessageStatus = "PENDING" | "FAILED";
 
 export interface ChatAttachment {
   id: string;
@@ -68,7 +69,20 @@ export interface SendMessagePayload {
   chatId: string;
   senderId: string;
   text?: string | null;
+  systemPayload?: Record<string, unknown> | null;
   attachments?: SendMessageAttachmentInput[];
+}
+
+export interface ScheduledMessageSummary {
+  id: string;
+  chatId: string;
+  senderId: string;
+  text: string;
+  silent: boolean;
+  scheduledFor: string;
+  createdAt: string;
+  status: ScheduledMessageStatus;
+  lastError: string | null;
 }
 
 export interface SendMessageAttachmentInput {

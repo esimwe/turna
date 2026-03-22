@@ -53,6 +53,7 @@ const sendMessageSchema = z.object({
       (value) => (typeof value === "string" ? value.trim() : value),
       z.string().max(4000).optional().nullable()
     ),
+  silent: z.boolean().optional().default(false),
   attachments: z.array(sendMessageAttachmentSchema).max(30).optional().default([])
 }).superRefine((value, ctx) => {
   if ((value.text?.length ?? 0) > 0 || value.attachments.length > 0) {
@@ -64,6 +65,16 @@ const sendMessageSchema = z.object({
     message: "text_or_attachment_required",
     path: ["text"]
   });
+});
+
+const scheduleMessageSchema = z.object({
+  chatId: z.string().trim().min(1).max(255),
+  text: z.preprocess(
+    (value) => (typeof value === "string" ? value.trim() : value),
+    z.string().min(1).max(4000)
+  ),
+  scheduledFor: z.string().datetime(),
+  silent: z.boolean().optional().default(false)
 });
 
 const attachmentUploadInitSchema = z.object({
@@ -107,6 +118,10 @@ const chatCollectionQuerySchema = listMessagesQuerySchema.extend({
 
 const messageIdParamSchema = z.object({
   messageId: z.string().trim().min(1).max(255)
+});
+
+const scheduledMessageIdParamSchema = z.object({
+  scheduledMessageId: z.string().trim().min(1).max(255)
 });
 
 const submitMessageReportSchema = z.object({
@@ -2312,6 +2327,54 @@ chatRouter.delete("/:chatId", requireAuth, requireMessagingAccess, async (req, r
   }
 });
 
+chatRouter.get("/:chatId/scheduled-messages", requireAuth, async (req, res) => {
+  const parsedParams = chatIdParamSchema.safeParse(req.params);
+  if (!parsedParams.success) {
+    res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+    return;
+  }
+
+  try {
+    const items = await chatService.listScheduledMessages(
+      parsedParams.data.chatId,
+      req.authUserId!
+    );
+    res.json({ data: items });
+  } catch (error) {
+    if (error instanceof Error && error.message === "forbidden_chat_access") {
+      res.status(403).json({ error: error.message });
+      return;
+    }
+
+    logError("scheduled chat messages list failed", error);
+    res.status(500).json({ error: "failed_to_list_scheduled_messages" });
+  }
+});
+
+chatRouter.delete("/scheduled-messages/:scheduledMessageId", requireAuth, async (req, res) => {
+  const parsedParams = scheduledMessageIdParamSchema.safeParse(req.params);
+  if (!parsedParams.success) {
+    res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+    return;
+  }
+
+  try {
+    await chatService.cancelScheduledMessage(
+      parsedParams.data.scheduledMessageId,
+      req.authUserId!
+    );
+    res.status(204).send();
+  } catch (error) {
+    if (error instanceof Error && error.message === "scheduled_message_not_found") {
+      res.status(404).json({ error: error.message });
+      return;
+    }
+
+    logError("scheduled chat message cancel failed", error);
+    res.status(500).json({ error: "failed_to_cancel_scheduled_message" });
+  }
+});
+
 chatRouter.get("/:chatId", requireAuth, async (req, res) => {
   const parsedParams = chatIdParamSchema.safeParse(req.params);
   if (!parsedParams.success) {
@@ -2475,10 +2538,13 @@ chatRouter.post("/messages", requireAuth, requireMessagingAccess, async (req, re
     }
 
     const audience = await chatService.getTypingAudience(parsed.data.chatId, userId);
+    const systemPayload =
+      parsed.data.silent === true ? { silent: true } : null;
     const message = await chatService.sendMessage({
       chatId: parsed.data.chatId,
       senderId: userId,
       text: parsed.data.text,
+      systemPayload,
       attachments
     });
     const socketMessage = { ...message, chatType: audience.chatType };
@@ -2493,7 +2559,8 @@ chatRouter.post("/messages", requireAuth, requireMessagingAccess, async (req, re
           const deliveredRecipientIds = await sendChatMessagePush({
             message: socketMessage,
             senderDisplayName,
-            recipientUserIds: recipientIds
+            recipientUserIds: recipientIds,
+            silent: parsed.data.silent
           });
           for (const recipientId of deliveredRecipientIds) {
             const deliveredIds = await chatService.markSpecificMessagesDelivered(
@@ -2566,6 +2633,45 @@ chatRouter.post("/messages", requireAuth, requireMessagingAccess, async (req, re
 
     logError("chat http send failed", error);
     res.status(500).json({ error: "failed_to_send_message" });
+  }
+});
+
+chatRouter.post("/messages/scheduled", requireAuth, requireMessagingAccess, async (req, res) => {
+  const parsed = scheduleMessageSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
+    return;
+  }
+
+  try {
+    const scheduled = await chatService.scheduleMessage({
+      chatId: parsed.data.chatId,
+      senderId: req.authUserId!,
+      text: parsed.data.text,
+      scheduledFor: parsed.data.scheduledFor,
+      silent: parsed.data.silent
+    });
+    res.status(201).json({ data: scheduled });
+  } catch (error) {
+    if (error instanceof Error) {
+      switch (error.message) {
+        case "forbidden_chat_access":
+          res.status(403).json({ error: error.message });
+          return;
+        case "chat_send_restricted":
+          res.status(403).json({ error: error.message });
+          return;
+        case "scheduled_message_text_required":
+        case "scheduled_message_invalid_time":
+        case "scheduled_message_must_be_future":
+        case "scheduled_message_too_far":
+          res.status(400).json({ error: error.message });
+          return;
+      }
+    }
+
+    logError("schedule chat message failed", error);
+    res.status(500).json({ error: "failed_to_schedule_message" });
   }
 });
 

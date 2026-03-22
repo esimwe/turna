@@ -392,12 +392,13 @@ async function getEligibleChatPushRecipients(params: {
   chatId: string;
   senderId: string;
   recipientUserIds: string[];
+  ignoreMute?: boolean;
 }): Promise<string[]> {
   const membershipRows = await prismaChatMember.findMany({
     where: {
       chatId: params.chatId,
       userId: { in: params.recipientUserIds },
-      muted: false
+      ...(params.ignoreMute === true ? {} : { muted: false })
     },
     select: { userId: true }
   });
@@ -502,11 +503,14 @@ export async function sendChatMessagePush(params: {
   message: ChatMessage;
   senderDisplayName: string;
   recipientUserIds: string[];
+  silent?: boolean;
+  ignoreMute?: boolean;
 }): Promise<string[]> {
   const eligibleRecipientUserIds = await getEligibleChatPushRecipients({
     chatId: params.message.chatId,
     senderId: params.message.senderId,
-    recipientUserIds: params.recipientUserIds
+    recipientUserIds: params.recipientUserIds,
+    ignoreMute: params.ignoreMute
   });
 
   if (!hasFirebaseCredentials() || eligibleRecipientUserIds.length === 0) {
@@ -594,6 +598,7 @@ export async function sendChatMessagePush(params: {
           chatTitle: chatContext?.chatTitle ?? "",
           body: notification.body,
           isMention: mentionUserIds.has(recipientUserId) ? "true" : "false",
+          silent: params.silent === true ? "true" : "false",
           unreadTotal: unreadTotal.toString()
         },
         android: {
@@ -601,19 +606,20 @@ export async function sendChatMessagePush(params: {
           collapseKey: collapseId,
           notification: {
             notificationCount: unreadTotal,
-            tag: collapseId
+            tag: collapseId,
+            ...(params.silent === true ? { channelId: "turna_chat_silent" } : {})
           }
         },
         apns: {
           headers: {
-            "apns-priority": "10",
+            "apns-priority": params.silent === true ? "5" : "10",
             "apns-collapse-id": collapseId
           },
           payload: {
             aps: {
-              sound: "default",
               badge: unreadTotal,
-              threadId: collapseId
+              threadId: collapseId,
+              ...(params.silent === true ? {} : { sound: "default" })
             }
           }
         }
