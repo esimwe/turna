@@ -1118,6 +1118,46 @@ class ChatApi {
     return 'direct_${sorted[0]}_${sorted[1]}';
   }
 
+  static String buildSavedMessagesChatId(String userId) {
+    return buildDirectChatId(userId, userId);
+  }
+
+  static bool isSavedMessagesChatId(String chatId, String currentUserId) {
+    return chatId == buildSavedMessagesChatId(currentUserId);
+  }
+
+  static ChatPreview buildSavedMessagesChatPreview(
+    AuthSession session, {
+    String message = '',
+    String time = '',
+    int unreadCount = 0,
+    bool isMuted = false,
+    bool isArchived = false,
+    bool isFavorited = false,
+    bool isLocked = false,
+    String? folderId,
+    String? folderName,
+  }) {
+    final selfProfile = TurnaUserProfileLocalCache.peek(session.userId);
+    return ChatPreview(
+      chatId: buildSavedMessagesChatId(session.userId),
+      name: 'Kendime Notlar',
+      message: message,
+      time: time,
+      avatarUrl: resolveTurnaSessionAvatarUrl(
+        session,
+        overrideAvatarUrl: selfProfile?.avatarUrl,
+      ),
+      unreadCount: unreadCount,
+      isMuted: isMuted,
+      isArchived: isArchived,
+      isFavorited: isFavorited,
+      isLocked: isLocked,
+      folderId: folderId,
+      folderName: folderName,
+    );
+  }
+
   static String? extractPeerUserId(String chatId, String currentUserId) {
     if (!chatId.startsWith('direct_')) return null;
     final parts = chatId
@@ -1127,7 +1167,10 @@ class ChatApi {
         .toList();
     if (parts.length != 2) return null;
     if (!parts.contains(currentUserId)) return null;
-    return parts.firstWhere((part) => part != currentUserId);
+    for (final part in parts) {
+      if (part != currentUserId) return part;
+    }
+    return null;
   }
 
   static Future<ChatMessagesPage> fetchMessagesPage(

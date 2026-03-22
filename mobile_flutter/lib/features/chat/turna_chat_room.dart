@@ -175,6 +175,62 @@ class _ResolvedChatMessageText {
   final String linkCaptionText;
 }
 
+class _TurnaInlineTranslationState {
+  const _TurnaInlineTranslationState({
+    required this.sourceText,
+    required this.targetLanguageCode,
+    this.detectedLanguageCode,
+    this.translatedText,
+    this.loading = false,
+    this.visible = false,
+  });
+
+  final String sourceText;
+  final String targetLanguageCode;
+  final String? detectedLanguageCode;
+  final String? translatedText;
+  final bool loading;
+  final bool visible;
+
+  bool get hasTranslation => (translatedText?.trim().isNotEmpty ?? false);
+
+  _TurnaInlineTranslationState copyWith({
+    String? sourceText,
+    String? targetLanguageCode,
+    String? detectedLanguageCode,
+    bool clearDetectedLanguageCode = false,
+    String? translatedText,
+    bool clearTranslatedText = false,
+    bool? loading,
+    bool? visible,
+  }) {
+    return _TurnaInlineTranslationState(
+      sourceText: sourceText ?? this.sourceText,
+      targetLanguageCode: targetLanguageCode ?? this.targetLanguageCode,
+      detectedLanguageCode: clearDetectedLanguageCode
+          ? null
+          : (detectedLanguageCode ?? this.detectedLanguageCode),
+      translatedText: clearTranslatedText
+          ? null
+          : (translatedText ?? this.translatedText),
+      loading: loading ?? this.loading,
+      visible: visible ?? this.visible,
+    );
+  }
+}
+
+class _TurnaInlineTranslationResult {
+  const _TurnaInlineTranslationResult({
+    required this.translatedText,
+    required this.targetLanguageCode,
+    this.sourceLanguageCode,
+  });
+
+  final String translatedText;
+  final String targetLanguageCode;
+  final String? sourceLanguageCode;
+}
+
 class _ChatRoomPageState extends State<ChatRoomPage>
     with WidgetsBindingObserver, RouteAware {
   static const Duration _voiceRecordTick = Duration(milliseconds: 140);
@@ -212,6 +268,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   Set<String> _softDeletedMessageIds = <String>{};
   Set<String> _deletedMessageIds = <String>{};
   Set<String> _selectedMessageIds = <String>{};
+  final Map<String, _TurnaInlineTranslationState> _inlineTranslations =
+      <String, _TurnaInlineTranslationState>{};
   final Map<String, _ResolvedChatMessageText> _resolvedMessageTextCache =
       <String, _ResolvedChatMessageText>{};
   final Map<String, GlobalKey> _messageKeys = <String, GlobalKey>{};
@@ -243,6 +301,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
 
   bool get _isSelectionMode => _selectedMessageIds.isNotEmpty;
   bool get _isGroupChat => widget.chat.chatType == TurnaChatType.group;
+  bool get _isSavedMessagesChat =>
+      ChatApi.isSavedMessagesChatId(widget.chat.chatId, widget.session.userId);
   TurnaChatDetail? get _cachedChatDetail =>
       TurnaChatDetailLocalCache.peek(widget.session.userId, widget.chat.chatId);
   TurnaChatDetail? get _cachedGroupDetail =>
@@ -251,11 +311,16 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       _isGroupChat ? null : _cachedChatDetail;
   String? get _peerUserId =>
       ChatApi.extractPeerUserId(widget.chat.chatId, widget.session.userId);
-  String? get _directAvatarUrl => _isGroupChat
-      ? null
-      : (_cachedDirectDetail != null
-            ? _cachedDirectDetail!.avatarUrl
-            : widget.chat.avatarUrl);
+  String? get _directAvatarUrl {
+    if (_isGroupChat) return null;
+    final resolved = _cachedDirectDetail?.avatarUrl ?? widget.chat.avatarUrl;
+    if ((resolved ?? '').trim().isNotEmpty) return resolved;
+    if (_isSavedMessagesChat) {
+      return resolveTurnaSessionAvatarUrl(widget.session);
+    }
+    return null;
+  }
+
   String? get _groupAvatarUrl =>
       _cachedGroupDetail?.avatarUrl ?? widget.chat.avatarUrl;
   int get _groupMemberCount =>
@@ -264,6 +329,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       ? ((_cachedGroupDetail?.title.trim().isNotEmpty ?? false)
             ? _cachedGroupDetail!.title.trim()
             : widget.chat.name)
+      : _isSavedMessagesChat
+      ? 'Kendime Notlar'
       : TurnaContactsDirectory.resolveDisplayLabel(
           phone: widget.chat.phone,
           fallbackName: widget.chat.name,
@@ -549,6 +616,84 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     _updateMentionSuggestions(_controller.text);
   }
 
+  _TurnaInlineTranslationState? _translationStateForMessage(
+    ChatMessage msg, {
+    _ResolvedChatMessageText? resolved,
+  }) {
+    final state = _inlineTranslations[msg.id];
+    if (state == null) return null;
+    final sourceText = (resolved ?? _resolveMessageText(msg)).trimmedText;
+    if (state.sourceText == sourceText) {
+      return state;
+    }
+    _inlineTranslations.remove(msg.id);
+    return null;
+  }
+
+  String _translationActionLabel(ChatMessage msg) {
+    final state = _translationStateForMessage(msg);
+    if (state?.loading == true) return 'Çevriliyor';
+    if (state?.hasTranslation == true) {
+      return state!.visible ? 'Orijinali göster' : 'Çeviriyi göster';
+    }
+    return 'Çevir';
+  }
+
+  String _preferredTranslationLanguageCode() {
+    final code = Localizations.maybeLocaleOf(
+      context,
+    )?.languageCode.trim().toLowerCase();
+    if (code == null || code.isEmpty) return 'tr';
+    return code;
+  }
+
+  String _normalizeTranslationComparisonText(String value) {
+    return value.trim().replaceAll(RegExp(r'\s+'), ' ').toLowerCase();
+  }
+
+  Future<_TurnaInlineTranslationResult> _fetchInlineTranslation(
+    String text, {
+    required String targetLanguageCode,
+  }) async {
+    final uri = Uri.https('translate.googleapis.com', '/translate_a/single', {
+      'client': 'gtx',
+      'sl': 'auto',
+      'tl': targetLanguageCode,
+      'dt': 't',
+      'dj': '1',
+      'q': text,
+    });
+    final response = await http.get(
+      uri,
+      headers: const <String, String>{'Accept': 'application/json'},
+    );
+    if (response.statusCode >= 400) {
+      throw TurnaApiException('Çeviri şu anda alınamadı.');
+    }
+
+    final decoded = jsonDecode(utf8.decode(response.bodyBytes));
+    if (decoded is! Map<String, dynamic>) {
+      throw TurnaApiException('Çeviri yanıtı okunamadı.');
+    }
+    final sentences = decoded['sentences'] as List<dynamic>? ?? const [];
+    final translated = sentences
+        .whereType<Map>()
+        .map((item) => item['trans']?.toString() ?? '')
+        .join()
+        .trim();
+    if (translated.isEmpty) {
+      throw TurnaApiException('Çevrilecek sonuç bulunamadı.');
+    }
+    final sourceLanguage = (decoded['src']?.toString() ?? '')
+        .trim()
+        .toLowerCase();
+    return _TurnaInlineTranslationResult(
+      translatedText: translated,
+      targetLanguageCode: targetLanguageCode,
+      sourceLanguageCode: sourceLanguage.isEmpty ? null : sourceLanguage,
+    );
+  }
+
   String? _buildPeerStatusText() {
     if (_isGroupChat) {
       final typingSummary = _client.groupTypingSummary;
@@ -566,6 +711,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         return '$_groupMemberCount üye';
       }
       return 'Grup sohbeti';
+    }
+    if (_isSavedMessagesChat) {
+      return 'Notlar, medya ve iletilen mesajlar yalnızca sana görünür';
     }
     if (_peerUserId == null) return null;
     if (_client.peerTyping) return 'yazıyor...';
@@ -2797,7 +2945,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   }
 
   Future<void> _translateMessage(ChatMessage msg) async {
-    final text = _resolveMessageText(msg).trimmedText;
+    final resolved = _resolveMessageText(msg);
+    final text = resolved.trimmedText;
     if (text.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Çevrilecek metin bulunamadı.')),
@@ -2805,15 +2954,65 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       return;
     }
 
-    final uri = Uri.parse(
-      'https://translate.google.com/?sl=auto&tl=tr&text=${Uri.encodeComponent(text)}&op=translate',
-    );
-    final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
-    if (!mounted) return;
-    if (!launched) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Çeviri açılamadı.')));
+    final existing = _translationStateForMessage(msg, resolved: resolved);
+    if (existing?.loading == true) return;
+    if (existing?.hasTranslation == true) {
+      setState(() {
+        _inlineTranslations[msg.id] = existing!.copyWith(
+          visible: !existing.visible,
+        );
+      });
+      return;
+    }
+
+    final targetLanguageCode = _preferredTranslationLanguageCode();
+    setState(() {
+      _inlineTranslations[msg.id] = _TurnaInlineTranslationState(
+        sourceText: text,
+        targetLanguageCode: targetLanguageCode,
+        loading: true,
+        visible: true,
+      );
+    });
+
+    try {
+      final result = await _fetchInlineTranslation(
+        text,
+        targetLanguageCode: targetLanguageCode,
+      );
+      if (!mounted) return;
+
+      if (_normalizeTranslationComparisonText(text) ==
+          _normalizeTranslationComparisonText(result.translatedText)) {
+        setState(() => _inlineTranslations.remove(msg.id));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Mesaj zaten uygulama dilinde görünüyor.'),
+          ),
+        );
+        return;
+      }
+
+      setState(() {
+        _inlineTranslations[msg.id] = _TurnaInlineTranslationState(
+          sourceText: text,
+          targetLanguageCode: result.targetLanguageCode,
+          detectedLanguageCode: result.sourceLanguageCode,
+          translatedText: result.translatedText,
+          loading: false,
+          visible: true,
+        );
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _inlineTranslations.remove(msg.id));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            error is TurnaApiException ? error.toString() : 'Çeviri alınamadı.',
+          ),
+        ),
+      );
     }
   }
 
@@ -3165,6 +3364,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     final isPinned =
         msg.isPinned ||
         _client.pinnedMessages.any((item) => item.messageId == msg.id);
+    final translateActionLabel = _translationActionLabel(msg);
     await showModalBottomSheet<void>(
       context: context,
       builder: (sheetContext) {
@@ -3195,11 +3395,13 @@ class _ChatRoomPageState extends State<ChatRoomPage>
               ),
               ListTile(
                 leading: const Icon(Icons.translate_rounded),
-                title: const Text('Cevir'),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  _translateMessage(msg);
-                },
+                title: Text(translateActionLabel),
+                onTap: translateActionLabel == 'Çevriliyor'
+                    ? null
+                    : () {
+                        Navigator.pop(sheetContext);
+                        _translateMessage(msg);
+                      },
               ),
               ListTile(
                 leading: const Icon(Icons.flag_outlined),
@@ -3960,6 +4162,10 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     final statusPayload = isDeletedPlaceholder ? null : parsed.status;
     final locationPayload = isDeletedPlaceholder ? null : parsed.location;
     final contactPayload = isDeletedPlaceholder ? null : parsed.contact;
+    final translationState = _translationStateForMessage(
+      msg,
+      resolved: resolved,
+    );
     final visibleAttachments = isDeletedPlaceholder
         ? const <ChatAttachment>[]
         : msg.attachments;
@@ -3989,6 +4195,11 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     final previewUri = showLinkPreview ? primaryLinkUri : null;
     final showTextBlock =
         hasText && (!showLinkPreview || linkCaptionText.isNotEmpty);
+    final showInlineTranslation =
+        translationState != null &&
+        (translationState.loading || translationState.visible) &&
+        !isDeletedPlaceholder &&
+        hasText;
     final useEmbeddedMediaBubble =
         !hasText &&
         !hasError &&
@@ -4317,6 +4528,21 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                       visibleAttachments.isNotEmpty ||
                       hasError))
                 Align(alignment: Alignment.bottomRight, child: footer),
+              if (showInlineTranslation) ...[
+                const SizedBox(height: 8),
+                _TurnaInlineTranslationCard(
+                  state: translationState,
+                  mine: mine,
+                  onToggle: translationState.loading
+                      ? null
+                      : () {
+                          setState(() {
+                            _inlineTranslations[msg.id] = translationState
+                                .copyWith(visible: false);
+                          });
+                        },
+                ),
+              ],
               if (msg.reactions.isNotEmpty) ...[
                 const SizedBox(height: 8),
                 Wrap(
@@ -6401,6 +6627,93 @@ class _TurnaStatusSnippetCard extends StatelessWidget {
   }
 }
 
+class _TurnaInlineTranslationCard extends StatelessWidget {
+  const _TurnaInlineTranslationCard({
+    required this.state,
+    required this.mine,
+    this.onToggle,
+  });
+
+  final _TurnaInlineTranslationState state;
+  final bool mine;
+  final VoidCallback? onToggle;
+
+  @override
+  Widget build(BuildContext context) {
+    final source = (state.detectedLanguageCode ?? '').trim().toUpperCase();
+    final target = state.targetLanguageCode.trim().toUpperCase();
+    final subtitle = source.isEmpty ? 'Çeviri' : '$source → $target';
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: mine
+            ? Colors.white.withValues(alpha: 0.5)
+            : Colors.black.withValues(alpha: 0.04),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: mine
+              ? Colors.white.withValues(alpha: 0.52)
+              : TurnaColors.border,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.translate_rounded,
+                size: 16,
+                color: TurnaColors.primary,
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  subtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w700,
+                    color: TurnaColors.primary,
+                  ),
+                ),
+              ),
+              if (onToggle != null)
+                InkWell(
+                  borderRadius: BorderRadius.circular(999),
+                  onTap: onToggle,
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    child: Text(
+                      'Orijinali göster',
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w700,
+                        color: TurnaColors.primary,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            state.loading ? 'Çevriliyor...' : (state.translatedText ?? ''),
+            style: const TextStyle(
+              fontSize: 13.5,
+              height: 1.28,
+              color: TurnaColors.text,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _MessageMetaFooter extends StatelessWidget {
   const _MessageMetaFooter({
     required this.timeLabel,
@@ -7385,9 +7698,31 @@ class _ForwardMessagePickerPageState extends State<ForwardMessagePickerPage> {
   }
 
   List<ChatPreview> _selectedChats(List<ChatPreview> chats) {
-    return chats
+    final selected = chats
         .where((chat) => _selectedChatIds.contains(chat.chatId))
         .toList(growable: false);
+    final savedMessagesChat = _savedMessagesChat(chats);
+    if (savedMessagesChat != null &&
+        _selectedChatIds.contains(savedMessagesChat.chatId) &&
+        !selected.any((chat) => chat.chatId == savedMessagesChat.chatId)) {
+      return <ChatPreview>[savedMessagesChat, ...selected];
+    }
+    return selected;
+  }
+
+  ChatPreview? _savedMessagesChat(List<ChatPreview> chats) {
+    final savedMessagesChatId = ChatApi.buildSavedMessagesChatId(
+      widget.session.userId,
+    );
+    if (widget.currentChatId == savedMessagesChatId) {
+      return null;
+    }
+    for (final chat in chats) {
+      if (chat.chatId == savedMessagesChatId) {
+        return chat;
+      }
+    }
+    return ChatApi.buildSavedMessagesChatPreview(widget.session);
   }
 
   void _toggleChatSelection(ChatPreview chat) {
@@ -7463,6 +7798,13 @@ class _ForwardMessagePickerPageState extends State<ForwardMessagePickerPage> {
   }
 
   Widget _buildLegacyForwardPicker(List<ChatPreview> chats) {
+    final savedMessagesChat = _savedMessagesChat(chats);
+    final listChats = savedMessagesChat == null
+        ? chats
+        : <ChatPreview>[
+            savedMessagesChat,
+            ...chats.where((chat) => chat.chatId != savedMessagesChat.chatId),
+          ];
     return Column(
       children: [
         Padding(
@@ -7483,15 +7825,44 @@ class _ForwardMessagePickerPageState extends State<ForwardMessagePickerPage> {
         ),
         Expanded(
           child: chats.isEmpty
-              ? const _CenteredState(
-                  icon: Icons.chat_bubble_outline,
-                  title: 'Sohbet bulunamadı',
-                  message: 'İletilecek başka sohbet bulunmuyor.',
-                )
+              ? (savedMessagesChat == null
+                    ? const _CenteredState(
+                        icon: Icons.chat_bubble_outline,
+                        title: 'Sohbet bulunamadı',
+                        message: 'İletilecek başka sohbet bulunmuyor.',
+                      )
+                    : ListView.builder(
+                        itemCount: listChats.length,
+                        itemBuilder: (context, index) {
+                          final chat = listChats[index];
+                          return ListTile(
+                            leading: _ProfileAvatar(
+                              label: chat.name,
+                              avatarUrl: chat.avatarUrl,
+                              authToken: widget.session.token,
+                              radius: 22,
+                            ),
+                            title: Text(
+                              chat.name,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            subtitle: chat.message.trim().isEmpty
+                                ? null
+                                : Text(
+                                    chat.message,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                            onTap: () => Navigator.pop(context, chat),
+                          );
+                        },
+                      ))
               : ListView.builder(
-                  itemCount: chats.length,
+                  itemCount: listChats.length,
                   itemBuilder: (context, index) {
-                    final chat = chats[index];
+                    final chat = listChats[index];
                     return ListTile(
                       leading: _ProfileAvatar(
                         label: chat.name,
@@ -7524,10 +7895,40 @@ class _ForwardMessagePickerPageState extends State<ForwardMessagePickerPage> {
     List<ChatPreview> chats,
     String query,
   ) {
+    final savedMessagesChat = _savedMessagesChat(allChats);
+    final savedMessagesMatchesQuery =
+        savedMessagesChat != null &&
+        (query.isEmpty ||
+            savedMessagesChat.name.toLowerCase().contains(query) ||
+            'notlar medya iletilen mesajlar'.contains(query));
+    final displayChats = query.isEmpty
+        ? chats
+            .where(
+              (chat) =>
+                  savedMessagesChat == null ||
+                  chat.chatId != savedMessagesChat.chatId,
+            )
+            .toList(growable: false)
+        : <ChatPreview>[
+            if (savedMessagesMatchesQuery) savedMessagesChat,
+            ...chats.where(
+              (chat) =>
+                  savedMessagesChat == null ||
+                  chat.chatId != savedMessagesChat.chatId,
+            ),
+          ];
     final frequentChats = allChats
         .where((chat) => chat.chatType == TurnaChatType.direct)
+        .where(
+          (chat) =>
+              savedMessagesChat == null ||
+              chat.chatId != savedMessagesChat.chatId,
+        )
         .take(3)
         .toList(growable: false);
+    final hasVisibleTargets = query.isEmpty
+        ? savedMessagesChat != null || displayChats.isNotEmpty
+        : displayChats.isNotEmpty;
     final showBottomComposer = _shareToStatus || _selectedChatIds.isNotEmpty;
 
     return Stack(
@@ -7560,7 +7961,7 @@ class _ForwardMessagePickerPageState extends State<ForwardMessagePickerPage> {
               ),
             ),
             Expanded(
-              child: chats.isEmpty
+              child: !hasVisibleTargets
                   ? const _CenteredState(
                       icon: Icons.search_off_rounded,
                       title: 'Kisi bulunamadi',
@@ -7575,6 +7976,32 @@ class _ForwardMessagePickerPageState extends State<ForwardMessagePickerPage> {
                       ),
                       children: [
                         if (query.isEmpty) ...[
+                          if (savedMessagesChat != null)
+                            _TurnaShareTargetTile(
+                              title: savedMessagesChat.name,
+                              subtitle: 'Notlar, medya ve iletilen mesajlar',
+                              leading: Container(
+                                width: 44,
+                                height: 44,
+                                decoration: const BoxDecoration(
+                                  color: Color(0xFFE9EDF2),
+                                  shape: BoxShape.circle,
+                                ),
+                                alignment: Alignment.center,
+                                child: const Icon(
+                                  Icons.bookmark_border_rounded,
+                                  color: Color(0xFF6E7580),
+                                  size: 22,
+                                ),
+                              ),
+                              selected: _selectedChatIds.contains(
+                                savedMessagesChat.chatId,
+                              ),
+                              onTap: () =>
+                                  _toggleChatSelection(savedMessagesChat),
+                            ),
+                          if (savedMessagesChat != null)
+                            const SizedBox(height: 8),
                           _TurnaShareTargetTile(
                             title: 'Durumum',
                             subtitle: 'Kisilerim',
@@ -7628,7 +8055,7 @@ class _ForwardMessagePickerPageState extends State<ForwardMessagePickerPage> {
                           ),
                           const SizedBox(height: 8),
                         ],
-                        ...chats.map(
+                        ...displayChats.map(
                           (chat) => _TurnaShareTargetTile(
                             title: chat.name,
                             subtitle: chat.message.trim().isEmpty

@@ -2520,6 +2520,20 @@ class _NewChatPageState extends State<NewChatPage> {
     navigator.pop(true);
   }
 
+  Future<void> _openSavedMessages() async {
+    await Navigator.push(
+      context,
+      buildChatRoomRoute(
+        chat: ChatApi.buildSavedMessagesChatPreview(widget.session),
+        session: widget.session,
+        callCoordinator: widget.callCoordinator,
+        onSessionExpired: widget.onSessionExpired,
+      ),
+    );
+    if (!mounted) return;
+    Navigator.of(context).pop(true);
+  }
+
   Future<void> _openChat(TurnaUserProfile user) async {
     final phone = user.phone;
     final fallbackName = phone == null || phone.trim().isEmpty
@@ -2914,6 +2928,12 @@ class _NewChatPageState extends State<NewChatPage> {
                           ),
                           child: Column(
                             children: [
+                              _buildQuickActionTile(
+                                icon: Icons.bookmark_border_rounded,
+                                title: 'Kendime Notlar',
+                                onTap: _openSavedMessages,
+                              ),
+                              const Divider(height: 1),
                               _buildQuickActionTile(
                                 icon: Icons.groups_rounded,
                                 title: 'Yeni grup',
