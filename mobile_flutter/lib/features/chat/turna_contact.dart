@@ -117,6 +117,27 @@ Future<void> addTurnaSharedContactToAddressBook(
   }
 }
 
+Future<void> addTurnaUserProfileToAddressBook(
+  BuildContext context,
+  TurnaUserProfile profile,
+) async {
+  try {
+    final phone = profile.phone?.trim() ?? '';
+    final email = profile.email?.trim() ?? '';
+    final contact = Contact(
+      displayName: profile.displayName,
+      phones: phone.isEmpty
+          ? const <Phone>[]
+          : [Phone(_normalizeTurnaSharedPhone(phone))],
+      emails: email.isEmpty ? const <Email>[] : [Email(email)],
+    );
+    await FlutterContacts.openExternalInsert(contact);
+  } catch (error) {
+    if (!context.mounted) return;
+    _showTurnaSharedContactSnackBar(context, 'Kişi kartı açılamadı: $error');
+  }
+}
+
 Future<void> openTurnaSharedContactCard(
   BuildContext context,
   TurnaSharedContactPayload payload, {
@@ -325,7 +346,7 @@ class _TurnaSharedContactDetailsPageState
             ),
             const SizedBox(height: 28),
             _TurnaSharedContactDetailTile(
-              title: 'Yeni kişi oluştur',
+              title: 'Rehbere kaydet',
               onTap: _handleAddContact,
               trailing: _busyKeys.contains('add-contact')
                   ? const SizedBox(

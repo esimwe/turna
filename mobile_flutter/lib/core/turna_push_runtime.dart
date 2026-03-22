@@ -13,6 +13,90 @@ class TurnaPushManager {
     kTurnaPushChatOpenCoordinator.requestOpen(chatId);
   }
 
+  static String _callEndedReasonLabel(String reason) {
+    switch (reason.trim().toLowerCase()) {
+      case 'missed':
+        return 'Cevapsız arama';
+      case 'declined':
+        return 'Arama reddedildi';
+      default:
+        return 'Arama sona erdi';
+    }
+  }
+
+  static TurnaInboxNotificationEntry? _entryFromRemoteMessage(
+    RemoteMessage message,
+  ) {
+    final data = message.data;
+    final type = (data['type'] ?? '').toString().trim().toLowerCase();
+    if (type.isEmpty) return null;
+    final createdAt =
+        message.sentTime?.toUtc().toIso8601String() ??
+        DateTime.now().toUtc().toIso8601String();
+
+    switch (type) {
+      case 'chat_message':
+        final messageId = (data['messageId'] ?? '').toString().trim();
+        final chatId = (data['chatId'] ?? '').toString().trim();
+        if (messageId.isEmpty || chatId.isEmpty) return null;
+        final sender = (data['senderDisplayName'] ?? '').toString().trim();
+        final title = message.notification?.title?.trim().isNotEmpty == true
+            ? message.notification!.title!.trim()
+            : (sender.isEmpty ? 'Yeni mesaj' : sender);
+        final body = message.notification?.body?.trim().isNotEmpty == true
+            ? message.notification!.body!.trim()
+            : (data['body'] ?? '').toString().trim();
+        return TurnaInboxNotificationEntry(
+          id: 'push:chat:$messageId',
+          source: 'push',
+          type: 'chat_message',
+          title: title,
+          body: body.isEmpty ? null : body,
+          createdAt: createdAt,
+          chatId: chatId,
+          messageId: messageId,
+        );
+      case 'incoming_call':
+        final callId = (data['callId'] ?? data['id'] ?? '').toString().trim();
+        if (callId.isEmpty) return null;
+        final caller = (data['callerDisplayName'] ?? data['nameCaller'] ?? '')
+            .toString()
+            .trim();
+        final isVideo = (data['isVideo'] ?? '').toString().trim() == 'true';
+        return TurnaInboxNotificationEntry(
+          id: 'push:incoming_call:$callId',
+          source: 'push',
+          type: 'incoming_call',
+          title: caller.isEmpty ? 'Gelen arama' : caller,
+          body: isVideo ? 'Goruntulu arama' : 'Sesli arama',
+          createdAt: createdAt,
+          callId: callId,
+        );
+      case 'call_ended':
+        final callId = (data['callId'] ?? data['id'] ?? '').toString().trim();
+        if (callId.isEmpty) return null;
+        return TurnaInboxNotificationEntry(
+          id: 'push:call_ended:$callId',
+          source: 'push',
+          type: 'call_ended',
+          title: _callEndedReasonLabel((data['reason'] ?? '').toString()),
+          body: null,
+          createdAt: createdAt,
+          callId: callId,
+        );
+      default:
+        return null;
+    }
+  }
+
+  static Future<void> _recordRemoteMessage(RemoteMessage message) async {
+    final session = _session;
+    if (session == null) return;
+    final entry = _entryFromRemoteMessage(message);
+    if (entry == null) return;
+    await TurnaNotificationInboxLocalCache.add(session.userId, entry);
+  }
+
   static Future<void> syncSession(AuthSession session) async {
     _session = session;
     final ready = await TurnaFirebase.ensureInitialized();
@@ -44,12 +128,14 @@ class TurnaPushManager {
         _listenersAttached = true;
         FirebaseMessaging.onMessage.listen((message) async {
           turnaLog('push foreground', message.data);
+          await _recordRemoteMessage(message);
           await TurnaNativeCallManager.handleForegroundRemoteMessage(
             message.data,
           );
         });
         FirebaseMessaging.onMessageOpenedApp.listen((message) async {
           turnaLog('push opened', message.data);
+          await _recordRemoteMessage(message);
           await _handleChatPushOpen(message.data);
           await TurnaNativeCallManager.handleForegroundRemoteMessage(
             message.data,
@@ -81,6 +167,7 @@ class TurnaPushManager {
         final initialMessage = await messaging.getInitialMessage();
         if (initialMessage != null) {
           turnaLog('push initial', initialMessage.data);
+          await _recordRemoteMessage(initialMessage);
           await _handleChatPushOpen(initialMessage.data);
           await TurnaNativeCallManager.handleForegroundRemoteMessage(
             initialMessage.data,

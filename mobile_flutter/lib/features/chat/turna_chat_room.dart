@@ -201,6 +201,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   bool _voiceRecorderBusy = false;
   bool _voiceSlideCancelArmed = false;
   bool _showSecurityBanner = false;
+  bool _selectionActionBusy = false;
   TurnaReplyPayload? _replyDraft;
   _ComposerEditDraft? _editingDraft;
   List<TurnaGroupMember> _mentionCandidates = const [];
@@ -210,6 +211,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   Set<String> _starredMessageIds = <String>{};
   Set<String> _softDeletedMessageIds = <String>{};
   Set<String> _deletedMessageIds = <String>{};
+  Set<String> _selectedMessageIds = <String>{};
   final Map<String, _ResolvedChatMessageText> _resolvedMessageTextCache =
       <String, _ResolvedChatMessageText>{};
   final Map<String, GlobalKey> _messageKeys = <String, GlobalKey>{};
@@ -239,6 +241,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   static const int _trackedMessageKeyLimit = 32;
   static const int _resolvedMessageTextCacheLimit = 256;
 
+  bool get _isSelectionMode => _selectedMessageIds.isNotEmpty;
   bool get _isGroupChat => widget.chat.chatType == TurnaChatType.group;
   TurnaChatDetail? get _cachedChatDetail =>
       TurnaChatDetailLocalCache.peek(widget.session.userId, widget.chat.chatId);
@@ -458,9 +461,62 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     }
   }
 
+  bool _canSelectMessage(ChatMessage msg, {ParsedTurnaMessageText? parsed}) {
+    if (_isSystemMessage(msg)) return false;
+    final resolved = parsed ?? _resolveMessageText(msg).parsed;
+    return !_isMessageDeletedPlaceholder(msg, parsed: resolved);
+  }
+
+  List<ChatMessage> _selectedMessages() {
+    final items = _currentDisplayMessages()
+        .where((message) => _selectedMessageIds.contains(message.id))
+        .toList();
+    items.sort((a, b) => compareTurnaTimestamps(a.createdAt, b.createdAt));
+    return items;
+  }
+
+  void _clearMessageSelection() {
+    if (_selectedMessageIds.isEmpty) return;
+    setState(() => _selectedMessageIds = <String>{});
+  }
+
+  void _toggleMessageSelection(ChatMessage msg) {
+    if (!_canSelectMessage(msg)) return;
+    final next = Set<String>.from(_selectedMessageIds);
+    if (next.contains(msg.id)) {
+      next.remove(msg.id);
+    } else {
+      next.add(msg.id);
+    }
+    setState(() {
+      _selectedMessageIds = next;
+      if (next.isNotEmpty) {
+        _replyDraft = null;
+        _editingDraft = null;
+      }
+    });
+    if (next.isNotEmpty) {
+      _composerFocusNode.unfocus();
+    }
+  }
+
   void _handleClientMessagesChanged() {
     final shouldSnapToBottom =
         !_scrollController.hasClients || _scrollController.offset < 120;
+    final visibleMessageIds = _currentDisplayMessages()
+        .map((message) => message.id)
+        .toSet();
+    if (_selectedMessageIds.isNotEmpty &&
+        !_selectedMessageIds.every(visibleMessageIds.contains)) {
+      final nextSelection = _selectedMessageIds
+          .where(visibleMessageIds.contains)
+          .toSet();
+      if (mounted) {
+        setState(() => _selectedMessageIds = nextSelection);
+      } else {
+        _selectedMessageIds = nextSelection;
+      }
+    }
     final timelineCount = _buildTimelineEntries().length;
     if (timelineCount != _lastRenderedTimelineCount) {
       _lastRenderedTimelineCount = timelineCount;
@@ -1782,6 +1838,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     if (parsed.contact != null) {
       return parsed.contact!.previewLabel;
     }
+    if (parsed.status != null) {
+      return parsed.status!.previewLabel;
+    }
     final text = resolved.trimmedText;
     if (text.isNotEmpty) {
       return text.length > 72 ? '${text.substring(0, 72)}...' : text;
@@ -1792,6 +1851,26 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     if (isTurnaImageAttachment(first)) return 'Fotoğraf';
     if (isTurnaVideoAttachment(first)) return 'Video';
     return 'Dosya';
+  }
+
+  Future<void> _openStatusReference(TurnaStatusMessagePayload status) async {
+    if (status.authorUserId.trim().isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Ilgili durum acilamadi.')));
+      return;
+    }
+    await Navigator.push<void>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => StatusViewerPage(
+          session: widget.session,
+          userId: status.authorUserId,
+          onSessionExpired: widget.onSessionExpired,
+          initialStatusId: status.statusId,
+        ),
+      ),
+    );
   }
 
   TurnaReplyPayload _replyPayloadForMessage(ChatMessage msg) {
@@ -2253,23 +2332,10 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     return items;
   }
 
-  Future<void> _forwardMessage(ChatMessage msg) async {
-    final targetChat = await Navigator.push<ChatPreview>(
-      context,
-      MaterialPageRoute(
-        builder: (_) => ForwardMessagePickerPage(
-          session: widget.session,
-          currentChatId: widget.chat.chatId,
-        ),
-      ),
-    );
-    if (!mounted || targetChat == null) return;
-
-    final messenger = ScaffoldMessenger.of(context);
-    messenger.showSnackBar(
-      SnackBar(content: Text('${targetChat.name} sohbetine iletiliyor...')),
-    );
-
+  Future<void> _forwardMessageToChat(
+    ChatMessage msg,
+    ChatPreview targetChat,
+  ) async {
     try {
       final parsed = _resolveMessageText(msg).parsed;
       final drafts = <OutgoingAttachmentDraft>[];
@@ -2313,6 +2379,32 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         text: parsed.text.trim().isEmpty ? null : parsed.text.trim(),
         attachments: drafts,
       );
+    } on TurnaUnauthorizedException {
+      rethrow;
+    } catch (error) {
+      throw TurnaApiException(error.toString());
+    }
+  }
+
+  Future<void> _forwardMessage(ChatMessage msg) async {
+    final targetChat = await Navigator.push<ChatPreview>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ForwardMessagePickerPage(
+          session: widget.session,
+          currentChatId: widget.chat.chatId,
+        ),
+      ),
+    );
+    if (!mounted || targetChat == null) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(
+      SnackBar(content: Text('${targetChat.name} sohbetine iletiliyor...')),
+    );
+
+    try {
+      await _forwardMessageToChat(msg, targetChat);
       if (!mounted) return;
       messenger
         ..hideCurrentSnackBar()
@@ -2330,7 +2422,10 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     }
   }
 
-  Future<void> _toggleStarMessage(ChatMessage msg) async {
+  Future<void> _toggleStarMessage(
+    ChatMessage msg, {
+    bool showFeedback = true,
+  }) async {
     final next = Set<String>.from(_starredMessageIds);
     final nowStarred = !next.contains(msg.id);
     if (nowStarred) {
@@ -2340,7 +2435,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     }
     setState(() => _starredMessageIds = next);
     await _persistStarredMessages();
-    if (!mounted) return;
+    if (!mounted || !showFeedback) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
@@ -2350,15 +2445,20 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     );
   }
 
-  Future<void> _deleteMessageLocally(ChatMessage msg) async {
+  Future<void> _deleteMessageLocally(
+    ChatMessage msg, {
+    bool showFeedback = true,
+  }) async {
     final next = Set<String>.from(_deletedMessageIds)..add(msg.id);
     final nextStarred = Set<String>.from(_starredMessageIds)..remove(msg.id);
     final nextSoftDeleted = Set<String>.from(_softDeletedMessageIds)
       ..remove(msg.id);
+    final nextSelected = Set<String>.from(_selectedMessageIds)..remove(msg.id);
     setState(() {
       _deletedMessageIds = next;
       _starredMessageIds = nextStarred;
       _softDeletedMessageIds = nextSoftDeleted;
+      _selectedMessageIds = nextSelected;
       if (_editingDraft?.messageId == msg.id) {
         _editingDraft = null;
         _controller.clear();
@@ -2368,19 +2468,24 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     await _persistDeletedMessages();
     await _persistStarredMessages();
     await _refreshPinnedMessagesIfAffected(msg.id);
-    if (!mounted) return;
+    if (!mounted || !showFeedback) return;
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(const SnackBar(content: Text('Mesaj bu cihazdan silindi.')));
   }
 
-  Future<void> _deleteMessageForMe(ChatMessage msg) async {
+  Future<void> _deleteMessageForMe(
+    ChatMessage msg, {
+    bool showFeedback = true,
+  }) async {
     final nextSoftDeleted = Set<String>.from(_softDeletedMessageIds)
       ..add(msg.id);
     final nextStarred = Set<String>.from(_starredMessageIds)..remove(msg.id);
+    final nextSelected = Set<String>.from(_selectedMessageIds)..remove(msg.id);
     setState(() {
       _softDeletedMessageIds = nextSoftDeleted;
       _starredMessageIds = nextStarred;
+      _selectedMessageIds = nextSelected;
       if (_editingDraft?.messageId == msg.id) {
         _editingDraft = null;
         _controller.clear();
@@ -2389,7 +2494,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     await _persistSoftDeletedMessages();
     await _persistStarredMessages();
     await _refreshPinnedMessagesIfAffected(msg.id);
-    if (!mounted) return;
+    if (!mounted || !showFeedback) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text('Mesaj sende Silindi. olarak gösteriliyor.'),
@@ -2397,7 +2502,10 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     );
   }
 
-  Future<void> _deleteMessageForEveryone(ChatMessage msg) async {
+  Future<void> _deleteMessageForEveryone(
+    ChatMessage msg, {
+    bool showFeedback = true,
+  }) async {
     try {
       final updated = await ChatApi.deleteMessageForEveryone(
         widget.session,
@@ -2405,9 +2513,12 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       );
       final nextSoftDeleted = Set<String>.from(_softDeletedMessageIds)
         ..remove(msg.id);
+      final nextSelected = Set<String>.from(_selectedMessageIds)
+        ..remove(msg.id);
       if (mounted) {
         setState(() {
           _softDeletedMessageIds = nextSoftDeleted;
+          _selectedMessageIds = nextSelected;
           if (_editingDraft?.messageId == msg.id) {
             _editingDraft = null;
             _controller.clear();
@@ -2417,7 +2528,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       await _persistSoftDeletedMessages();
       await _refreshPinnedMessagesIfAffected(msg.id);
       _client.mergeServerMessage(updated);
-      if (!mounted) return;
+      if (!mounted || !showFeedback) return;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text('Mesaj herkesten silindi.')));
@@ -2430,6 +2541,201 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         context,
       ).showSnackBar(SnackBar(content: Text(error.toString())));
     }
+  }
+
+  Future<void> _bulkForwardSelectedMessages() async {
+    final selectedMessages = _selectedMessages();
+    if (selectedMessages.isEmpty || _selectionActionBusy) return;
+    final targetChat = await Navigator.push<ChatPreview>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ForwardMessagePickerPage(
+          session: widget.session,
+          currentChatId: widget.chat.chatId,
+        ),
+      ),
+    );
+    if (!mounted || targetChat == null) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _selectionActionBusy = true);
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          '${selectedMessages.length} mesaj ${targetChat.name} sohbetine iletiliyor...',
+        ),
+      ),
+    );
+    try {
+      for (final message in selectedMessages) {
+        await _forwardMessageToChat(message, targetChat);
+      }
+      if (!mounted) return;
+      setState(() {
+        _selectionActionBusy = false;
+        _selectedMessageIds = <String>{};
+      });
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(
+              '${selectedMessages.length} mesaj ${targetChat.name} sohbetine iletildi.',
+            ),
+          ),
+        );
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      setState(() => _selectionActionBusy = false);
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _selectionActionBusy = false);
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
+  Future<void> _bulkToggleStarMessages() async {
+    final selectedMessages = _selectedMessages();
+    if (selectedMessages.isEmpty || _selectionActionBusy) return;
+    final allStarred = selectedMessages.every(
+      (message) => _starredMessageIds.contains(message.id),
+    );
+    final next = Set<String>.from(_starredMessageIds);
+    for (final message in selectedMessages) {
+      if (allStarred) {
+        next.remove(message.id);
+      } else {
+        next.add(message.id);
+      }
+    }
+    setState(() {
+      _starredMessageIds = next;
+      _selectedMessageIds = <String>{};
+    });
+    await _persistStarredMessages();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          allStarred
+              ? '${selectedMessages.length} mesajdan yıldız kaldırıldı.'
+              : '${selectedMessages.length} mesaja yıldız eklendi.',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _bulkDeleteForMe(List<ChatMessage> selectedMessages) async {
+    setState(() => _selectionActionBusy = true);
+    try {
+      for (final message in selectedMessages) {
+        await _deleteMessageForMe(message, showFeedback: false);
+      }
+      if (!mounted) return;
+      setState(() {
+        _selectionActionBusy = false;
+        _selectedMessageIds = <String>{};
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('${selectedMessages.length} mesaj senden silindi.'),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _selectionActionBusy = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
+  Future<void> _bulkDeleteForEveryone(
+    List<ChatMessage> selectedMessages,
+  ) async {
+    setState(() => _selectionActionBusy = true);
+    try {
+      for (final message in selectedMessages) {
+        await _deleteMessageForEveryone(message, showFeedback: false);
+      }
+      if (!mounted) return;
+      setState(() {
+        _selectionActionBusy = false;
+        _selectedMessageIds = <String>{};
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('${selectedMessages.length} mesaj herkesten silindi.'),
+        ),
+      );
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      setState(() => _selectionActionBusy = false);
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _selectionActionBusy = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
+  Future<void> _showBulkDeleteMessageOptions() async {
+    final selectedMessages = _selectedMessages();
+    if (selectedMessages.isEmpty || _selectionActionBusy) return;
+    final canDeleteForEveryone = selectedMessages.every((message) {
+      return _canDeleteForEveryone(
+        message,
+        parsed: _resolveMessageText(message).parsed,
+      );
+    });
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.delete_outline_rounded),
+                title: const Text('Benden sil'),
+                onTap: () async {
+                  Navigator.pop(sheetContext);
+                  final confirmed = await _showDestructiveConfirm(
+                    title: 'Mesajları senden sil',
+                    message:
+                        '${selectedMessages.length} mesaj sadece senin tarafında Silindi. olarak gösterilecek.',
+                    confirmLabel: 'Benden sil',
+                  );
+                  if (!confirmed) return;
+                  await _bulkDeleteForMe(selectedMessages);
+                },
+              ),
+              if (canDeleteForEveryone)
+                ListTile(
+                  leading: const Icon(Icons.delete_sweep_outlined),
+                  title: const Text('Herkesten sil'),
+                  onTap: () async {
+                    Navigator.pop(sheetContext);
+                    final confirmed = await _showDestructiveConfirm(
+                      title: 'Mesajları herkesten sil',
+                      message:
+                          '${selectedMessages.length} mesaj iki taraf için de Silindi. olarak değişecek.',
+                      confirmLabel: 'Herkesten sil',
+                    );
+                    if (!confirmed) return;
+                    await _bulkDeleteForEveryone(selectedMessages);
+                  },
+                ),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   Future<void> _confirmRemoveDeletedPlaceholder(ChatMessage msg) async {
@@ -2549,6 +2855,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   }
 
   String _messageTypeLabel(ChatMessage msg, ParsedTurnaMessageText parsed) {
+    if (parsed.status != null) {
+      return 'Durum yanıtı';
+    }
     if (parsed.location != null) {
       return parsed.location!.live ? 'Canlı konum' : 'Konum';
     }
@@ -2920,6 +3229,10 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     ChatAttachment? attachment,
   }) async {
     final parsed = _resolveMessageText(msg).parsed;
+    if (_isSelectionMode) {
+      _toggleMessageSelection(msg);
+      return;
+    }
     if (_isMessageDeletedPlaceholder(msg, parsed: parsed)) {
       await _confirmRemoveDeletedPlaceholder(msg);
       return;
@@ -2959,6 +3272,15 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                       onTap: () {
                         Navigator.pop(sheetContext);
                         _showReactionPicker(msg);
+                      },
+                    ),
+                    _MessageQuickAction(
+                      icon: Icons.checklist_rounded,
+                      label: 'Sec',
+                      enabled: _canSelectMessage(msg, parsed: parsed),
+                      onTap: () {
+                        Navigator.pop(sheetContext);
+                        _toggleMessageSelection(msg);
                       },
                     ),
                     _MessageQuickAction(
@@ -3635,12 +3957,14 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     final displayText = isDeletedPlaceholder
         ? 'Silindi.'
         : resolved.trimmedText;
+    final statusPayload = isDeletedPlaceholder ? null : parsed.status;
     final locationPayload = isDeletedPlaceholder ? null : parsed.location;
     final contactPayload = isDeletedPlaceholder ? null : parsed.contact;
     final visibleAttachments = isDeletedPlaceholder
         ? const <ChatAttachment>[]
         : msg.attachments;
     final hasText = displayText.isNotEmpty;
+    final hasStatusSnippet = statusPayload != null;
     final hasLocation = locationPayload != null;
     final hasContact = contactPayload != null;
     final hasSingleAudioAttachment =
@@ -3669,11 +3993,13 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         !hasText &&
         !hasError &&
         parsed.reply == null &&
+        !hasStatusSnippet &&
         (locationPayload != null ||
             contactPayload != null ||
             hasSingleVisualAttachment ||
             hasSingleAudioAttachment);
     final isHighlighted = _highlightedMessageId == msg.id;
+    final isSelected = _selectedMessageIds.contains(msg.id);
     final footer = _MessageMetaFooter(
       timeLabel: _formatMessageTime(msg.createdAt),
       mine: mine,
@@ -3706,7 +4032,12 @@ class _ChatRoomPageState extends State<ChatRoomPage>
             TurnaColors.accent.withValues(alpha: mine ? 0.18 : 0.12),
             bubbleColor,
           )
-        : bubbleColor;
+        : (isSelected
+              ? Color.alphaBlend(
+                  TurnaColors.primary.withValues(alpha: mine ? 0.18 : 0.1),
+                  bubbleColor,
+                )
+              : bubbleColor);
     final bubbleRadius = BorderRadius.only(
       topLeft: const Radius.circular(TurnaChatTokens.bubbleRadius),
       topRight: const Radius.circular(TurnaChatTokens.bubbleRadius),
@@ -3719,6 +4050,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     );
     final bubbleBorder = msg.status == ChatMessageStatus.failed
         ? Border.all(color: Colors.red.shade200)
+        : isSelected
+        ? Border.all(color: TurnaColors.primary, width: 1.3)
         : isHighlighted
         ? Border.all(
             color: TurnaColors.accentStrong.withValues(alpha: 0.72),
@@ -3730,7 +4063,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
       child: GestureDetector(
         onLongPress: () => _handleMessageLongPress(msg),
-        onTap: isDeletedPlaceholder
+        onTap: _isSelectionMode
+            ? () => _toggleMessageSelection(msg)
+            : isDeletedPlaceholder
             ? () => _confirmRemoveDeletedPlaceholder(msg)
             : mine &&
                   (msg.status == ChatMessageStatus.failed ||
@@ -3780,6 +4115,22 @@ class _ChatRoomPageState extends State<ChatRoomPage>
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              if (_isSelectionMode)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: Icon(
+                      isSelected
+                          ? Icons.check_circle_rounded
+                          : Icons.radio_button_unchecked_rounded,
+                      size: 18,
+                      color: isSelected
+                          ? TurnaColors.primary
+                          : TurnaColors.textMuted,
+                    ),
+                  ),
+                ),
               if (_isGroupChat && !mine) ...[
                 Padding(
                   padding: const EdgeInsets.only(bottom: 6),
@@ -3856,6 +4207,21 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                   },
                 ),
                 if (hasText ||
+                    hasStatusSnippet ||
+                    hasLocation ||
+                    hasContact ||
+                    visibleAttachments.isNotEmpty)
+                  const SizedBox(height: 8),
+              ],
+              if (statusPayload != null) ...[
+                _TurnaStatusSnippetCard(
+                  payload: statusPayload,
+                  mine: mine,
+                  onTap: _isSelectionMode
+                      ? () => _toggleMessageSelection(msg)
+                      : () => _openStatusReference(statusPayload),
+                ),
+                if (hasText ||
                     hasLocation ||
                     hasContact ||
                     visibleAttachments.isNotEmpty)
@@ -3865,17 +4231,23 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                 _ChatAttachmentList(
                   attachments: visibleAttachments,
                   mine: mine,
-                  onTap: (attachment) {
+                  onTap: (attachment) async {
+                    if (_isSelectionMode) {
+                      _toggleMessageSelection(msg);
+                      return;
+                    }
                     if (isTurnaImageAttachment(attachment) ||
                         isTurnaVideoAttachment(attachment)) {
-                      return _openMediaAttachment(msg, attachment);
+                      await _openMediaAttachment(msg, attachment);
+                      return;
                     }
-                    return _openAttachment(attachment);
+                    await _openAttachment(attachment);
                   },
                   formatFileSize: _formatFileSize,
                   authToken: widget.session.token,
-                  onLongPress: (attachment) =>
-                      _handleMessageLongPress(msg, attachment: attachment),
+                  onLongPress: (attachment) => _isSelectionMode
+                      ? _toggleMessageSelection(msg)
+                      : _handleMessageLongPress(msg, attachment: attachment),
                   overlayFooter: useEmbeddedMediaBubble ? embeddedFooter : null,
                   audioOverlayFooter: useEmbeddedMediaBubble
                       ? embeddedFooterPlain
@@ -3940,6 +4312,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                 Align(alignment: Alignment.bottomRight, child: footer)
               else if (!useEmbeddedMediaBubble &&
                   (hasLocation ||
+                      hasStatusSnippet ||
                       hasContact ||
                       visibleAttachments.isNotEmpty ||
                       hasError))
@@ -5596,126 +5969,164 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: TurnaColors.backgroundSoft,
-      appBar: AppBar(
-        backgroundColor: TurnaColors.background,
-        surfaceTintColor: Colors.transparent,
-        elevation: 0,
-        titleSpacing: 4,
-        title: AnimatedBuilder(
-          animation: _headerListenable,
-          builder: (context, _) {
-            final peerStatusText = _buildPeerStatusText();
-            final peerTyping = _client.peerTyping;
-            return GestureDetector(
-              onTap: _isGroupChat
-                  ? _openGroupInfo
-                  : (_peerUserId == null ? null : _openPeerProfile),
-              child: Row(
-                children: [
-                  _ProfileAvatar(
-                    label: _chatDisplayName,
-                    avatarUrl: _isGroupChat
-                        ? _groupAvatarUrl
-                        : _directAvatarUrl,
-                    authToken: widget.session.token,
-                    radius: 19,
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
+      appBar: _isSelectionMode
+          ? AppBar(
+              backgroundColor: TurnaColors.background,
+              surfaceTintColor: Colors.transparent,
+              elevation: 0,
+              leading: IconButton(
+                tooltip: 'Seçimi kapat',
+                onPressed: _selectionActionBusy ? null : _clearMessageSelection,
+                icon: const Icon(Icons.close_rounded),
+              ),
+              title: Text(
+                '${_selectedMessageIds.length} mesaj seçildi',
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+              actions: [
+                IconButton(
+                  tooltip: 'İlet',
+                  onPressed: _selectionActionBusy
+                      ? null
+                      : _bulkForwardSelectedMessages,
+                  icon: const Icon(Icons.forward_rounded),
+                ),
+                IconButton(
+                  tooltip: 'Yıldız',
+                  onPressed: _selectionActionBusy
+                      ? null
+                      : _bulkToggleStarMessages,
+                  icon: const Icon(Icons.star_border_rounded),
+                ),
+                IconButton(
+                  tooltip: 'Sil',
+                  onPressed: _selectionActionBusy
+                      ? null
+                      : _showBulkDeleteMessageOptions,
+                  icon: const Icon(Icons.delete_outline_rounded),
+                ),
+              ],
+            )
+          : AppBar(
+              backgroundColor: TurnaColors.background,
+              surfaceTintColor: Colors.transparent,
+              elevation: 0,
+              titleSpacing: 4,
+              title: AnimatedBuilder(
+                animation: _headerListenable,
+                builder: (context, _) {
+                  final peerStatusText = _buildPeerStatusText();
+                  final peerTyping = _client.peerTyping;
+                  return GestureDetector(
+                    onTap: _isGroupChat
+                        ? _openGroupInfo
+                        : (_peerUserId == null ? null : _openPeerProfile),
+                    child: Row(
                       children: [
-                        Text(
-                          _chatDisplayName,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.w600,
+                        _ProfileAvatar(
+                          label: _chatDisplayName,
+                          avatarUrl: _isGroupChat
+                              ? _groupAvatarUrl
+                              : _directAvatarUrl,
+                          authToken: widget.session.token,
+                          radius: 19,
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                _chatDisplayName,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              if (peerStatusText != null)
+                                Text(
+                                  peerStatusText,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 12.5,
+                                    color: peerTyping
+                                        ? TurnaColors.primary
+                                        : TurnaColors.textMuted,
+                                    fontWeight: peerTyping
+                                        ? FontWeight.w600
+                                        : FontWeight.w500,
+                                  ),
+                                ),
+                            ],
                           ),
                         ),
-                        if (peerStatusText != null)
-                          Text(
-                            peerStatusText,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 12.5,
-                              color: peerTyping
-                                  ? TurnaColors.primary
-                                  : TurnaColors.textMuted,
-                              fontWeight: peerTyping
-                                  ? FontWeight.w600
-                                  : FontWeight.w500,
-                            ),
-                          ),
                       ],
                     ),
+                  );
+                },
+              ),
+              actions: [
+                if (_isGroupChat)
+                  AnimatedBuilder(
+                    animation: _headerListenable,
+                    builder: (context, _) {
+                      final activeGroupCall = _activeGroupCall;
+                      return IconButton(
+                        tooltip: activeGroupCall == null
+                            ? (_canCurrentUserStartGroupCalls
+                                  ? 'Grup çağrısı başlat'
+                                  : 'Aktif çağrı varsa katıl')
+                            : 'Aktif grup çağrısına katıl',
+                        onPressed:
+                            (activeGroupCall == null &&
+                                !_canCurrentUserStartGroupCalls)
+                            ? null
+                            : _openGroupCallTypePicker,
+                        icon: Icon(
+                          activeGroupCall?.type == TurnaCallType.video
+                              ? Icons.videocam_rounded
+                              : Icons.call_rounded,
+                          color: activeGroupCall == null
+                              ? null
+                              : TurnaColors.primaryStrong,
+                        ),
+                      );
+                    },
+                  ),
+                if (_isGroupChat)
+                  IconButton(
+                    tooltip: 'Grup içi ara',
+                    onPressed: _openGroupSearch,
+                    icon: const Icon(Icons.search_rounded),
+                  ),
+                if (_isGroupChat)
+                  IconButton(
+                    tooltip: 'Grup bilgisi',
+                    onPressed: _openGroupInfo,
+                    icon: const Icon(Icons.info_outline_rounded),
+                  ),
+                if (!_isGroupChat) ...[
+                  IconButton(
+                    tooltip: 'Görüntülü ara',
+                    onPressed: _peerUserId == null
+                        ? null
+                        : () => _startCall(TurnaCallType.video),
+                    icon: const Icon(Icons.videocam_outlined),
+                  ),
+                  IconButton(
+                    tooltip: 'Sesli ara',
+                    onPressed: _peerUserId == null
+                        ? null
+                        : () => _startCall(TurnaCallType.audio),
+                    icon: const Icon(Icons.call_outlined),
                   ),
                 ],
-              ),
-            );
-          },
-        ),
-        actions: [
-          if (_isGroupChat)
-            AnimatedBuilder(
-              animation: _headerListenable,
-              builder: (context, _) {
-                final activeGroupCall = _activeGroupCall;
-                return IconButton(
-                  tooltip: activeGroupCall == null
-                      ? (_canCurrentUserStartGroupCalls
-                            ? 'Grup çağrısı başlat'
-                            : 'Aktif çağrı varsa katıl')
-                      : 'Aktif grup çağrısına katıl',
-                  onPressed:
-                      (activeGroupCall == null &&
-                          !_canCurrentUserStartGroupCalls)
-                      ? null
-                      : _openGroupCallTypePicker,
-                  icon: Icon(
-                    activeGroupCall?.type == TurnaCallType.video
-                        ? Icons.videocam_rounded
-                        : Icons.call_rounded,
-                    color: activeGroupCall == null
-                        ? null
-                        : TurnaColors.primaryStrong,
-                  ),
-                );
-              },
+              ],
             ),
-          if (_isGroupChat)
-            IconButton(
-              tooltip: 'Grup içi ara',
-              onPressed: _openGroupSearch,
-              icon: const Icon(Icons.search_rounded),
-            ),
-          if (_isGroupChat)
-            IconButton(
-              tooltip: 'Grup bilgisi',
-              onPressed: _openGroupInfo,
-              icon: const Icon(Icons.info_outline_rounded),
-            ),
-          if (!_isGroupChat) ...[
-            IconButton(
-              tooltip: 'Görüntülü ara',
-              onPressed: _peerUserId == null
-                  ? null
-                  : () => _startCall(TurnaCallType.video),
-              icon: const Icon(Icons.videocam_outlined),
-            ),
-            IconButton(
-              tooltip: 'Sesli ara',
-              onPressed: _peerUserId == null
-                  ? null
-                  : () => _startCall(TurnaCallType.audio),
-              icon: const Icon(Icons.call_outlined),
-            ),
-          ],
-        ],
-      ),
       body: AnimatedBuilder(
         animation: _contentListenable,
         builder: (context, _) {
@@ -5888,10 +6299,103 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                   ],
                 ),
               ),
-              _buildComposer(),
+              if (!_isSelectionMode) _buildComposer(),
             ],
           );
         },
+      ),
+    );
+  }
+}
+
+class _TurnaStatusSnippetCard extends StatelessWidget {
+  const _TurnaStatusSnippetCard({
+    required this.payload,
+    required this.mine,
+    required this.onTap,
+  });
+
+  final TurnaStatusMessagePayload payload;
+  final bool mine;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final author = payload.authorDisplayName.trim().isEmpty
+        ? 'Durum'
+        : payload.authorDisplayName.trim();
+    final preview = payload.previewLabel;
+    return Material(
+      color: mine
+          ? Colors.white.withValues(alpha: 0.42)
+          : Colors.black.withValues(alpha: 0.04),
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+          child: Row(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: mine
+                      ? TurnaColors.primary.withValues(alpha: 0.12)
+                      : TurnaColors.primary50,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                alignment: Alignment.center,
+                child: Icon(
+                  payload.statusType == 'video'
+                      ? Icons.play_circle_outline_rounded
+                      : payload.statusType == 'image'
+                      ? Icons.photo_outlined
+                      : Icons.motion_photos_on_rounded,
+                  color: TurnaColors.primary,
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '$author durumuna cevap',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w700,
+                        color: TurnaColors.primary,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      preview,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 13.5,
+                        height: 1.2,
+                        color: TurnaColors.text,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              const Icon(
+                Icons.chevron_right_rounded,
+                size: 18,
+                color: TurnaColors.textMuted,
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

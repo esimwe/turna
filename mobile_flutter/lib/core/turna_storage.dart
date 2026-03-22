@@ -9,6 +9,7 @@ class TurnaLocalStore {
   static const String chatMessageTable = 'chat_message';
   static const String pendingMessageTable = 'pending_message';
   static const String callHistoryTable = 'call_history';
+  static const String notificationInboxTable = 'notification_inbox';
 
   static Database? _database;
   static Future<Database>? _opening;
@@ -49,7 +50,7 @@ class TurnaLocalStore {
     final path = '$databasesPath/$_dbName';
     return openDatabase(
       path,
-      version: 2,
+      version: 3,
       onCreate: (db, version) async {
         await _createSchema(db);
       },
@@ -59,6 +60,15 @@ class TurnaLocalStore {
             CREATE TABLE IF NOT EXISTS $callHistoryTable (
               owner_user_id TEXT PRIMARY KEY,
               calls_json TEXT NOT NULL,
+              updated_at INTEGER NOT NULL
+            )
+          ''');
+        }
+        if (oldVersion < 3) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS $notificationInboxTable (
+              owner_user_id TEXT PRIMARY KEY,
+              notifications_json TEXT NOT NULL,
               updated_at INTEGER NOT NULL
             )
           ''');
@@ -122,6 +132,13 @@ class TurnaLocalStore {
       CREATE TABLE $callHistoryTable (
         owner_user_id TEXT PRIMARY KEY,
         calls_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE $notificationInboxTable (
+        owner_user_id TEXT PRIMARY KEY,
+        notifications_json TEXT NOT NULL,
         updated_at INTEGER NOT NULL
       )
     ''');
@@ -219,6 +236,7 @@ class TurnaLocalStore {
           chatMessageTable,
           pendingMessageTable,
           callHistoryTable,
+          notificationInboxTable,
         ]) {
           await tx.delete(table);
         }
@@ -520,6 +538,47 @@ class TurnaCallHistoryLocalRepository {
   }
 }
 
+class TurnaNotificationInboxLocalRepository {
+  static Future<String?> loadRaw(String userId, String legacyPrefsKey) async {
+    final raw =
+        await TurnaLocalStore.readJsonValue(
+          table: TurnaLocalStore.notificationInboxTable,
+          valueColumn: 'notifications_json',
+          where: <String, Object?>{'owner_user_id': userId},
+        ) ??
+        (await SharedPreferences.getInstance()).getString(legacyPrefsKey);
+    return raw == null || raw.trim().isEmpty ? null : raw;
+  }
+
+  static Future<void> saveRaw(
+    String userId,
+    String legacyPrefsKey,
+    String rawJson,
+  ) async {
+    final saved = await TurnaLocalStore.writeJsonValue(
+      table: TurnaLocalStore.notificationInboxTable,
+      valueColumn: 'notifications_json',
+      keyValues: <String, Object?>{'owner_user_id': userId},
+      jsonValue: rawJson,
+    );
+    final prefs = await SharedPreferences.getInstance();
+    if (saved) {
+      await prefs.remove(legacyPrefsKey);
+      return;
+    }
+    await prefs.setString(legacyPrefsKey, rawJson);
+  }
+
+  static Future<void> clear(String userId, String legacyPrefsKey) async {
+    await TurnaLocalStore.deleteRows(
+      table: TurnaLocalStore.notificationInboxTable,
+      where: <String, Object?>{'owner_user_id': userId},
+    );
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(legacyPrefsKey);
+  }
+}
+
 class TurnaLocalStateReset {
   static Future<void> clearAppData() async {
     await TurnaLocalStore.clearAppData();
@@ -532,6 +591,7 @@ class TurnaLocalStateReset {
     TurnaChatDetailLocalCache._warm.clear();
     TurnaChatHistoryLocalCache._warm.clear();
     TurnaCallHistoryLocalCache._warm.clear();
+    TurnaNotificationInboxLocalCache._warm.clear();
     TurnaSocketClient._warmMessageCache.clear();
   }
 

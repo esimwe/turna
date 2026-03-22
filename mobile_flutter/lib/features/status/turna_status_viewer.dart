@@ -8,11 +8,13 @@ class StatusViewerPage extends StatefulWidget {
     required this.session,
     required this.userId,
     required this.onSessionExpired,
+    this.initialStatusId,
   });
 
   final AuthSession session;
   final String userId;
   final VoidCallback onSessionExpired;
+  final String? initialStatusId;
 
   @override
   State<StatusViewerPage> createState() => _StatusViewerPageState();
@@ -25,12 +27,16 @@ class _StatusViewerPageState extends State<StatusViewerPage> {
   Timer? _imageTimer;
   double _progress = 0;
   bool _statusMarkedBusy = false;
+  final TextEditingController _replyController = TextEditingController();
+  final FocusNode _replyFocusNode = FocusNode();
+  bool _sendingReply = false;
   vp.VideoPlayerController? _videoController;
   Future<void>? _videoFuture;
 
   @override
   void initState() {
     super.initState();
+    _replyFocusNode.addListener(_handleReplyFocusChanged);
     _feedFuture = TurnaStatusApi.fetchUserFeed(widget.session, widget.userId);
   }
 
@@ -39,7 +45,8 @@ class _StatusViewerPageState extends State<StatusViewerPage> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.userId == widget.userId &&
         oldWidget.session.userId == widget.session.userId &&
-        oldWidget.session.token == widget.session.token) {
+        oldWidget.session.token == widget.session.token &&
+        oldWidget.initialStatusId == widget.initialStatusId) {
       return;
     }
     _imageTimer?.cancel();
@@ -48,6 +55,8 @@ class _StatusViewerPageState extends State<StatusViewerPage> {
     _index = 0;
     _feed = null;
     _statusMarkedBusy = false;
+    _replyController.clear();
+    _sendingReply = false;
     _feedFuture = TurnaStatusApi.fetchUserFeed(widget.session, widget.userId);
     unawaited(_disposeVideo());
   }
@@ -55,12 +64,32 @@ class _StatusViewerPageState extends State<StatusViewerPage> {
   @override
   void dispose() {
     _imageTimer?.cancel();
+    _replyFocusNode.removeListener(_handleReplyFocusChanged);
+    _replyFocusNode.dispose();
+    _replyController.dispose();
     _videoController?.dispose();
     super.dispose();
   }
 
   void _close() {
     Navigator.pop(context);
+  }
+
+  void _handleReplyFocusChanged() {
+    if (_replyFocusNode.hasFocus) {
+      unawaited(_pausePlayback());
+    } else {
+      unawaited(_resumePlayback());
+    }
+  }
+
+  void _applyInitialStatusSelection(TurnaStatusUserFeed feed) {
+    final targetId = widget.initialStatusId?.trim() ?? '';
+    if (targetId.isEmpty) return;
+    final targetIndex = feed.items.indexWhere((item) => item.id == targetId);
+    if (targetIndex >= 0 && targetIndex != _index) {
+      _index = targetIndex;
+    }
   }
 
   Future<void> _activateCurrentItem() async {
@@ -580,6 +609,128 @@ class _StatusViewerPageState extends State<StatusViewerPage> {
     await _resumePlayback();
   }
 
+  TurnaStatusMessagePayload _statusPayloadForItem(
+    TurnaStatusUserFeed feed,
+    TurnaStatusItem item,
+  ) {
+    final previewText = item.isText
+        ? (item.text?.trim().isNotEmpty == true ? item.text!.trim() : 'Durum')
+        : item.isVideo
+        ? 'Video durumu'
+        : 'Fotograf durumu';
+    return TurnaStatusMessagePayload(
+      statusId: item.id,
+      authorUserId: feed.user.id,
+      authorDisplayName: feed.user.resolvedDisplayName,
+      statusType: item.isVideo ? 'video' : (item.isText ? 'text' : 'image'),
+      previewText: previewText,
+    );
+  }
+
+  Future<void> _sendStatusReply(
+    TurnaStatusUserFeed feed,
+    TurnaStatusItem item,
+  ) async {
+    if (_sendingReply) return;
+    final encodedText = buildTurnaStatusEncodedText(
+      status: _statusPayloadForItem(feed, item),
+      text: _replyController.text,
+    );
+    setState(() => _sendingReply = true);
+    try {
+      await ChatApi.sendMessage(
+        widget.session,
+        chatId: ChatApi.buildDirectChatId(widget.session.userId, feed.user.id),
+        text: encodedText,
+      );
+      if (!mounted) return;
+      _replyController.clear();
+      _replyFocusNode.unfocus();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Duruma cevap sohbete gonderildi.')),
+      );
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    } finally {
+      if (mounted) {
+        setState(() => _sendingReply = false);
+      }
+    }
+  }
+
+  Widget _buildReplyComposer(TurnaStatusUserFeed feed, TurnaStatusItem item) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () {},
+      child: SafeArea(
+        top: false,
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.32),
+            border: Border(
+              top: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+            ),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _replyController,
+                  focusNode: _replyFocusNode,
+                  minLines: 1,
+                  maxLines: 3,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    hintText: '${feed.user.resolvedDisplayName} icin cevap yaz',
+                    hintStyle: const TextStyle(color: Colors.white70),
+                    filled: true,
+                    fillColor: Colors.white.withValues(alpha: 0.08),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(24),
+                      borderSide: BorderSide.none,
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              SizedBox(
+                width: 44,
+                height: 44,
+                child: IconButton.filled(
+                  onPressed: _sendingReply
+                      ? null
+                      : () => unawaited(_sendStatusReply(feed, item)),
+                  style: IconButton.styleFrom(
+                    backgroundColor: Colors.white,
+                    foregroundColor: Colors.black,
+                  ),
+                  icon: _sendingReply
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.send_rounded),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -590,6 +741,7 @@ class _StatusViewerPageState extends State<StatusViewerPage> {
           final feed = _feed ?? snapshot.data;
           if (_feed == null && snapshot.hasData) {
             _feed = snapshot.data;
+            _applyInitialStatusSelection(_feed!);
             WidgetsBinding.instance.addPostFrameCallback((_) {
               if (!mounted) return;
               unawaited(_activateCurrentItem());
@@ -792,6 +944,13 @@ class _StatusViewerPageState extends State<StatusViewerPage> {
                         ),
                       ),
                     ),
+                  )
+                else
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    child: _buildReplyComposer(feed, item),
                   ),
               ],
             ),

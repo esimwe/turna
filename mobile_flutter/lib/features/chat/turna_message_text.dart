@@ -6,6 +6,9 @@ import 'turna_location_models.dart';
 final RegExp _kTurnaReplyMarkerPattern = RegExp(
   r'^\[\[turna-reply:([A-Za-z0-9_-]+)\]\]\n?',
 );
+final RegExp _kTurnaStatusMarkerPattern = RegExp(
+  r'^\[\[turna-status:([A-Za-z0-9_-]+)\]\]\n?',
+);
 final RegExp _kTurnaLocationMarkerPattern = RegExp(
   r'^\[\[turna-location:([A-Za-z0-9_-]+)\]\]\n?',
 );
@@ -40,10 +43,61 @@ class TurnaReplyPayload {
   }
 }
 
+class TurnaStatusMessagePayload {
+  const TurnaStatusMessagePayload({
+    required this.statusId,
+    required this.authorUserId,
+    required this.authorDisplayName,
+    required this.statusType,
+    required this.previewText,
+  });
+
+  final String statusId;
+  final String authorUserId;
+  final String authorDisplayName;
+  final String statusType;
+  final String previewText;
+
+  String get previewLabel {
+    final trimmed = previewText.trim();
+    if (trimmed.isNotEmpty) return trimmed;
+    return switch (statusType.trim().toLowerCase()) {
+      'video' => 'Video durumu',
+      'image' => 'Fotograf durumu',
+      _ => 'Durum',
+    };
+  }
+
+  String get typeLabel => switch (statusType.trim().toLowerCase()) {
+    'video' => 'Video durumu',
+    'image' => 'Fotograf durumu',
+    _ => 'Durum',
+  };
+
+  Map<String, dynamic> toMap() => {
+    'statusId': statusId,
+    'authorUserId': authorUserId,
+    'authorDisplayName': authorDisplayName,
+    'statusType': statusType,
+    'previewText': previewText,
+  };
+
+  factory TurnaStatusMessagePayload.fromMap(Map<String, dynamic> map) {
+    return TurnaStatusMessagePayload(
+      statusId: (map['statusId'] ?? '').toString(),
+      authorUserId: (map['authorUserId'] ?? '').toString(),
+      authorDisplayName: (map['authorDisplayName'] ?? '').toString(),
+      statusType: (map['statusType'] ?? 'text').toString(),
+      previewText: (map['previewText'] ?? '').toString(),
+    );
+  }
+}
+
 class ParsedTurnaMessageText {
   const ParsedTurnaMessageText({
     required this.text,
     this.reply,
+    this.status,
     this.location,
     this.contact,
     this.deletedForEveryone = false,
@@ -51,6 +105,7 @@ class ParsedTurnaMessageText {
 
   final String text;
   final TurnaReplyPayload? reply;
+  final TurnaStatusMessagePayload? status;
   final TurnaLocationPayload? location;
   final TurnaSharedContactPayload? contact;
   final bool deletedForEveryone;
@@ -66,6 +121,7 @@ ParsedTurnaMessageText parseTurnaMessageText(String raw) {
 
   var working = raw;
   TurnaReplyPayload? reply;
+  TurnaStatusMessagePayload? status;
 
   final replyMatch = _kTurnaReplyMarkerPattern.firstMatch(working);
   if (replyMatch != null) {
@@ -78,6 +134,22 @@ ParsedTurnaMessageText parseTurnaMessageText(String raw) {
         jsonDecode(decoded) as Map<String, dynamic>,
       );
       working = working.substring(replyMatch.end);
+    } catch (_) {
+      return ParsedTurnaMessageText(text: raw);
+    }
+  }
+
+  final statusMatch = _kTurnaStatusMarkerPattern.firstMatch(working);
+  if (statusMatch != null) {
+    try {
+      final encoded = statusMatch.group(1)!;
+      final decoded = utf8.decode(
+        base64Url.decode(base64Url.normalize(encoded)),
+      );
+      status = TurnaStatusMessagePayload.fromMap(
+        jsonDecode(decoded) as Map<String, dynamic>,
+      );
+      working = working.substring(statusMatch.end);
     } catch (_) {
       return ParsedTurnaMessageText(text: raw);
     }
@@ -97,6 +169,7 @@ ParsedTurnaMessageText parseTurnaMessageText(String raw) {
       return ParsedTurnaMessageText(
         text: cleaned,
         reply: reply,
+        status: status,
         location: payload,
       );
     } catch (_) {
@@ -118,6 +191,7 @@ ParsedTurnaMessageText parseTurnaMessageText(String raw) {
       return ParsedTurnaMessageText(
         text: cleaned,
         reply: reply,
+        status: status,
         contact: payload,
       );
     } catch (_) {
@@ -125,7 +199,7 @@ ParsedTurnaMessageText parseTurnaMessageText(String raw) {
     }
   }
 
-  return ParsedTurnaMessageText(text: working, reply: reply);
+  return ParsedTurnaMessageText(text: working, reply: reply, status: status);
 }
 
 String buildTurnaReplyEncodedText({
@@ -136,6 +210,20 @@ String buildTurnaReplyEncodedText({
     utf8.encode(jsonEncode(reply.toMap())),
   ).replaceAll('=', '');
   return '[[turna-reply:$encoded]]\n$text';
+}
+
+String buildTurnaStatusEncodedText({
+  required TurnaStatusMessagePayload status,
+  String text = '',
+}) {
+  final encoded = base64UrlEncode(
+    utf8.encode(jsonEncode(status.toMap())),
+  ).replaceAll('=', '');
+  final trimmedText = text.trim();
+  if (trimmedText.isEmpty) {
+    return '[[turna-status:$encoded]]';
+  }
+  return '[[turna-status:$encoded]]\n$trimmedText';
 }
 
 String buildTurnaLocationEncodedText({required TurnaLocationPayload location}) {
@@ -165,5 +253,8 @@ String sanitizeTurnaChatPreviewText(String raw) {
   }
   final cleaned = parsed.text.trim();
   if (cleaned.isNotEmpty) return cleaned;
+  if (parsed.status != null) {
+    return parsed.status!.previewLabel;
+  }
   return parsed.reply?.previewText ?? raw;
 }

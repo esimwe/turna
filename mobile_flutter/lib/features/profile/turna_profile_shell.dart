@@ -37,6 +37,7 @@ class SettingsPage extends StatefulWidget {
 class _SettingsPageState extends State<SettingsPage> {
   late TurnaUserProfile _profile;
   int _allStarredMessageCount = 0;
+  int _notificationUnreadCount = 0;
 
   @override
   void initState() {
@@ -44,6 +45,7 @@ class _SettingsPageState extends State<SettingsPage> {
     _profile = _profileFromSession(widget.session);
     unawaited(_loadCachedProfile());
     unawaited(_loadStarredMessageCount());
+    unawaited(_loadNotificationCount());
   }
 
   @override
@@ -54,6 +56,7 @@ class _SettingsPageState extends State<SettingsPage> {
         oldWidget.session.token != widget.session.token) {
       unawaited(_loadCachedProfile());
       unawaited(_loadStarredMessageCount());
+      unawaited(_loadNotificationCount());
     }
   }
 
@@ -71,6 +74,7 @@ class _SettingsPageState extends State<SettingsPage> {
       _profile = _profileFromSession(widget.session, previous: _profile);
     });
     unawaited(_loadStarredMessageCount());
+    unawaited(_loadNotificationCount());
   }
 
   Future<void> _openProfileEditor() async {
@@ -106,6 +110,16 @@ class _SettingsPageState extends State<SettingsPage> {
         0,
         (sum, ids) => sum + ids.length,
       );
+    });
+  }
+
+  Future<void> _loadNotificationCount() async {
+    final items = await TurnaNotificationInboxLocalCache.load(
+      widget.session.userId,
+    );
+    if (!mounted) return;
+    setState(() {
+      _notificationUnreadCount = items.where((item) => !item.isRead).length;
     });
   }
 
@@ -323,8 +337,16 @@ class _SettingsPageState extends State<SettingsPage> {
               _SettingsMenuAction(
                 icon: Icons.notifications_none_rounded,
                 label: 'Bildirimler',
-                onTap: () =>
-                    _openPage(const PlaceholderPage(title: 'Bildirimler')),
+                trailingText: _notificationUnreadCount > 0
+                    ? '$_notificationUnreadCount'
+                    : null,
+                onTap: () => _openPage(
+                  TurnaNotificationsInboxPage(
+                    session: widget.session,
+                    callCoordinator: widget.callCoordinator,
+                    onSessionExpired: widget.onLogout,
+                  ),
+                ),
               ),
               _SettingsMenuAction(
                 icon: Icons.swap_vert_rounded,
@@ -364,6 +386,309 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class TurnaNotificationsInboxPage extends StatefulWidget {
+  const TurnaNotificationsInboxPage({
+    super.key,
+    required this.session,
+    required this.callCoordinator,
+    required this.onSessionExpired,
+  });
+
+  final AuthSession session;
+  final TurnaCallCoordinator callCoordinator;
+  final VoidCallback onSessionExpired;
+
+  @override
+  State<TurnaNotificationsInboxPage> createState() =>
+      _TurnaNotificationsInboxPageState();
+}
+
+class _TurnaNotificationsInboxPageState
+    extends State<TurnaNotificationsInboxPage> {
+  List<TurnaInboxNotificationEntry> _localItems =
+      const <TurnaInboxNotificationEntry>[];
+  List<TurnaInboxNotificationEntry> _communityItems =
+      const <TurnaInboxNotificationEntry>[];
+  ChatInboxData? _cachedInbox;
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _cachedInbox = TurnaChatInboxLocalCache.peek(widget.session.userId);
+    unawaited(_loadLocalItems());
+    unawaited(_loadCachedInbox());
+    unawaited(_reload());
+  }
+
+  List<TurnaInboxNotificationEntry> get _items {
+    final items = <TurnaInboxNotificationEntry>[
+      ..._localItems,
+      ..._communityItems,
+    ];
+    items.sort((a, b) => compareTurnaTimestamps(b.createdAt, a.createdAt));
+    return items;
+  }
+
+  Future<void> _loadLocalItems() async {
+    final local = await TurnaNotificationInboxLocalCache.load(
+      widget.session.userId,
+    );
+    if (!mounted) return;
+    setState(() => _localItems = local);
+    await TurnaNotificationInboxLocalCache.markAllRead(widget.session.userId);
+    final refreshed = await TurnaNotificationInboxLocalCache.load(
+      widget.session.userId,
+    );
+    if (!mounted) return;
+    setState(() => _localItems = refreshed);
+  }
+
+  Future<void> _loadCachedInbox() async {
+    final inbox =
+        _cachedInbox ??
+        await TurnaChatInboxLocalCache.load(widget.session.userId);
+    if (!mounted || inbox == null) return;
+    setState(() => _cachedInbox = inbox);
+  }
+
+  Future<List<TurnaInboxNotificationEntry>> _fetchCommunityItems() async {
+    final response = await http.get(
+      Uri.parse('$kBackendBaseUrl/api/communities/notifications?limit=50'),
+      headers: <String, String>{
+        'Authorization': 'Bearer ${widget.session.token}',
+      },
+    );
+    if (response.statusCode == 401) {
+      throw TurnaUnauthorizedException();
+    }
+    if (response.statusCode >= 400) {
+      throw TurnaApiException('Topluluk bildirimleri yüklenemedi.');
+    }
+    final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+    final items = (decoded['data'] as List<dynamic>? ?? const <dynamic>[])
+        .whereType<Map>()
+        .map((item) => Map<String, dynamic>.from(item))
+        .map(
+          (item) => TurnaInboxNotificationEntry(
+            id: 'community:${(item['id'] ?? '').toString()}',
+            source: 'community',
+            type: (item['type'] ?? 'community').toString(),
+            title: (item['title'] ?? 'Topluluk bildirimi').toString(),
+            body: (item['body'] ?? '').toString().trim().isEmpty
+                ? null
+                : (item['body'] ?? '').toString().trim(),
+            createdAt: (item['createdAt'] ?? '').toString(),
+            messageId: (item['messageId'] ?? '').toString().trim().isEmpty
+                ? null
+                : (item['messageId'] ?? '').toString().trim(),
+            isRead: (item['readAt'] ?? '').toString().trim().isNotEmpty,
+          ),
+        )
+        .toList(growable: false);
+    return items;
+  }
+
+  Future<void> _reload() async {
+    setState(() {
+      _loading = _items.isEmpty;
+      _error = null;
+    });
+    try {
+      final communityItems = await _fetchCommunityItems();
+      if (!mounted) return;
+      setState(() {
+        _communityItems = communityItems;
+        _loading = false;
+      });
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+      Navigator.of(context).maybePop();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = error.toString();
+      });
+    }
+  }
+
+  IconData _iconForItem(TurnaInboxNotificationEntry item) {
+    switch (item.type) {
+      case 'incoming_call':
+        return Icons.call_rounded;
+      case 'call_ended':
+        return Icons.call_end_rounded;
+      case 'mention':
+        return Icons.alternate_email_rounded;
+      case 'reply':
+        return Icons.reply_rounded;
+      case 'chat_message':
+        return Icons.chat_bubble_outline_rounded;
+      default:
+        return Icons.notifications_none_rounded;
+    }
+  }
+
+  String _formatItemTime(String iso) {
+    final dt = parseTurnaLocalDateTime(iso);
+    if (dt == null) return '';
+    final diff = DateTime.now().difference(dt);
+    if (diff.inMinutes < 1) return 'Az önce';
+    if (diff.inHours < 1) return '${diff.inMinutes} dk';
+    if (diff.inDays < 1) {
+      final hh = dt.hour.toString().padLeft(2, '0');
+      final mm = dt.minute.toString().padLeft(2, '0');
+      return '$hh:$mm';
+    }
+    final dd = dt.day.toString().padLeft(2, '0');
+    final mm = dt.month.toString().padLeft(2, '0');
+    return '$dd.$mm';
+  }
+
+  Future<void> _openItem(TurnaInboxNotificationEntry item) async {
+    final chatId = item.chatId?.trim() ?? '';
+    if (chatId.isEmpty) {
+      if (item.source == 'community') {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Topluluk bildirimi kaydedildi. Bu ilk dilimde detay derin linki eklenmedi.',
+            ),
+          ),
+        );
+      }
+      return;
+    }
+    _cachedInbox ??= await TurnaChatInboxLocalCache.load(widget.session.userId);
+    final chat = _cachedInbox?.chats.cast<ChatPreview?>().firstWhere(
+      (entry) => entry?.chatId == chatId,
+      orElse: () => null,
+    );
+    if (!mounted) return;
+    if (chat == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('İlgili sohbet bulunamadı.')),
+      );
+      return;
+    }
+    await Navigator.push<void>(
+      context,
+      buildChatRoomRoute(
+        chat: chat,
+        session: widget.session,
+        callCoordinator: widget.callCoordinator,
+        onSessionExpired: widget.onSessionExpired,
+        initialFocusMessageId: item.messageId,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final items = _items;
+    return Scaffold(
+      backgroundColor: TurnaColors.backgroundSoft,
+      appBar: AppBar(title: const Text('Bildirimler')),
+      body: RefreshIndicator(
+        onRefresh: _reload,
+        child: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : _error != null && items.isEmpty
+            ? ListView(
+                children: [
+                  SizedBox(
+                    height: 420,
+                    child: _CenteredState(
+                      icon: Icons.notifications_off_outlined,
+                      title: 'Bildirimler yüklenemedi',
+                      message: _error!,
+                    ),
+                  ),
+                ],
+              )
+            : items.isEmpty
+            ? ListView(
+                children: const [
+                  SizedBox(
+                    height: 420,
+                    child: _CenteredState(
+                      icon: Icons.notifications_none_rounded,
+                      title: 'Bildirim yok',
+                      message:
+                          'Mesajlar, aramalar ve topluluk hareketleri burada toplanacak.',
+                    ),
+                  ),
+                ],
+              )
+            : ListView.separated(
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 28),
+                itemCount: items.length,
+                separatorBuilder: (_, _) => const SizedBox(height: 10),
+                itemBuilder: (context, index) {
+                  final item = items[index];
+                  return Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: ListTile(
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 8,
+                      ),
+                      leading: Container(
+                        width: 42,
+                        height: 42,
+                        decoration: BoxDecoration(
+                          color: item.isRead
+                              ? TurnaColors.backgroundMuted
+                              : TurnaColors.primary50,
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        alignment: Alignment.center,
+                        child: Icon(
+                          _iconForItem(item),
+                          color: item.isRead
+                              ? TurnaColors.textMuted
+                              : TurnaColors.primary,
+                        ),
+                      ),
+                      title: Text(
+                        item.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontWeight: item.isRead
+                              ? FontWeight.w600
+                              : FontWeight.w700,
+                        ),
+                      ),
+                      subtitle: Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          [
+                            if ((item.body ?? '').trim().isNotEmpty)
+                              item.body!.trim(),
+                            _formatItemTime(item.createdAt),
+                          ].join('  •  '),
+                          maxLines: 3,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(height: 1.28),
+                        ),
+                      ),
+                      onTap: () => _openItem(item),
+                    ),
+                  );
+                },
+              ),
       ),
     );
   }
@@ -3305,6 +3630,12 @@ class _UserProfilePageState extends State<UserProfilePage> {
     }
   }
 
+  Future<void> _addProfileToContacts() async {
+    final profile = _profile;
+    if (profile == null) return;
+    await addTurnaUserProfileToAddressBook(context, profile);
+  }
+
   void _showPlaceholderAction(String label) {
     ScaffoldMessenger.of(
       context,
@@ -3597,6 +3928,14 @@ class _UserProfilePageState extends State<UserProfilePage> {
           const SizedBox(height: 12),
           _UserProfileGroupCard(
             children: [
+              _UserProfileRow(
+                icon: Icons.person_add_alt_1_outlined,
+                title: 'Rehbere kaydet',
+                subtitle: profile.phone?.trim().isNotEmpty == true
+                    ? formatTurnaDisplayPhone(profile.phone!)
+                    : 'Kişi kartını cihaz rehberine ekle.',
+                onTap: _addProfileToContacts,
+              ),
               _UserProfileRow(
                 icon: Icons.notifications_none_outlined,
                 title: 'Bildirimler',

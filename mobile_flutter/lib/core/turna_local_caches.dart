@@ -605,6 +605,184 @@ class TurnaStarredMessagesLocalCache {
   }
 }
 
+class TurnaInboxNotificationEntry {
+  const TurnaInboxNotificationEntry({
+    required this.id,
+    required this.source,
+    required this.type,
+    required this.title,
+    required this.createdAt,
+    this.body,
+    this.chatId,
+    this.messageId,
+    this.callId,
+    this.isRead = false,
+  });
+
+  final String id;
+  final String source;
+  final String type;
+  final String title;
+  final String createdAt;
+  final String? body;
+  final String? chatId;
+  final String? messageId;
+  final String? callId;
+  final bool isRead;
+
+  TurnaInboxNotificationEntry copyWith({
+    String? id,
+    String? source,
+    String? type,
+    String? title,
+    String? createdAt,
+    String? body,
+    String? chatId,
+    String? messageId,
+    String? callId,
+    bool? isRead,
+    bool clearBody = false,
+    bool clearChatId = false,
+    bool clearMessageId = false,
+    bool clearCallId = false,
+  }) {
+    return TurnaInboxNotificationEntry(
+      id: id ?? this.id,
+      source: source ?? this.source,
+      type: type ?? this.type,
+      title: title ?? this.title,
+      createdAt: createdAt ?? this.createdAt,
+      body: clearBody ? null : (body ?? this.body),
+      chatId: clearChatId ? null : (chatId ?? this.chatId),
+      messageId: clearMessageId ? null : (messageId ?? this.messageId),
+      callId: clearCallId ? null : (callId ?? this.callId),
+      isRead: isRead ?? this.isRead,
+    );
+  }
+
+  factory TurnaInboxNotificationEntry.fromMap(Map<String, dynamic> map) {
+    return TurnaInboxNotificationEntry(
+      id: (map['id'] ?? '').toString(),
+      source: (map['source'] ?? 'push').toString(),
+      type: (map['type'] ?? 'message').toString(),
+      title: (map['title'] ?? '').toString(),
+      createdAt: (map['createdAt'] ?? '').toString(),
+      body: _turnaNotificationNullableString(map['body']),
+      chatId: _turnaNotificationNullableString(map['chatId']),
+      messageId: _turnaNotificationNullableString(map['messageId']),
+      callId: _turnaNotificationNullableString(map['callId']),
+      isRead: map['isRead'] == true,
+    );
+  }
+
+  Map<String, dynamic> toMap() => {
+    'id': id,
+    'source': source,
+    'type': type,
+    'title': title,
+    'createdAt': createdAt,
+    'body': body,
+    'chatId': chatId,
+    'messageId': messageId,
+    'callId': callId,
+    'isRead': isRead,
+  };
+}
+
+String? _turnaNotificationNullableString(Object? value) {
+  final trimmed = value?.toString().trim();
+  if (trimmed == null || trimmed.isEmpty) return null;
+  return trimmed;
+}
+
+class TurnaNotificationInboxLocalCache {
+  static const String _prefix = 'turna_notification_inbox_v1_';
+  static const int _itemLimit = 120;
+  static final Map<String, List<TurnaInboxNotificationEntry>> _warm =
+      <String, List<TurnaInboxNotificationEntry>>{};
+
+  static String _key(String userId) => '$_prefix$userId';
+
+  static List<TurnaInboxNotificationEntry>? peek(String userId) {
+    final cached = _warm[userId];
+    if (cached == null) return null;
+    return List<TurnaInboxNotificationEntry>.from(cached);
+  }
+
+  static Future<List<TurnaInboxNotificationEntry>> load(String userId) async {
+    final warm = peek(userId);
+    if (warm != null) return warm;
+
+    final raw = await TurnaNotificationInboxLocalRepository.loadRaw(
+      userId,
+      _key(userId),
+    );
+    if (raw == null || raw.trim().isEmpty) {
+      return const <TurnaInboxNotificationEntry>[];
+    }
+    try {
+      final decoded = jsonDecode(raw) as List<dynamic>;
+      final items = decoded
+          .whereType<Map>()
+          .map(
+            (item) => TurnaInboxNotificationEntry.fromMap(
+              Map<String, dynamic>.from(item),
+            ),
+          )
+          .toList(growable: false);
+      final normalized = _normalize(items);
+      _warm[userId] = normalized;
+      await save(userId, normalized);
+      return List<TurnaInboxNotificationEntry>.from(normalized);
+    } catch (_) {
+      return const <TurnaInboxNotificationEntry>[];
+    }
+  }
+
+  static Future<void> save(
+    String userId,
+    Iterable<TurnaInboxNotificationEntry> items,
+  ) async {
+    final normalized = _normalize(items);
+    _warm[userId] = normalized;
+    await TurnaNotificationInboxLocalRepository.saveRaw(
+      userId,
+      _key(userId),
+      jsonEncode(normalized.map((item) => item.toMap()).toList()),
+    );
+  }
+
+  static Future<void> add(
+    String userId,
+    TurnaInboxNotificationEntry item,
+  ) async {
+    final existing = await load(userId);
+    await save(userId, <TurnaInboxNotificationEntry>[item, ...existing]);
+  }
+
+  static Future<void> markAllRead(String userId) async {
+    final existing = await load(userId);
+    await save(userId, existing.map((item) => item.copyWith(isRead: true)));
+  }
+
+  static List<TurnaInboxNotificationEntry> _normalize(
+    Iterable<TurnaInboxNotificationEntry> items,
+  ) {
+    final byId = <String, TurnaInboxNotificationEntry>{};
+    for (final item in items) {
+      final id = item.id.trim();
+      if (id.isEmpty) continue;
+      byId[id] = item;
+    }
+    final normalized = byId.values.toList()
+      ..sort((a, b) => compareTurnaTimestamps(b.createdAt, a.createdAt));
+    if (normalized.length > _itemLimit) {
+      return normalized.sublist(0, _itemLimit);
+    }
+    return normalized;
+  }
+}
+
 class TurnaAuthSessionStore {
   static const _tokenKey = 'turna_auth_token';
   static const _userIdKey = 'turna_auth_user_id';

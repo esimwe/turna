@@ -193,6 +193,18 @@ class _TurnaPrivacyPageState extends State<TurnaPrivacyPage> {
     }
   }
 
+  Future<void> _openBlockedContactsPage() async {
+    await Navigator.push<void>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => TurnaBlockedContactsPage(
+          session: widget.session,
+          onSessionExpired: widget.onSessionExpired,
+        ),
+      ),
+    );
+  }
+
   Future<void> _openLastSeenPage() async {
     final result = await Navigator.push<_TurnaLastSeenPrivacyResult>(
       context,
@@ -438,6 +450,10 @@ class _TurnaPrivacyPageState extends State<TurnaPrivacyPage> {
             _TurnaPrivacyCard(
               children: [
                 _TurnaPrivacyMenuRow(title: 'Aramalar', onTap: _openCallsPage),
+                _TurnaPrivacyMenuRow(
+                  title: 'Engellenen kişiler',
+                  onTap: _openBlockedContactsPage,
+                ),
               ],
             ),
             const SizedBox(height: 18),
@@ -478,6 +494,202 @@ class _TurnaPrivacyPageState extends State<TurnaPrivacyPage> {
 }
 
 enum _TurnaPrivacyField { profilePhoto, about, links, groups }
+
+class TurnaBlockedContactsPage extends StatefulWidget {
+  const TurnaBlockedContactsPage({
+    super.key,
+    required this.session,
+    required this.onSessionExpired,
+  });
+
+  final AuthSession session;
+  final VoidCallback onSessionExpired;
+
+  @override
+  State<TurnaBlockedContactsPage> createState() =>
+      _TurnaBlockedContactsPageState();
+}
+
+class _TurnaBlockedContactsPageState extends State<TurnaBlockedContactsPage> {
+  List<ChatPreview> _blockedChats = const <ChatPreview>[];
+  final Set<String> _busyChatIds = <String>{};
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_restoreCachedInbox());
+    unawaited(_load());
+  }
+
+  List<ChatPreview> _extractBlockedChats(ChatInboxData inbox) {
+    return inbox.chats
+        .where((chat) => chat.chatType == TurnaChatType.direct)
+        .where((chat) => chat.peerId != null)
+        .where((chat) => chat.isBlockedByMe)
+        .toList(growable: false);
+  }
+
+  Future<void> _restoreCachedInbox() async {
+    final cached =
+        TurnaChatInboxLocalCache.peek(widget.session.userId) ??
+        await TurnaChatInboxLocalCache.load(widget.session.userId);
+    if (!mounted || cached == null) return;
+    setState(() {
+      _blockedChats = _extractBlockedChats(cached);
+      _loading = false;
+    });
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = _blockedChats.isEmpty;
+      _error = null;
+    });
+    try {
+      final inbox = await ChatApi.fetchChats(widget.session);
+      await TurnaChatInboxLocalCache.save(widget.session.userId, inbox);
+      if (!mounted) return;
+      setState(() {
+        _blockedChats = _extractBlockedChats(inbox);
+        _loading = false;
+      });
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      widget.onSessionExpired();
+      Navigator.of(context).maybePop();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = error.toString();
+      });
+    }
+  }
+
+  Future<void> _unblock(ChatPreview chat) async {
+    if (_busyChatIds.contains(chat.chatId)) return;
+    setState(() => _busyChatIds.add(chat.chatId));
+    try {
+      await ChatApi.setChatBlocked(
+        widget.session,
+        chatId: chat.chatId,
+        blocked: false,
+      );
+      if (!mounted) return;
+      setState(() {
+        _busyChatIds.remove(chat.chatId);
+        _blockedChats = _blockedChats
+            .where((item) => item.chatId != chat.chatId)
+            .toList(growable: false);
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('"${chat.name}" engeli kaldırıldı.')),
+      );
+      unawaited(_load());
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      setState(() => _busyChatIds.remove(chat.chatId));
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _busyChatIds.remove(chat.chatId));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: TurnaColors.backgroundSoft,
+      appBar: AppBar(title: const Text('Engellenen kişiler')),
+      body: RefreshIndicator(
+        onRefresh: _load,
+        child: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : _error != null && _blockedChats.isEmpty
+            ? ListView(
+                children: [
+                  SizedBox(
+                    height: MediaQuery.of(context).size.height * 0.6,
+                    child: _CenteredState(
+                      icon: Icons.block_outlined,
+                      title: 'Liste yüklenemedi',
+                      message: _error!,
+                    ),
+                  ),
+                ],
+              )
+            : _blockedChats.isEmpty
+            ? ListView(
+                children: const [
+                  SizedBox(
+                    height: 420,
+                    child: _CenteredState(
+                      icon: Icons.block_outlined,
+                      title: 'Engellenen kişi yok',
+                      message: 'Engellediğin kişiler burada listelenecek.',
+                    ),
+                  ),
+                ],
+              )
+            : ListView.separated(
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 28),
+                itemCount: _blockedChats.length,
+                separatorBuilder: (_, _) => const SizedBox(height: 10),
+                itemBuilder: (context, index) {
+                  final chat = _blockedChats[index];
+                  final busy = _busyChatIds.contains(chat.chatId);
+                  return Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: ListTile(
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 6,
+                      ),
+                      leading: _ProfileAvatar(
+                        label: chat.name,
+                        avatarUrl: chat.avatarUrl,
+                        authToken: widget.session.token,
+                        radius: 24,
+                      ),
+                      title: Text(
+                        chat.name,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      subtitle: (chat.phone ?? '').trim().isEmpty
+                          ? const Text('Bu kişi engellendi.')
+                          : Text(formatTurnaDisplayPhone(chat.phone!)),
+                      trailing: IconButton(
+                        tooltip: 'Engeli kaldır',
+                        onPressed: busy ? null : () => _unblock(chat),
+                        icon: busy
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(
+                                Icons.delete_outline_rounded,
+                                color: TurnaColors.error,
+                              ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+      ),
+    );
+  }
+}
 
 class _TurnaLastSeenPrivacyResult {
   const _TurnaLastSeenPrivacyResult({
