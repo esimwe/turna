@@ -84,6 +84,73 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
+  Future<void> _openMoodEditor() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => _ProfileFieldEditorPage(
+          field: _ProfileEditableField.about,
+          initialValue: _profile.about ?? '',
+          session: widget.session,
+          currentUsername: (_profile.username ?? '').trim().toLowerCase(),
+          onSave: _saveMood,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _saveMood(String value) async {
+    try {
+      final updatedProfile = await ProfileApi.updateMe(
+        widget.session,
+        displayName: _profile.displayName,
+        username: (_profile.username ?? '').trim(),
+        about: value,
+        city: (_profile.city ?? '').trim(),
+        country: (_profile.country ?? '').trim(),
+        expertise: (_profile.expertise ?? '').trim(),
+        communityRole: (_profile.communityRole ?? '').trim(),
+        interests: _profile.interests,
+        socialLinks: _profile.socialLinks,
+        phone: (_profile.phone ?? '').trim(),
+        email: (_profile.email ?? '').trim(),
+      );
+      final updatedSession = widget.session.copyWith(
+        displayName: updatedProfile.displayName,
+        username: updatedProfile.username,
+        phone: updatedProfile.phone,
+        avatarUrl: updatedProfile.avatarUrl,
+        clearPhone: updatedProfile.phone == null,
+        clearAvatarUrl: updatedProfile.avatarUrl == null,
+      );
+      await TurnaAuthSessionStore.save(updatedSession);
+      await TurnaProfileLocalCache.saveSelfProfile(updatedProfile);
+      await TurnaUserProfileLocalCache.save(updatedProfile);
+      if (!mounted) return;
+      setState(() {
+        _profile = _profileFromSession(
+          updatedSession,
+          previous: updatedProfile,
+        );
+      });
+      widget.onSessionUpdated(updatedSession);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            value.trim().isEmpty
+                ? 'Ruh hali kaldırıldı.'
+                : 'Ruh hali güncellendi.',
+          ),
+        ),
+      );
+    } on TurnaUnauthorizedException {
+      if (mounted) {
+        widget.onLogout();
+      }
+      throw TurnaApiException('Oturum süresi doldu.');
+    }
+  }
+
   Future<void> _loadCachedProfile() async {
     final cached = await TurnaProfileLocalCache.loadSelfProfile(widget.session);
     if (!mounted || cached == null) return;
@@ -175,9 +242,6 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   Widget build(BuildContext context) {
     final about = _profile.about?.trim();
-    final statusText = (about != null && about.isNotEmpty)
-        ? about
-        : 'Şu anki ruh halim';
     final displayName = _profile.displayName;
     final avatarUrl = resolveTurnaSessionAvatarUrl(
       widget.session,
@@ -207,26 +271,11 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
             const SizedBox(height: 8),
             Center(
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 10,
-                ),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(999),
-                  boxShadow: const [TurnaColors.shadowSoft],
-                ),
-                child: Text(
-                  statusText,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: TurnaColors.textMuted,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
+              child: _ProfileMoodBubble(
+                text: about,
+                emptyLabel: 'Ruh halini ekle',
+                editable: true,
+                onTap: _openMoodEditor,
               ),
             ),
             const SizedBox(height: 12),
@@ -365,6 +414,83 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _ProfileMoodBubble extends StatelessWidget {
+  const _ProfileMoodBubble({
+    required this.text,
+    this.emptyLabel,
+    this.editable = false,
+    this.onTap,
+  });
+
+  final String? text;
+  final String? emptyLabel;
+  final bool editable;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final trimmedText = text?.trim() ?? '';
+    final trimmedEmptyLabel = emptyLabel?.trim() ?? '';
+    final hasText = trimmedText.isNotEmpty;
+    final label = hasText ? trimmedText : trimmedEmptyLabel;
+    if (label.isEmpty) return const SizedBox.shrink();
+
+    final bubbleColor = hasText ? Colors.white : const Color(0xFFEAF6EE);
+    final labelColor = hasText ? TurnaColors.textMuted : TurnaColors.success;
+    final borderColor = hasText
+        ? Colors.black.withValues(alpha: 0.05)
+        : const Color(0xFFC9E5D2);
+    final bubble = ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 280),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        decoration: BoxDecoration(
+          color: bubbleColor,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: borderColor),
+          boxShadow: hasText ? const [TurnaColors.shadowSoft] : null,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: labelColor,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+            if (editable) ...[
+              const SizedBox(width: 8),
+              Icon(
+                hasText ? Icons.edit_outlined : Icons.add_rounded,
+                size: 18,
+                color: labelColor,
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+
+    if (onTap == null) return bubble;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(999),
+        child: bubble,
       ),
     );
   }
@@ -4562,9 +4688,8 @@ class _UserProfilePageState extends State<UserProfilePage> {
 
     final about = profile.about?.trim();
     final username = profile.username?.trim();
-    final subtitle = about == null || about.isEmpty
-        ? 'Merhaba! Ben Turna kullaniyorum.'
-        : about;
+    final hasMood = about != null && about.isNotEmpty;
+    final subtitle = hasMood ? null : 'Merhaba! Ben Turna kullaniyorum.';
     final displayedUsername = username == null || username.isEmpty
         ? null
         : '@$username';
@@ -4596,6 +4721,10 @@ class _UserProfilePageState extends State<UserProfilePage> {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
         children: [
+          if (hasMood) ...[
+            Center(child: _ProfileMoodBubble(text: about)),
+            const SizedBox(height: 12),
+          ],
           Center(
             child: GestureDetector(
               onTap: avatarUrl == null || avatarUrl.trim().isEmpty
@@ -4636,18 +4765,20 @@ class _UserProfilePageState extends State<UserProfilePage> {
               ),
             ),
           ],
-          const SizedBox(height: 4),
-          Center(
-            child: Text(
-              subtitle,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                fontSize: 15,
-                color: Color(0xFF727A76),
-                height: 1.25,
+          if (subtitle != null) ...[
+            const SizedBox(height: 4),
+            Center(
+              child: Text(
+                subtitle,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 15,
+                  color: Color(0xFF727A76),
+                  height: 1.25,
+                ),
               ),
             ),
-          ),
+          ],
           const SizedBox(height: 18),
           Row(
             children: [
