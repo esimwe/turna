@@ -1472,6 +1472,7 @@ class ChatApi {
     AuthSession session, {
     required String chatId,
     String? text,
+    bool silent = false,
     List<OutgoingAttachmentDraft> attachments = const [],
   }) async {
     try {
@@ -1484,6 +1485,7 @@ class ChatApi {
         body: jsonEncode({
           'chatId': chatId,
           'text': text?.trim(),
+          'silent': silent,
           'attachments': attachments
               .map((attachment) => attachment.toMap())
               .toList(),
@@ -1498,6 +1500,92 @@ class ChatApi {
       rethrow;
     } catch (_) {
       throw TurnaApiException('Mesaj gönderilemedi.');
+    }
+  }
+
+  static Future<TurnaScheduledMessageSummary> scheduleMessage(
+    AuthSession session, {
+    required String chatId,
+    required String text,
+    required DateTime scheduledFor,
+    bool silent = false,
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse('$kBackendBaseUrl/api/chats/messages/scheduled'),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'chatId': chatId,
+          'text': text.trim(),
+          'scheduledFor': scheduledFor.toUtc().toIso8601String(),
+          'silent': silent,
+        }),
+      );
+      _throwIfApiError(res);
+
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = map['data'] as Map<String, dynamic>? ?? const {};
+      return TurnaScheduledMessageSummary.fromMap(data);
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Zamanlanmış mesaj oluşturulamadı.');
+    }
+  }
+
+  static Future<List<TurnaScheduledMessageSummary>> listScheduledMessages(
+    AuthSession session, {
+    required String chatId,
+  }) async {
+    try {
+      final res = await http.get(
+        Uri.parse('$kBackendBaseUrl/api/chats/$chatId/scheduled-messages'),
+        headers: {'Authorization': 'Bearer ${session.token}'},
+      );
+      _throwIfApiError(res);
+
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = (map['data'] as List<dynamic>? ?? const []);
+      return data
+          .whereType<Map>()
+          .map(
+            (item) => TurnaScheduledMessageSummary.fromMap(
+              Map<String, dynamic>.from(item),
+            ),
+          )
+          .toList(growable: false);
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Zamanlanmış mesajlar yüklenemedi.');
+    }
+  }
+
+  static Future<void> deleteScheduledMessage(
+    AuthSession session, {
+    required String scheduledMessageId,
+  }) async {
+    try {
+      final request = http.Request(
+        'DELETE',
+        Uri.parse(
+          '$kBackendBaseUrl/api/chats/scheduled-messages/$scheduledMessageId',
+        ),
+      );
+      request.headers.addAll({
+        'Authorization': 'Bearer ${session.token}',
+        'Content-Type': 'application/json',
+      });
+      final streamed = await request.send();
+      final res = await http.Response.fromStream(streamed);
+      _throwIfApiError(res);
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Zamanlanmış mesaj iptal edilemedi.');
     }
   }
 

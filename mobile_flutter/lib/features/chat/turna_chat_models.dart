@@ -349,6 +349,59 @@ class TurnaChatDetail {
   }
 }
 
+enum TurnaScheduledMessageStatus { pending, failed }
+
+extension TurnaScheduledMessageStatusX on TurnaScheduledMessageStatus {
+  static TurnaScheduledMessageStatus fromWire(String value) {
+    switch (value.trim().toUpperCase()) {
+      case 'FAILED':
+        return TurnaScheduledMessageStatus.failed;
+      default:
+        return TurnaScheduledMessageStatus.pending;
+    }
+  }
+}
+
+class TurnaScheduledMessageSummary {
+  const TurnaScheduledMessageSummary({
+    required this.id,
+    required this.chatId,
+    required this.senderId,
+    required this.text,
+    required this.silent,
+    required this.scheduledFor,
+    required this.createdAt,
+    required this.status,
+    this.lastError,
+  });
+
+  final String id;
+  final String chatId;
+  final String senderId;
+  final String text;
+  final bool silent;
+  final String scheduledFor;
+  final String createdAt;
+  final TurnaScheduledMessageStatus status;
+  final String? lastError;
+
+  factory TurnaScheduledMessageSummary.fromMap(Map<String, dynamic> map) {
+    return TurnaScheduledMessageSummary(
+      id: (map['id'] ?? '').toString(),
+      chatId: (map['chatId'] ?? '').toString(),
+      senderId: (map['senderId'] ?? '').toString(),
+      text: (map['text'] ?? '').toString(),
+      silent: map['silent'] == true,
+      scheduledFor: (map['scheduledFor'] ?? '').toString(),
+      createdAt: (map['createdAt'] ?? '').toString(),
+      status: TurnaScheduledMessageStatusX.fromWire(
+        (map['status'] ?? '').toString(),
+      ),
+      lastError: _turnaChatNullableString(map['lastError']),
+    );
+  }
+}
+
 class TurnaGroupMember {
   TurnaGroupMember({
     required this.userId,

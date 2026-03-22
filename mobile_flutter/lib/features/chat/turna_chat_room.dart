@@ -12,6 +12,8 @@ class _ComposerEditDraft {
   final String originalText;
 }
 
+enum _TurnaComposerSendAction { normal, silent, scheduled }
+
 class ChatRoomPage extends StatefulWidget {
   const ChatRoomPage({
     super.key,
@@ -249,6 +251,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   final Stopwatch _voiceStopwatch = Stopwatch();
   bool _showScrollToBottom = false;
   bool _attachmentBusy = false;
+  bool _composerActionBusy = false;
   bool _hasComposerText = false;
   bool _loadingPeerCalls = false;
   bool _voiceRecording = false;
@@ -3802,8 +3805,139 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     }
   }
 
-  Future<void> _handleSendPressed() async {
-    if (_attachmentBusy) return;
+  String get _scheduledComposerActionLabel =>
+      _isSavedMessagesChat ? 'Hatırlatıcı ayarla' : 'Zamanlanmış mesaj';
+
+  String _formatScheduledComposerTime(DateTime value) {
+    final local = value.toLocal();
+    final dd = local.day.toString().padLeft(2, '0');
+    final mm = local.month.toString().padLeft(2, '0');
+    final hh = local.hour.toString().padLeft(2, '0');
+    final min = local.minute.toString().padLeft(2, '0');
+    return '$dd.$mm  $hh:$min';
+  }
+
+  Future<void> _openScheduledMessages() async {
+    await Navigator.push<void>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => TurnaScheduledMessagesPage(
+          session: widget.session,
+          chat: widget.chat,
+          onSessionExpired: widget.onSessionExpired,
+        ),
+      ),
+    );
+  }
+
+  Future<_TurnaComposerSendAction?> _showComposerSendOptions() {
+    return showModalBottomSheet<_TurnaComposerSendAction>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const ListTile(
+                title: Text(
+                  'Gönderim seç',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.send_rounded),
+                title: const Text('Gönder'),
+                onTap: () => Navigator.pop(
+                  sheetContext,
+                  _TurnaComposerSendAction.normal,
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.notifications_off_outlined),
+                title: const Text('Sessiz gönder'),
+                subtitle: const Text('Bildirim sesi olmadan gönder'),
+                onTap: () => Navigator.pop(
+                  sheetContext,
+                  _TurnaComposerSendAction.silent,
+                ),
+              ),
+              ListTile(
+                leading: Icon(
+                  _isSavedMessagesChat
+                      ? Icons.notifications_active_outlined
+                      : Icons.schedule_rounded,
+                ),
+                title: Text(_scheduledComposerActionLabel),
+                subtitle: Text(
+                  _isSavedMessagesChat
+                      ? 'Seçilen saatte sana hatırlatıcı olarak gelsin'
+                      : 'Seçilen tarih ve saatte gönderilsin',
+                ),
+                onTap: () => Navigator.pop(
+                  sheetContext,
+                  _TurnaComposerSendAction.scheduled,
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<DateTime?> _pickScheduledSendTime() async {
+    final now = DateTime.now();
+    final initial = now.add(const Duration(minutes: 30));
+    final pickedDate = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(now.year, now.month, now.day),
+      lastDate: now.add(const Duration(days: 365)),
+    );
+    if (pickedDate == null) return null;
+    if (!mounted) return null;
+    final pickedTime = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay(hour: initial.hour, minute: initial.minute),
+    );
+    if (pickedTime == null) return null;
+    final scheduledAt = DateTime(
+      pickedDate.year,
+      pickedDate.month,
+      pickedDate.day,
+      pickedTime.hour,
+      pickedTime.minute,
+    );
+    if (scheduledAt.isBefore(now.add(const Duration(seconds: 30)))) {
+      if (!mounted) return null;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            _isSavedMessagesChat
+                ? 'Hatırlatıcı zamanı gelecekte olmalı.'
+                : 'Zamanlanan mesaj ileri bir saat seçmeli.',
+          ),
+        ),
+      );
+      return null;
+    }
+    return scheduledAt;
+  }
+
+  Future<void> _handleSendButtonLongPress() async {
+    if (_attachmentBusy || _composerActionBusy || _editingDraft != null) return;
+    if (_controller.text.trim().isEmpty) return;
+    final action = await _showComposerSendOptions();
+    if (action == null) return;
+    await _handleSendPressed(action: action);
+  }
+
+  Future<void> _handleSendPressed({
+    _TurnaComposerSendAction action = _TurnaComposerSendAction.normal,
+  }) async {
+    if (_attachmentBusy || _composerActionBusy) return;
     final text = _controller.text.trim();
     if (text.isEmpty) return;
     final editingDraft = _editingDraft;
@@ -3842,16 +3976,107 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     final outboundText = _replyDraft == null
         ? text
         : buildTurnaReplyEncodedText(reply: _replyDraft!, text: text);
-    _client.send(outboundText);
-    TurnaAnalytics.logEvent('message_sent', {
-      'chat_id': widget.chat.chatId,
-      'kind': 'text',
-    });
-    _controller.clear();
-    if (mounted) {
-      setState(() => _replyDraft = null);
+    if (action == _TurnaComposerSendAction.normal) {
+      _client.send(outboundText);
+      TurnaAnalytics.logEvent('message_sent', {
+        'chat_id': widget.chat.chatId,
+        'kind': 'text',
+        'mode': 'default',
+      });
+      _controller.clear();
+      if (mounted) {
+        setState(() => _replyDraft = null);
+      }
+      _jumpToBottom();
+      return;
     }
-    _jumpToBottom();
+
+    if (action == _TurnaComposerSendAction.scheduled) {
+      final scheduledAt = await _pickScheduledSendTime();
+      if (scheduledAt == null) return;
+      if (!mounted) return;
+      setState(() => _composerActionBusy = true);
+      try {
+        await ChatApi.scheduleMessage(
+          widget.session,
+          chatId: widget.chat.chatId,
+          text: outboundText,
+          scheduledFor: scheduledAt,
+        );
+        if (!mounted) return;
+        _controller.clear();
+        setState(() {
+          _replyDraft = null;
+          _composerActionBusy = false;
+        });
+        await TurnaAnalytics.logEvent('message_scheduled', {
+          'chat_id': widget.chat.chatId,
+          'kind': 'text',
+          'is_saved_messages': _isSavedMessagesChat,
+        });
+        if (!mounted) return;
+        final message = _isSavedMessagesChat
+            ? 'Hatırlatıcı ayarlandı: ${_formatScheduledComposerTime(scheduledAt)}'
+            : 'Mesaj zamanlandı: ${_formatScheduledComposerTime(scheduledAt)}';
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            SnackBar(
+              content: Text(message),
+              action: SnackBarAction(
+                label: 'Aç',
+                onPressed: _openScheduledMessages,
+              ),
+            ),
+          );
+        return;
+      } on TurnaUnauthorizedException {
+        if (!mounted) return;
+        setState(() => _composerActionBusy = false);
+        widget.onSessionExpired();
+        return;
+      } catch (error) {
+        if (!mounted) return;
+        setState(() => _composerActionBusy = false);
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.toString())));
+        return;
+      }
+    }
+
+    setState(() => _composerActionBusy = true);
+    try {
+      final message = await ChatApi.sendMessage(
+        widget.session,
+        chatId: widget.chat.chatId,
+        text: outboundText,
+        silent: true,
+      );
+      _client.mergeServerMessage(message);
+      await TurnaAnalytics.logEvent('message_sent', {
+        'chat_id': widget.chat.chatId,
+        'kind': 'text',
+        'mode': 'silent',
+      });
+      if (!mounted) return;
+      _controller.clear();
+      setState(() {
+        _replyDraft = null;
+        _composerActionBusy = false;
+      });
+      _jumpToBottom();
+    } on TurnaUnauthorizedException {
+      if (!mounted) return;
+      setState(() => _composerActionBusy = false);
+      widget.onSessionExpired();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _composerActionBusy = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
   }
 
   String _formatCallTimelineSubtitle(TurnaCallHistoryItem item) {
@@ -4209,6 +4434,10 @@ class _ChatRoomPageState extends State<ChatRoomPage>
             contactPayload != null ||
             hasSingleVisualAttachment ||
             hasSingleAudioAttachment);
+    final isSilentDelivery = mine && msg.systemPayload?['silent'] == true;
+    final isScheduledDelivery =
+        mine &&
+        (msg.systemPayload?['scheduledFor'] ?? '').toString().trim().isNotEmpty;
     final isHighlighted = _highlightedMessageId == msg.id;
     final isSelected = _selectedMessageIds.contains(msg.id);
     final footer = _MessageMetaFooter(
@@ -4217,6 +4446,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       status: msg.status,
       edited: msg.isEdited,
       starred: _starredMessageIds.contains(msg.id),
+      silent: isSilentDelivery,
+      scheduled: isScheduledDelivery,
     );
     final embeddedFooter = _MessageMetaFooter(
       timeLabel: _formatMessageTime(msg.createdAt),
@@ -4224,6 +4455,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       status: msg.status,
       edited: msg.isEdited,
       starred: _starredMessageIds.contains(msg.id),
+      silent: isSilentDelivery,
+      scheduled: isScheduledDelivery,
       overlay: true,
     );
     final embeddedFooterPlain = _MessageMetaFooter(
@@ -4232,6 +4465,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       status: msg.status,
       edited: msg.isEdited,
       starred: _starredMessageIds.contains(msg.id),
+      silent: isSilentDelivery,
+      scheduled: isScheduledDelivery,
       overlay: true,
       showOverlayBackground: false,
     );
@@ -4839,7 +5074,10 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                           width: 42,
                           height: 42,
                           child: IconButton(
-                            onPressed: _attachmentBusy || _editingDraft != null
+                            onPressed:
+                                _attachmentBusy ||
+                                    _composerActionBusy ||
+                                    _editingDraft != null
                                 ? null
                                 : _pickCameraImage,
                             icon: const Icon(Icons.photo_camera_outlined),
@@ -4859,12 +5097,30 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                                     color: TurnaColors.primary,
                                     shape: BoxShape.circle,
                                   ),
-                                  child: IconButton(
-                                    onPressed: _attachmentBusy
+                                  child: GestureDetector(
+                                    onLongPress:
+                                        _attachmentBusy ||
+                                            _composerActionBusy ||
+                                            _editingDraft != null
                                         ? null
-                                        : _handleSendPressed,
-                                    icon: const Icon(Icons.send_rounded),
-                                    color: TurnaColors.surface,
+                                        : _handleSendButtonLongPress,
+                                    child: IconButton(
+                                      onPressed:
+                                          _attachmentBusy || _composerActionBusy
+                                          ? null
+                                          : _handleSendPressed,
+                                      icon: _composerActionBusy
+                                          ? const SizedBox(
+                                              width: 18,
+                                              height: 18,
+                                              child: CircularProgressIndicator(
+                                                strokeWidth: 2,
+                                                color: TurnaColors.surface,
+                                              ),
+                                            )
+                                          : const Icon(Icons.send_rounded),
+                                      color: TurnaColors.surface,
+                                    ),
                                   ),
                                 )
                               : SizedBox(
@@ -4874,10 +5130,12 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                                   child: GestureDetector(
                                     key: _voiceMicKey,
                                     behavior: HitTestBehavior.opaque,
-                                    onTap: _attachmentBusy
+                                    onTap:
+                                        _attachmentBusy || _composerActionBusy
                                         ? null
                                         : _showVoiceMessageHint,
-                                    onLongPressStart: _attachmentBusy
+                                    onLongPressStart:
+                                        _attachmentBusy || _composerActionBusy
                                         ? null
                                         : (_) =>
                                               unawaited(_startVoiceRecording()),
@@ -6296,6 +6554,17 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                 },
               ),
               actions: [
+                IconButton(
+                  tooltip: _isSavedMessagesChat
+                      ? 'Hatırlatıcılar'
+                      : 'Zamanlanmış mesajlar',
+                  onPressed: _openScheduledMessages,
+                  icon: Icon(
+                    _isSavedMessagesChat
+                        ? Icons.notifications_active_outlined
+                        : Icons.schedule_rounded,
+                  ),
+                ),
                 if (_isGroupChat)
                   AnimatedBuilder(
                     animation: _headerListenable,
@@ -6721,6 +6990,8 @@ class _MessageMetaFooter extends StatelessWidget {
     required this.status,
     this.edited = false,
     this.starred = false,
+    this.silent = false,
+    this.scheduled = false,
     this.overlay = false,
     this.showOverlayBackground = true,
   });
@@ -6730,6 +7001,8 @@ class _MessageMetaFooter extends StatelessWidget {
   final ChatMessageStatus status;
   final bool edited;
   final bool starred;
+  final bool silent;
+  final bool scheduled;
   final bool overlay;
   final bool showOverlayBackground;
 
@@ -6753,6 +7026,14 @@ class _MessageMetaFooter extends StatelessWidget {
                 ? Colors.white.withValues(alpha: 0.96)
                 : (mine ? TurnaColors.chatOutgoingMeta : TurnaColors.warning),
           ),
+          const SizedBox(width: 4),
+        ],
+        if (scheduled) ...[
+          Icon(Icons.schedule_rounded, size: 13, color: textColor),
+          const SizedBox(width: 4),
+        ],
+        if (silent) ...[
+          Icon(Icons.notifications_off_outlined, size: 13, color: textColor),
           const SizedBox(width: 4),
         ],
         Text(
@@ -7903,12 +8184,12 @@ class _ForwardMessagePickerPageState extends State<ForwardMessagePickerPage> {
             'notlar medya iletilen mesajlar'.contains(query));
     final displayChats = query.isEmpty
         ? chats
-            .where(
-              (chat) =>
-                  savedMessagesChat == null ||
-                  chat.chatId != savedMessagesChat.chatId,
-            )
-            .toList(growable: false)
+              .where(
+                (chat) =>
+                    savedMessagesChat == null ||
+                    chat.chatId != savedMessagesChat.chatId,
+              )
+              .toList(growable: false)
         : <ChatPreview>[
             if (savedMessagesMatchesQuery) savedMessagesChat,
             ...chats.where(
