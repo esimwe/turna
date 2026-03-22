@@ -658,6 +658,103 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     );
   }
 
+  Future<List<int>> _renderComposerStickerPng(
+    _TurnaStickerSelection selection,
+  ) async {
+    const dimension = 1024.0;
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(
+      recorder,
+      const Rect.fromLTWH(0, 0, dimension, dimension),
+    );
+    final rect = const Rect.fromLTWH(0, 0, dimension, dimension);
+    final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(220));
+
+    final gradient = ui.Gradient.linear(
+      const Offset(0, 0),
+      const Offset(dimension, dimension),
+      selection.colors.map((item) => item.withValues(alpha: 1)).toList(),
+    );
+    canvas.drawRRect(rrect, Paint()..shader = gradient);
+    canvas.drawCircle(
+      const Offset(860, 170),
+      120,
+      Paint()..color = Colors.white.withValues(alpha: 0.14),
+    );
+    canvas.drawCircle(
+      const Offset(180, 840),
+      150,
+      Paint()..color = Colors.white.withValues(alpha: 0.09),
+    );
+
+    final emojiPainter = TextPainter(
+      text: TextSpan(
+        text: selection.emoji,
+        style: const TextStyle(fontSize: 430, height: 1),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    emojiPainter.paint(
+      canvas,
+      Offset(
+        (dimension - emojiPainter.width) / 2,
+        (dimension - emojiPainter.height) / 2 - 70,
+      ),
+    );
+
+    final labelBackground = RRect.fromRectAndRadius(
+      const Rect.fromLTWH(220, 780, 584, 104),
+      const Radius.circular(52),
+    );
+    canvas.drawRRect(
+      labelBackground,
+      Paint()..color = Colors.white.withValues(alpha: 0.2),
+    );
+    final labelPainter = TextPainter(
+      text: TextSpan(
+        text: selection.label.toUpperCase(),
+        style: const TextStyle(
+          fontSize: 46,
+          fontWeight: FontWeight.w800,
+          color: Colors.white,
+          letterSpacing: 1.6,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout(maxWidth: 520);
+    labelPainter.paint(
+      canvas,
+      Offset((dimension - labelPainter.width) / 2, 806),
+    );
+
+    final image = await recorder.endRecording().toImage(
+      dimension.toInt(),
+      dimension.toInt(),
+    );
+    final data = await image.toByteData(format: ui.ImageByteFormat.png);
+    image.dispose();
+    if (data == null) {
+      throw TurnaApiException('Çıkartma hazırlanamadı.');
+    }
+    return data.buffer.asUint8List();
+  }
+
+  Future<void> _handleComposerStickerSelected(
+    _TurnaStickerSelection selection,
+  ) async {
+    if (_attachmentBusy || _composerActionBusy) return;
+    final bytes = await _renderComposerStickerPng(selection);
+    await _sendPickedAttachment(
+      kind: ChatAttachmentKind.image,
+      fileName: 'sticker-${selection.packId}-${selection.stickerId}.png',
+      contentType: 'image/png',
+      readBytes: () async => bytes,
+      sizeBytes: bytes.length,
+      width: 1024,
+      height: 1024,
+    );
+  }
+
   _TurnaInlineTranslationState? _translationStateForMessage(
     ChatMessage msg, {
     _ResolvedChatMessageText? resolved,
@@ -5184,6 +5281,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                           visible: _showComposerEmojiPanel,
                           onSessionExpired: widget.onSessionExpired,
                           onSelectEmoji: _insertComposerEmoji,
+                          onSelectSticker: _handleComposerStickerSelected,
                         ),
                       ),
                     ),
