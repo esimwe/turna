@@ -79,6 +79,7 @@ part '../core/turna_local_caches.dart';
 part '../core/turna_upload_models.dart';
 part '../features/chat/turna_inbox.dart';
 part '../features/chat/turna_chat_room.dart';
+part '../features/chat/turna_reaction_packs.dart';
 part '../features/chat/turna_scheduled_messages.dart';
 part '../features/chat/turna_group_info.dart';
 part '../features/chat/turna_group_settings.dart';

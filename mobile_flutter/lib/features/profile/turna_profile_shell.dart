@@ -88,32 +88,23 @@ class _SettingsPageState extends State<SettingsPage> {
     await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => _ProfileFieldEditorPage(
-          field: _ProfileEditableField.about,
-          initialValue: _profile.about ?? '',
+        builder: (_) => _ProfileMoodEditorPage(
+          initialText: _profile.about ?? '',
+          initialMoodEmoji: _profile.moodEmoji,
           session: widget.session,
-          currentUsername: (_profile.username ?? '').trim().toLowerCase(),
           onSave: _saveMood,
+          onSessionExpired: widget.onLogout,
         ),
       ),
     );
   }
 
-  Future<void> _saveMood(String value) async {
+  Future<void> _saveMood(String value, String? moodEmoji) async {
     try {
-      final updatedProfile = await ProfileApi.updateMe(
+      final updatedProfile = await ProfileApi.updateMood(
         widget.session,
-        displayName: _profile.displayName,
-        username: (_profile.username ?? '').trim(),
         about: value,
-        city: (_profile.city ?? '').trim(),
-        country: (_profile.country ?? '').trim(),
-        expertise: (_profile.expertise ?? '').trim(),
-        communityRole: (_profile.communityRole ?? '').trim(),
-        interests: _profile.interests,
-        socialLinks: _profile.socialLinks,
-        phone: (_profile.phone ?? '').trim(),
-        email: (_profile.email ?? '').trim(),
+        moodEmoji: moodEmoji,
       );
       final updatedSession = widget.session.copyWith(
         displayName: updatedProfile.displayName,
@@ -273,6 +264,7 @@ class _SettingsPageState extends State<SettingsPage> {
             Center(
               child: _ProfileMoodBubble(
                 text: about,
+                emoji: _profile.moodEmoji,
                 emptyLabel: 'Ruh halini ekle',
                 editable: true,
                 onTap: _openMoodEditor,
@@ -422,12 +414,14 @@ class _SettingsPageState extends State<SettingsPage> {
 class _ProfileMoodBubble extends StatelessWidget {
   const _ProfileMoodBubble({
     required this.text,
+    this.emoji,
     this.emptyLabel,
     this.editable = false,
     this.onTap,
   });
 
   final String? text;
+  final String? emoji;
   final String? emptyLabel;
   final bool editable;
   final VoidCallback? onTap;
@@ -435,6 +429,7 @@ class _ProfileMoodBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final trimmedText = text?.trim() ?? '';
+    final trimmedEmoji = emoji?.trim() ?? '';
     final trimmedEmptyLabel = emptyLabel?.trim() ?? '';
     final hasText = trimmedText.isNotEmpty;
     final label = hasText ? trimmedText : trimmedEmptyLabel;
@@ -458,6 +453,10 @@ class _ProfileMoodBubble extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (trimmedEmoji.isNotEmpty && hasText) ...[
+              Text(trimmedEmoji, style: const TextStyle(fontSize: 17)),
+              const SizedBox(width: 8),
+            ],
             Flexible(
               child: Text(
                 label,
@@ -4006,6 +4005,253 @@ class _ProfileFieldEditorPage extends StatefulWidget {
       _ProfileFieldEditorPageState();
 }
 
+class _ProfileMoodEditorPage extends StatefulWidget {
+  const _ProfileMoodEditorPage({
+    required this.initialText,
+    required this.initialMoodEmoji,
+    required this.session,
+    required this.onSave,
+    required this.onSessionExpired,
+  });
+
+  final String initialText;
+  final String? initialMoodEmoji;
+  final AuthSession session;
+  final Future<void> Function(String text, String? moodEmoji) onSave;
+  final VoidCallback onSessionExpired;
+
+  @override
+  State<_ProfileMoodEditorPage> createState() => _ProfileMoodEditorPageState();
+}
+
+class _ProfileMoodEditorPageState extends State<_ProfileMoodEditorPage> {
+  late final TextEditingController _controller;
+  late String? _selectedMoodEmoji;
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.initialText);
+    _selectedMoodEmoji = widget.initialMoodEmoji?.trim();
+    _controller.addListener(_handleChanged);
+  }
+
+  @override
+  void dispose() {
+    _controller.removeListener(_handleChanged);
+    _controller.dispose();
+    super.dispose();
+  }
+
+  String get _normalizedText => _controller.text.trim();
+
+  bool get _hasChanges {
+    return _normalizedText != widget.initialText.trim() ||
+        (_selectedMoodEmoji ?? '') != (widget.initialMoodEmoji?.trim() ?? '');
+  }
+
+  void _handleChanged() {
+    if (!mounted) return;
+    setState(() => _error = null);
+  }
+
+  Future<void> _pickMoodEmoji() async {
+    final selection = await showTurnaPackEmojiPicker(
+      context: context,
+      session: widget.session,
+      onSessionExpired: widget.onSessionExpired,
+      title: 'Ruh hali emojisi',
+      selectedEmoji: _selectedMoodEmoji,
+    );
+    if (!mounted || selection == null) return;
+    setState(() {
+      _selectedMoodEmoji = selection.emoji;
+      _error = null;
+    });
+  }
+
+  Future<void> _handleSave() async {
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      final text = _normalizedText;
+      await widget.onSave(
+        text,
+        text.isEmpty
+            ? null
+            : (_selectedMoodEmoji?.trim().isNotEmpty == true
+                  ? _selectedMoodEmoji!.trim()
+                  : null),
+      );
+      if (!mounted) return;
+      Navigator.of(context).pop();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _error = error.toString();
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final canSave = !_saving && _hasChanges;
+    final previewText = _normalizedText;
+
+    return Scaffold(
+      backgroundColor: TurnaColors.backgroundSoft,
+      appBar: AppBar(
+        backgroundColor: TurnaColors.backgroundSoft,
+        surfaceTintColor: Colors.transparent,
+        leadingWidth: 78,
+        leading: TextButton(
+          onPressed: _saving ? null : () => Navigator.pop(context),
+          child: const Text(
+            'İptal',
+            style: TextStyle(fontSize: 16, color: Color(0xFF202124)),
+          ),
+        ),
+        centerTitle: true,
+        title: const Text(
+          'Ruh hali',
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
+        actions: [
+          TextButton(
+            onPressed: canSave ? _handleSave : null,
+            child: Text(
+              _saving ? 'Kaydediliyor' : 'Kaydet',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: canSave ? TurnaColors.primary : const Color(0xFFADB3B1),
+              ),
+            ),
+          ),
+        ],
+      ),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+        children: [
+          Center(
+            child: _ProfileMoodBubble(
+              text: previewText,
+              emoji: previewText.isEmpty ? null : _selectedMoodEmoji,
+              emptyLabel: 'Ruh halini ekle',
+            ),
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _controller,
+            autofocus: true,
+            keyboardType: TextInputType.text,
+            textCapitalization: TextCapitalization.sentences,
+            maxLines: 4,
+            decoration: InputDecoration(
+              hintText: 'Neler oluyor?',
+              filled: true,
+              fillColor: Colors.white,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(14),
+                borderSide: BorderSide.none,
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(14),
+                borderSide: BorderSide.none,
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(14),
+                borderSide: const BorderSide(color: TurnaColors.primary),
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(18),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 44,
+                  height: 44,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: TurnaColors.backgroundMuted,
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Text(
+                    (_selectedMoodEmoji?.trim().isNotEmpty == true)
+                        ? _selectedMoodEmoji!
+                        : '🙂',
+                    style: const TextStyle(fontSize: 22),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Ruh hali emojisi',
+                        style: TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      SizedBox(height: 4),
+                      Text(
+                        'Seçtiğin emoji profil balonunda metnin yanında görünür.',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: TurnaColors.textMuted,
+                          height: 1.35,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                TextButton(
+                  onPressed: _saving ? null : _pickMoodEmoji,
+                  child: const Text('Seç'),
+                ),
+              ],
+            ),
+          ),
+          if ((_selectedMoodEmoji?.trim().isNotEmpty ?? false)) ...[
+            const SizedBox(height: 10),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                onPressed: _saving
+                    ? null
+                    : () => setState(() => _selectedMoodEmoji = null),
+                icon: const Icon(Icons.close_rounded, size: 18),
+                label: const Text('Emojiyi kaldır'),
+              ),
+            ),
+          ],
+          if (_error != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              _error!,
+              style: const TextStyle(
+                color: Colors.redAccent,
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 class _ProfileFieldEditorPageState extends State<_ProfileFieldEditorPage> {
   static final RegExp _usernamePattern = RegExp(r'^[a-z][a-z0-9._]{2,23}$');
   static final RegExp _emailPattern = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
@@ -4687,6 +4933,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
     }
 
     final about = profile.about?.trim();
+    final moodEmoji = profile.moodEmoji?.trim();
     final username = profile.username?.trim();
     final hasMood = about != null && about.isNotEmpty;
     final subtitle = hasMood ? null : 'Merhaba! Ben Turna kullaniyorum.';
@@ -4722,7 +4969,9 @@ class _UserProfilePageState extends State<UserProfilePage> {
         padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
         children: [
           if (hasMood) ...[
-            Center(child: _ProfileMoodBubble(text: about)),
+            Center(
+              child: _ProfileMoodBubble(text: about, emoji: moodEmoji),
+            ),
             const SizedBox(height: 12),
           ],
           Center(
@@ -5280,17 +5529,6 @@ class _TurnaStarredMessagesPageState extends State<TurnaStarredMessagesPage> {
     ).showSnackBar(const SnackBar(content: Text('Yıldız kaldırıldı.')));
   }
 
-  static const List<String> _starredReactionOptions = <String>[
-    '👍',
-    '❤️',
-    '😂',
-    '🔥',
-    '👏',
-    '😮',
-    '😢',
-    '🙏',
-  ];
-
   bool _canPinEntry(_TurnaStarredMessageEntry entry) {
     return entry.chat.chatType == TurnaChatType.group;
   }
@@ -5361,8 +5599,9 @@ class _TurnaStarredMessagesPageState extends State<TurnaStarredMessagesPage> {
 
   Future<void> _toggleReactionEntry(
     _TurnaStarredMessageEntry entry,
-    String emoji,
-  ) async {
+    String emoji, {
+    String? packId,
+  }) async {
     try {
       final updatedMessage = _entryHasMyReaction(entry, emoji)
           ? await ChatApi.removeReaction(
@@ -5374,6 +5613,7 @@ class _TurnaStarredMessagesPageState extends State<TurnaStarredMessagesPage> {
               widget.session,
               messageId: entry.message.id,
               emoji: emoji,
+              packId: packId,
             );
       await _replaceEntryMessage(entry, updatedMessage);
       if (!mounted) return;
@@ -5394,60 +5634,18 @@ class _TurnaStarredMessagesPageState extends State<TurnaStarredMessagesPage> {
   Future<void> _showReactionPickerForEntry(
     _TurnaStarredMessageEntry entry,
   ) async {
-    await showModalBottomSheet<void>(
+    await showTurnaReactionPackPicker(
       context: context,
-      builder: (sheetContext) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 18, 16, 24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Tepki seç',
-                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
-                ),
-                const SizedBox(height: 14),
-                Wrap(
-                  spacing: 10,
-                  runSpacing: 10,
-                  children: _starredReactionOptions.map((emoji) {
-                    final selected = _entryHasMyReaction(entry, emoji);
-                    return InkWell(
-                      borderRadius: BorderRadius.circular(18),
-                      onTap: () async {
-                        Navigator.pop(sheetContext);
-                        await _toggleReactionEntry(entry, emoji);
-                      },
-                      child: Container(
-                        width: 52,
-                        height: 52,
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          color: selected
-                              ? TurnaColors.primary50
-                              : TurnaColors.backgroundMuted,
-                          borderRadius: BorderRadius.circular(18),
-                          border: Border.all(
-                            color: selected
-                                ? TurnaColors.primary
-                                : TurnaColors.border,
-                          ),
-                        ),
-                        child: Text(
-                          emoji,
-                          style: const TextStyle(fontSize: 24),
-                        ),
-                      ),
-                    );
-                  }).toList(),
-                ),
-              ],
-            ),
-          ),
-        );
+      session: widget.session,
+      selectedEmojis: entry.message.reactions
+          .where((reaction) => reaction.userIds.contains(widget.session.userId))
+          .map((reaction) => reaction.emoji)
+          .toSet(),
+      onToggleReaction: (emoji, packId) async {
+        await _toggleReactionEntry(entry, emoji, packId: packId);
       },
+      onSessionExpired: widget.onSessionExpired,
+      title: 'Tepki seç',
     );
   }
 

@@ -157,6 +157,34 @@ class ProfileApi {
     return TurnaUserProfile.fromMap(data);
   }
 
+  static Future<TurnaUserProfile> updateMood(
+    AuthSession session, {
+    required String about,
+    String? moodEmoji,
+  }) async {
+    final res = await http.put(
+      Uri.parse('$kBackendBaseUrl/api/profile/me/mood'),
+      headers: {
+        'Authorization': 'Bearer ${session.token}',
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode({
+        'about': about.trim(),
+        'moodEmoji': moodEmoji?.trim().isNotEmpty == true
+            ? moodEmoji!.trim()
+            : null,
+      }),
+    );
+    _throwIfApiError(res, label: 'updateMood');
+
+    final map = jsonDecode(res.body) as Map<String, dynamic>;
+    final data = map['data'] as Map<String, dynamic>? ?? const {};
+    final profile = TurnaUserProfile.fromMap(data);
+    await TurnaProfileLocalCache.saveSelfProfile(profile);
+    await TurnaUserProfileLocalCache.save(profile);
+    return profile;
+  }
+
   static Future<TurnaUserProfile> completeOnboarding(
     AuthSession session, {
     required String displayName,

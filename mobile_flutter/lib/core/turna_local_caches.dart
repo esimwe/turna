@@ -10,6 +10,7 @@ TurnaUserProfile buildTurnaSelfProfileFromSession(
     username: session.username,
     phone: session.phone,
     about: previous?.about,
+    moodEmoji: previous?.moodEmoji,
     email: previous?.email,
     avatarUrl: session.avatarUrl ?? previous?.avatarUrl,
     city: previous?.city,

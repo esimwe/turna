@@ -1645,6 +1645,7 @@ class ChatApi {
     AuthSession session, {
     required String messageId,
     required String emoji,
+    String? packId,
   }) async {
     try {
       final res = await http.post(
@@ -1653,7 +1654,11 @@ class ChatApi {
           'Authorization': 'Bearer ${session.token}',
           'Content-Type': 'application/json',
         },
-        body: jsonEncode({'emoji': emoji}),
+        body: jsonEncode({
+          'emoji': emoji,
+          if (packId != null && packId.trim().isNotEmpty)
+            'packId': packId.trim(),
+        }),
       );
       _throwIfApiError(res);
       final map = jsonDecode(res.body) as Map<String, dynamic>;
@@ -1691,6 +1696,57 @@ class ChatApi {
       rethrow;
     } catch (_) {
       throw TurnaApiException('Tepki kaldırılamadı.');
+    }
+  }
+
+  static Future<TurnaReactionPackCatalog> fetchReactionPacks(
+    AuthSession session,
+  ) async {
+    try {
+      final res = await http.get(
+        Uri.parse('$kBackendBaseUrl/api/chats/reaction-packs'),
+        headers: {'Authorization': 'Bearer ${session.token}'},
+      );
+      _throwIfApiError(res);
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = map['data'] as Map<String, dynamic>? ?? const {};
+      return TurnaReactionPackCatalog.fromMap(data);
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Emoji paketleri yüklenemedi.');
+    }
+  }
+
+  static Future<TurnaReactionPackCatalog> updateReactionPackPreferences(
+    AuthSession session, {
+    List<String>? installedPackIds,
+    List<String>? favoriteEmojis,
+  }) async {
+    try {
+      final res = await http.put(
+        Uri.parse('$kBackendBaseUrl/api/chats/reaction-packs/preferences'),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          ...?installedPackIds == null
+              ? null
+              : {'installedPackIds': installedPackIds},
+          ...?favoriteEmojis == null
+              ? null
+              : {'favoriteEmojis': favoriteEmojis},
+        }),
+      );
+      _throwIfApiError(res);
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = map['data'] as Map<String, dynamic>? ?? const {};
+      return TurnaReactionPackCatalog.fromMap(data);
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Emoji paketleri güncellenemedi.');
     }
   }
 

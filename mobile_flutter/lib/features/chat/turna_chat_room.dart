@@ -3157,17 +3157,6 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     );
   }
 
-  static const List<String> _reactionOptions = <String>[
-    '👍',
-    '❤️',
-    '😂',
-    '🔥',
-    '👏',
-    '😮',
-    '😢',
-    '🙏',
-  ];
-
   bool _messageHasMyReaction(ChatMessage msg, String emoji) {
     return msg.reactions.any(
       (reaction) =>
@@ -3176,7 +3165,11 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     );
   }
 
-  Future<void> _toggleReaction(ChatMessage msg, String emoji) async {
+  Future<void> _toggleReaction(
+    ChatMessage msg,
+    String emoji, {
+    String? packId,
+  }) async {
     try {
       final updated = _messageHasMyReaction(msg, emoji)
           ? await ChatApi.removeReaction(
@@ -3188,6 +3181,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
               widget.session,
               messageId: msg.id,
               emoji: emoji,
+              packId: packId,
             );
       _client.mergeServerMessage(updated);
     } on TurnaUnauthorizedException {
@@ -3202,60 +3196,18 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   }
 
   Future<void> _showReactionPicker(ChatMessage msg) async {
-    await showModalBottomSheet<void>(
+    await showTurnaReactionPackPicker(
       context: context,
-      builder: (sheetContext) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 18, 16, 24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Tepki sec',
-                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
-                ),
-                const SizedBox(height: 14),
-                Wrap(
-                  spacing: 10,
-                  runSpacing: 10,
-                  children: _reactionOptions.map((emoji) {
-                    final selected = _messageHasMyReaction(msg, emoji);
-                    return InkWell(
-                      borderRadius: BorderRadius.circular(18),
-                      onTap: () async {
-                        Navigator.pop(sheetContext);
-                        await _toggleReaction(msg, emoji);
-                      },
-                      child: Container(
-                        width: 52,
-                        height: 52,
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          color: selected
-                              ? TurnaColors.primary50
-                              : TurnaColors.backgroundMuted,
-                          borderRadius: BorderRadius.circular(18),
-                          border: Border.all(
-                            color: selected
-                                ? TurnaColors.primary
-                                : TurnaColors.border,
-                          ),
-                        ),
-                        child: Text(
-                          emoji,
-                          style: const TextStyle(fontSize: 24),
-                        ),
-                      ),
-                    );
-                  }).toList(),
-                ),
-              ],
-            ),
-          ),
-        );
+      session: widget.session,
+      selectedEmojis: msg.reactions
+          .where((reaction) => reaction.userIds.contains(widget.session.userId))
+          .map((reaction) => reaction.emoji)
+          .toSet(),
+      onToggleReaction: (emoji, packId) async {
+        await _toggleReaction(msg, emoji, packId: packId);
       },
+      onSessionExpired: widget.onSessionExpired,
+      title: 'Tepki seç',
     );
   }
 

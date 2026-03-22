@@ -66,6 +66,7 @@ class TurnaUserProfile {
     this.phone,
     this.email,
     this.about,
+    this.moodEmoji,
     this.avatarUrl,
     this.city,
     this.country,
@@ -83,6 +84,7 @@ class TurnaUserProfile {
   final String? phone;
   final String? email;
   final String? about;
+  final String? moodEmoji;
   final String? avatarUrl;
   final String? city;
   final String? country;
@@ -101,6 +103,7 @@ class TurnaUserProfile {
       phone: turnaProfileNullableString(map['phone']),
       email: turnaProfileNullableString(map['email']),
       about: turnaProfileNullableString(map['about']),
+      moodEmoji: turnaProfileNullableString(map['moodEmoji']),
       avatarUrl: turnaProfileNullableString(map['avatarUrl']),
       city: turnaProfileNullableString(map['city']),
       country: turnaProfileNullableString(map['country']),
@@ -123,6 +126,7 @@ class TurnaUserProfile {
       'phone': phone,
       'email': email,
       'about': about,
+      'moodEmoji': moodEmoji,
       'avatarUrl': avatarUrl,
       'city': city,
       'country': country,
