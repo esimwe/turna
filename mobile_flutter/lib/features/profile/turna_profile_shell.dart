@@ -37,7 +37,6 @@ class SettingsPage extends StatefulWidget {
 class _SettingsPageState extends State<SettingsPage> {
   late TurnaUserProfile _profile;
   int _allStarredMessageCount = 0;
-  int _notificationUnreadCount = 0;
 
   @override
   void initState() {
@@ -45,7 +44,6 @@ class _SettingsPageState extends State<SettingsPage> {
     _profile = _profileFromSession(widget.session);
     unawaited(_loadCachedProfile());
     unawaited(_loadStarredMessageCount());
-    unawaited(_loadNotificationCount());
   }
 
   @override
@@ -56,7 +54,6 @@ class _SettingsPageState extends State<SettingsPage> {
         oldWidget.session.token != widget.session.token) {
       unawaited(_loadCachedProfile());
       unawaited(_loadStarredMessageCount());
-      unawaited(_loadNotificationCount());
     }
   }
 
@@ -74,7 +71,6 @@ class _SettingsPageState extends State<SettingsPage> {
       _profile = _profileFromSession(widget.session, previous: _profile);
     });
     unawaited(_loadStarredMessageCount());
-    unawaited(_loadNotificationCount());
   }
 
   Future<void> _openProfileEditor() async {
@@ -110,16 +106,6 @@ class _SettingsPageState extends State<SettingsPage> {
         0,
         (sum, ids) => sum + ids.length,
       );
-    });
-  }
-
-  Future<void> _loadNotificationCount() async {
-    final items = await TurnaNotificationInboxLocalCache.load(
-      widget.session.userId,
-    );
-    if (!mounted) return;
-    setState(() {
-      _notificationUnreadCount = items.where((item) => !item.isRead).length;
     });
   }
 
@@ -337,15 +323,8 @@ class _SettingsPageState extends State<SettingsPage> {
               _SettingsMenuAction(
                 icon: Icons.notifications_none_rounded,
                 label: 'Bildirimler',
-                trailingText: _notificationUnreadCount > 0
-                    ? '$_notificationUnreadCount'
-                    : null,
                 onTap: () => _openPage(
-                  TurnaNotificationsInboxPage(
-                    session: widget.session,
-                    callCoordinator: widget.callCoordinator,
-                    onSessionExpired: widget.onLogout,
-                  ),
+                  TurnaNotificationsSettingsPage(session: widget.session),
                 ),
               ),
               _SettingsMenuAction(
@@ -385,6 +364,813 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+enum _TurnaNotificationSoundOption { muted, note, system }
+
+extension _TurnaNotificationSoundOptionX on _TurnaNotificationSoundOption {
+  String get label {
+    switch (this) {
+      case _TurnaNotificationSoundOption.muted:
+        return 'Kapalı';
+      case _TurnaNotificationSoundOption.note:
+        return 'Not';
+      case _TurnaNotificationSoundOption.system:
+        return 'Varsayılan';
+    }
+  }
+
+  static _TurnaNotificationSoundOption fromStorage(String? raw) {
+    switch ((raw ?? '').trim().toLowerCase()) {
+      case 'muted':
+        return _TurnaNotificationSoundOption.muted;
+      case 'system':
+        return _TurnaNotificationSoundOption.system;
+      default:
+        return _TurnaNotificationSoundOption.note;
+    }
+  }
+
+  String get storageValue => name;
+}
+
+class _TurnaNotificationSettingsData {
+  const _TurnaNotificationSettingsData({
+    required this.messageEnabled,
+    required this.messageSound,
+    required this.messageReactionEnabled,
+    required this.groupEnabled,
+    required this.groupSound,
+    required this.groupReactionEnabled,
+    required this.statusEnabled,
+    required this.statusSound,
+    required this.statusReplyEnabled,
+    required this.remindersEnabled,
+    required this.clearBadgeOnOpen,
+    required this.showPreview,
+    required this.inAppBannerEnabled,
+    required this.inAppSoundEnabled,
+    required this.inAppVibrationEnabled,
+  });
+
+  final bool messageEnabled;
+  final _TurnaNotificationSoundOption messageSound;
+  final bool messageReactionEnabled;
+  final bool groupEnabled;
+  final _TurnaNotificationSoundOption groupSound;
+  final bool groupReactionEnabled;
+  final bool statusEnabled;
+  final _TurnaNotificationSoundOption statusSound;
+  final bool statusReplyEnabled;
+  final bool remindersEnabled;
+  final bool clearBadgeOnOpen;
+  final bool showPreview;
+  final bool inAppBannerEnabled;
+  final bool inAppSoundEnabled;
+  final bool inAppVibrationEnabled;
+
+  factory _TurnaNotificationSettingsData.defaults() {
+    return const _TurnaNotificationSettingsData(
+      messageEnabled: true,
+      messageSound: _TurnaNotificationSoundOption.note,
+      messageReactionEnabled: true,
+      groupEnabled: true,
+      groupSound: _TurnaNotificationSoundOption.note,
+      groupReactionEnabled: true,
+      statusEnabled: true,
+      statusSound: _TurnaNotificationSoundOption.note,
+      statusReplyEnabled: true,
+      remindersEnabled: true,
+      clearBadgeOnOpen: false,
+      showPreview: true,
+      inAppBannerEnabled: true,
+      inAppSoundEnabled: true,
+      inAppVibrationEnabled: true,
+    );
+  }
+
+  factory _TurnaNotificationSettingsData.fromMap(Map<String, dynamic> map) {
+    final defaults = _TurnaNotificationSettingsData.defaults();
+    return _TurnaNotificationSettingsData(
+      messageEnabled: map['messageEnabled'] is bool
+          ? map['messageEnabled'] as bool
+          : defaults.messageEnabled,
+      messageSound: _TurnaNotificationSoundOptionX.fromStorage(
+        map['messageSound']?.toString(),
+      ),
+      messageReactionEnabled: map['messageReactionEnabled'] is bool
+          ? map['messageReactionEnabled'] as bool
+          : defaults.messageReactionEnabled,
+      groupEnabled: map['groupEnabled'] is bool
+          ? map['groupEnabled'] as bool
+          : defaults.groupEnabled,
+      groupSound: _TurnaNotificationSoundOptionX.fromStorage(
+        map['groupSound']?.toString(),
+      ),
+      groupReactionEnabled: map['groupReactionEnabled'] is bool
+          ? map['groupReactionEnabled'] as bool
+          : defaults.groupReactionEnabled,
+      statusEnabled: map['statusEnabled'] is bool
+          ? map['statusEnabled'] as bool
+          : defaults.statusEnabled,
+      statusSound: _TurnaNotificationSoundOptionX.fromStorage(
+        map['statusSound']?.toString(),
+      ),
+      statusReplyEnabled: map['statusReplyEnabled'] is bool
+          ? map['statusReplyEnabled'] as bool
+          : defaults.statusReplyEnabled,
+      remindersEnabled: map['remindersEnabled'] is bool
+          ? map['remindersEnabled'] as bool
+          : defaults.remindersEnabled,
+      clearBadgeOnOpen: map['clearBadgeOnOpen'] is bool
+          ? map['clearBadgeOnOpen'] as bool
+          : defaults.clearBadgeOnOpen,
+      showPreview: map['showPreview'] is bool
+          ? map['showPreview'] as bool
+          : defaults.showPreview,
+      inAppBannerEnabled: map['inAppBannerEnabled'] is bool
+          ? map['inAppBannerEnabled'] as bool
+          : defaults.inAppBannerEnabled,
+      inAppSoundEnabled: map['inAppSoundEnabled'] is bool
+          ? map['inAppSoundEnabled'] as bool
+          : defaults.inAppSoundEnabled,
+      inAppVibrationEnabled: map['inAppVibrationEnabled'] is bool
+          ? map['inAppVibrationEnabled'] as bool
+          : defaults.inAppVibrationEnabled,
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return <String, dynamic>{
+      'messageEnabled': messageEnabled,
+      'messageSound': messageSound.storageValue,
+      'messageReactionEnabled': messageReactionEnabled,
+      'groupEnabled': groupEnabled,
+      'groupSound': groupSound.storageValue,
+      'groupReactionEnabled': groupReactionEnabled,
+      'statusEnabled': statusEnabled,
+      'statusSound': statusSound.storageValue,
+      'statusReplyEnabled': statusReplyEnabled,
+      'remindersEnabled': remindersEnabled,
+      'clearBadgeOnOpen': clearBadgeOnOpen,
+      'showPreview': showPreview,
+      'inAppBannerEnabled': inAppBannerEnabled,
+      'inAppSoundEnabled': inAppSoundEnabled,
+      'inAppVibrationEnabled': inAppVibrationEnabled,
+    };
+  }
+
+  _TurnaNotificationSettingsData copyWith({
+    bool? messageEnabled,
+    _TurnaNotificationSoundOption? messageSound,
+    bool? messageReactionEnabled,
+    bool? groupEnabled,
+    _TurnaNotificationSoundOption? groupSound,
+    bool? groupReactionEnabled,
+    bool? statusEnabled,
+    _TurnaNotificationSoundOption? statusSound,
+    bool? statusReplyEnabled,
+    bool? remindersEnabled,
+    bool? clearBadgeOnOpen,
+    bool? showPreview,
+    bool? inAppBannerEnabled,
+    bool? inAppSoundEnabled,
+    bool? inAppVibrationEnabled,
+  }) {
+    return _TurnaNotificationSettingsData(
+      messageEnabled: messageEnabled ?? this.messageEnabled,
+      messageSound: messageSound ?? this.messageSound,
+      messageReactionEnabled:
+          messageReactionEnabled ?? this.messageReactionEnabled,
+      groupEnabled: groupEnabled ?? this.groupEnabled,
+      groupSound: groupSound ?? this.groupSound,
+      groupReactionEnabled: groupReactionEnabled ?? this.groupReactionEnabled,
+      statusEnabled: statusEnabled ?? this.statusEnabled,
+      statusSound: statusSound ?? this.statusSound,
+      statusReplyEnabled: statusReplyEnabled ?? this.statusReplyEnabled,
+      remindersEnabled: remindersEnabled ?? this.remindersEnabled,
+      clearBadgeOnOpen: clearBadgeOnOpen ?? this.clearBadgeOnOpen,
+      showPreview: showPreview ?? this.showPreview,
+      inAppBannerEnabled: inAppBannerEnabled ?? this.inAppBannerEnabled,
+      inAppSoundEnabled: inAppSoundEnabled ?? this.inAppSoundEnabled,
+      inAppVibrationEnabled:
+          inAppVibrationEnabled ?? this.inAppVibrationEnabled,
+    );
+  }
+}
+
+class _TurnaNotificationSettingsStore {
+  static String _key(String userId) =>
+      'turna_notification_settings_v1_${userId.trim()}';
+
+  static Future<_TurnaNotificationSettingsData> load(String userId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_key(userId));
+    if (raw == null || raw.trim().isEmpty) {
+      return _TurnaNotificationSettingsData.defaults();
+    }
+    try {
+      final decoded = jsonDecode(raw) as Map<String, dynamic>;
+      return _TurnaNotificationSettingsData.fromMap(decoded);
+    } catch (_) {
+      return _TurnaNotificationSettingsData.defaults();
+    }
+  }
+
+  static Future<void> save(
+    String userId,
+    _TurnaNotificationSettingsData value,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_key(userId), jsonEncode(value.toMap()));
+  }
+
+  static Future<void> clear(String userId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_key(userId));
+  }
+}
+
+class TurnaNotificationsSettingsPage extends StatefulWidget {
+  const TurnaNotificationsSettingsPage({super.key, required this.session});
+
+  final AuthSession session;
+
+  @override
+  State<TurnaNotificationsSettingsPage> createState() =>
+      _TurnaNotificationsSettingsPageState();
+}
+
+class _TurnaNotificationsSettingsPageState
+    extends State<TurnaNotificationsSettingsPage> {
+  _TurnaNotificationSettingsData _settings =
+      _TurnaNotificationSettingsData.defaults();
+  bool _loading = true;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_load());
+  }
+
+  Future<void> _load() async {
+    final settings = await _TurnaNotificationSettingsStore.load(
+      widget.session.userId,
+    );
+    if (!mounted) return;
+    setState(() {
+      _settings = settings;
+      _loading = false;
+    });
+  }
+
+  Future<void> _updateSettings(_TurnaNotificationSettingsData next) async {
+    setState(() {
+      _settings = next;
+      _saving = true;
+    });
+    await _TurnaNotificationSettingsStore.save(widget.session.userId, next);
+    if (!mounted) return;
+    setState(() => _saving = false);
+  }
+
+  Future<void> _openInAppSettings() async {
+    final updated = await Navigator.push<_TurnaNotificationSettingsData>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => _TurnaInAppNotificationsPage(settings: _settings),
+      ),
+    );
+    if (updated == null) return;
+    await _updateSettings(updated);
+  }
+
+  Future<void> _pickSound({
+    required String title,
+    required _TurnaNotificationSoundOption current,
+    required Future<void> Function(_TurnaNotificationSoundOption value) onPick,
+  }) async {
+    final selected = await showModalBottomSheet<_TurnaNotificationSoundOption>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                title: Text(
+                  title,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+              for (final option in _TurnaNotificationSoundOption.values)
+                ListTile(
+                  leading: Icon(
+                    option == current
+                        ? Icons.radio_button_checked_rounded
+                        : Icons.radio_button_off_rounded,
+                    color: option == current
+                        ? TurnaColors.primary
+                        : TurnaColors.textMuted,
+                  ),
+                  title: Text(option.label),
+                  onTap: () => Navigator.pop(sheetContext, option),
+                ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+    if (selected == null || selected == current) return;
+    await onPick(selected);
+  }
+
+  Future<void> _resetSettings() async {
+    final confirmed = await showModalBottomSheet<bool>(
+      context: context,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const ListTile(
+                title: Text(
+                  'Bildirim ayarlarını sıfırla',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+                subtitle: Text(
+                  'Mesaj, grup, durum ve uygulama içi bildirim tercihleri varsayılana dönecek.',
+                ),
+              ),
+              ListTile(
+                leading: const Icon(
+                  Icons.restart_alt_rounded,
+                  color: TurnaColors.error,
+                ),
+                title: const Text(
+                  'Sıfırla',
+                  style: TextStyle(color: TurnaColors.error),
+                ),
+                onTap: () => Navigator.pop(sheetContext, true),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+    if (confirmed != true) return;
+    final defaults = _TurnaNotificationSettingsData.defaults();
+    await _TurnaNotificationSettingsStore.clear(widget.session.userId);
+    if (!mounted) return;
+    setState(() => _settings = defaults);
+    await _TurnaNotificationSettingsStore.save(widget.session.userId, defaults);
+  }
+
+  String _inAppSummary() {
+    final labels = <String>[
+      if (_settings.inAppBannerEnabled) 'Başlıklar',
+      if (_settings.inAppSoundEnabled) 'Sesler',
+      if (_settings.inAppVibrationEnabled) 'Titreşim',
+    ];
+    return labels.isEmpty ? 'Kapalı' : labels.join(', ');
+  }
+
+  Widget _buildSectionLabel(String title) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(2, 0, 2, 8),
+      child: Text(
+        title,
+        style: const TextStyle(
+          fontSize: 13,
+          fontWeight: FontWeight.w700,
+          color: TurnaColors.textMuted,
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: TurnaColors.backgroundSoft,
+      appBar: AppBar(title: const Text('Bildirimler')),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
+              children: [
+                _buildSectionLabel('Mesaj bildirimleri'),
+                _TurnaNotificationCard(
+                  children: [
+                    _TurnaNotificationSwitchRow(
+                      title: 'Bildirimleri göster',
+                      value: _settings.messageEnabled,
+                      onChanged: (value) => _updateSettings(
+                        _settings.copyWith(messageEnabled: value),
+                      ),
+                    ),
+                    _TurnaNotificationValueRow(
+                      title: 'Ses',
+                      value: _settings.messageSound.label,
+                      enabled: _settings.messageEnabled,
+                      onTap: () => _pickSound(
+                        title: 'Mesaj sesi',
+                        current: _settings.messageSound,
+                        onPick: (value) => _updateSettings(
+                          _settings.copyWith(messageSound: value),
+                        ),
+                      ),
+                    ),
+                    _TurnaNotificationSwitchRow(
+                      title: 'Tepki bildirimleri',
+                      value: _settings.messageReactionEnabled,
+                      onChanged: _settings.messageEnabled
+                          ? (value) => _updateSettings(
+                              _settings.copyWith(messageReactionEnabled: value),
+                            )
+                          : null,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                _buildSectionLabel('Grup bildirimleri'),
+                _TurnaNotificationCard(
+                  children: [
+                    _TurnaNotificationSwitchRow(
+                      title: 'Bildirimleri göster',
+                      value: _settings.groupEnabled,
+                      onChanged: (value) => _updateSettings(
+                        _settings.copyWith(groupEnabled: value),
+                      ),
+                    ),
+                    _TurnaNotificationValueRow(
+                      title: 'Ses',
+                      value: _settings.groupSound.label,
+                      enabled: _settings.groupEnabled,
+                      onTap: () => _pickSound(
+                        title: 'Grup bildirim sesi',
+                        current: _settings.groupSound,
+                        onPick: (value) => _updateSettings(
+                          _settings.copyWith(groupSound: value),
+                        ),
+                      ),
+                    ),
+                    _TurnaNotificationSwitchRow(
+                      title: 'Tepki bildirimleri',
+                      value: _settings.groupReactionEnabled,
+                      onChanged: _settings.groupEnabled
+                          ? (value) => _updateSettings(
+                              _settings.copyWith(groupReactionEnabled: value),
+                            )
+                          : null,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                _buildSectionLabel('Durum bildirimleri'),
+                _TurnaNotificationCard(
+                  children: [
+                    _TurnaNotificationSwitchRow(
+                      title: 'Bildirimleri göster',
+                      value: _settings.statusEnabled,
+                      onChanged: (value) => _updateSettings(
+                        _settings.copyWith(statusEnabled: value),
+                      ),
+                    ),
+                    _TurnaNotificationValueRow(
+                      title: 'Ses',
+                      value: _settings.statusSound.label,
+                      enabled: _settings.statusEnabled,
+                      onTap: () => _pickSound(
+                        title: 'Durum bildirim sesi',
+                        current: _settings.statusSound,
+                        onPick: (value) => _updateSettings(
+                          _settings.copyWith(statusSound: value),
+                        ),
+                      ),
+                    ),
+                    _TurnaNotificationSwitchRow(
+                      title: 'Yanıt bildirimleri',
+                      value: _settings.statusReplyEnabled,
+                      onChanged: _settings.statusEnabled
+                          ? (value) => _updateSettings(
+                              _settings.copyWith(statusReplyEnabled: value),
+                            )
+                          : null,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                _TurnaNotificationCard(
+                  children: [
+                    _TurnaNotificationSwitchRow(
+                      title: 'Hatırlatıcılar',
+                      subtitle:
+                          'Görmediğiniz mesajlar, aramalar veya durum güncellemeleri için ara sıra hatırlatıcı alın.',
+                      value: _settings.remindersEnabled,
+                      onChanged: (value) => _updateSettings(
+                        _settings.copyWith(remindersEnabled: value),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                _buildSectionLabel('Ana ekran bildirimleri'),
+                _TurnaNotificationCard(
+                  children: [
+                    _TurnaNotificationSwitchRow(
+                      title: 'Rozeti açılışta temizle',
+                      subtitle:
+                          'Uygulamayı her açtığınızda ana ekran rozetinin temizlenmesini tercih edin.',
+                      value: _settings.clearBadgeOnOpen,
+                      onChanged: (value) => _updateSettings(
+                        _settings.copyWith(clearBadgeOnOpen: value),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                _TurnaNotificationCard(
+                  children: [
+                    _TurnaNotificationValueRow(
+                      title: 'Uygulama içi bildirimler',
+                      subtitle: _inAppSummary(),
+                      value: 'Yönet',
+                      onTap: _openInAppSettings,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                _TurnaNotificationCard(
+                  children: [
+                    _TurnaNotificationSwitchRow(
+                      title: 'Önizlemeyi göster',
+                      subtitle:
+                          'Yeni mesaj bildirimlerinde mesaj içeriğinin önizlemesini göster.',
+                      value: _settings.showPreview,
+                      onChanged: (value) => _updateSettings(
+                        _settings.copyWith(showPreview: value),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                _TurnaNotificationDangerRow(
+                  subtitle:
+                      'Sohbetler için özel bildirimler dahil olmak üzere tüm tercihleri varsayılana döndür.',
+                  busy: _saving,
+                  onTap: _resetSettings,
+                ),
+              ],
+            ),
+    );
+  }
+}
+
+class _TurnaInAppNotificationsPage extends StatefulWidget {
+  const _TurnaInAppNotificationsPage({required this.settings});
+
+  final _TurnaNotificationSettingsData settings;
+
+  @override
+  State<_TurnaInAppNotificationsPage> createState() =>
+      _TurnaInAppNotificationsPageState();
+}
+
+class _TurnaInAppNotificationsPageState
+    extends State<_TurnaInAppNotificationsPage> {
+  late _TurnaNotificationSettingsData _draft;
+
+  @override
+  void initState() {
+    super.initState();
+    _draft = widget.settings;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: TurnaColors.backgroundSoft,
+      appBar: AppBar(
+        title: const Text('Uygulama içi bildirimler'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, _draft),
+            child: const Text('Bitti'),
+          ),
+        ],
+      ),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
+        children: [
+          _TurnaNotificationCard(
+            children: [
+              _TurnaNotificationSwitchRow(
+                title: 'Başlıklar',
+                subtitle:
+                    'Uygulama açıkken üstten küçük bildirim kartı göster.',
+                value: _draft.inAppBannerEnabled,
+                onChanged: (value) => setState(
+                  () => _draft = _draft.copyWith(inAppBannerEnabled: value),
+                ),
+              ),
+              _TurnaNotificationSwitchRow(
+                title: 'Sesler',
+                subtitle: 'Uygulama içi bildirimlerde kısa ses çal.',
+                value: _draft.inAppSoundEnabled,
+                onChanged: (value) => setState(
+                  () => _draft = _draft.copyWith(inAppSoundEnabled: value),
+                ),
+              ),
+              _TurnaNotificationSwitchRow(
+                title: 'Titreşim',
+                subtitle: 'Desteklenen cihazlarda titreşim kullan.',
+                value: _draft.inAppVibrationEnabled,
+                onChanged: (value) => setState(
+                  () => _draft = _draft.copyWith(inAppVibrationEnabled: value),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TurnaNotificationCard extends StatelessWidget {
+  const _TurnaNotificationCard({required this.children});
+
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Column(
+        children: [
+          for (var index = 0; index < children.length; index++) ...[
+            children[index],
+            if (index != children.length - 1)
+              const Divider(height: 1, indent: 16, endIndent: 16),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _TurnaNotificationSwitchRow extends StatelessWidget {
+  const _TurnaNotificationSwitchRow({
+    required this.title,
+    required this.value,
+    required this.onChanged,
+    this.subtitle,
+  });
+
+  final String title;
+  final String? subtitle;
+  final bool value;
+  final ValueChanged<bool>? onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      onTap: onChanged == null ? null : () => onChanged!(!value),
+      title: Text(
+        title,
+        style: TextStyle(
+          fontWeight: FontWeight.w600,
+          color: onChanged == null ? TurnaColors.textMuted : TurnaColors.text,
+        ),
+      ),
+      subtitle: subtitle == null
+          ? null
+          : Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                subtitle!,
+                style: const TextStyle(
+                  fontSize: 12.5,
+                  height: 1.32,
+                  color: TurnaColors.textMuted,
+                ),
+              ),
+            ),
+      trailing: Switch.adaptive(
+        value: value,
+        onChanged: onChanged,
+        activeThumbColor: TurnaColors.primary,
+        activeTrackColor: TurnaColors.primary100,
+      ),
+    );
+  }
+}
+
+class _TurnaNotificationValueRow extends StatelessWidget {
+  const _TurnaNotificationValueRow({
+    required this.title,
+    required this.value,
+    required this.onTap,
+    this.subtitle,
+    this.enabled = true,
+  });
+
+  final String title;
+  final String? subtitle;
+  final String value;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final titleColor = enabled ? TurnaColors.text : TurnaColors.textMuted;
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      enabled: enabled,
+      onTap: enabled ? onTap : null,
+      title: Text(
+        title,
+        style: TextStyle(fontWeight: FontWeight.w600, color: titleColor),
+      ),
+      subtitle: subtitle == null
+          ? null
+          : Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                subtitle!,
+                style: const TextStyle(
+                  fontSize: 12.5,
+                  height: 1.32,
+                  color: TurnaColors.textMuted,
+                ),
+              ),
+            ),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            value,
+            style: const TextStyle(fontSize: 14, color: TurnaColors.textMuted),
+          ),
+          const SizedBox(width: 4),
+          const Icon(Icons.chevron_right_rounded, color: TurnaColors.textMuted),
+        ],
+      ),
+    );
+  }
+}
+
+class _TurnaNotificationDangerRow extends StatelessWidget {
+  const _TurnaNotificationDangerRow({
+    required this.subtitle,
+    required this.onTap,
+    this.busy = false,
+  });
+
+  final String subtitle;
+  final VoidCallback onTap;
+  final bool busy;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        enabled: !busy,
+        onTap: busy ? null : onTap,
+        title: const Text(
+          'Bildirim ayarlarını sıfırla',
+          style: TextStyle(
+            fontWeight: FontWeight.w700,
+            color: TurnaColors.error,
+          ),
+        ),
+        subtitle: Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Text(
+            subtitle,
+            style: const TextStyle(
+              fontSize: 12.5,
+              height: 1.32,
+              color: TurnaColors.textMuted,
+            ),
+          ),
         ),
       ),
     );
@@ -596,7 +1382,7 @@ class _TurnaNotificationsInboxPageState
     final items = _items;
     return Scaffold(
       backgroundColor: TurnaColors.backgroundSoft,
-      appBar: AppBar(title: const Text('Bildirimler')),
+      appBar: AppBar(title: const Text('Bildirim merkezi')),
       body: RefreshIndicator(
         onRefresh: _reload,
         child: _loading
