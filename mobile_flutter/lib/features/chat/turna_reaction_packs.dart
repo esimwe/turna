@@ -1466,32 +1466,36 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
         _stickerPacks.firstWhere(
           (item) => item.items.any((entry) => entry.id == sticker.id),
         );
-    if (!_isStickerPackReady(pack)) {
-      final failure = _stickerPackFailure(pack);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            failure?.trim().isNotEmpty == true
-                ? failure!
-                : 'Sticker paketi hazırlanıyor. Birkaç saniye sonra tekrar dene.',
-          ),
-        ),
-      );
-      return;
-    }
+
     setState(() {
-      _sessionRecentStickerIds.remove(sticker.id);
-      _sessionRecentStickerIds.insert(0, sticker.id);
-      if (_sessionRecentStickerIds.length > 16) {
-        _sessionRecentStickerIds.removeRange(
-          16,
-          _sessionRecentStickerIds.length,
-        );
-      }
       _sendingSticker = true;
       _syncSelectedStickerTab();
     });
     try {
+      if (!_isStickerPackReady(pack)) {
+        await _syncStickerPacks(<_TurnaStickerPack>[pack]);
+      }
+      if (!_isStickerPackReady(pack)) {
+        final failure = _stickerPackFailure(pack);
+        throw TurnaApiException(
+          failure?.trim().isNotEmpty == true
+              ? failure!
+              : 'Sticker paketi şu anda hazırlanamadı.',
+        );
+      }
+
+      setState(() {
+        _sessionRecentStickerIds.remove(sticker.id);
+        _sessionRecentStickerIds.insert(0, sticker.id);
+        if (_sessionRecentStickerIds.length > 16) {
+          _sessionRecentStickerIds.removeRange(
+            16,
+            _sessionRecentStickerIds.length,
+          );
+        }
+        _syncSelectedStickerTab();
+      });
+
       await widget.onSelectSticker(
         _TurnaStickerSelection(
           packId: pack.id,
@@ -2108,19 +2112,6 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
                   color: TurnaColors.textMuted,
                 ),
               ),
-            ] else if (!selectedPackReady) ...[
-              const SizedBox(height: 4),
-              Text(
-                selectedPackSyncing
-                    ? 'Sticker paketi arka planda hazırlanıyor.'
-                    : 'Sticker paketi kullanıma hazırlanıyor.',
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  fontSize: 12,
-                  height: 1.35,
-                  color: TurnaColors.textMuted,
-                ),
-              ),
             ],
             if (selectedPackHasFailure) ...[
               const SizedBox(height: 10),
@@ -2139,16 +2130,16 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
         child: GridView.builder(
           padding: const EdgeInsets.fromLTRB(14, 0, 14, 86),
           gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 4,
-            mainAxisSpacing: 12,
-            crossAxisSpacing: 12,
-            childAspectRatio: 0.82,
+            crossAxisCount: 8,
+            mainAxisSpacing: 10,
+            crossAxisSpacing: 10,
+            childAspectRatio: 0.9,
           ),
           itemCount: selectedTab?.items.length ?? 0,
           itemBuilder: (context, index) {
             final item = selectedTab!.items[index];
             final itemPack = selectedPack ?? _stickerPackForItem(item.id);
-            final enabled = selectedPackReady && !_sendingSticker;
+            final enabled = !_sendingSticker;
             return InkWell(
               onTap: enabled ? () => _handleStickerTap(item) : null,
               borderRadius: BorderRadius.circular(22),
@@ -2160,7 +2151,7 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
                 child: Stack(
                   children: [
                     Padding(
-                      padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+                      padding: const EdgeInsets.fromLTRB(4, 4, 4, 4),
                       child: Column(
                         children: [
                           Expanded(
@@ -2172,34 +2163,20 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
                         ],
                       ),
                     ),
-                    if (!enabled)
+                    if (_sendingSticker)
                       Positioned.fill(
                         child: DecoratedBox(
                           decoration: BoxDecoration(
-                            color: Colors.black.withValues(alpha: 0.2),
+                            color: Colors.black.withValues(alpha: 0.1),
                             borderRadius: BorderRadius.circular(22),
                           ),
                           child: Center(
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 7,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Colors.black.withValues(alpha: 0.42),
-                                borderRadius: BorderRadius.circular(999),
-                              ),
-                              child: Text(
-                                selectedPackHasFailure
-                                    ? 'Tekrar dene'
-                                    : (selectedPackSyncing
-                                          ? 'Yükleniyor'
-                                          : 'Hazırlanıyor'),
-                                style: const TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w700,
-                                  color: Colors.white,
-                                ),
+                            child: SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.black.withValues(alpha: 0.55),
                               ),
                             ),
                           ),

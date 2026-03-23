@@ -633,6 +633,19 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     setState(() => _showComposerEmojiPanel = true);
   }
 
+  void _dismissComposerInputSurface() {
+    final hadFocus = _composerFocusNode.hasFocus;
+    final panelVisible = _showComposerEmojiPanel;
+    if (!hadFocus && !panelVisible) {
+      return;
+    }
+    FocusScope.of(context).unfocus();
+    if (!panelVisible) {
+      return;
+    }
+    setState(() => _showComposerEmojiPanel = false);
+  }
+
   void _insertComposerEmoji(TurnaPackEmojiSelection selection) {
     final value = _controller.value;
     final text = value.text;
@@ -743,6 +756,18 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     _TurnaStickerSelection selection,
   ) async {
     if (_attachmentBusy || _composerActionBusy) return;
+
+    final hasDraftText = _controller.text.trim().isNotEmpty;
+    if (hasDraftText) {
+      _insertComposerEmoji(
+        TurnaPackEmojiSelection(
+          packId: selection.packId,
+          emoji: selection.emoji,
+        ),
+      );
+      _composerFocusNode.requestFocus();
+      return;
+    }
 
     if (selection.sourceKind == TurnaExpressionPackSourceKind.remoteZip &&
         (selection.relativeAssetPath?.trim().isNotEmpty ?? false)) {
@@ -6894,91 +6919,95 @@ class _ChatRoomPageState extends State<ChatRoomPage>
               if (_messageExpirationBannerText() != null)
                 _buildMessageExpirationBanner(),
               Expanded(
-                child: Stack(
-                  children: [
-                    const Positioned.fill(child: _ChatWallpaper()),
-                    if (timelineEntries.isEmpty && _client.loadingInitial)
-                      const SizedBox.expand()
-                    else if (timelineEntries.isEmpty)
-                      const _CenteredState(
-                        icon: Icons.chat_bubble_outline,
-                        title: 'Henüz mesaj yok',
-                        message: 'İlk mesajı göndererek sohbeti başlat.',
-                      )
-                    else
-                      ListView.builder(
-                        controller: _scrollController,
-                        reverse: true,
-                        padding: const EdgeInsets.fromLTRB(8, 14, 8, 18),
-                        itemCount: timelineEntries.length + 1,
-                        itemBuilder: (context, index) {
-                          if (index == timelineEntries.length) {
-                            if (_client.loadingMore) {
-                              return const Padding(
-                                padding: EdgeInsets.symmetric(vertical: 12),
-                                child: Center(
-                                  child: Text(
-                                    'Eski mesajlar ekleniyor...',
-                                    style: TextStyle(color: Color(0xFF777C79)),
-                                  ),
-                                ),
-                              );
-                            }
-                            if (_client.hasMore) {
-                              return const Padding(
-                                padding: EdgeInsets.symmetric(vertical: 12),
-                                child: Center(
-                                  child: Text(
-                                    'Eski mesajlar yükleniyor...',
-                                    style: TextStyle(color: Color(0xFF777C79)),
-                                  ),
-                                ),
-                              );
-                            }
-                            return const SizedBox(height: 24);
-                          }
-
-                          final entry = timelineEntries[index];
-                          final msg = entry.message;
-                          final call = entry.call;
-                          return Column(
-                            children: [
-                              if (_shouldShowDayChip(timelineEntries, index))
-                                Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                    vertical: TurnaChatTokens.dateGap / 2,
-                                  ),
-                                  child: _DateSeparatorChip(
-                                    label: _formatDayLabel(
-                                      _timelineCreatedAt(entry),
+                child: Listener(
+                  behavior: HitTestBehavior.translucent,
+                  onPointerDown: (_) => _dismissComposerInputSurface(),
+                  child: Stack(
+                    children: [
+                      const Positioned.fill(child: _ChatWallpaper()),
+                      if (timelineEntries.isEmpty && _client.loadingInitial)
+                        const SizedBox.expand()
+                      else if (timelineEntries.isEmpty)
+                        const _CenteredState(
+                          icon: Icons.chat_bubble_outline,
+                          title: 'Henüz mesaj yok',
+                          message: 'İlk mesajı göndererek sohbeti başlat.',
+                        )
+                      else
+                        ListView.builder(
+                          controller: _scrollController,
+                          reverse: true,
+                          padding: const EdgeInsets.fromLTRB(8, 14, 8, 18),
+                          itemCount: timelineEntries.length + 1,
+                          itemBuilder: (context, index) {
+                            if (index == timelineEntries.length) {
+                              if (_client.loadingMore) {
+                                return const Padding(
+                                  padding: EdgeInsets.symmetric(vertical: 12),
+                                  child: Center(
+                                    child: Text(
+                                      'Eski mesajlar ekleniyor...',
+                                      style: TextStyle(color: Color(0xFF777C79)),
                                     ),
                                   ),
-                                ),
-                              if (msg != null)
-                                _buildMessageBubble(
-                                  timelineEntries,
-                                  index,
-                                  msg,
-                                  msg.senderId == widget.session.userId,
-                                )
-                              else if (call != null)
-                                _buildCallBubble(timelineEntries, index, call),
-                            ],
-                          );
-                        },
-                      ),
-                    if (_showScrollToBottom)
-                      Positioned(
-                        right: 16,
-                        bottom: 16,
-                        child: FloatingActionButton.small(
-                          backgroundColor: Colors.white,
-                          foregroundColor: TurnaColors.primary,
-                          onPressed: _jumpToBottom,
-                          child: const Icon(Icons.keyboard_arrow_down),
+                                );
+                              }
+                              if (_client.hasMore) {
+                                return const Padding(
+                                  padding: EdgeInsets.symmetric(vertical: 12),
+                                  child: Center(
+                                    child: Text(
+                                      'Eski mesajlar yükleniyor...',
+                                      style: TextStyle(color: Color(0xFF777C79)),
+                                    ),
+                                  ),
+                                );
+                              }
+                              return const SizedBox(height: 24);
+                            }
+
+                            final entry = timelineEntries[index];
+                            final msg = entry.message;
+                            final call = entry.call;
+                            return Column(
+                              children: [
+                                if (_shouldShowDayChip(timelineEntries, index))
+                                  Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: TurnaChatTokens.dateGap / 2,
+                                    ),
+                                    child: _DateSeparatorChip(
+                                      label: _formatDayLabel(
+                                        _timelineCreatedAt(entry),
+                                      ),
+                                    ),
+                                  ),
+                                if (msg != null)
+                                  _buildMessageBubble(
+                                    timelineEntries,
+                                    index,
+                                    msg,
+                                    msg.senderId == widget.session.userId,
+                                  )
+                                else if (call != null)
+                                  _buildCallBubble(timelineEntries, index, call),
+                              ],
+                            );
+                          },
                         ),
-                      ),
-                  ],
+                      if (_showScrollToBottom)
+                        Positioned(
+                          right: 16,
+                          bottom: 16,
+                          child: FloatingActionButton.small(
+                            backgroundColor: Colors.white,
+                            foregroundColor: TurnaColors.primary,
+                            onPressed: _jumpToBottom,
+                            child: const Icon(Icons.keyboard_arrow_down),
+                          ),
+                        ),
+                    ],
+                  ),
                 ),
               ),
               if (!_isSelectionMode) _buildComposer(),
