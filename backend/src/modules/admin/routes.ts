@@ -133,9 +133,10 @@ const upsertExpressionPackSchema = z.object({
   id: z.string().trim().min(1).max(120),
   title: z.string().trim().min(1).max(80),
   subtitle: z.string().trim().max(160).nullable().optional(),
+  iconEmoji: z.string().trim().min(1).max(32).nullable().optional(),
   version: z.string().trim().min(1).max(60),
   isActive: z.boolean().optional().default(true),
-  items: z.array(expressionPackItemSchema).min(1).max(200),
+  items: z.array(expressionPackItemSchema).max(200).optional(),
   reason: z.string().trim().min(4).max(500).optional()
 });
 
@@ -528,6 +529,7 @@ adminRouter.post(
         id: parsed.data.id,
         title: parsed.data.title,
         subtitle: parsed.data.subtitle,
+        iconEmoji: parsed.data.iconEmoji,
         version: parsed.data.version,
         isActive: parsed.data.isActive,
         items: parsed.data.items

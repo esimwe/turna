@@ -491,23 +491,6 @@ async function updateExpressionPackStatus(packId, version, isActive) {
   return response?.data || null;
 }
 
-function getExpressionPackSampleItems() {
-  return [
-    {
-      id: "spark-hello",
-      emoji: "✨",
-      label: "Merhaba",
-      assetType: "static_webp",
-      relativeAssetPath: "stickers/spark-hello.webp",
-      palette: ["#FFE8AA", "#FFC857"]
-    }
-  ];
-}
-
-function getDefaultExpressionPackItemsText() {
-  return JSON.stringify(getExpressionPackSampleItems(), null, 2);
-}
-
 function createEmptyExpressionPackDraft() {
   return {
     mode: "create",
@@ -517,8 +500,9 @@ function createEmptyExpressionPackDraft() {
     version: "",
     title: "",
     subtitle: "",
+    iconEmoji: "🙂",
     isActive: true,
-    itemsText: getDefaultExpressionPackItemsText(),
+    itemsText: "",
     archiveFile: null
   };
 }
@@ -532,6 +516,7 @@ function buildExpressionPackDraftFromPack(pack) {
     version: String(pack?.version || "").trim(),
     title: String(pack?.title || "").trim(),
     subtitle: String(pack?.subtitle || "").trim(),
+    iconEmoji: String(pack?.iconEmoji || "🙂").trim() || "🙂",
     isActive: pack?.isActive !== false,
     itemsText: JSON.stringify(Array.isArray(pack?.items) ? pack.items : [], null, 2),
     archiveFile: null
@@ -563,6 +548,7 @@ function buildExpressionPackVersionDraft(pack) {
     version: bumpExpressionPackVersion(pack?.version),
     title: String(pack?.title || "").trim(),
     subtitle: String(pack?.subtitle || "").trim(),
+    iconEmoji: String(pack?.iconEmoji || "🙂").trim() || "🙂",
     isActive: true,
     itemsText: JSON.stringify(Array.isArray(pack?.items) ? pack.items : [], null, 2),
     archiveFile: null
@@ -662,8 +648,9 @@ function parseExpressionPackItemsInput(itemsRaw) {
   const raw = String(itemsRaw || "").trim();
   if (!raw) {
     return {
-      ok: false,
-      error: "Item JSON gerekli.",
+      ok: true,
+      auto: true,
+      error: "",
       items: [],
       assetCounts: {}
     };
@@ -675,6 +662,7 @@ function parseExpressionPackItemsInput(itemsRaw) {
   } catch (error) {
     return {
       ok: false,
+      auto: false,
       error: error?.message || "Item JSON parse edilemedi.",
       items: [],
       assetCounts: {}
@@ -684,6 +672,7 @@ function parseExpressionPackItemsInput(itemsRaw) {
   if (!Array.isArray(parsed)) {
     return {
       ok: false,
+      auto: false,
       error: "Item JSON bir dizi olmali.",
       items: [],
       assetCounts: {}
@@ -693,6 +682,7 @@ function parseExpressionPackItemsInput(itemsRaw) {
   if (!parsed.length) {
     return {
       ok: false,
+      auto: false,
       error: "En az bir item gerekli.",
       items: [],
       assetCounts: {}
@@ -709,6 +699,7 @@ function parseExpressionPackItemsInput(itemsRaw) {
     if (source == null || typeof source !== "object") {
       return {
         ok: false,
+        auto: false,
         error: `Item ${index + 1} bir obje olmali.`,
         items: [],
         assetCounts: {}
@@ -731,6 +722,7 @@ function parseExpressionPackItemsInput(itemsRaw) {
     if (!id || !emoji || !label || !assetType || !relativeAssetPath) {
       return {
         ok: false,
+        auto: false,
         error: `Item ${index + 1} icin id, emoji, label, assetType ve relativeAssetPath zorunlu.`,
         items: [],
         assetCounts: {}
@@ -740,6 +732,7 @@ function parseExpressionPackItemsInput(itemsRaw) {
     if (!expressionPackAssetTypeMeta[assetType]) {
       return {
         ok: false,
+        auto: false,
         error: `Item ${index + 1} icin desteklenmeyen assetType: ${assetType}`,
         items: [],
         assetCounts: {}
@@ -749,6 +742,7 @@ function parseExpressionPackItemsInput(itemsRaw) {
     if (seenIds.has(id)) {
       return {
         ok: false,
+        auto: false,
         error: `Ayni item id iki kez kullanildi: ${id}`,
         items: [],
         assetCounts: {}
@@ -759,6 +753,7 @@ function parseExpressionPackItemsInput(itemsRaw) {
     if (seenPaths.has(relativeAssetPath)) {
       return {
         ok: false,
+        auto: false,
         error: `Ayni relativeAssetPath iki kez kullanildi: ${relativeAssetPath}`,
         items: [],
         assetCounts: {}
@@ -772,6 +767,7 @@ function parseExpressionPackItemsInput(itemsRaw) {
     if (!expressionPackAssetTypeMeta[assetType].extensions.includes(extension)) {
       return {
         ok: false,
+        auto: false,
         error: `${relativeAssetPath} yolu ${assetType} icin uygun uzantida degil.`,
         items: [],
         assetCounts: {}
@@ -791,6 +787,7 @@ function parseExpressionPackItemsInput(itemsRaw) {
 
   return {
     ok: true,
+    auto: false,
     error: "",
     items,
     assetCounts
@@ -803,6 +800,21 @@ function renderExpressionPackItemsInspector(validation) {
       <div class="expression-pack-inspector invalid">
         <div class="user-title">JSON dogrulamasi gecemedi</div>
         <div class="error-text">${escapeHtml(validation.error || "Item JSON gecersiz.")}</div>
+      </div>
+    `;
+  }
+
+  if (validation.auto) {
+    return `
+      <div class="expression-pack-inspector">
+        <div class="list-title-row">
+          <strong>Otomatik item uretimi</strong>
+          <span class="soft-badge">JSON opsiyonel</span>
+        </div>
+        <div class="muted-text">
+          Bu alanı boş bırakırsan backend zip içindeki desteklenen dosyalardan item listesini otomatik üretir.
+          Üstte gözükecek pack ikonu için sadece <strong>Paket ikonu</strong> alanını doldurman yeterli.
+        </div>
       </div>
     `;
   }
@@ -853,6 +865,7 @@ function syncExpressionPackDraftFromForm() {
   const versionInput = document.getElementById("expression-pack-version");
   const titleInput = document.getElementById("expression-pack-title");
   const subtitleInput = document.getElementById("expression-pack-subtitle");
+  const iconEmojiInput = document.getElementById("expression-pack-icon-emoji");
   const activeInput = document.getElementById("expression-pack-active");
   const itemsInput = document.getElementById("expression-pack-items");
   const archiveInput = document.getElementById("expression-pack-archive");
@@ -861,6 +874,7 @@ function syncExpressionPackDraftFromForm() {
   if (versionInput) draft.version = versionInput.value.trim();
   if (titleInput) draft.title = titleInput.value.trim();
   if (subtitleInput) draft.subtitle = subtitleInput.value.trim();
+  if (iconEmojiInput) draft.iconEmoji = iconEmojiInput.value.trim() || "🙂";
   if (activeInput) draft.isActive = activeInput.value === "true";
   if (itemsInput) draft.itemsText = itemsInput.value;
   if (archiveInput?.files?.[0]) {
@@ -885,7 +899,9 @@ function refreshExpressionPackFormState() {
       ? `Secili zip: <strong>${escapeHtml(draft.archiveFile.name)}</strong> • ${escapeHtml(formatFileSize(draft.archiveFile.size || 0))}`
       : draft.mode === "edit"
         ? "Yeni zip secmezsen mevcut arsiv korunur."
-        : "Zip secmeden sadece metadata kaydedebilirsin."
+        : validation.auto
+          ? "Zip'i yuklediginde item listesi dosya adlarindan otomatik olusturulur."
+          : "Zip secmeden sadece metadata kaydedebilirsin."
   }
 
   if (submitButton) {
@@ -1751,7 +1767,9 @@ function renderFeatureFlagsPage() {
 function renderExpressionPacksPage() {
   const draft = getExpressionPackDraft();
   const versionSummary = getExpressionPackVersionSummary();
-  const itemPlaceholder = escapeHtml(getDefaultExpressionPackItemsText());
+  const itemPlaceholder = escapeHtml(
+    '[\n  {\n    "id": "spark-hello",\n    "emoji": "✨",\n    "label": "Merhaba",\n    "assetType": "static_webp",\n    "relativeAssetPath": "stickers/spark-hello.webp"\n  }\n]'
+  );
   const validation = parseExpressionPackItemsInput(draft.itemsText);
   const isEditing = draft.mode === "edit";
   const isVersioning = draft.mode === "version";
@@ -1815,8 +1833,18 @@ function renderExpressionPacksPage() {
             <span>Alt baslik</span>
             <input id="expression-pack-subtitle" type="text" placeholder="Kisa aciklama" value="${escapeAttribute(draft.subtitle)}" />
           </label>
+          <div class="field-grid">
+            <label class="field">
+              <span>Paket ikonu</span>
+              <input id="expression-pack-icon-emoji" type="text" maxlength="8" placeholder="🙂" value="${escapeAttribute(draft.iconEmoji || "🙂")}" />
+            </label>
+            <label class="field">
+              <span>Otomatik import</span>
+              <input type="text" value="Zip icindeki png/webp dosyalarindan otomatik olusur" readonly />
+            </label>
+          </div>
           <label class="field">
-            <span>Pack item JSON</span>
+            <span>Pack item JSON (opsiyonel override)</span>
             <textarea id="expression-pack-items" spellcheck="false" placeholder="${itemPlaceholder}">${escapeHtml(draft.itemsText)}</textarea>
           </label>
           <div id="expression-pack-items-preview">${renderExpressionPackItemsInspector(validation)}</div>
@@ -1839,7 +1867,7 @@ function renderExpressionPacksPage() {
             <button class="primary-button" id="expression-pack-submit" type="submit" ${validation.ok ? "" : "disabled"}>${submitLabel}</button>
             <button class="ghost-button" id="expression-pack-reset" type="button">${isEditing || isVersioning ? "Yeni pack" : "Formu sifirla"}</button>
             <span class="inline-feedback ${state.expressionPackFeedbackTone === "error" ? "error-text" : "success-text"}">
-              ${state.expressionPackFeedback ? escapeHtml(state.expressionPackFeedback) : "Zip icindeki dosya yollarinin JSON'daki relativeAssetPath ile birebir eslesmesi gerekiyor."}
+              ${state.expressionPackFeedback ? escapeHtml(state.expressionPackFeedback) : "JSON bossa item listesi zip icinden otomatik uretilir. Ust ikon icin sadece Paket ikonu secmen yeterli."}
             </span>
           </div>
         </form>
@@ -1887,6 +1915,7 @@ function renderExpressionPackCard(pack, versionSummary) {
       </div>
       <div class="message-body">${escapeHtml(pack.subtitle || "-")}</div>
       <div class="user-subtitle">ID: ${escapeHtml(pack.id || "-")}</div>
+      <div class="user-subtitle">Paket ikonu: ${escapeHtml(pack.iconEmoji || "🙂")}</div>
       <div class="user-subtitle">Archive: ${escapeHtml(pack.archivePath || "-")}</div>
       <div class="user-subtitle">Item: ${escapeHtml(String(pack.itemCount || 0))} • Boyut: ${escapeHtml(formatFileSize(pack.archiveSizeBytes || 0))}</div>
       <div class="user-subtitle">Yukleme: ${escapeHtml(formatDateTime(pack.uploadedAt))}</div>
@@ -1983,8 +2012,9 @@ function attachExpressionPacksPageEvents() {
           version: currentDraft.version,
           title: currentDraft.title,
           subtitle: currentDraft.subtitle || null,
+          iconEmoji: currentDraft.iconEmoji || "🙂",
           isActive: currentDraft.isActive,
-          items: validation.items,
+          ...(validation.auto ? {} : { items: validation.items }),
           reason:
             currentDraft.mode === "edit"
               ? "Expression pack admin panelden duzenlendi."

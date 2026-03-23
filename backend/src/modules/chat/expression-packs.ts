@@ -14,6 +14,7 @@ interface ExpressionPackManifestItem {
   id: string;
   title: string;
   subtitle: string;
+  iconEmoji: string;
   version: string;
   sourceKind: ExpressionPackSourceKindValue;
   archivePath: string;
@@ -35,6 +36,7 @@ export interface ExpressionPackApiItem {
   id: string;
   title: string;
   subtitle: string;
+  iconEmoji: string;
   version: string;
   sourceKind: ExpressionPackSourceKindValue;
   downloadUrl: string;
@@ -57,6 +59,7 @@ export interface AdminExpressionPackItem {
   id: string;
   title: string;
   subtitle: string;
+  iconEmoji: string;
   version: string;
   sourceKind: ExpressionPackSourceKindValue;
   archivePath: string;
@@ -205,6 +208,136 @@ function isSupportedAssetType(value: string): value is ExpressionPackAssetTypeVa
   );
 }
 
+function assetTypeForRelativePath(relativePath: string): ExpressionPackAssetTypeValue | null {
+  const extension = path.extname(relativePath).toLowerCase();
+  for (const [assetType, extensions] of Object.entries(assetTypeAllowedExtensions) as Array<
+    [ExpressionPackAssetTypeValue, string[]]
+  >) {
+    if (extensions.includes(extension)) {
+      return assetType;
+    }
+  }
+  return null;
+}
+
+function sanitizeGeneratedItemId(value: string): string {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replaceAll(/[^a-z0-9]+/g, "-")
+    .replaceAll(/^-+|-+$/g, "");
+  return normalized.slice(0, 120);
+}
+
+function humanizeGeneratedLabel(filePath: string): string {
+  const baseName = path.basename(filePath, path.extname(filePath));
+  const cleaned = baseName
+    .replaceAll(/[_-]?hires/gi, "")
+    .replaceAll(/[_-]?icon/gi, "")
+    .replaceAll(/[_-]?emoji/gi, "")
+    .replaceAll(/[_-]+/g, " ")
+    .trim();
+  if (!cleaned) return "Sticker";
+  return cleaned
+    .split(/\s+/)
+    .map((part) => (part ? `${part.charAt(0).toUpperCase()}${part.slice(1)}` : part))
+    .join(" ")
+    .slice(0, 80);
+}
+
+function inferEmojiFromRelativePath(filePath: string): string {
+  const normalized = path
+    .basename(filePath, path.extname(filePath))
+    .trim()
+    .toLowerCase()
+    .replaceAll(/[_\s]+/g, "-");
+
+  const rules: Array<[string, string]> = [
+    ["rolling-on-the-floor", "🤣"],
+    ["tears-of-joy", "😂"],
+    ["big-eyes", "😃"],
+    ["smiling-eyes", "😊"],
+    ["heart-eyes", "😍"],
+    ["in-love", "😍"],
+    ["blowing-a-kiss", "😘"],
+    ["kissing-face", "😘"],
+    ["kiss", "😘"],
+    ["squinting", "😆"],
+    ["tongue", "😛"],
+    ["halo", "😇"],
+    ["upside-down", "🙃"],
+    ["winking", "😉"],
+    ["mask", "😷"],
+    ["fearful", "😨"],
+    ["nauseated", "🤢"],
+    ["poo", "💩"],
+    ["relieved", "😌"],
+    ["pouting", "😠"],
+    ["angry", "😠"],
+    ["sad", "😢"],
+    ["disappointed", "😞"],
+    ["blushing", "😊"],
+    ["slightly-smiling", "🙂"],
+    ["smiling-face", "😊"],
+    ["grinning", "😀"],
+    ["grin", "😄"],
+    ["lol", "😆"],
+    ["zany", "🤪"]
+  ];
+
+  for (const [pattern, emoji] of rules) {
+    if (normalized.includes(pattern)) {
+      return emoji;
+    }
+  }
+  return "🙂";
+}
+
+function buildGeneratedItemsFromArchive(
+  archiveBytes: Buffer
+): ExpressionPackManifestStickerItem[] {
+  const entries = listArchiveEntries(archiveBytes);
+  const items: ExpressionPackManifestStickerItem[] = [];
+  const usedIds = new Set<string>();
+
+  for (const entry of entries) {
+    if (!entry.path || entry.isDirectory) continue;
+    const assetType = assetTypeForRelativePath(entry.path);
+    if (!assetType) continue;
+
+    let itemId = sanitizeGeneratedItemId(
+      path.join(path.dirname(entry.path), path.basename(entry.path, path.extname(entry.path)))
+    );
+    if (!itemId) {
+      itemId = `sticker-${items.length + 1}`;
+    }
+    let uniqueItemId = itemId;
+    let suffix = 2;
+    while (usedIds.has(uniqueItemId)) {
+      uniqueItemId = `${itemId}-${suffix}`;
+      suffix += 1;
+    }
+    usedIds.add(uniqueItemId);
+
+    items.push({
+      id: uniqueItemId,
+      emoji: inferEmojiFromRelativePath(entry.path),
+      label: humanizeGeneratedLabel(entry.path),
+      assetType,
+      relativeAssetPath: entry.path,
+      palette: []
+    });
+  }
+
+  if (items.length === 0) {
+    throw new ExpressionPackValidationError(
+      "Zip icinde desteklenen png/webp/lottie/webm dosyasi bulunamadi."
+    );
+  }
+
+  return items.slice(0, 200);
+}
+
 function parseManifestItem(value: unknown): ExpressionPackManifestStickerItem | null {
   if (value == null || typeof value !== "object") return null;
   const map = value as Record<string, unknown>;
@@ -233,6 +366,7 @@ function parseManifestPack(value: unknown): ExpressionPackManifestItem | null {
   const id = normalizeTrimmedString(map.id, 120);
   const title = normalizeTrimmedString(map.title, 80);
   const subtitle = normalizeTrimmedString(map.subtitle, 160);
+  const iconEmoji = normalizeTrimmedString(map.iconEmoji, 32) || "🙂";
   const version = normalizeTrimmedString(map.version, 60);
   const sourceKind = normalizeTrimmedString(map.sourceKind, 32).toLowerCase();
   const archivePath = normalizeRelativePath(map.archivePath);
@@ -247,8 +381,7 @@ function parseManifestPack(value: unknown): ExpressionPackManifestItem | null {
     !title ||
     !version ||
     !archivePath ||
-    sourceKind !== "remote_zip" ||
-    items.length === 0
+    sourceKind !== "remote_zip"
   ) {
     return null;
   }
@@ -257,6 +390,7 @@ function parseManifestPack(value: unknown): ExpressionPackManifestItem | null {
     id,
     title,
     subtitle,
+    iconEmoji,
     version,
     sourceKind: "remote_zip",
     archivePath,
@@ -301,6 +435,7 @@ async function writeExpressionPackManifest(input: {
       id: pack.id,
       title: pack.title,
       subtitle: pack.subtitle,
+      iconEmoji: pack.iconEmoji,
       version: pack.version,
       sourceKind: pack.sourceKind,
       archivePath: pack.archivePath,
@@ -514,6 +649,7 @@ export async function listExpressionPacks(baseUrl: string): Promise<ExpressionPa
 
   for (const pack of manifest.packs) {
     if (!pack.isActive) continue;
+    if (pack.items.length === 0) continue;
     const absoluteArchivePath = resolveArchiveAbsolutePath(pack.archivePath);
     if (!absoluteArchivePath) continue;
     try {
@@ -539,6 +675,7 @@ export async function listExpressionPacks(baseUrl: string): Promise<ExpressionPa
       id: pack.id,
       title: pack.title,
       subtitle: pack.subtitle,
+      iconEmoji: pack.iconEmoji,
       version: pack.version,
       sourceKind: pack.sourceKind,
       downloadUrl: `${baseUrl}${buildDownloadPath(pack.id, pack.version)}`,
@@ -643,6 +780,7 @@ export async function listAdminExpressionPacks(): Promise<{
         id: pack.id,
         title: pack.title,
         subtitle: pack.subtitle,
+        iconEmoji: pack.iconEmoji,
         version: pack.version,
         sourceKind: pack.sourceKind,
         archivePath: pack.archivePath,
@@ -714,9 +852,10 @@ export async function upsertAdminExpressionPack(input: {
   id: string;
   title: string;
   subtitle?: string | null;
+  iconEmoji?: string | null;
   version: string;
   isActive?: boolean;
-  items: Array<{
+  items?: Array<{
     id: string;
     emoji: string;
     label: string;
@@ -730,12 +869,13 @@ export async function upsertAdminExpressionPack(input: {
     id: normalizeTrimmedString(input.id, 120),
     title: normalizeTrimmedString(input.title, 80),
     subtitle: normalizeTrimmedString(input.subtitle, 160),
+    iconEmoji: normalizeTrimmedString(input.iconEmoji, 32) || "🙂",
     version: normalizeTrimmedString(input.version, 60),
     sourceKind: "remote_zip",
     archivePath: buildDefaultArchivePath(input.id, input.version),
     isActive: input.isActive !== false,
     uploadedAt: null,
-    items: input.items.map((item) => ({
+    items: (input.items ?? []).map((item) => ({
       id: normalizeTrimmedString(item.id, 120),
       emoji: normalizeTrimmedString(item.emoji, 32),
       label: normalizeTrimmedString(item.label, 80),
@@ -745,8 +885,6 @@ export async function upsertAdminExpressionPack(input: {
     }))
   };
 
-  assertValidPackDefinition(nextPack);
-
   const existingIndex = manifest.packs.findIndex(
     (item) => item.id === nextPack.id && item.version === nextPack.version
   );
@@ -754,9 +892,19 @@ export async function upsertAdminExpressionPack(input: {
     const existing = manifest.packs[existingIndex];
     nextPack.archivePath = existing.archivePath;
     nextPack.uploadedAt = existing.uploadedAt;
+    if (nextPack.items.length === 0) {
+      nextPack.items = existing.items;
+    }
+    if (!nextPack.iconEmoji) {
+      nextPack.iconEmoji = existing.iconEmoji || "🙂";
+    }
     manifest.packs[existingIndex] = nextPack;
   } else {
     manifest.packs.push(nextPack);
+  }
+
+  if (nextPack.items.length > 0) {
+    assertValidPackDefinition(nextPack);
   }
 
   if (nextPack.isActive) {
@@ -815,6 +963,12 @@ export async function writeAdminExpressionPackArchive(input: {
   );
   if (!target) {
     throw new Error("expression_pack_not_found");
+  }
+  if (target.items.length === 0) {
+    target.items = buildGeneratedItemsFromArchive(input.archiveBytes);
+  }
+  if (!target.iconEmoji.trim()) {
+    target.iconEmoji = target.items[0]?.emoji || "🙂";
   }
   assertArchiveMatchesPack(target, input.archiveBytes);
   const absoluteArchivePath = resolveArchiveAbsolutePath(target.archivePath);
