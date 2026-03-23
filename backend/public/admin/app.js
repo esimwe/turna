@@ -53,6 +53,10 @@ const pageMeta = {
     title: "Feature Flags",
     subtitle: "Sistem genelindeki ac/kapat anahtarlari."
   },
+  expressionPacks: {
+    title: "Sticker Packleri",
+    subtitle: "Remote sticker pack katalogu, zip yukleme ve aktif/pasif yonetimi."
+  },
   auditLogs: {
     title: "Audit Log",
     subtitle: "Admin aksiyonlarinin iz kayitlari."
@@ -93,9 +97,12 @@ const state = {
   otpSettings: null,
   countryPolicies: [],
   featureFlags: [],
+  expressionPacks: [],
   auditLogs: [],
   admins: [],
   systemHealth: null,
+  expressionPackFeedback: "",
+  expressionPackFeedbackTone: "success",
 
   selectedGlobalChatId: null,
   globalChatMessages: [],
@@ -240,6 +247,7 @@ async function ensurePageData(page, force = false) {
     if (page === "otp" && state.otpSettings) return;
     if (page === "countryPolicies" && state.countryPolicies.length) return;
     if (page === "featureFlags" && state.featureFlags.length) return;
+    if (page === "expressionPacks" && state.expressionPacks.length) return;
     if (page === "auditLogs" && state.auditLogs.length) return;
     if (page === "admins" && state.admins.length) return;
     if (page === "system" && state.systemHealth) return;
@@ -257,6 +265,7 @@ async function ensurePageData(page, force = false) {
   if (page === "otp") return loadOtpSettings();
   if (page === "countryPolicies") return loadCountryPolicies();
   if (page === "featureFlags") return loadFeatureFlags();
+  if (page === "expressionPacks") return loadExpressionPacks();
   if (page === "auditLogs") return loadAuditLogs();
   if (page === "admins") return loadAdmins("");
   if (page === "system") return loadSystemHealth();
@@ -400,6 +409,65 @@ async function loadFeatureFlags() {
   const payload = await api("/api/admin/feature-flags");
   state.featureFlags = payload.data || [];
   if (state.currentPage === "featureFlags") renderCurrentPage();
+}
+
+async function loadExpressionPacks() {
+  const payload = await api("/api/admin/expression-packs");
+  state.expressionPacks = payload?.data?.packs || [];
+  if (state.currentPage === "expressionPacks") renderCurrentPage();
+}
+
+async function saveExpressionPackMetadata(payload) {
+  const response = await api("/api/admin/expression-packs", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+  return response?.data || null;
+}
+
+async function uploadExpressionPackArchive(packId, version, file) {
+  const response = await fetch(
+    `/api/admin/expression-packs/${encodeURIComponent(packId)}/${encodeURIComponent(version)}/archive`,
+    {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${state.token}`,
+        "Content-Type": file?.type || "application/zip"
+      },
+      body: file
+    }
+  );
+
+  if (response.status === 401) {
+    state.token = null;
+    state.admin = null;
+    localStorage.removeItem(storageKey);
+    renderShell();
+    throw new Error("Oturum gecerli degil.");
+  }
+
+  const text = await response.text();
+  const payload = text ? safeJson(text) : {};
+  if (!response.ok) {
+    throw new Error(payload?.error || `Istek basarisiz (${response.status})`);
+  }
+  return payload?.data || null;
+}
+
+async function updateExpressionPackStatus(packId, version, isActive) {
+  const response = await api(
+    `/api/admin/expression-packs/${encodeURIComponent(packId)}/${encodeURIComponent(version)}/status`,
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        isActive,
+        reason: isActive
+          ? "Pack admin panelden aktif edildi."
+          : "Pack admin panelden pasife alindi."
+      })
+    }
+  );
+  return response?.data || null;
 }
 
 async function loadAuditLogs() {
@@ -553,6 +621,11 @@ function renderCurrentPage() {
   }
   if (state.currentPage === "featureFlags") {
     pageContent.innerHTML = renderFeatureFlagsPage();
+    return;
+  }
+  if (state.currentPage === "expressionPacks") {
+    pageContent.innerHTML = renderExpressionPacksPage();
+    attachExpressionPacksPageEvents();
     return;
   }
   if (state.currentPage === "auditLogs") {
@@ -1250,6 +1323,211 @@ function renderFeatureFlagsPage() {
   `;
 }
 
+function renderExpressionPacksPage() {
+  const itemPlaceholder = escapeHtml(
+    JSON.stringify(
+      [
+        {
+          id: "spark-hello",
+          emoji: "✨",
+          label: "Merhaba",
+          assetType: "static_webp",
+          relativeAssetPath: "stickers/spark-hello.webp",
+          palette: ["#FFE8AA", "#FFC857"]
+        }
+      ],
+      null,
+      2
+    )
+  );
+
+  return `
+    <section class="workspace">
+      <section class="panel page-panel">
+        <div class="panel-heading">
+          <div>
+            <h2>Yeni Sticker Pack</h2>
+            <p>Metadata kaydini olustur, sonra zip arsivini ayni formdan yukle.</p>
+          </div>
+        </div>
+        <form id="expression-pack-form" class="stack-form">
+          <div class="field-grid">
+            <label class="field">
+              <span>Pack ID</span>
+              <input id="expression-pack-id" type="text" placeholder="cozy-v2" required />
+            </label>
+            <label class="field">
+              <span>Versiyon</span>
+              <input id="expression-pack-version" type="text" placeholder="1.0.0" required />
+            </label>
+          </div>
+          <div class="field-grid">
+            <label class="field">
+              <span>Baslik</span>
+              <input id="expression-pack-title" type="text" placeholder="Cozy Pack" required />
+            </label>
+            <label class="field">
+              <span>Aktif</span>
+              <select id="expression-pack-active">
+                <option value="true">Aktif</option>
+                <option value="false">Pasif</option>
+              </select>
+            </label>
+          </div>
+          <label class="field">
+            <span>Alt baslik</span>
+            <input id="expression-pack-subtitle" type="text" placeholder="Kisa aciklama" />
+          </label>
+          <label class="field">
+            <span>Pack item JSON</span>
+            <textarea id="expression-pack-items" spellcheck="false" placeholder="${itemPlaceholder}"></textarea>
+          </label>
+          <label class="field">
+            <span>Zip arsivi</span>
+            <input id="expression-pack-archive" type="file" accept=".zip,application/zip,application/octet-stream" />
+          </label>
+          <div class="notice-actions">
+            <button class="primary-button" type="submit">Kaydet ve yukle</button>
+            <span class="inline-feedback ${state.expressionPackFeedbackTone === "error" ? "error-text" : "success-text"}">
+              ${state.expressionPackFeedback ? escapeHtml(state.expressionPackFeedback) : "Zip icindeki dosya yollarinin JSON'daki relativeAssetPath ile birebir eslesmesi gerekiyor."}
+            </span>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel page-panel">
+        <div class="panel-heading">
+          <div>
+            <h2>Mevcut Packler</h2>
+            <p>Mobil yalnizca aktif ve arsivi yuklu packleri gorur.</p>
+          </div>
+        </div>
+        <div class="table-list">
+          ${
+            state.expressionPacks.length
+              ? state.expressionPacks.map(renderExpressionPackCard).join("")
+              : '<div class="empty-note">Henüz remote sticker pack yok.</div>'
+          }
+        </div>
+      </section>
+    </section>
+  `;
+}
+
+function renderExpressionPackCard(pack) {
+  const preview = (pack.items || []).slice(0, 8).map((item) => escapeHtml(item.emoji || "🙂")).join(" ");
+  return `
+    <article class="list-card expression-pack-card">
+      <div class="list-title-row">
+        <strong>${escapeHtml(pack.title || "-")} <span class="muted-inline">v${escapeHtml(pack.version || "-")}</span></strong>
+        <div class="badge-row">
+          <span class="status-badge ${pack.isActive ? "" : "status-suspended"}">${pack.isActive ? "Aktif" : "Pasif"}</span>
+          <span class="soft-badge ${pack.archiveExists ? "" : "soft-badge-warning"}">${pack.archiveExists ? "Zip hazir" : "Zip bekleniyor"}</span>
+        </div>
+      </div>
+      <div class="message-body">${escapeHtml(pack.subtitle || "-")}</div>
+      <div class="user-subtitle">ID: ${escapeHtml(pack.id || "-")}</div>
+      <div class="user-subtitle">Archive: ${escapeHtml(pack.archivePath || "-")}</div>
+      <div class="user-subtitle">Item: ${escapeHtml(String(pack.itemCount || 0))} • Boyut: ${escapeHtml(formatFileSize(pack.archiveSizeBytes || 0))}</div>
+      <div class="user-subtitle">Yukleme: ${escapeHtml(formatDateTime(pack.uploadedAt))}</div>
+      ${preview ? `<div class="expression-pack-preview">${preview}</div>` : ""}
+      <div class="badge-row">
+        <button
+          class="ghost-button"
+          type="button"
+          data-expression-pack-toggle="${escapeAttribute(pack.id)}"
+          data-expression-pack-version="${escapeAttribute(pack.version)}"
+          data-expression-pack-active="${pack.isActive ? "true" : "false"}"
+        >
+          ${pack.isActive ? "Pasife al" : "Aktif et"}
+        </button>
+      </div>
+    </article>
+  `;
+}
+
+function attachExpressionPacksPageEvents() {
+  const form = document.getElementById("expression-pack-form");
+  if (form) {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      state.expressionPackFeedback = "";
+      state.expressionPackFeedbackTone = "success";
+      renderCurrentPage();
+
+      const id = document.getElementById("expression-pack-id")?.value?.trim() || "";
+      const version = document.getElementById("expression-pack-version")?.value?.trim() || "";
+      const title = document.getElementById("expression-pack-title")?.value?.trim() || "";
+      const subtitle = document.getElementById("expression-pack-subtitle")?.value?.trim() || "";
+      const isActive = (document.getElementById("expression-pack-active")?.value || "true") === "true";
+      const itemsRaw = document.getElementById("expression-pack-items")?.value?.trim() || "";
+      const archiveInput = document.getElementById("expression-pack-archive");
+      const archiveFile = archiveInput?.files?.[0] || null;
+
+      let items;
+      try {
+        const parsed = JSON.parse(itemsRaw || "[]");
+        if (!Array.isArray(parsed) || !parsed.length) {
+          throw new Error("En az bir item gerekli.");
+        }
+        items = parsed;
+      } catch (error) {
+        state.expressionPackFeedback = error?.message || "Item JSON gecersiz.";
+        state.expressionPackFeedbackTone = "error";
+        renderCurrentPage();
+        return;
+      }
+
+      try {
+        await saveExpressionPackMetadata({
+          id,
+          version,
+          title,
+          subtitle: subtitle || null,
+          isActive,
+          items,
+          reason: "Expression pack admin panelden kaydedildi."
+        });
+        if (archiveFile) {
+          await uploadExpressionPackArchive(id, version, archiveFile);
+        }
+        await loadExpressionPacks();
+        state.expressionPackFeedback = archiveFile
+          ? "Pack metadata kaydedildi ve zip yuklendi."
+          : "Pack metadata kaydedildi. Zip sonradan da yuklenebilir.";
+        state.expressionPackFeedbackTone = "success";
+        renderCurrentPage();
+      } catch (error) {
+        state.expressionPackFeedback = error?.message || "Pack kaydedilemedi.";
+        state.expressionPackFeedbackTone = "error";
+        renderCurrentPage();
+      }
+    });
+  }
+
+  pageContent.querySelectorAll("[data-expression-pack-toggle]").forEach((node) => {
+    node.addEventListener("click", async () => {
+      const packId = node.dataset.expressionPackToggle;
+      const version = node.dataset.expressionPackVersion;
+      const isActive = node.dataset.expressionPackActive === "true";
+      if (!packId || !version) return;
+      try {
+        await updateExpressionPackStatus(packId, version, !isActive);
+        await loadExpressionPacks();
+        state.expressionPackFeedback = !isActive
+          ? "Pack aktif edildi."
+          : "Pack pasife alindi.";
+        state.expressionPackFeedbackTone = "success";
+        renderCurrentPage();
+      } catch (error) {
+        state.expressionPackFeedback = error?.message || "Pack durumu guncellenemedi.";
+        state.expressionPackFeedbackTone = "error";
+        renderCurrentPage();
+      }
+    });
+  });
+}
+
 function renderAuditLogsPage() {
   return `
     <section class="panel page-panel">
@@ -1588,6 +1866,14 @@ function kv(label, value) {
 
 function formatNumber(value) {
   return new Intl.NumberFormat("tr-TR").format(Number(value || 0));
+}
+
+function formatFileSize(value) {
+  const size = Number(value || 0);
+  if (!Number.isFinite(size) || size <= 0) return "-";
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(2)} MB`;
 }
 
 function formatDateTime(value) {

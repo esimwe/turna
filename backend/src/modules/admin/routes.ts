@@ -1,5 +1,5 @@
 import bcrypt from "bcryptjs";
-import { Router } from "express";
+import express, { Router } from "express";
 import { z } from "zod";
 import {
   ADMIN_ROLES,
@@ -22,6 +22,12 @@ import { requireAdminAuth, requireAdminRole } from "../../middleware/admin-auth.
 import { buildAvatarUrl } from "../profile/avatar-url.js";
 import { buildPhoneLookupKeys } from "../profile/contact-lookup.js";
 import { emitChatMessage, emitInboxUpdate } from "../chat/chat.realtime.js";
+import {
+  listAdminExpressionPacks,
+  upsertAdminExpressionPack,
+  updateAdminExpressionPackStatus,
+  writeAdminExpressionPackArchive
+} from "../chat/expression-packs.js";
 import { chatService } from "../chat/chat.service.js";
 
 export const adminRouter = Router();
@@ -106,6 +112,35 @@ const updateFeatureFlagSchema = z.object({
 
 const featureFlagKeyParamSchema = z.object({
   key: z.string().trim().min(1).max(120)
+});
+
+const expressionPackParamSchema = z.object({
+  packId: z.string().trim().min(1).max(120),
+  version: z.string().trim().min(1).max(60)
+});
+
+const expressionPackItemSchema = z.object({
+  id: z.string().trim().min(1).max(120),
+  emoji: z.string().trim().min(1).max(32),
+  label: z.string().trim().min(1).max(80),
+  assetType: z.enum(["static_png", "static_webp", "animated_lottie", "video_webm"]),
+  relativeAssetPath: z.string().trim().min(1).max(512),
+  palette: z.array(z.string().trim().min(4).max(16)).max(2).optional().default([])
+});
+
+const upsertExpressionPackSchema = z.object({
+  id: z.string().trim().min(1).max(120),
+  title: z.string().trim().min(1).max(80),
+  subtitle: z.string().trim().max(160).nullable().optional(),
+  version: z.string().trim().min(1).max(60),
+  isActive: z.boolean().optional().default(true),
+  items: z.array(expressionPackItemSchema).min(1).max(200),
+  reason: z.string().trim().min(4).max(500).optional()
+});
+
+const updateExpressionPackStatusSchema = z.object({
+  isActive: z.boolean(),
+  reason: z.string().trim().min(4).max(500).optional()
 });
 
 const countryPolicyParamSchema = z.object({
@@ -463,6 +498,151 @@ adminRouter.put(
     });
 
     res.json({ data: flag });
+  }
+);
+
+adminRouter.get("/expression-packs", requireAdminAuth, async (_req, res) => {
+  try {
+    const data = await listAdminExpressionPacks();
+    res.json({ data });
+  } catch (error) {
+    logError("admin expression packs fetch failed", error);
+    res.status(500).json({ error: "failed_to_fetch_expression_packs" });
+  }
+});
+
+adminRouter.post(
+  "/expression-packs",
+  requireAdminAuth,
+  requireAdminRole("SUPER_ADMIN", "OPS_ADMIN"),
+  async (req, res) => {
+    const parsed = upsertExpressionPackSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
+      return;
+    }
+
+    try {
+      const pack = await upsertAdminExpressionPack({
+        id: parsed.data.id,
+        title: parsed.data.title,
+        subtitle: parsed.data.subtitle,
+        version: parsed.data.version,
+        isActive: parsed.data.isActive,
+        items: parsed.data.items
+      });
+      await writeAdminAuditLog({
+        actorAdminId: req.adminUserId!,
+        action: "expression_pack_upserted",
+        targetType: "expression_pack",
+        targetId: `${pack.id}@${pack.version}`,
+        reason: parsed.data.reason ?? "Expression pack metadata guncellendi.",
+        metadata: {
+          isActive: pack.isActive,
+          itemCount: pack.itemCount
+        }
+      });
+      res.json({ data: pack });
+    } catch (error) {
+      logError("admin expression pack upsert failed", error);
+      res.status(500).json({ error: "failed_to_upsert_expression_pack" });
+    }
+  }
+);
+
+adminRouter.put(
+  "/expression-packs/:packId/:version/status",
+  requireAdminAuth,
+  requireAdminRole("SUPER_ADMIN", "OPS_ADMIN"),
+  async (req, res) => {
+    const parsedParams = expressionPackParamSchema.safeParse(req.params);
+    const parsedBody = updateExpressionPackStatusSchema.safeParse(req.body);
+    if (!parsedParams.success) {
+      res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+      return;
+    }
+    if (!parsedBody.success) {
+      res.status(400).json({ error: "validation_error", details: parsedBody.error.flatten() });
+      return;
+    }
+
+    try {
+      const pack = await updateAdminExpressionPackStatus({
+        id: parsedParams.data.packId,
+        version: parsedParams.data.version,
+        isActive: parsedBody.data.isActive
+      });
+      await writeAdminAuditLog({
+        actorAdminId: req.adminUserId!,
+        action: "expression_pack_status_updated",
+        targetType: "expression_pack",
+        targetId: `${pack.id}@${pack.version}`,
+        reason:
+          parsedBody.data.reason ??
+          (pack.isActive
+            ? "Expression pack aktif edildi."
+            : "Expression pack pasife alindi."),
+        metadata: {
+          isActive: pack.isActive
+        }
+      });
+      res.json({ data: pack });
+    } catch (error) {
+      if (error instanceof Error && error.message === "expression_pack_not_found") {
+        res.status(404).json({ error: error.message });
+        return;
+      }
+      logError("admin expression pack status update failed", error);
+      res.status(500).json({ error: "failed_to_update_expression_pack_status" });
+    }
+  }
+);
+
+adminRouter.put(
+  "/expression-packs/:packId/:version/archive",
+  requireAdminAuth,
+  requireAdminRole("SUPER_ADMIN", "OPS_ADMIN"),
+  express.raw({
+    type: ["application/zip", "application/octet-stream", "application/x-zip-compressed"],
+    limit: "64mb"
+  }),
+  async (req, res) => {
+    const parsedParams = expressionPackParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+      return;
+    }
+    if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+      res.status(400).json({ error: "expression_pack_archive_required" });
+      return;
+    }
+
+    try {
+      const pack = await writeAdminExpressionPackArchive({
+        id: parsedParams.data.packId,
+        version: parsedParams.data.version,
+        archiveBytes: req.body as Buffer
+      });
+      await writeAdminAuditLog({
+        actorAdminId: req.adminUserId!,
+        action: "expression_pack_archive_uploaded",
+        targetType: "expression_pack",
+        targetId: `${pack.id}@${pack.version}`,
+        reason: "Expression pack zip arsivi yuklendi.",
+        metadata: {
+          archivePath: pack.archivePath,
+          archiveSizeBytes: pack.archiveSizeBytes
+        }
+      });
+      res.json({ data: pack });
+    } catch (error) {
+      if (error instanceof Error && error.message === "expression_pack_not_found") {
+        res.status(404).json({ error: error.message });
+        return;
+      }
+      logError("admin expression pack archive upload failed", error);
+      res.status(500).json({ error: "failed_to_upload_expression_pack_archive" });
+    }
   }
 );
 

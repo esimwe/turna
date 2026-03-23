@@ -16,6 +16,8 @@ interface ExpressionPackManifestItem {
   version: string;
   sourceKind: ExpressionPackSourceKindValue;
   archivePath: string;
+  isActive: boolean;
+  uploadedAt: string | null;
   items: ExpressionPackManifestStickerItem[];
 }
 
@@ -48,6 +50,28 @@ export interface ExpressionPackApiItem {
 export interface ExpressionPackCatalogResponse {
   catalogVersion: string;
   packs: ExpressionPackApiItem[];
+}
+
+export interface AdminExpressionPackItem {
+  id: string;
+  title: string;
+  subtitle: string;
+  version: string;
+  sourceKind: ExpressionPackSourceKindValue;
+  archivePath: string;
+  isActive: boolean;
+  uploadedAt: string | null;
+  archiveExists: boolean;
+  archiveSizeBytes: number;
+  itemCount: number;
+  items: Array<{
+    id: string;
+    emoji: string;
+    label: string;
+    assetType: ExpressionPackAssetTypeValue;
+    relativeAssetPath: string;
+    palette: string[];
+  }>;
 }
 
 const expressionPacksRootDir = fileURLToPath(
@@ -126,6 +150,8 @@ function parseManifestPack(value: unknown): ExpressionPackManifestItem | null {
   const version = normalizeTrimmedString(map.version, 60);
   const sourceKind = normalizeTrimmedString(map.sourceKind, 32).toLowerCase();
   const archivePath = normalizeRelativePath(map.archivePath);
+  const isActive = map.isActive !== false;
+  const uploadedAt = normalizeTrimmedString(map.uploadedAt, 64) || null;
   const items = (Array.isArray(map.items) ? map.items : [])
     .map((item) => parseManifestItem(item))
     .filter((item): item is ExpressionPackManifestStickerItem => item != null);
@@ -148,6 +174,8 @@ function parseManifestPack(value: unknown): ExpressionPackManifestItem | null {
     version,
     sourceKind: "remote_zip",
     archivePath,
+    isActive,
+    uploadedAt,
     items
   };
 }
@@ -176,6 +204,37 @@ async function loadExpressionPackManifest(): Promise<{
   }
 }
 
+async function writeExpressionPackManifest(input: {
+  catalogVersion: string;
+  packs: ExpressionPackManifestItem[];
+}): Promise<void> {
+  await fs.mkdir(expressionPacksRootDir, { recursive: true });
+  const payload = {
+    catalogVersion: input.catalogVersion,
+    packs: input.packs.map((pack) => ({
+      id: pack.id,
+      title: pack.title,
+      subtitle: pack.subtitle,
+      version: pack.version,
+      sourceKind: pack.sourceKind,
+      archivePath: pack.archivePath,
+      isActive: pack.isActive,
+      uploadedAt: pack.uploadedAt,
+      items: pack.items.map((item) => ({
+        id: item.id,
+        emoji: item.emoji,
+        label: item.label,
+        assetType: item.assetType,
+        relativeAssetPath: item.relativeAssetPath,
+        palette: item.palette
+      }))
+    }))
+  };
+  const tempPath = `${expressionPackManifestPath}.tmp`;
+  await fs.writeFile(tempPath, JSON.stringify(payload, null, 2));
+  await fs.rename(tempPath, expressionPackManifestPath);
+}
+
 function resolveArchiveAbsolutePath(relativePath: string): string | null {
   const normalized = normalizeRelativePath(relativePath);
   if (!normalized) return null;
@@ -198,6 +257,7 @@ export async function listExpressionPacks(baseUrl: string): Promise<ExpressionPa
   const packs: ExpressionPackApiItem[] = [];
 
   for (const pack of manifest.packs) {
+    if (!pack.isActive) continue;
     const absoluteArchivePath = resolveArchiveAbsolutePath(pack.archivePath);
     if (!absoluteArchivePath) continue;
     try {
@@ -244,9 +304,183 @@ export async function resolveExpressionPackArchivePath(
   if (!absoluteArchivePath) return null;
   try {
     const stat = await fs.stat(absoluteArchivePath);
-    if (!stat.isFile() || stat.size <= 0) return null;
+    if (!pack.isActive || !stat.isFile() || stat.size <= 0) return null;
     return absoluteArchivePath;
   } catch {
     return null;
   }
+}
+
+function buildDefaultArchivePath(packId: string, version: string): string {
+  const normalizedId = packId.replaceAll(/[^a-zA-Z0-9._-]/g, "_");
+  const normalizedVersion = version.replaceAll(/[^a-zA-Z0-9._-]/g, "_");
+  return `archives/${normalizedId}-${normalizedVersion}.zip`;
+}
+
+export async function listAdminExpressionPacks(): Promise<{
+  catalogVersion: string;
+  packs: AdminExpressionPackItem[];
+}> {
+  const manifest = await loadExpressionPackManifest();
+  const packs = await Promise.all(
+    manifest.packs.map(async (pack) => {
+      const absoluteArchivePath = resolveArchiveAbsolutePath(pack.archivePath);
+      let archiveExists = false;
+      let archiveSizeBytes = 0;
+      if (absoluteArchivePath) {
+        try {
+          const stat = await fs.stat(absoluteArchivePath);
+          archiveExists = stat.isFile() && stat.size > 0;
+          archiveSizeBytes = archiveExists ? stat.size : 0;
+        } catch {
+          archiveExists = false;
+          archiveSizeBytes = 0;
+        }
+      }
+      return {
+        id: pack.id,
+        title: pack.title,
+        subtitle: pack.subtitle,
+        version: pack.version,
+        sourceKind: pack.sourceKind,
+        archivePath: pack.archivePath,
+        isActive: pack.isActive,
+        uploadedAt: pack.uploadedAt,
+        archiveExists,
+        archiveSizeBytes,
+        itemCount: pack.items.length,
+        items: pack.items.map((item) => ({
+          id: item.id,
+          emoji: item.emoji,
+          label: item.label,
+          assetType: item.assetType,
+          relativeAssetPath: item.relativeAssetPath,
+          palette: item.palette
+        }))
+      } satisfies AdminExpressionPackItem;
+    })
+  );
+  return {
+    catalogVersion: manifest.catalogVersion,
+    packs: packs.sort((left, right) => {
+      const titleCompare = left.title.localeCompare(right.title, "tr");
+      if (titleCompare !== 0) return titleCompare;
+      return right.version.localeCompare(left.version, "tr");
+    })
+  };
+}
+
+export async function upsertAdminExpressionPack(input: {
+  id: string;
+  title: string;
+  subtitle?: string | null;
+  version: string;
+  isActive?: boolean;
+  items: Array<{
+    id: string;
+    emoji: string;
+    label: string;
+    assetType: ExpressionPackAssetTypeValue;
+    relativeAssetPath: string;
+    palette?: string[];
+  }>;
+}): Promise<AdminExpressionPackItem> {
+  const manifest = await loadExpressionPackManifest();
+  const nextPack: ExpressionPackManifestItem = {
+    id: normalizeTrimmedString(input.id, 120),
+    title: normalizeTrimmedString(input.title, 80),
+    subtitle: normalizeTrimmedString(input.subtitle, 160),
+    version: normalizeTrimmedString(input.version, 60),
+    sourceKind: "remote_zip",
+    archivePath: buildDefaultArchivePath(input.id, input.version),
+    isActive: input.isActive !== false,
+    uploadedAt: null,
+    items: input.items.map((item) => ({
+      id: normalizeTrimmedString(item.id, 120),
+      emoji: normalizeTrimmedString(item.emoji, 32),
+      label: normalizeTrimmedString(item.label, 80),
+      assetType: item.assetType,
+      relativeAssetPath: normalizeRelativePath(item.relativeAssetPath),
+      palette: normalizePalette(item.palette)
+    }))
+  };
+
+  const existingIndex = manifest.packs.findIndex(
+    (item) => item.id === nextPack.id && item.version === nextPack.version
+  );
+  if (existingIndex >= 0) {
+    const existing = manifest.packs[existingIndex];
+    nextPack.archivePath = existing.archivePath;
+    nextPack.uploadedAt = existing.uploadedAt;
+    manifest.packs[existingIndex] = nextPack;
+  } else {
+    manifest.packs.push(nextPack);
+  }
+
+  manifest.catalogVersion = new Date().toISOString();
+  await writeExpressionPackManifest(manifest);
+  const listed = await listAdminExpressionPacks();
+  const matched = listed.packs.find(
+    (item) => item.id === nextPack.id && item.version === nextPack.version
+  );
+  if (!matched) {
+    throw new Error("expression_pack_persist_failed");
+  }
+  return matched;
+}
+
+export async function updateAdminExpressionPackStatus(input: {
+  id: string;
+  version: string;
+  isActive: boolean;
+}): Promise<AdminExpressionPackItem> {
+  const manifest = await loadExpressionPackManifest();
+  const target = manifest.packs.find(
+    (item) => item.id === input.id.trim() && item.version === input.version.trim()
+  );
+  if (!target) {
+    throw new Error("expression_pack_not_found");
+  }
+  target.isActive = input.isActive;
+  manifest.catalogVersion = new Date().toISOString();
+  await writeExpressionPackManifest(manifest);
+  const listed = await listAdminExpressionPacks();
+  const matched = listed.packs.find(
+    (item) => item.id === target.id && item.version === target.version
+  );
+  if (!matched) {
+    throw new Error("expression_pack_not_found");
+  }
+  return matched;
+}
+
+export async function writeAdminExpressionPackArchive(input: {
+  id: string;
+  version: string;
+  archiveBytes: Buffer;
+}): Promise<AdminExpressionPackItem> {
+  const manifest = await loadExpressionPackManifest();
+  const target = manifest.packs.find(
+    (item) => item.id === input.id.trim() && item.version === input.version.trim()
+  );
+  if (!target) {
+    throw new Error("expression_pack_not_found");
+  }
+  const absoluteArchivePath = resolveArchiveAbsolutePath(target.archivePath);
+  if (!absoluteArchivePath) {
+    throw new Error("expression_pack_archive_path_invalid");
+  }
+  await fs.mkdir(path.dirname(absoluteArchivePath), { recursive: true });
+  await fs.writeFile(absoluteArchivePath, input.archiveBytes);
+  target.uploadedAt = new Date().toISOString();
+  manifest.catalogVersion = new Date().toISOString();
+  await writeExpressionPackManifest(manifest);
+  const listed = await listAdminExpressionPacks();
+  const matched = listed.packs.find(
+    (item) => item.id === target.id && item.version === target.version
+  );
+  if (!matched) {
+    throw new Error("expression_pack_not_found");
+  }
+  return matched;
 }
