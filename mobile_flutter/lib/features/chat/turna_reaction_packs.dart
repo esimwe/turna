@@ -853,6 +853,7 @@ class _TurnaStickerPack {
     required this.title,
     required this.subtitle,
     required this.previewEmoji,
+    this.iconUrl,
     required this.sourceKind,
     required this.version,
     this.downloadUrl,
@@ -863,6 +864,7 @@ class _TurnaStickerPack {
   final String title;
   final String subtitle;
   final String previewEmoji;
+  final String? iconUrl;
   final TurnaExpressionPackSourceKind sourceKind;
   final String version;
   final String? downloadUrl;
@@ -1540,10 +1542,54 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
     final ready = pack == null || _isStickerPackReady(pack);
     final syncing = pack != null && _isStickerPackSyncing(pack);
     final failed = pack != null && _stickerPackFailure(pack) != null;
+    final iconUrl = _resolveStickerPackIconUrl(pack?.iconUrl);
     return Stack(
       clipBehavior: Clip.none,
       children: [
-        Text(tab.previewEmoji, style: const TextStyle(fontSize: 20)),
+        SizedBox(
+          width: 22,
+          height: 22,
+          child: iconUrl == null
+              ? Center(
+                  child: Text(
+                    tab.previewEmoji,
+                    style: const TextStyle(fontSize: 20),
+                  ),
+                )
+              : FutureBuilder<File?>(
+                  future: TurnaLocalMediaCache.getOrDownloadFile(
+                    cacheKey: _buildStickerPackIconCacheKey(iconUrl),
+                    url: iconUrl,
+                    authToken: widget.session.token,
+                  ),
+                  builder: (context, snapshot) {
+                    final file = snapshot.data;
+                    if (file == null) {
+                      return Center(
+                        child: Text(
+                          tab.previewEmoji,
+                          style: const TextStyle(fontSize: 20),
+                        ),
+                      );
+                    }
+                    return ClipRRect(
+                      borderRadius: BorderRadius.circular(7),
+                      child: Image.file(
+                        file,
+                        width: 22,
+                        height: 22,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, _, _) => Center(
+                          child: Text(
+                            tab.previewEmoji,
+                            style: const TextStyle(fontSize: 20),
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+        ),
         if (!ready)
           Positioned(
             right: -5,
@@ -1575,6 +1621,28 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
           ),
       ],
     );
+  }
+
+  String? _resolveStickerPackIconUrl(String? value) {
+    final trimmed = value?.trim() ?? '';
+    if (trimmed.isEmpty) return null;
+    final direct = Uri.tryParse(trimmed);
+    if (direct != null && direct.hasScheme) {
+      return normalizeTurnaRemoteUrl(trimmed);
+    }
+    final backend = Uri.tryParse(kBackendBaseUrl);
+    if (backend == null) return null;
+    return normalizeTurnaRemoteUrl(backend.resolve(trimmed).toString());
+  }
+
+  String _buildStickerPackIconCacheKey(String iconUrl) {
+    final uri = Uri.tryParse(iconUrl);
+    final normalizedPath = uri?.path.trim().toLowerCase() ?? iconUrl.trim().toLowerCase();
+    final version = uri?.queryParameters['v']?.trim();
+    if (version == null || version.isEmpty) {
+      return 'expression-pack-icon:$normalizedPath';
+    }
+    return 'expression-pack-icon:$normalizedPath?v=$version';
   }
 
   bool _isStickerPackReady(_TurnaStickerPack pack) {

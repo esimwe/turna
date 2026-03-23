@@ -375,6 +375,7 @@ class TurnaExpressionPackCatalogLoader {
           (map['iconEmoji'] ?? '').toString().trim().isNotEmpty
           ? (map['iconEmoji'] ?? '').toString().trim()
           : items.first.emoji,
+      iconUrl: (map['iconUrl'] ?? '').toString().trim(),
       sourceKind: sourceKind,
       version: version.isEmpty ? '1' : version,
       downloadUrl: (map['downloadUrl'] ?? '').toString().trim(),

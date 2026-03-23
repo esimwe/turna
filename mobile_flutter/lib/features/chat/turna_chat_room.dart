@@ -5312,12 +5312,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                     alignment: Alignment.topCenter,
                     child: _showComposerEmojiPanel
                         ? Padding(
-                            padding: const EdgeInsets.only(
-                              left: 48,
-                              right: 92,
-                              top: 10,
-                            ),
+                            padding: const EdgeInsets.fromLTRB(8, 10, 8, 0),
                             child: SizedBox(
+                              width: double.infinity,
                               height: 310,
                               child: _TurnaComposerEmojiPanel(
                                 session: widget.session,
