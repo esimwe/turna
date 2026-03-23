@@ -40,6 +40,8 @@ class TurnaSocketClient extends ChangeNotifier {
   bool _restoredRecentMessages = false;
   bool _isFlushingQueue = false;
   bool _localTyping = false;
+  bool _canMarkSeen = false;
+  bool _pendingSeen = false;
   int _localMessageSeq = 0;
   bool isConnected = false;
   bool loadingInitial = true;
@@ -557,7 +559,25 @@ class TurnaSocketClient extends ChangeNotifier {
   }
 
   void _markSeen() {
+    if (!_canMarkSeen) {
+      _pendingSeen = true;
+      return;
+    }
+    _pendingSeen = false;
     _socket?.emit('chat:seen', {'chatId': chatId});
+  }
+
+  void setSeenEligibility(bool canMarkSeen, {bool flushPending = false}) {
+    if (_canMarkSeen == canMarkSeen) {
+      if (canMarkSeen && flushPending && _pendingSeen) {
+        _markSeen();
+      }
+      return;
+    }
+    _canMarkSeen = canMarkSeen;
+    if (_canMarkSeen && (flushPending || _pendingSeen)) {
+      _markSeen();
+    }
   }
 
   void updateComposerText(String text) {

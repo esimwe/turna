@@ -335,6 +335,17 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       _cachedGroupDetail?.avatarUrl ?? widget.chat.avatarUrl;
   int get _groupMemberCount =>
       _cachedGroupDetail?.memberCount ?? widget.chat.memberCount;
+  bool get _isRouteForeground =>
+      (_route?.isCurrent ?? ModalRoute.of(context)?.isCurrent ?? false) &&
+      WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
+
+  void _syncSeenEligibility({bool flushPending = false}) {
+    _client.setSeenEligibility(
+      _isRouteForeground,
+      flushPending: flushPending,
+    );
+  }
+
   String get _chatDisplayName => _isGroupChat
       ? ((_cachedGroupDetail?.title.trim().isNotEmpty ?? false)
             ? _cachedGroupDetail!.title.trim()
@@ -458,6 +469,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     _client.messagesRevisionListenable.addListener(
       _handleClientMessagesChanged,
     );
+    _client.setSeenEligibility(false);
     _client.connect();
     widget.callCoordinator.addListener(_handleCallCoordinatorChanged);
     _controller.addListener(_handleComposerChanged);
@@ -509,6 +521,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   @override
   void didPush() {
     kTurnaActiveChatRegistry.setCurrent(widget.chat);
+    _syncSeenEligibility(flushPending: true);
     if (!_isGroupChat) {
       unawaited(_loadPeerCallHistory());
     }
@@ -517,6 +530,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   @override
   void didPopNext() {
     kTurnaActiveChatRegistry.setCurrent(widget.chat);
+    _syncSeenEligibility(flushPending: true);
     if (!_isGroupChat) {
       unawaited(_loadPeerCallHistory());
     }
@@ -525,11 +539,13 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   @override
   void didPushNext() {
     kTurnaActiveChatRegistry.clearCurrent(widget.chat.chatId);
+    _syncSeenEligibility();
   }
 
   @override
   void didPop() {
     kTurnaActiveChatRegistry.clearCurrent(widget.chat.chatId);
+    _syncSeenEligibility();
   }
 
   void _refresh() {
@@ -6926,6 +6942,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       kTurnaRouteObserver.unsubscribe(this);
     }
     kTurnaActiveChatRegistry.clearCurrent(widget.chat.chatId);
+    _client.setSeenEligibility(false);
     _client.messagesRevisionListenable.removeListener(
       _handleClientMessagesChanged,
     );
@@ -6948,6 +6965,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
+      _syncSeenEligibility(flushPending: true);
       _client.refreshConnection();
       unawaited(_loadPeerCallHistory());
       if (_isGroupChat) {
@@ -6959,6 +6977,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     if (state == AppLifecycleState.hidden ||
         state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached) {
+      _syncSeenEligibility();
       if (_voiceRecording) {
         unawaited(_cancelVoiceRecording());
       }
