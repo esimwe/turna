@@ -5306,27 +5306,29 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                         ),
                       ],
                     ),
-                  ClipRect(
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 180),
-                      curve: Curves.easeOutCubic,
-                      height: _showComposerEmojiPanel ? 310 : 0,
-                      margin: EdgeInsets.only(
-                        left: 48,
-                        right: 92,
-                        top: _showComposerEmojiPanel ? 10 : 0,
-                      ),
-                      child: IgnorePointer(
-                        ignoring: !_showComposerEmojiPanel,
-                        child: _TurnaComposerEmojiPanel(
-                          session: widget.session,
-                          visible: _showComposerEmojiPanel,
-                          onSessionExpired: widget.onSessionExpired,
-                          onSelectEmoji: _insertComposerEmoji,
-                          onSelectSticker: _handleComposerStickerSelected,
-                        ),
-                      ),
-                    ),
+                  AnimatedSize(
+                    duration: const Duration(milliseconds: 180),
+                    curve: Curves.easeOutCubic,
+                    alignment: Alignment.topCenter,
+                    child: _showComposerEmojiPanel
+                        ? Padding(
+                            padding: const EdgeInsets.only(
+                              left: 48,
+                              right: 92,
+                              top: 10,
+                            ),
+                            child: SizedBox(
+                              height: 310,
+                              child: _TurnaComposerEmojiPanel(
+                                session: widget.session,
+                                visible: true,
+                                onSessionExpired: widget.onSessionExpired,
+                                onSelectEmoji: _insertComposerEmoji,
+                                onSelectSticker: _handleComposerStickerSelected,
+                              ),
+                            ),
+                          )
+                        : const SizedBox.shrink(),
                   ),
                 ],
               ),
