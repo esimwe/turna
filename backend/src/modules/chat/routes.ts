@@ -35,10 +35,20 @@ import {
   trackReactionPackUsage,
   updateReactionPackPreferences
 } from "./reaction-packs.js";
+import {
+  listExpressionPacks,
+  resolveExpressionPackArchivePath
+} from "./expression-packs.js";
 import { chatService } from "./chat.service.js";
 
 export const chatRouter = Router();
 const prismaUserContact = (prisma as unknown as { userContact: any }).userContact;
+
+function buildRequestBaseUrl(req: Request): string {
+  const forwardedProto = req.header("x-forwarded-proto")?.split(",")[0]?.trim();
+  const protocol = forwardedProto || req.protocol || "https";
+  return `${protocol}://${req.get("host")}`;
+}
 
 const sendMessageAttachmentSchema = z.object({
   objectKey: z.string().trim().min(1).max(512),
@@ -2417,6 +2427,41 @@ chatRouter.put("/reaction-packs/preferences", requireAuth, async (req, res) => {
   } catch (error) {
     logError("reaction pack preferences update failed", error);
     res.status(500).json({ error: "failed_to_update_reaction_pack_preferences" });
+  }
+});
+
+chatRouter.get("/expression-packs", requireAuth, async (req, res) => {
+  try {
+    const data = await listExpressionPacks(buildRequestBaseUrl(req));
+    res.json({ data });
+  } catch (error) {
+    logError("expression packs fetch failed", error);
+    res.status(500).json({ error: "failed_to_fetch_expression_packs" });
+  }
+});
+
+chatRouter.get("/expression-packs/:packId/:version/archive", requireAuth, async (req, res) => {
+  const packId =
+    typeof req.params.packId === "string" ? req.params.packId.trim() : "";
+  const version =
+    typeof req.params.version === "string" ? req.params.version.trim() : "";
+  if (!packId || !version) {
+    res.status(400).json({ error: "validation_error" });
+    return;
+  }
+
+  try {
+    const archivePath = await resolveExpressionPackArchivePath(packId, version);
+    if (!archivePath) {
+      res.status(404).json({ error: "expression_pack_not_found" });
+      return;
+    }
+    res.setHeader("Cache-Control", "private, max-age=300");
+    res.type("application/zip");
+    res.sendFile(archivePath);
+  } catch (error) {
+    logError("expression pack archive download failed", error);
+    res.status(500).json({ error: "failed_to_download_expression_pack" });
   }
 });
 
