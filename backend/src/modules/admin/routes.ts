@@ -137,6 +137,7 @@ const upsertExpressionPackSchema = z.object({
   version: z.string().trim().min(1).max(60),
   isActive: z.boolean().optional().default(true),
   items: z.array(expressionPackItemSchema).max(200).optional(),
+  autoImportFromArchive: z.boolean().optional().default(false),
   reason: z.string().trim().min(4).max(500).optional()
 });
 
@@ -532,7 +533,8 @@ adminRouter.post(
         iconEmoji: parsed.data.iconEmoji,
         version: parsed.data.version,
         isActive: parsed.data.isActive,
-        items: parsed.data.items
+        items: parsed.data.items,
+        autoImportFromArchive: parsed.data.autoImportFromArchive
       });
       await writeAdminAuditLog({
         actorAdminId: req.adminUserId!,

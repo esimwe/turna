@@ -2014,6 +2014,7 @@ function attachExpressionPacksPageEvents() {
           subtitle: currentDraft.subtitle || null,
           iconEmoji: currentDraft.iconEmoji || "🙂",
           isActive: currentDraft.isActive,
+          autoImportFromArchive: validation.auto && archiveFile != null,
           ...(validation.auto ? {} : { items: validation.items }),
           reason:
             currentDraft.mode === "edit"

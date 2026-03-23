@@ -855,6 +855,7 @@ export async function upsertAdminExpressionPack(input: {
   iconEmoji?: string | null;
   version: string;
   isActive?: boolean;
+  autoImportFromArchive?: boolean;
   items?: Array<{
     id: string;
     emoji: string;
@@ -892,10 +893,10 @@ export async function upsertAdminExpressionPack(input: {
     const existing = manifest.packs[existingIndex];
     nextPack.archivePath = existing.archivePath;
     nextPack.uploadedAt = existing.uploadedAt;
-    if (nextPack.items.length === 0) {
+    if (nextPack.items.length === 0 && input.autoImportFromArchive !== true) {
       nextPack.items = existing.items;
     }
-    if (!nextPack.iconEmoji) {
+    if (!nextPack.iconEmoji && input.autoImportFromArchive !== true) {
       nextPack.iconEmoji = existing.iconEmoji || "🙂";
     }
     manifest.packs[existingIndex] = nextPack;
