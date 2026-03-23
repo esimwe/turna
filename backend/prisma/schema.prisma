@@ -265,6 +265,7 @@ model User {
   pinnedChatMessages    ChatPinnedMessage[] @relation("ChatPinnedMessageUser")
   reactionPackPreference UserReactionPreference?
   reactionPackUsageEvents ReactionPackUsageEvent[]
+  expressionPackUsageEvents ExpressionPackUsageEvent[]
   communityMemberships  CommunityMembership[]
   communityMessages     CommunityMessage[]   @relation("CommunityMessageAuthor")
   communityTopics       CommunityTopic[]     @relation("CommunityTopicAuthor")
@@ -578,6 +579,24 @@ model ReactionPackUsageEvent {
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([packId, createdAt(sort: Desc)])
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([surface, createdAt(sort: Desc)])
+}
+
+model ExpressionPackUsageEvent {
+  id          String   @id @default(uuid())
+  userId      String
+  packId      String
+  packVersion String
+  itemId      String
+  assetType   String
+  surface     String
+  createdAt   DateTime @default(now())
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([packId, packVersion, createdAt(sort: Desc)])
+  @@index([itemId, createdAt(sort: Desc)])
   @@index([userId, createdAt(sort: Desc)])
   @@index([surface, createdAt(sort: Desc)])
 }

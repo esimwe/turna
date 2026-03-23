@@ -37,7 +37,8 @@ import {
 } from "./reaction-packs.js";
 import {
   listExpressionPacks,
-  resolveExpressionPackArchivePath
+  resolveExpressionPackArchivePath,
+  trackExpressionPackUsage
 } from "./expression-packs.js";
 import { chatService } from "./chat.service.js";
 
@@ -81,6 +82,13 @@ const sendMessageSchema = z.object({
     message: "text_or_attachment_required",
     path: ["text"]
   });
+});
+
+const expressionPackUsageSchema = z.object({
+  packId: z.string().trim().min(1).max(120),
+  version: z.string().trim().min(1).max(60),
+  itemId: z.string().trim().min(1).max(120),
+  surface: z.string().trim().min(1).max(32).optional().default("composer_sticker")
 });
 
 const scheduleMessageSchema = z.object({
@@ -2462,6 +2470,36 @@ chatRouter.get("/expression-packs/:packId/:version/archive", requireAuth, async 
   } catch (error) {
     logError("expression pack archive download failed", error);
     res.status(500).json({ error: "failed_to_download_expression_pack" });
+  }
+});
+
+chatRouter.post("/expression-packs/usage", requireAuth, async (req, res) => {
+  const parsed = expressionPackUsageSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "validation_error", details: parsed.error.flatten() });
+    return;
+  }
+
+  try {
+    await trackExpressionPackUsage(req.authUserId!, {
+      packId: parsed.data.packId,
+      version: parsed.data.version,
+      itemId: parsed.data.itemId,
+      surface: parsed.data.surface
+    });
+    res.status(204).send();
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      (error.message === "expression_pack_not_found" ||
+        error.message === "expression_pack_item_not_found")
+    ) {
+      res.status(404).json({ error: error.message });
+      return;
+    }
+
+    logError("expression pack usage track failed", error);
+    res.status(500).json({ error: "failed_to_track_expression_pack_usage" });
   }
 });
 

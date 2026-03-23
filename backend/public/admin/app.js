@@ -1890,6 +1890,7 @@ function renderExpressionPackCard(pack, versionSummary) {
       <div class="user-subtitle">Archive: ${escapeHtml(pack.archivePath || "-")}</div>
       <div class="user-subtitle">Item: ${escapeHtml(String(pack.itemCount || 0))} • Boyut: ${escapeHtml(formatFileSize(pack.archiveSizeBytes || 0))}</div>
       <div class="user-subtitle">Yukleme: ${escapeHtml(formatDateTime(pack.uploadedAt))}</div>
+      <div class="user-subtitle">Kullanim: ${escapeHtml(formatNumber(pack.usageCount || 0))} • Son kullanim: ${escapeHtml(formatDateTime(pack.lastUsedAt))}</div>
       ${
         !isLatestVersion
           ? `<div class="muted-text">Bu surum guncel degil. Son versiyon: v${escapeHtml(summary.latestVersion || "-")}.</div>`

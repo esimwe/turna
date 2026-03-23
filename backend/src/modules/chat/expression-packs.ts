@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { prisma } from "../../lib/prisma.js";
 
 export type ExpressionPackSourceKindValue = "remote_zip";
 export type ExpressionPackAssetTypeValue =
@@ -64,6 +65,8 @@ export interface AdminExpressionPackItem {
   archiveExists: boolean;
   archiveSizeBytes: number;
   itemCount: number;
+  usageCount: number;
+  lastUsedAt: string | null;
   items: Array<{
     id: string;
     emoji: string;
@@ -77,6 +80,9 @@ export interface AdminExpressionPackItem {
 const expressionPacksRootDir = fileURLToPath(
   new URL("../../../public/expression-packs", import.meta.url)
 );
+const prismaExpressionPackUsageEvent = (
+  prisma as unknown as { expressionPackUsageEvent: any }
+).expressionPackUsageEvent;
 const expressionPackManifestPath = path.join(expressionPacksRootDir, "manifest.json");
 const maxExpressionPackArchiveBytes = 64 * 1024 * 1024;
 const maxExpressionPackEntries = 512;
@@ -139,6 +145,55 @@ function normalizeRelativePath(value: unknown): string {
     return "";
   }
   return normalized;
+}
+
+function tokenizeVersion(value: string): string[] {
+  return String(value || "")
+    .trim()
+    .split(/[^a-zA-Z0-9]+/)
+    .filter(Boolean);
+}
+
+function comparePackVersion(left: string, right: string): number {
+  const leftTokens = tokenizeVersion(left);
+  const rightTokens = tokenizeVersion(right);
+  const length = Math.max(leftTokens.length, rightTokens.length);
+
+  for (let index = 0; index < length; index += 1) {
+    const leftToken = leftTokens[index] ?? "";
+    const rightToken = rightTokens[index] ?? "";
+    const leftNumeric = /^\d+$/.test(leftToken);
+    const rightNumeric = /^\d+$/.test(rightToken);
+
+    if (leftNumeric && rightNumeric) {
+      const leftValue = Number.parseInt(leftToken, 10);
+      const rightValue = Number.parseInt(rightToken, 10);
+      if (leftValue !== rightValue) {
+        return leftValue - rightValue;
+      }
+      continue;
+    }
+
+    const compared = leftToken.localeCompare(rightToken, "tr", { sensitivity: "base" });
+    if (compared !== 0) return compared;
+  }
+
+  return left.localeCompare(right, "tr", { sensitivity: "base" });
+}
+
+function ensureSingleActiveVersion(
+  packs: ExpressionPackManifestItem[],
+  targetId: string,
+  targetVersion: string
+): void {
+  for (const pack of packs) {
+    if (pack.id !== targetId) continue;
+    pack.isActive = pack.version === targetVersion;
+  }
+}
+
+function buildPackVersionKey(packId: string, version: string): string {
+  return `${packId.trim()}::${version.trim()}`;
 }
 
 function isSupportedAssetType(value: string): value is ExpressionPackAssetTypeValue {
@@ -455,7 +510,7 @@ export function isExpressionPackValidationError(
 
 export async function listExpressionPacks(baseUrl: string): Promise<ExpressionPackCatalogResponse> {
   const manifest = await loadExpressionPackManifest();
-  const packs: ExpressionPackApiItem[] = [];
+  const latestActivePacks = new Map<string, ExpressionPackManifestItem>();
 
   for (const pack of manifest.packs) {
     if (!pack.isActive) continue;
@@ -468,7 +523,19 @@ export async function listExpressionPacks(baseUrl: string): Promise<ExpressionPa
       continue;
     }
 
-    packs.push({
+    const current = latestActivePacks.get(pack.id);
+    if (!current || comparePackVersion(pack.version, current.version) > 0) {
+      latestActivePacks.set(pack.id, pack);
+    }
+  }
+
+  const packs = Array.from(latestActivePacks.values())
+    .sort((left, right) => {
+      const titleCompare = left.title.localeCompare(right.title, "tr", { sensitivity: "base" });
+      if (titleCompare !== 0) return titleCompare;
+      return comparePackVersion(right.version, left.version);
+    })
+    .map((pack) => ({
       id: pack.id,
       title: pack.title,
       subtitle: pack.subtitle,
@@ -483,13 +550,44 @@ export async function listExpressionPacks(baseUrl: string): Promise<ExpressionPa
         relativeAssetPath: item.relativeAssetPath,
         palette: item.palette
       }))
-    });
-  }
+    }));
 
   return {
     catalogVersion: manifest.catalogVersion,
     packs
   };
+}
+
+async function getUsageSummaryByPackVersion(): Promise<
+  Map<string, { usageCount: number; lastUsedAt: string | null }>
+> {
+  const rows = await prismaExpressionPackUsageEvent.groupBy({
+    by: ["packId", "packVersion"],
+    _count: {
+      packId: true
+    },
+    _max: {
+      createdAt: true
+    }
+  });
+
+  const map = new Map<string, { usageCount: number; lastUsedAt: string | null }>();
+  for (const row of rows as Array<{
+    packId: string;
+    packVersion: string;
+    _count?: { packId?: number | null };
+    _max?: { createdAt?: Date | string | null };
+  }>) {
+    const lastUsedAtValue = row._max?.createdAt;
+    map.set(buildPackVersionKey(row.packId, row.packVersion), {
+      usageCount: row._count?.packId ?? 0,
+      lastUsedAt:
+        lastUsedAtValue instanceof Date
+          ? lastUsedAtValue.toISOString()
+          : lastUsedAtValue?.toString() ?? null
+    });
+  }
+  return map;
 }
 
 export async function resolveExpressionPackArchivePath(
@@ -523,6 +621,7 @@ export async function listAdminExpressionPacks(): Promise<{
   packs: AdminExpressionPackItem[];
 }> {
   const manifest = await loadExpressionPackManifest();
+  const usageSummaryByKey = await getUsageSummaryByPackVersion();
   const packs = await Promise.all(
     manifest.packs.map(async (pack) => {
       const absoluteArchivePath = resolveArchiveAbsolutePath(pack.archivePath);
@@ -538,6 +637,8 @@ export async function listAdminExpressionPacks(): Promise<{
           archiveSizeBytes = 0;
         }
       }
+      const usageSummary =
+        usageSummaryByKey.get(buildPackVersionKey(pack.id, pack.version)) ?? null;
       return {
         id: pack.id,
         title: pack.title,
@@ -550,6 +651,8 @@ export async function listAdminExpressionPacks(): Promise<{
         archiveExists,
         archiveSizeBytes,
         itemCount: pack.items.length,
+        usageCount: usageSummary?.usageCount ?? 0,
+        lastUsedAt: usageSummary?.lastUsedAt ?? null,
         items: pack.items.map((item) => ({
           id: item.id,
           emoji: item.emoji,
@@ -564,11 +667,47 @@ export async function listAdminExpressionPacks(): Promise<{
   return {
     catalogVersion: manifest.catalogVersion,
     packs: packs.sort((left, right) => {
-      const titleCompare = left.title.localeCompare(right.title, "tr");
+      const titleCompare = left.title.localeCompare(right.title, "tr", { sensitivity: "base" });
       if (titleCompare !== 0) return titleCompare;
-      return right.version.localeCompare(left.version, "tr");
+      return comparePackVersion(right.version, left.version);
     })
   };
+}
+
+export async function trackExpressionPackUsage(
+  userId: string,
+  input: {
+    packId: string;
+    version: string;
+    itemId: string;
+    surface?: string;
+  }
+): Promise<void> {
+  const manifest = await loadExpressionPackManifest();
+  const pack = manifest.packs.find(
+    (item) =>
+      item.id === input.packId.trim() &&
+      item.version === input.version.trim() &&
+      item.isActive
+  );
+  if (!pack) {
+    throw new Error("expression_pack_not_found");
+  }
+  const sticker = pack.items.find((item) => item.id === input.itemId.trim());
+  if (!sticker) {
+    throw new Error("expression_pack_item_not_found");
+  }
+
+  await prismaExpressionPackUsageEvent.create({
+    data: {
+      userId,
+      packId: pack.id,
+      packVersion: pack.version,
+      itemId: sticker.id,
+      assetType: sticker.assetType,
+      surface: normalizeTrimmedString(input.surface, 32) || "composer_sticker"
+    }
+  });
 }
 
 export async function upsertAdminExpressionPack(input: {
@@ -620,6 +759,10 @@ export async function upsertAdminExpressionPack(input: {
     manifest.packs.push(nextPack);
   }
 
+  if (nextPack.isActive) {
+    ensureSingleActiveVersion(manifest.packs, nextPack.id, nextPack.version);
+  }
+
   manifest.catalogVersion = new Date().toISOString();
   await writeExpressionPackManifest(manifest);
   const listed = await listAdminExpressionPacks();
@@ -644,7 +787,11 @@ export async function updateAdminExpressionPackStatus(input: {
   if (!target) {
     throw new Error("expression_pack_not_found");
   }
-  target.isActive = input.isActive;
+  if (input.isActive) {
+    ensureSingleActiveVersion(manifest.packs, target.id, target.version);
+  } else {
+    target.isActive = false;
+  }
   manifest.catalogVersion = new Date().toISOString();
   await writeExpressionPackManifest(manifest);
   const listed = await listAdminExpressionPacks();
