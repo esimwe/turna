@@ -104,6 +104,7 @@ const state = {
   expressionPackFeedback: "",
   expressionPackFeedbackTone: "success",
   expressionPackUploadingKey: "",
+  expressionPackIconUploadingKey: "",
   expressionPackDraft: createEmptyExpressionPackDraft(),
 
   selectedGlobalChatId: null,
@@ -475,6 +476,35 @@ async function uploadExpressionPackArchive(packId, version, file) {
   return payload?.data || null;
 }
 
+async function uploadExpressionPackIcon(packId, version, file) {
+  const response = await fetch(
+    `/api/admin/expression-packs/${encodeURIComponent(packId)}/${encodeURIComponent(version)}/icon`,
+    {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${state.token}`,
+        "Content-Type": file?.type || "application/octet-stream"
+      },
+      body: file
+    }
+  );
+
+  if (response.status === 401) {
+    state.token = null;
+    state.admin = null;
+    localStorage.removeItem(storageKey);
+    renderShell();
+    throw new Error("Oturum gecerli degil.");
+  }
+
+  const text = await response.text();
+  const payload = text ? safeJson(text) : {};
+  if (!response.ok) {
+    throw new Error(payload?.error || `Istek basarisiz (${response.status})`);
+  }
+  return payload?.data || null;
+}
+
 async function updateExpressionPackStatus(packId, version, isActive) {
   const response = await api(
     `/api/admin/expression-packs/${encodeURIComponent(packId)}/${encodeURIComponent(version)}/status`,
@@ -491,6 +521,19 @@ async function updateExpressionPackStatus(packId, version, isActive) {
   return response?.data || null;
 }
 
+async function deleteExpressionPack(packId, version) {
+  const response = await api(
+    `/api/admin/expression-packs/${encodeURIComponent(packId)}/${encodeURIComponent(version)}`,
+    {
+      method: "DELETE",
+      body: JSON.stringify({
+        reason: "Expression pack admin panelden silindi."
+      })
+    }
+  );
+  return response?.data || null;
+}
+
 function createEmptyExpressionPackDraft() {
   return {
     mode: "create",
@@ -501,8 +544,10 @@ function createEmptyExpressionPackDraft() {
     title: "",
     subtitle: "",
     iconEmoji: "🙂",
+    iconUrl: "",
     isActive: true,
     itemsText: "",
+    iconFile: null,
     archiveFile: null
   };
 }
@@ -517,8 +562,10 @@ function buildExpressionPackDraftFromPack(pack) {
     title: String(pack?.title || "").trim(),
     subtitle: String(pack?.subtitle || "").trim(),
     iconEmoji: String(pack?.iconEmoji || "🙂").trim() || "🙂",
+    iconUrl: String(pack?.iconUrl || "").trim(),
     isActive: pack?.isActive !== false,
     itemsText: JSON.stringify(Array.isArray(pack?.items) ? pack.items : [], null, 2),
+    iconFile: null,
     archiveFile: null
   };
 }
@@ -549,8 +596,10 @@ function buildExpressionPackVersionDraft(pack) {
     title: String(pack?.title || "").trim(),
     subtitle: String(pack?.subtitle || "").trim(),
     iconEmoji: String(pack?.iconEmoji || "🙂").trim() || "🙂",
+    iconUrl: String(pack?.iconUrl || "").trim(),
     isActive: true,
     itemsText: JSON.stringify(Array.isArray(pack?.items) ? pack.items : [], null, 2),
+    iconFile: null,
     archiveFile: null
   };
 }
@@ -621,6 +670,16 @@ function findExpressionPackUploadInput(packId, version) {
     (input) =>
       input.dataset.expressionPackUploadInput === packId &&
       input.dataset.expressionPackUploadVersion === version
+  );
+}
+
+function findExpressionPackIconUploadInput(packId, version) {
+  return Array.from(
+    pageContent.querySelectorAll("[data-expression-pack-icon-upload-input]")
+  ).find(
+    (input) =>
+      input.dataset.expressionPackIconUploadInput === packId &&
+      input.dataset.expressionPackIconUploadVersion === version
   );
 }
 
@@ -813,7 +872,8 @@ function renderExpressionPackItemsInspector(validation) {
         </div>
         <div class="muted-text">
           Bu alanı boş bırakırsan backend zip içindeki desteklenen dosyalardan item listesini otomatik üretir.
-          Üstte gözükecek pack ikonu için sadece <strong>Paket ikonu</strong> alanını doldurman yeterli.
+          Üstte gözükecek pack sekmesi için istersen <strong>Paket ikon gorseli</strong> yukleyebilir, istemezsen
+          <strong>Paket ikonu emojisi</strong> ile devam edebilirsin.
         </div>
       </div>
     `;
@@ -866,6 +926,7 @@ function syncExpressionPackDraftFromForm() {
   const titleInput = document.getElementById("expression-pack-title");
   const subtitleInput = document.getElementById("expression-pack-subtitle");
   const iconEmojiInput = document.getElementById("expression-pack-icon-emoji");
+  const iconFileInput = document.getElementById("expression-pack-icon-file");
   const activeInput = document.getElementById("expression-pack-active");
   const itemsInput = document.getElementById("expression-pack-items");
   const archiveInput = document.getElementById("expression-pack-archive");
@@ -875,6 +936,9 @@ function syncExpressionPackDraftFromForm() {
   if (titleInput) draft.title = titleInput.value.trim();
   if (subtitleInput) draft.subtitle = subtitleInput.value.trim();
   if (iconEmojiInput) draft.iconEmoji = iconEmojiInput.value.trim() || "🙂";
+  if (iconFileInput?.files?.[0]) {
+    draft.iconFile = iconFileInput.files[0];
+  }
   if (activeInput) draft.isActive = activeInput.value === "true";
   if (itemsInput) draft.itemsText = itemsInput.value;
   if (archiveInput?.files?.[0]) {
@@ -887,11 +951,34 @@ function refreshExpressionPackFormState() {
   const draft = syncExpressionPackDraftFromForm();
   const validation = parseExpressionPackItemsInput(draft.itemsText);
   const previewNode = document.getElementById("expression-pack-items-preview");
+  const iconNode = document.getElementById("expression-pack-icon-summary");
   const archiveNode = document.getElementById("expression-pack-archive-summary");
   const submitButton = document.getElementById("expression-pack-submit");
 
   if (previewNode) {
     previewNode.innerHTML = renderExpressionPackItemsInspector(validation);
+  }
+
+  if (iconNode) {
+    const hasRemoteIcon = String(draft.iconUrl || "").trim().length > 0;
+    const iconPreview = hasRemoteIcon
+      ? `<img src="${escapeAttribute(draft.iconUrl)}" alt="" class="expression-pack-icon-image" />`
+      : `<div class="expression-pack-icon-fallback">${escapeHtml(draft.iconEmoji || "🙂")}</div>`;
+    iconNode.innerHTML = `
+      <div class="expression-pack-icon-preview">
+        ${iconPreview}
+        <div>
+          <div class="user-title">${hasRemoteIcon ? "Yuklu ikon" : "Emoji fallback"}</div>
+          <div class="user-subtitle">${
+            draft.iconFile
+              ? `Secili ikon: ${escapeHtml(draft.iconFile.name)} • ${escapeHtml(formatFileSize(draft.iconFile.size || 0))}`
+              : hasRemoteIcon
+                ? "Yeni ikon secmezsen mevcut gorsel korunur."
+                : "Gorsel yuklemezsen pack sekmesinde emoji fallback gorunur."
+          }</div>
+        </div>
+      </div>
+    `;
   }
 
   if (archiveNode) {
@@ -1835,7 +1922,7 @@ function renderExpressionPacksPage() {
           </label>
           <div class="field-grid">
             <label class="field">
-              <span>Paket ikonu</span>
+              <span>Paket ikonu emojisi</span>
               <input id="expression-pack-icon-emoji" type="text" maxlength="8" placeholder="🙂" value="${escapeAttribute(draft.iconEmoji || "🙂")}" />
             </label>
             <label class="field">
@@ -1843,6 +1930,11 @@ function renderExpressionPacksPage() {
               <input type="text" value="Zip icindeki png/webp dosyalarindan otomatik olusur" readonly />
             </label>
           </div>
+          <label class="field">
+            <span>Paket ikon gorseli</span>
+            <input id="expression-pack-icon-file" type="file" accept="image/png,image/webp,image/jpeg,image/gif" />
+          </label>
+          <div id="expression-pack-icon-summary" class="muted-text"></div>
           <label class="field">
             <span>Pack item JSON (opsiyonel override)</span>
             <textarea id="expression-pack-items" spellcheck="false" placeholder="${itemPlaceholder}">${escapeHtml(draft.itemsText)}</textarea>
@@ -1867,7 +1959,7 @@ function renderExpressionPacksPage() {
             <button class="primary-button" id="expression-pack-submit" type="submit" ${validation.ok ? "" : "disabled"}>${submitLabel}</button>
             <button class="ghost-button" id="expression-pack-reset" type="button">${isEditing || isVersioning ? "Yeni pack" : "Formu sifirla"}</button>
             <span class="inline-feedback ${state.expressionPackFeedbackTone === "error" ? "error-text" : "success-text"}">
-              ${state.expressionPackFeedback ? escapeHtml(state.expressionPackFeedback) : "JSON bossa item listesi zip icinden otomatik uretilir. Ust ikon icin sadece Paket ikonu secmen yeterli."}
+              ${state.expressionPackFeedback ? escapeHtml(state.expressionPackFeedback) : "JSON bossa item listesi zip icinden otomatik uretilir. Ust sekme ikonu icin gorsel yukleyebilir ya da emoji fallback birakabilirsin."}
             </span>
           </div>
         </form>
@@ -1902,20 +1994,30 @@ function renderExpressionPackCard(pack, versionSummary) {
   const isActiveVersion = summary.activeVersion === pack.version;
   const uploadKey = expressionPackVersionKey(pack.id, pack.version);
   const uploading = state.expressionPackUploadingKey === uploadKey;
+  const iconUploading = state.expressionPackIconUploadingKey === uploadKey;
+  const iconVisual = pack.iconUrl
+    ? `<img src="${escapeAttribute(pack.iconUrl)}" alt="" class="expression-pack-icon-image" />`
+    : `<div class="expression-pack-icon-fallback">${escapeHtml(pack.iconEmoji || "🙂")}</div>`;
   return `
     <article class="list-card expression-pack-card">
-      <div class="list-title-row">
-        <strong>${escapeHtml(pack.title || "-")} <span class="muted-inline">v${escapeHtml(pack.version || "-")}</span></strong>
-        <div class="badge-row">
-          <span class="status-badge ${pack.isActive ? "" : "status-suspended"}">${pack.isActive ? "Aktif" : "Pasif"}</span>
-          <span class="soft-badge ${pack.archiveExists ? "" : "soft-badge-warning"}">${pack.archiveExists ? "Zip hazir" : "Zip bekleniyor"}</span>
-          ${isActiveVersion ? '<span class="soft-badge">Canli surum</span>' : ""}
-          ${isLatestVersion ? '<span class="soft-badge">En guncel</span>' : ""}
+      <div class="expression-pack-card-head">
+        <div class="expression-pack-card-icon">${iconVisual}</div>
+        <div class="expression-pack-card-copy">
+          <div class="list-title-row">
+            <strong>${escapeHtml(pack.title || "-")} <span class="muted-inline">v${escapeHtml(pack.version || "-")}</span></strong>
+            <div class="badge-row">
+              <span class="status-badge ${pack.isActive ? "" : "status-suspended"}">${pack.isActive ? "Aktif" : "Pasif"}</span>
+              <span class="soft-badge ${pack.archiveExists ? "" : "soft-badge-warning"}">${pack.archiveExists ? "Zip hazir" : "Zip bekleniyor"}</span>
+              ${pack.iconExists ? '<span class="soft-badge">Ikon hazir</span>' : '<span class="soft-badge soft-badge-warning">Emoji fallback</span>'}
+              ${isActiveVersion ? '<span class="soft-badge">Canli surum</span>' : ""}
+              ${isLatestVersion ? '<span class="soft-badge">En guncel</span>' : ""}
+            </div>
+          </div>
+          <div class="message-body">${escapeHtml(pack.subtitle || "-")}</div>
         </div>
       </div>
-      <div class="message-body">${escapeHtml(pack.subtitle || "-")}</div>
       <div class="user-subtitle">ID: ${escapeHtml(pack.id || "-")}</div>
-      <div class="user-subtitle">Paket ikonu: ${escapeHtml(pack.iconEmoji || "🙂")}</div>
+      <div class="user-subtitle">Paket ikonu: ${pack.iconExists ? "Gorsel yuklu" : escapeHtml(pack.iconEmoji || "🙂")}</div>
       <div class="user-subtitle">Archive: ${escapeHtml(pack.archivePath || "-")}</div>
       <div class="user-subtitle">Item: ${escapeHtml(String(pack.itemCount || 0))} • Boyut: ${escapeHtml(formatFileSize(pack.archiveSizeBytes || 0))}</div>
       <div class="user-subtitle">Yukleme: ${escapeHtml(formatDateTime(pack.uploadedAt))}</div>
@@ -1963,12 +2065,36 @@ function renderExpressionPackCard(pack, versionSummary) {
         >
           ${uploading ? "Zip yukleniyor..." : pack.archiveExists ? "Zip degistir" : "Zip yukle"}
         </button>
+        <button
+          class="ghost-button"
+          type="button"
+          data-expression-pack-icon-upload-trigger="${escapeAttribute(pack.id)}"
+          data-expression-pack-icon-upload-version="${escapeAttribute(pack.version)}"
+          ${iconUploading ? "disabled" : ""}
+        >
+          ${iconUploading ? "Ikon yukleniyor..." : pack.iconExists ? "Ikon degistir" : "Ikon yukle"}
+        </button>
+        <button
+          class="danger-button"
+          type="button"
+          data-expression-pack-delete="${escapeAttribute(pack.id)}"
+          data-expression-pack-delete-version="${escapeAttribute(pack.version)}"
+        >
+          Paketi sil
+        </button>
         <input
           class="hidden"
           type="file"
           accept=".zip,application/zip,application/octet-stream"
           data-expression-pack-upload-input="${escapeAttribute(pack.id)}"
           data-expression-pack-upload-version="${escapeAttribute(pack.version)}"
+        />
+        <input
+          class="hidden"
+          type="file"
+          accept="image/png,image/webp,image/jpeg,image/gif"
+          data-expression-pack-icon-upload-input="${escapeAttribute(pack.id)}"
+          data-expression-pack-icon-upload-version="${escapeAttribute(pack.version)}"
         />
       </div>
     </article>
@@ -1984,7 +2110,12 @@ function attachExpressionPacksPageEvents() {
         node.tagName === "SELECT" || node.type === "file" ? "change" : "input";
       node.addEventListener(eventName, () => {
         if (node.type === "file" && !node.files?.length) {
-          draft.archiveFile = null;
+          if (node.id === "expression-pack-archive") {
+            draft.archiveFile = null;
+          }
+          if (node.id === "expression-pack-icon-file") {
+            draft.iconFile = null;
+          }
         }
         refreshExpressionPackFormState();
       });
@@ -2004,6 +2135,7 @@ function attachExpressionPacksPageEvents() {
       state.expressionPackFeedback = "";
       state.expressionPackFeedbackTone = "success";
       renderCurrentPage();
+      const iconFile = currentDraft.iconFile;
       const archiveFile = currentDraft.archiveFile;
 
       try {
@@ -2021,6 +2153,9 @@ function attachExpressionPacksPageEvents() {
               ? "Expression pack admin panelden duzenlendi."
               : "Expression pack admin panelden kaydedildi."
         });
+        if (iconFile) {
+          await uploadExpressionPackIcon(currentDraft.id, currentDraft.version, iconFile);
+        }
         if (archiveFile) {
           await uploadExpressionPackArchive(currentDraft.id, currentDraft.version, archiveFile);
         }
@@ -2032,15 +2167,21 @@ function attachExpressionPacksPageEvents() {
           ? buildExpressionPackDraftFromPack(latestPack)
           : {
               ...currentDraft,
+              iconFile: null,
               archiveFile: null
             };
-        state.expressionPackFeedback = archiveFile
-          ? "Pack metadata kaydedildi ve zip yuklendi."
-          : currentDraft.mode === "edit"
-            ? "Pack metadata guncellendi."
-            : currentDraft.mode === "version"
-              ? "Yeni pack versiyonu olusturuldu."
-            : "Pack metadata kaydedildi. Zip sonradan da yuklenebilir.";
+        state.expressionPackFeedback =
+          iconFile && archiveFile
+            ? "Pack metadata kaydedildi, ikon ve zip yuklendi."
+            : iconFile
+              ? "Pack metadata kaydedildi ve ikon yuklendi."
+              : archiveFile
+                ? "Pack metadata kaydedildi ve zip yuklendi."
+                : currentDraft.mode === "edit"
+                  ? "Pack metadata guncellendi."
+                  : currentDraft.mode === "version"
+                    ? "Yeni pack versiyonu olusturuldu."
+                    : "Pack metadata kaydedildi. Ikon ve zip sonradan da yuklenebilir.";
         state.expressionPackFeedbackTone = "success";
         renderCurrentPage();
       } catch (error) {
@@ -2097,6 +2238,15 @@ function attachExpressionPacksPageEvents() {
     });
   });
 
+  pageContent.querySelectorAll("[data-expression-pack-icon-upload-trigger]").forEach((node) => {
+    node.addEventListener("click", () => {
+      const packId = node.dataset.expressionPackIconUploadTrigger;
+      const version = node.dataset.expressionPackIconUploadVersion;
+      const input = findExpressionPackIconUploadInput(packId, version);
+      input?.click();
+    });
+  });
+
   pageContent.querySelectorAll("[data-expression-pack-upload-input]").forEach((node) => {
     node.addEventListener("change", async () => {
       const packId = node.dataset.expressionPackUploadInput;
@@ -2132,6 +2282,41 @@ function attachExpressionPacksPageEvents() {
     });
   });
 
+  pageContent.querySelectorAll("[data-expression-pack-icon-upload-input]").forEach((node) => {
+    node.addEventListener("change", async () => {
+      const packId = node.dataset.expressionPackIconUploadInput;
+      const version = node.dataset.expressionPackIconUploadVersion;
+      const file = node.files?.[0] || null;
+      if (!packId || !version || !file) return;
+
+      state.expressionPackIconUploadingKey = expressionPackVersionKey(packId, version);
+      state.expressionPackFeedback = "Ikon yukleniyor...";
+      state.expressionPackFeedbackTone = "success";
+      renderCurrentPage();
+
+      try {
+        await uploadExpressionPackIcon(packId, version, file);
+        await loadExpressionPacks();
+        if (state.expressionPackDraft?.id === packId && state.expressionPackDraft?.version === version) {
+          const refreshedPack = state.expressionPacks.find(
+            (pack) => pack.id === packId && pack.version === version
+          );
+          if (refreshedPack) {
+            state.expressionPackDraft = buildExpressionPackDraftFromPack(refreshedPack);
+          }
+        }
+        state.expressionPackFeedback = `Ikon yuklendi: ${packId} v${version}`;
+        state.expressionPackFeedbackTone = "success";
+      } catch (error) {
+        state.expressionPackFeedback = error?.message || "Ikon yuklenemedi.";
+        state.expressionPackFeedbackTone = "error";
+      } finally {
+        state.expressionPackIconUploadingKey = "";
+        renderCurrentPage();
+      }
+    });
+  });
+
   pageContent.querySelectorAll("[data-expression-pack-toggle]").forEach((node) => {
     node.addEventListener("click", async () => {
       const packId = node.dataset.expressionPackToggle;
@@ -2159,6 +2344,38 @@ function attachExpressionPacksPageEvents() {
         renderCurrentPage();
       } catch (error) {
         state.expressionPackFeedback = error?.message || "Pack durumu guncellenemedi.";
+        state.expressionPackFeedbackTone = "error";
+        renderCurrentPage();
+      }
+    });
+  });
+
+  pageContent.querySelectorAll("[data-expression-pack-delete]").forEach((node) => {
+    node.addEventListener("click", async () => {
+      const packId = node.dataset.expressionPackDelete;
+      const version = node.dataset.expressionPackDeleteVersion;
+      if (!packId || !version) return;
+      const pack = state.expressionPacks.find(
+        (entry) => entry.id === packId && entry.version === version
+      );
+      const confirmed = window.confirm(
+        `${pack?.title || packId} v${version} silinsin mi? Arsiv ve ikon dosyalari da kaldirilacak.`
+      );
+      if (!confirmed) return;
+
+      try {
+        const deleted = await deleteExpressionPack(packId, version);
+        await loadExpressionPacks();
+        if (state.expressionPackDraft?.id === packId && state.expressionPackDraft?.version === version) {
+          state.expressionPackDraft = createEmptyExpressionPackDraft();
+        }
+        state.expressionPackFeedback = deleted?.activatedVersion
+          ? `Pack silindi. ${packId} icin aktif surum v${deleted.activatedVersion} oldu.`
+          : "Pack silindi.";
+        state.expressionPackFeedbackTone = "success";
+        renderCurrentPage();
+      } catch (error) {
+        state.expressionPackFeedback = error?.message || "Pack silinemedi.";
         state.expressionPackFeedbackTone = "error";
         renderCurrentPage();
       }

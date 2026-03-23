@@ -18,6 +18,9 @@ export function createApp() {
   const app = express();
   const adminPublicDir = fileURLToPath(new URL("../public/admin", import.meta.url));
   const webPublicDir = fileURLToPath(new URL("../public/web", import.meta.url));
+  const expressionPackIconsDir = fileURLToPath(
+    new URL("../public/expression-pack-icons", import.meta.url)
+  );
   const webIndexFile = path.join(webPublicDir, "index.html");
 
   if (env.TRUST_PROXY) {
@@ -47,6 +50,7 @@ export function createApp() {
   app.use(express.json({ limit: "2mb" }));
   app.use("/admin", express.static(adminPublicDir));
   app.use("/web", express.static(webPublicDir, { index: false }));
+  app.use("/expression-pack-icons", express.static(expressionPackIconsDir));
 
   app.use("/api", healthRouter);
   app.use("/api/auth", authRouter);

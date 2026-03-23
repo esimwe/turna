@@ -15,6 +15,8 @@ interface ExpressionPackManifestItem {
   title: string;
   subtitle: string;
   iconEmoji: string;
+  iconPath: string | null;
+  iconUpdatedAt: string | null;
   version: string;
   sourceKind: ExpressionPackSourceKindValue;
   archivePath: string;
@@ -37,6 +39,7 @@ export interface ExpressionPackApiItem {
   title: string;
   subtitle: string;
   iconEmoji: string;
+  iconUrl: string;
   version: string;
   sourceKind: ExpressionPackSourceKindValue;
   downloadUrl: string;
@@ -60,6 +63,10 @@ export interface AdminExpressionPackItem {
   title: string;
   subtitle: string;
   iconEmoji: string;
+  iconUrl: string;
+  iconPath: string | null;
+  iconExists: boolean;
+  iconUpdatedAt: string | null;
   version: string;
   sourceKind: ExpressionPackSourceKindValue;
   archivePath: string;
@@ -83,6 +90,9 @@ export interface AdminExpressionPackItem {
 const expressionPacksRootDir = fileURLToPath(
   new URL("../../../public/expression-packs", import.meta.url)
 );
+const expressionPackIconsRootDir = fileURLToPath(
+  new URL("../../../public/expression-pack-icons", import.meta.url)
+);
 const prismaExpressionPackUsageEvent = (
   prisma as unknown as { expressionPackUsageEvent: any }
 ).expressionPackUsageEvent;
@@ -90,6 +100,7 @@ const expressionPackManifestPath = path.join(expressionPacksRootDir, "manifest.j
 const maxExpressionPackArchiveBytes = 64 * 1024 * 1024;
 const maxExpressionPackEntries = 512;
 const maxExpressionPackTotalUncompressedBytes = 96 * 1024 * 1024;
+const maxExpressionPackIconBytes = 2 * 1024 * 1024;
 
 const assetTypeAllowedExtensions: Record<ExpressionPackAssetTypeValue, string[]> = {
   static_png: [".png"],
@@ -117,6 +128,11 @@ interface IndexedZipEntry {
   isDirectory: boolean;
   compressedSize: number;
   uncompressedSize: number;
+}
+
+interface ExpressionPackIconFormat {
+  extension: ".png" | ".webp" | ".jpg" | ".gif";
+  contentType: "image/png" | "image/webp" | "image/jpeg" | "image/gif";
 }
 
 function normalizeTrimmedString(value: unknown, maxLength: number): string {
@@ -367,6 +383,8 @@ function parseManifestPack(value: unknown): ExpressionPackManifestItem | null {
   const title = normalizeTrimmedString(map.title, 80);
   const subtitle = normalizeTrimmedString(map.subtitle, 160);
   const iconEmoji = normalizeTrimmedString(map.iconEmoji, 32) || "🙂";
+  const iconPath = normalizeRelativePath(map.iconPath) || null;
+  const iconUpdatedAt = normalizeTrimmedString(map.iconUpdatedAt, 64) || null;
   const version = normalizeTrimmedString(map.version, 60);
   const sourceKind = normalizeTrimmedString(map.sourceKind, 32).toLowerCase();
   const archivePath = normalizeRelativePath(map.archivePath);
@@ -391,6 +409,8 @@ function parseManifestPack(value: unknown): ExpressionPackManifestItem | null {
     title,
     subtitle,
     iconEmoji,
+    iconPath,
+    iconUpdatedAt,
     version,
     sourceKind: "remote_zip",
     archivePath,
@@ -436,6 +456,8 @@ async function writeExpressionPackManifest(input: {
       title: pack.title,
       subtitle: pack.subtitle,
       iconEmoji: pack.iconEmoji,
+      iconPath: pack.iconPath,
+      iconUpdatedAt: pack.iconUpdatedAt,
       version: pack.version,
       sourceKind: pack.sourceKind,
       archivePath: pack.archivePath,
@@ -469,8 +491,42 @@ function resolveArchiveAbsolutePath(relativePath: string): string | null {
   return absolutePath;
 }
 
+function resolveIconAbsolutePath(relativePath: string | null | undefined): string | null {
+  const normalized = normalizeRelativePath(relativePath);
+  if (!normalized) return null;
+  const absolutePath = path.resolve(expressionPackIconsRootDir, normalized);
+  if (
+    absolutePath !== expressionPackIconsRootDir &&
+    !absolutePath.startsWith(`${expressionPackIconsRootDir}${path.sep}`)
+  ) {
+    return null;
+  }
+  return absolutePath;
+}
+
 function buildDownloadPath(packId: string, version: string): string {
   return `/api/chats/expression-packs/${encodeURIComponent(packId)}/${encodeURIComponent(version)}/archive`;
+}
+
+function encodePathForUrl(relativePath: string): string {
+  return relativePath
+    .split("/")
+    .filter(Boolean)
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+}
+
+function buildIconUrl(
+  iconPath: string | null,
+  stamp: string | null,
+  baseUrl?: string | null
+): string {
+  const normalized = normalizeRelativePath(iconPath);
+  if (!normalized) return "";
+  const relativeUrl = `/expression-pack-icons/${encodePathForUrl(normalized)}${
+    stamp ? `?v=${encodeURIComponent(stamp)}` : ""
+  }`;
+  return baseUrl ? `${baseUrl}${relativeUrl}` : relativeUrl;
 }
 
 function listArchiveEntries(archiveBytes: Buffer): IndexedZipEntry[] {
@@ -671,27 +727,42 @@ export async function listExpressionPacks(baseUrl: string): Promise<ExpressionPa
       if (titleCompare !== 0) return titleCompare;
       return comparePackVersion(right.version, left.version);
     })
-    .map((pack) => ({
-      id: pack.id,
-      title: pack.title,
-      subtitle: pack.subtitle,
-      iconEmoji: pack.iconEmoji,
-      version: pack.version,
-      sourceKind: pack.sourceKind,
-      downloadUrl: `${baseUrl}${buildDownloadPath(pack.id, pack.version)}`,
-      items: pack.items.map((item) => ({
-        id: item.id,
-        emoji: item.emoji,
-        label: item.label,
-        assetType: item.assetType,
-        relativeAssetPath: item.relativeAssetPath,
-        palette: item.palette
-      }))
-    }));
+    .map(async (pack) => {
+      let iconUrl = "";
+      const absoluteIconPath = resolveIconAbsolutePath(pack.iconPath);
+      if (absoluteIconPath) {
+        try {
+          const stat = await fs.stat(absoluteIconPath);
+          if (stat.isFile() && stat.size > 0) {
+            iconUrl = buildIconUrl(pack.iconPath, pack.iconUpdatedAt, baseUrl);
+          }
+        } catch {
+          iconUrl = "";
+        }
+      }
+      return {
+        id: pack.id,
+        title: pack.title,
+        subtitle: pack.subtitle,
+        iconEmoji: pack.iconEmoji,
+        iconUrl,
+        version: pack.version,
+        sourceKind: pack.sourceKind,
+        downloadUrl: `${baseUrl}${buildDownloadPath(pack.id, pack.version)}`,
+        items: pack.items.map((item) => ({
+          id: item.id,
+          emoji: item.emoji,
+          label: item.label,
+          assetType: item.assetType,
+          relativeAssetPath: item.relativeAssetPath,
+          palette: item.palette
+        }))
+      };
+    });
 
   return {
     catalogVersion: manifest.catalogVersion,
-    packs
+    packs: await Promise.all(packs)
   };
 }
 
@@ -753,6 +824,103 @@ function buildDefaultArchivePath(packId: string, version: string): string {
   return `archives/${normalizedId}-${normalizedVersion}.zip`;
 }
 
+function buildDefaultIconPath(packId: string, version: string, extension: string): string {
+  const normalizedId = packId.replaceAll(/[^a-zA-Z0-9._-]/g, "_");
+  const normalizedVersion = version.replaceAll(/[^a-zA-Z0-9._-]/g, "_");
+  const safeExtension = extension.startsWith(".") ? extension : `.${extension}`;
+  return `packs/${normalizedId}-${normalizedVersion}${safeExtension}`;
+}
+
+function detectExpressionPackIconFormat(
+  iconBytes: Buffer,
+  contentType?: string | null
+): ExpressionPackIconFormat {
+  const hintedType = normalizeTrimmedString(contentType, 80).toLowerCase();
+  if (iconBytes.length === 0) {
+    throw new ExpressionPackValidationError("Paket ikonu bos olamaz.");
+  }
+  if (iconBytes.length > maxExpressionPackIconBytes) {
+    throw new ExpressionPackValidationError("Paket ikonu 2 MB sinirini asti.");
+  }
+
+  const isPng =
+    iconBytes.length >= 8 &&
+    iconBytes[0] === 0x89 &&
+    iconBytes[1] === 0x50 &&
+    iconBytes[2] === 0x4e &&
+    iconBytes[3] === 0x47 &&
+    iconBytes[4] === 0x0d &&
+    iconBytes[5] === 0x0a &&
+    iconBytes[6] === 0x1a &&
+    iconBytes[7] === 0x0a;
+  if (isPng) {
+    return { extension: ".png", contentType: "image/png" };
+  }
+
+  const isWebp =
+    iconBytes.length >= 12 &&
+    iconBytes.subarray(0, 4).toString("ascii") === "RIFF" &&
+    iconBytes.subarray(8, 12).toString("ascii") === "WEBP";
+  if (isWebp) {
+    return { extension: ".webp", contentType: "image/webp" };
+  }
+
+  const isJpeg = iconBytes.length >= 3 && iconBytes[0] === 0xff && iconBytes[1] === 0xd8 && iconBytes[2] === 0xff;
+  if (isJpeg) {
+    return { extension: ".jpg", contentType: "image/jpeg" };
+  }
+
+  const header6 = iconBytes.length >= 6 ? iconBytes.subarray(0, 6).toString("ascii") : "";
+  if (header6 === "GIF87a" || header6 === "GIF89a") {
+    return { extension: ".gif", contentType: "image/gif" };
+  }
+
+  if (hintedType && hintedType.startsWith("image/")) {
+    throw new ExpressionPackValidationError(
+      "Paket ikonu icin yalnizca png, webp, jpg veya gif kabul ediliyor."
+    );
+  }
+  throw new ExpressionPackValidationError("Paket ikonu dosya formati anlasilamadi.");
+}
+
+async function deleteFileIfExists(absolutePath: string | null): Promise<void> {
+  if (!absolutePath) return;
+  try {
+    await fs.rm(absolutePath, { force: true });
+  } catch (_) {}
+}
+
+async function pickFallbackActivePackVersion(
+  packs: ExpressionPackManifestItem[],
+  packId: string
+): Promise<ExpressionPackManifestItem | null> {
+  const sameId = packs.filter((item) => item.id === packId);
+  if (sameId.length === 0) return null;
+
+  let latestWithArchive: ExpressionPackManifestItem | null = null;
+  let latestAny: ExpressionPackManifestItem | null = null;
+
+  for (const pack of sameId) {
+    if (!latestAny || comparePackVersion(pack.version, latestAny.version) > 0) {
+      latestAny = pack;
+    }
+
+    const absoluteArchivePath = resolveArchiveAbsolutePath(pack.archivePath);
+    if (!absoluteArchivePath) continue;
+    try {
+      const stat = await fs.stat(absoluteArchivePath);
+      if (!stat.isFile() || stat.size <= 0) continue;
+      if (!latestWithArchive || comparePackVersion(pack.version, latestWithArchive.version) > 0) {
+        latestWithArchive = pack;
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return latestWithArchive ?? latestAny;
+}
+
 export async function listAdminExpressionPacks(): Promise<{
   catalogVersion: string;
   packs: AdminExpressionPackItem[];
@@ -764,6 +932,7 @@ export async function listAdminExpressionPacks(): Promise<{
       const absoluteArchivePath = resolveArchiveAbsolutePath(pack.archivePath);
       let archiveExists = false;
       let archiveSizeBytes = 0;
+      let iconExists = false;
       if (absoluteArchivePath) {
         try {
           const stat = await fs.stat(absoluteArchivePath);
@@ -774,6 +943,15 @@ export async function listAdminExpressionPacks(): Promise<{
           archiveSizeBytes = 0;
         }
       }
+      const absoluteIconPath = resolveIconAbsolutePath(pack.iconPath);
+      if (absoluteIconPath) {
+        try {
+          const stat = await fs.stat(absoluteIconPath);
+          iconExists = stat.isFile() && stat.size > 0;
+        } catch {
+          iconExists = false;
+        }
+      }
       const usageSummary =
         usageSummaryByKey.get(buildPackVersionKey(pack.id, pack.version)) ?? null;
       return {
@@ -781,6 +959,10 @@ export async function listAdminExpressionPacks(): Promise<{
         title: pack.title,
         subtitle: pack.subtitle,
         iconEmoji: pack.iconEmoji,
+        iconUrl: iconExists ? buildIconUrl(pack.iconPath, pack.iconUpdatedAt) : "",
+        iconPath: pack.iconPath,
+        iconExists,
+        iconUpdatedAt: pack.iconUpdatedAt,
         version: pack.version,
         sourceKind: pack.sourceKind,
         archivePath: pack.archivePath,
@@ -871,6 +1053,8 @@ export async function upsertAdminExpressionPack(input: {
     title: normalizeTrimmedString(input.title, 80),
     subtitle: normalizeTrimmedString(input.subtitle, 160),
     iconEmoji: normalizeTrimmedString(input.iconEmoji, 32) || "🙂",
+    iconPath: null,
+    iconUpdatedAt: null,
     version: normalizeTrimmedString(input.version, 60),
     sourceKind: "remote_zip",
     archivePath: buildDefaultArchivePath(input.id, input.version),
@@ -893,6 +1077,8 @@ export async function upsertAdminExpressionPack(input: {
     const existing = manifest.packs[existingIndex];
     nextPack.archivePath = existing.archivePath;
     nextPack.uploadedAt = existing.uploadedAt;
+    nextPack.iconPath = existing.iconPath;
+    nextPack.iconUpdatedAt = existing.iconUpdatedAt;
     if (nextPack.items.length === 0 && input.autoImportFromArchive !== true) {
       nextPack.items = existing.items;
     }
@@ -989,4 +1175,92 @@ export async function writeAdminExpressionPackArchive(input: {
     throw new Error("expression_pack_not_found");
   }
   return matched;
+}
+
+export async function writeAdminExpressionPackIcon(input: {
+  id: string;
+  version: string;
+  iconBytes: Buffer;
+  contentType?: string | null;
+}): Promise<AdminExpressionPackItem> {
+  const manifest = await loadExpressionPackManifest();
+  const target = manifest.packs.find(
+    (item) => item.id === input.id.trim() && item.version === input.version.trim()
+  );
+  if (!target) {
+    throw new Error("expression_pack_not_found");
+  }
+
+  const format = detectExpressionPackIconFormat(input.iconBytes, input.contentType);
+  const nextIconPath = buildDefaultIconPath(target.id, target.version, format.extension);
+  const absoluteIconPath = resolveIconAbsolutePath(nextIconPath);
+  if (!absoluteIconPath) {
+    throw new Error("expression_pack_icon_path_invalid");
+  }
+
+  const previousIconPath = resolveIconAbsolutePath(target.iconPath);
+  target.iconPath = nextIconPath;
+  target.iconUpdatedAt = new Date().toISOString();
+
+  await fs.mkdir(path.dirname(absoluteIconPath), { recursive: true });
+  await fs.writeFile(absoluteIconPath, input.iconBytes);
+  if (previousIconPath && previousIconPath !== absoluteIconPath) {
+    await deleteFileIfExists(previousIconPath);
+  }
+
+  manifest.catalogVersion = new Date().toISOString();
+  await writeExpressionPackManifest(manifest);
+  const listed = await listAdminExpressionPacks();
+  const matched = listed.packs.find(
+    (item) => item.id === target.id && item.version === target.version
+  );
+  if (!matched) {
+    throw new Error("expression_pack_not_found");
+  }
+  return matched;
+}
+
+export async function deleteAdminExpressionPack(input: {
+  id: string;
+  version: string;
+}): Promise<{
+  deletedPackId: string;
+  deletedVersion: string;
+  deletedArchivePath: string;
+  deletedIconPath: string | null;
+  activatedVersion: string | null;
+}> {
+  const manifest = await loadExpressionPackManifest();
+  const targetIndex = manifest.packs.findIndex(
+    (item) => item.id === input.id.trim() && item.version === input.version.trim()
+  );
+  if (targetIndex < 0) {
+    throw new Error("expression_pack_not_found");
+  }
+
+  const [target] = manifest.packs.splice(targetIndex, 1);
+  const targetArchivePath = resolveArchiveAbsolutePath(target.archivePath);
+  const targetIconPath = resolveIconAbsolutePath(target.iconPath);
+
+  let activatedVersion: string | null = null;
+  if (target.isActive) {
+    const fallback = await pickFallbackActivePackVersion(manifest.packs, target.id);
+    if (fallback) {
+      ensureSingleActiveVersion(manifest.packs, fallback.id, fallback.version);
+      activatedVersion = fallback.version;
+    }
+  }
+
+  manifest.catalogVersion = new Date().toISOString();
+  await writeExpressionPackManifest(manifest);
+  await deleteFileIfExists(targetArchivePath);
+  await deleteFileIfExists(targetIconPath);
+
+  return {
+    deletedPackId: target.id,
+    deletedVersion: target.version,
+    deletedArchivePath: target.archivePath,
+    deletedIconPath: target.iconPath,
+    activatedVersion
+  };
 }

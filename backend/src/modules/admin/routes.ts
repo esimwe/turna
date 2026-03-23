@@ -23,11 +23,13 @@ import { buildAvatarUrl } from "../profile/avatar-url.js";
 import { buildPhoneLookupKeys } from "../profile/contact-lookup.js";
 import { emitChatMessage, emitInboxUpdate } from "../chat/chat.realtime.js";
 import {
+  deleteAdminExpressionPack,
   isExpressionPackValidationError,
   listAdminExpressionPacks,
   upsertAdminExpressionPack,
   updateAdminExpressionPackStatus,
-  writeAdminExpressionPackArchive
+  writeAdminExpressionPackArchive,
+  writeAdminExpressionPackIcon
 } from "../chat/expression-packs.js";
 import { chatService } from "../chat/chat.service.js";
 
@@ -143,6 +145,10 @@ const upsertExpressionPackSchema = z.object({
 
 const updateExpressionPackStatusSchema = z.object({
   isActive: z.boolean(),
+  reason: z.string().trim().min(4).max(500).optional()
+});
+
+const deleteExpressionPackSchema = z.object({
   reason: z.string().trim().min(4).max(500).optional()
 });
 
@@ -655,6 +661,111 @@ adminRouter.put(
       }
       logError("admin expression pack archive upload failed", error);
       res.status(500).json({ error: "failed_to_upload_expression_pack_archive" });
+    }
+  }
+);
+
+adminRouter.put(
+  "/expression-packs/:packId/:version/icon",
+  requireAdminAuth,
+  requireAdminRole("SUPER_ADMIN", "OPS_ADMIN"),
+  express.raw({
+    type: [
+      "image/png",
+      "image/webp",
+      "image/jpeg",
+      "image/gif",
+      "application/octet-stream"
+    ],
+    limit: "2mb"
+  }),
+  async (req, res) => {
+    const parsedParams = expressionPackParamSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+      return;
+    }
+    if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+      res.status(400).json({ error: "expression_pack_icon_required" });
+      return;
+    }
+
+    try {
+      const pack = await writeAdminExpressionPackIcon({
+        id: parsedParams.data.packId,
+        version: parsedParams.data.version,
+        iconBytes: req.body as Buffer,
+        contentType: req.header("content-type")
+      });
+      await writeAdminAuditLog({
+        actorAdminId: req.adminUserId!,
+        action: "expression_pack_icon_uploaded",
+        targetType: "expression_pack",
+        targetId: `${pack.id}@${pack.version}`,
+        reason: "Expression pack ikon gorseli yuklendi.",
+        metadata: {
+          iconPath: pack.iconPath,
+          iconUpdatedAt: pack.iconUpdatedAt
+        }
+      });
+      res.json({ data: pack });
+    } catch (error) {
+      if (error instanceof Error && error.message === "expression_pack_not_found") {
+        res.status(404).json({ error: error.message });
+        return;
+      }
+      if (isExpressionPackValidationError(error)) {
+        res.status(400).json({ error: error.message });
+        return;
+      }
+      logError("admin expression pack icon upload failed", error);
+      res.status(500).json({ error: "failed_to_upload_expression_pack_icon" });
+    }
+  }
+);
+
+adminRouter.delete(
+  "/expression-packs/:packId/:version",
+  requireAdminAuth,
+  requireAdminRole("SUPER_ADMIN", "OPS_ADMIN"),
+  async (req, res) => {
+    const parsedParams = expressionPackParamSchema.safeParse(req.params);
+    const parsedBody = deleteExpressionPackSchema.safeParse(req.body ?? {});
+    if (!parsedParams.success) {
+      res.status(400).json({ error: "validation_error", details: parsedParams.error.flatten() });
+      return;
+    }
+    if (!parsedBody.success) {
+      res.status(400).json({ error: "validation_error", details: parsedBody.error.flatten() });
+      return;
+    }
+
+    try {
+      const deleted = await deleteAdminExpressionPack({
+        id: parsedParams.data.packId,
+        version: parsedParams.data.version
+      });
+      await writeAdminAuditLog({
+        actorAdminId: req.adminUserId!,
+        action: "expression_pack_deleted",
+        targetType: "expression_pack",
+        targetId: `${deleted.deletedPackId}@${deleted.deletedVersion}`,
+        reason:
+          parsedBody.data.reason?.trim() || "Expression pack admin panelden silindi.",
+        metadata: {
+          archivePath: deleted.deletedArchivePath,
+          iconPath: deleted.deletedIconPath,
+          activatedVersion: deleted.activatedVersion
+        }
+      });
+      res.json({ data: deleted });
+    } catch (error) {
+      if (error instanceof Error && error.message === "expression_pack_not_found") {
+        res.status(404).json({ error: error.message });
+        return;
+      }
+      logError("admin expression pack delete failed", error);
+      res.status(500).json({ error: "failed_to_delete_expression_pack" });
     }
   }
 );
