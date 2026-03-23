@@ -78,6 +78,37 @@ const expressionPacksRootDir = fileURLToPath(
   new URL("../../../public/expression-packs", import.meta.url)
 );
 const expressionPackManifestPath = path.join(expressionPacksRootDir, "manifest.json");
+const maxExpressionPackArchiveBytes = 64 * 1024 * 1024;
+const maxExpressionPackEntries = 512;
+const maxExpressionPackTotalUncompressedBytes = 96 * 1024 * 1024;
+
+const assetTypeAllowedExtensions: Record<ExpressionPackAssetTypeValue, string[]> = {
+  static_png: [".png"],
+  static_webp: [".webp"],
+  animated_lottie: [".json", ".lottie"],
+  video_webm: [".webm"]
+};
+
+const assetTypeMaxBytes: Record<ExpressionPackAssetTypeValue, number> = {
+  static_png: 6 * 1024 * 1024,
+  static_webp: 4 * 1024 * 1024,
+  animated_lottie: 2 * 1024 * 1024,
+  video_webm: 24 * 1024 * 1024
+};
+
+class ExpressionPackValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ExpressionPackValidationError";
+  }
+}
+
+interface IndexedZipEntry {
+  path: string;
+  isDirectory: boolean;
+  compressedSize: number;
+  uncompressedSize: number;
+}
 
 function normalizeTrimmedString(value: unknown, maxLength: number): string {
   const normalized = typeof value === "string" ? value.trim() : value?.toString().trim() ?? "";
@@ -252,6 +283,176 @@ function buildDownloadPath(packId: string, version: string): string {
   return `/api/chats/expression-packs/${encodeURIComponent(packId)}/${encodeURIComponent(version)}/archive`;
 }
 
+function listArchiveEntries(archiveBytes: Buffer): IndexedZipEntry[] {
+  if (archiveBytes.length < 22) {
+    throw new ExpressionPackValidationError("Zip arsivi gecersiz veya eksik.");
+  }
+
+  let eocdOffset = -1;
+  const minOffset = Math.max(0, archiveBytes.length - (0xffff + 22));
+  for (let offset = archiveBytes.length - 22; offset >= minOffset; offset -= 1) {
+    if (archiveBytes.readUInt32LE(offset) === 0x06054b50) {
+      eocdOffset = offset;
+      break;
+    }
+  }
+  if (eocdOffset < 0) {
+    throw new ExpressionPackValidationError("Zip arsivinin merkezi dizini bulunamadi.");
+  }
+
+  const totalEntries = archiveBytes.readUInt16LE(eocdOffset + 10);
+  const centralDirectorySize = archiveBytes.readUInt32LE(eocdOffset + 12);
+  const centralDirectoryOffset = archiveBytes.readUInt32LE(eocdOffset + 16);
+  if (
+    centralDirectoryOffset < 0 ||
+    centralDirectorySize <= 0 ||
+    centralDirectoryOffset + centralDirectorySize > archiveBytes.length
+  ) {
+    throw new ExpressionPackValidationError("Zip arsivinin merkezi dizin bilgisi bozuk.");
+  }
+
+  const entries: IndexedZipEntry[] = [];
+  let cursor = centralDirectoryOffset;
+  const endOffset = centralDirectoryOffset + centralDirectorySize;
+  while (cursor < endOffset) {
+    if (cursor + 46 > archiveBytes.length || archiveBytes.readUInt32LE(cursor) !== 0x02014b50) {
+      throw new ExpressionPackValidationError("Zip arsivi okunurken gecersiz entry bulundu.");
+    }
+    const compressedSize = archiveBytes.readUInt32LE(cursor + 20);
+    const uncompressedSize = archiveBytes.readUInt32LE(cursor + 24);
+    const fileNameLength = archiveBytes.readUInt16LE(cursor + 28);
+    const extraLength = archiveBytes.readUInt16LE(cursor + 30);
+    const commentLength = archiveBytes.readUInt16LE(cursor + 32);
+    const dataStart = cursor + 46;
+    const dataEnd = dataStart + fileNameLength;
+    if (dataEnd > archiveBytes.length) {
+      throw new ExpressionPackValidationError("Zip arsivindeki dosya isimleri okunamadi.");
+    }
+    const rawPath = archiveBytes.subarray(dataStart, dataEnd).toString("utf8");
+    const normalizedPath = normalizeRelativePath(rawPath);
+    if (!normalizedPath && rawPath.trim()) {
+      throw new ExpressionPackValidationError("Zip icinde gecersiz dosya yolu bulundu.");
+    }
+    entries.push({
+      path: normalizedPath,
+      isDirectory: rawPath.endsWith("/"),
+      compressedSize,
+      uncompressedSize
+    });
+    if (entries.length > maxExpressionPackEntries) {
+      throw new ExpressionPackValidationError("Zip icindeki dosya sayisi siniri asti.");
+    }
+    cursor = dataEnd + extraLength + commentLength;
+  }
+
+  if (totalEntries > 0 && entries.length !== totalEntries) {
+    throw new ExpressionPackValidationError("Zip arsivindeki entry sayisi tutarsiz.");
+  }
+
+  return entries;
+}
+
+function assertValidPackDefinition(pack: ExpressionPackManifestItem): void {
+  if (!pack.id || !pack.title || !pack.version) {
+    throw new ExpressionPackValidationError("Pack bilgileri eksik.");
+  }
+  if (pack.items.length === 0) {
+    throw new ExpressionPackValidationError("Pack icin en az bir item gerekli.");
+  }
+
+  const itemIds = new Set<string>();
+  const relativePaths = new Set<string>();
+  for (const item of pack.items) {
+    if (!item.id || !item.emoji || !item.label || !item.relativeAssetPath) {
+      throw new ExpressionPackValidationError("Pack item alanlari eksik.");
+    }
+    if (itemIds.has(item.id)) {
+      throw new ExpressionPackValidationError(`Ayni item id iki kez kullanildi: ${item.id}`);
+    }
+    itemIds.add(item.id);
+
+    if (relativePaths.has(item.relativeAssetPath)) {
+      throw new ExpressionPackValidationError(
+        `Ayni relativeAssetPath iki kez kullanildi: ${item.relativeAssetPath}`
+      );
+    }
+    relativePaths.add(item.relativeAssetPath);
+
+    const extension = path.extname(item.relativeAssetPath).toLowerCase();
+    const allowedExtensions = assetTypeAllowedExtensions[item.assetType];
+    if (!allowedExtensions.includes(extension)) {
+      throw new ExpressionPackValidationError(
+        `${item.relativeAssetPath} yolu ${item.assetType} icin uygun uzantida degil.`
+      );
+    }
+  }
+}
+
+function assertArchiveMatchesPack(
+  pack: ExpressionPackManifestItem,
+  archiveBytes: Buffer
+): void {
+  assertValidPackDefinition(pack);
+
+  if (archiveBytes.length <= 0) {
+    throw new ExpressionPackValidationError("Zip arsivi bos olamaz.");
+  }
+  if (archiveBytes.length > maxExpressionPackArchiveBytes) {
+    throw new ExpressionPackValidationError("Zip arsivi 64 MB sinirini asti.");
+  }
+
+  const entries = listArchiveEntries(archiveBytes);
+  const files = new Map<string, IndexedZipEntry>();
+  let totalUncompressedBytes = 0;
+  for (const entry of entries) {
+    if (!entry.path || entry.isDirectory) continue;
+    if (files.has(entry.path)) {
+      throw new ExpressionPackValidationError(`Zip icinde ayni dosya iki kez bulundu: ${entry.path}`);
+    }
+    files.set(entry.path, entry);
+    totalUncompressedBytes += entry.uncompressedSize;
+  }
+
+  if (files.size === 0) {
+    throw new ExpressionPackValidationError("Zip arsivinde kullanilabilir dosya bulunamadi.");
+  }
+  if (totalUncompressedBytes > maxExpressionPackTotalUncompressedBytes) {
+    throw new ExpressionPackValidationError("Zip arsivinin acilmis boyutu izin verilen siniri asti.");
+  }
+
+  const missingPaths: string[] = [];
+  for (const item of pack.items) {
+    const file = files.get(item.relativeAssetPath);
+    if (!file) {
+      missingPaths.push(item.relativeAssetPath);
+      continue;
+    }
+    if (file.uncompressedSize <= 0) {
+      throw new ExpressionPackValidationError(`Bos dosya kabul edilmiyor: ${item.relativeAssetPath}`);
+    }
+    if (file.uncompressedSize > assetTypeMaxBytes[item.assetType]) {
+      throw new ExpressionPackValidationError(
+        `${item.relativeAssetPath} dosyasi izin verilen boyutu asiyor.`
+      );
+    }
+  }
+
+  if (missingPaths.length > 0) {
+    const preview = missingPaths.slice(0, 4).join(", ");
+    throw new ExpressionPackValidationError(
+      `Zip icinde beklenen dosyalar bulunamadi: ${preview}${
+        missingPaths.length > 4 ? " ..." : ""
+      }`
+    );
+  }
+}
+
+export function isExpressionPackValidationError(
+  error: unknown
+): error is ExpressionPackValidationError {
+  return error instanceof ExpressionPackValidationError;
+}
+
 export async function listExpressionPacks(baseUrl: string): Promise<ExpressionPackCatalogResponse> {
   const manifest = await loadExpressionPackManifest();
   const packs: ExpressionPackApiItem[] = [];
@@ -405,6 +606,8 @@ export async function upsertAdminExpressionPack(input: {
     }))
   };
 
+  assertValidPackDefinition(nextPack);
+
   const existingIndex = manifest.packs.findIndex(
     (item) => item.id === nextPack.id && item.version === nextPack.version
   );
@@ -466,6 +669,7 @@ export async function writeAdminExpressionPackArchive(input: {
   if (!target) {
     throw new Error("expression_pack_not_found");
   }
+  assertArchiveMatchesPack(target, input.archiveBytes);
   const absoluteArchivePath = resolveArchiveAbsolutePath(target.archivePath);
   if (!absoluteArchivePath) {
     throw new Error("expression_pack_archive_path_invalid");

@@ -23,6 +23,7 @@ import { buildAvatarUrl } from "../profile/avatar-url.js";
 import { buildPhoneLookupKeys } from "../profile/contact-lookup.js";
 import { emitChatMessage, emitInboxUpdate } from "../chat/chat.realtime.js";
 import {
+  isExpressionPackValidationError,
   listAdminExpressionPacks,
   upsertAdminExpressionPack,
   updateAdminExpressionPackStatus,
@@ -544,6 +545,10 @@ adminRouter.post(
       });
       res.json({ data: pack });
     } catch (error) {
+      if (isExpressionPackValidationError(error)) {
+        res.status(400).json({ error: error.message });
+        return;
+      }
       logError("admin expression pack upsert failed", error);
       res.status(500).json({ error: "failed_to_upsert_expression_pack" });
     }
@@ -638,6 +643,10 @@ adminRouter.put(
     } catch (error) {
       if (error instanceof Error && error.message === "expression_pack_not_found") {
         res.status(404).json({ error: error.message });
+        return;
+      }
+      if (isExpressionPackValidationError(error)) {
+        res.status(400).json({ error: error.message });
         return;
       }
       logError("admin expression pack archive upload failed", error);

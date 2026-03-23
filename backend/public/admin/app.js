@@ -103,6 +103,7 @@ const state = {
   systemHealth: null,
   expressionPackFeedback: "",
   expressionPackFeedbackTone: "success",
+  expressionPackDraft: createEmptyExpressionPackDraft(),
 
   selectedGlobalChatId: null,
   globalChatMessages: [],
@@ -114,6 +115,25 @@ const state = {
     icon: "lock",
     silent: true,
     reason: ""
+  }
+};
+
+const expressionPackAssetTypeMeta = {
+  static_png: {
+    label: "PNG",
+    extensions: [".png"]
+  },
+  static_webp: {
+    label: "WebP",
+    extensions: [".webp"]
+  },
+  animated_lottie: {
+    label: "Lottie",
+    extensions: [".json", ".lottie"]
+  },
+  video_webm: {
+    label: "WebM",
+    extensions: [".webm"]
   }
 };
 
@@ -468,6 +488,306 @@ async function updateExpressionPackStatus(packId, version, isActive) {
     }
   );
   return response?.data || null;
+}
+
+function getExpressionPackSampleItems() {
+  return [
+    {
+      id: "spark-hello",
+      emoji: "✨",
+      label: "Merhaba",
+      assetType: "static_webp",
+      relativeAssetPath: "stickers/spark-hello.webp",
+      palette: ["#FFE8AA", "#FFC857"]
+    }
+  ];
+}
+
+function getDefaultExpressionPackItemsText() {
+  return JSON.stringify(getExpressionPackSampleItems(), null, 2);
+}
+
+function createEmptyExpressionPackDraft() {
+  return {
+    mode: "create",
+    id: "",
+    version: "",
+    title: "",
+    subtitle: "",
+    isActive: true,
+    itemsText: getDefaultExpressionPackItemsText(),
+    archiveFile: null
+  };
+}
+
+function buildExpressionPackDraftFromPack(pack) {
+  return {
+    mode: "edit",
+    id: String(pack?.id || "").trim(),
+    version: String(pack?.version || "").trim(),
+    title: String(pack?.title || "").trim(),
+    subtitle: String(pack?.subtitle || "").trim(),
+    isActive: pack?.isActive !== false,
+    itemsText: JSON.stringify(Array.isArray(pack?.items) ? pack.items : [], null, 2),
+    archiveFile: null
+  };
+}
+
+function getExpressionPackDraft() {
+  if (!state.expressionPackDraft) {
+    state.expressionPackDraft = createEmptyExpressionPackDraft();
+  }
+  return state.expressionPackDraft;
+}
+
+function normalizeExpressionPackPath(value) {
+  const normalized = String(value || "").trim().replaceAll("\\", "/");
+  if (
+    !normalized ||
+    normalized.startsWith("/") ||
+    normalized.includes("../") ||
+    normalized.includes("..\\")
+  ) {
+    return "";
+  }
+  return normalized;
+}
+
+function parseExpressionPackItemsInput(itemsRaw) {
+  const raw = String(itemsRaw || "").trim();
+  if (!raw) {
+    return {
+      ok: false,
+      error: "Item JSON gerekli.",
+      items: [],
+      assetCounts: {}
+    };
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    return {
+      ok: false,
+      error: error?.message || "Item JSON parse edilemedi.",
+      items: [],
+      assetCounts: {}
+    };
+  }
+
+  if (!Array.isArray(parsed)) {
+    return {
+      ok: false,
+      error: "Item JSON bir dizi olmali.",
+      items: [],
+      assetCounts: {}
+    };
+  }
+
+  if (!parsed.length) {
+    return {
+      ok: false,
+      error: "En az bir item gerekli.",
+      items: [],
+      assetCounts: {}
+    };
+  }
+
+  const seenIds = new Set();
+  const seenPaths = new Set();
+  const items = [];
+  const assetCounts = {};
+
+  for (let index = 0; index < parsed.length; index += 1) {
+    const source = parsed[index];
+    if (source == null || typeof source !== "object") {
+      return {
+        ok: false,
+        error: `Item ${index + 1} bir obje olmali.`,
+        items: [],
+        assetCounts: {}
+      };
+    }
+
+    const id = String(source.id || "").trim();
+    const emoji = String(source.emoji || "").trim();
+    const label = String(source.label || "").trim();
+    const assetType = String(source.assetType || "").trim().toLowerCase();
+    const relativeAssetPath = normalizeExpressionPackPath(source.relativeAssetPath);
+    const palette = Array.isArray(source.palette)
+      ? source.palette
+          .map((item) => String(item || "").trim())
+          .filter((item) => /^#?[A-Fa-f0-9]{6,8}$/.test(item))
+          .slice(0, 2)
+          .map((item) => (item.startsWith("#") ? item : `#${item}`))
+      : [];
+
+    if (!id || !emoji || !label || !assetType || !relativeAssetPath) {
+      return {
+        ok: false,
+        error: `Item ${index + 1} icin id, emoji, label, assetType ve relativeAssetPath zorunlu.`,
+        items: [],
+        assetCounts: {}
+      };
+    }
+
+    if (!expressionPackAssetTypeMeta[assetType]) {
+      return {
+        ok: false,
+        error: `Item ${index + 1} icin desteklenmeyen assetType: ${assetType}`,
+        items: [],
+        assetCounts: {}
+      };
+    }
+
+    if (seenIds.has(id)) {
+      return {
+        ok: false,
+        error: `Ayni item id iki kez kullanildi: ${id}`,
+        items: [],
+        assetCounts: {}
+      };
+    }
+    seenIds.add(id);
+
+    if (seenPaths.has(relativeAssetPath)) {
+      return {
+        ok: false,
+        error: `Ayni relativeAssetPath iki kez kullanildi: ${relativeAssetPath}`,
+        items: [],
+        assetCounts: {}
+      };
+    }
+    seenPaths.add(relativeAssetPath);
+
+    const extension = relativeAssetPath.includes(".")
+      ? `.${relativeAssetPath.split(".").pop().toLowerCase()}`
+      : "";
+    if (!expressionPackAssetTypeMeta[assetType].extensions.includes(extension)) {
+      return {
+        ok: false,
+        error: `${relativeAssetPath} yolu ${assetType} icin uygun uzantida degil.`,
+        items: [],
+        assetCounts: {}
+      };
+    }
+
+    items.push({
+      id,
+      emoji,
+      label,
+      assetType,
+      relativeAssetPath,
+      palette
+    });
+    assetCounts[assetType] = (assetCounts[assetType] || 0) + 1;
+  }
+
+  return {
+    ok: true,
+    error: "",
+    items,
+    assetCounts
+  };
+}
+
+function renderExpressionPackItemsInspector(validation) {
+  if (!validation.ok) {
+    return `
+      <div class="expression-pack-inspector invalid">
+        <div class="user-title">JSON dogrulamasi gecemedi</div>
+        <div class="error-text">${escapeHtml(validation.error || "Item JSON gecersiz.")}</div>
+      </div>
+    `;
+  }
+
+  const assetBadges = Object.entries(validation.assetCounts || {})
+    .map(
+      ([assetType, count]) =>
+        `<span class="soft-badge">${escapeHtml(expressionPackAssetTypeMeta[assetType]?.label || assetType)} • ${escapeHtml(String(count))}</span>`
+    )
+    .join("");
+
+  return `
+    <div class="expression-pack-inspector">
+      <div class="list-title-row">
+        <strong>JSON onizleme</strong>
+        <span class="status-badge">${escapeHtml(String(validation.items.length))} item</span>
+      </div>
+      <div class="badge-row">${assetBadges}</div>
+      <div class="expression-pack-item-preview-list">
+        ${validation.items
+          .slice(0, 6)
+          .map(
+            (item) => `
+              <article class="expression-pack-item-preview">
+                <div class="expression-pack-item-emoji">${escapeHtml(item.emoji)}</div>
+                <div>
+                  <div class="user-title">${escapeHtml(item.label)}</div>
+                  <div class="user-subtitle">${escapeHtml(item.id)} • ${escapeHtml(expressionPackAssetTypeMeta[item.assetType]?.label || item.assetType)}</div>
+                  <div class="user-subtitle">${escapeHtml(item.relativeAssetPath)}</div>
+                </div>
+              </article>
+            `
+          )
+          .join("")}
+      </div>
+      ${
+        validation.items.length > 6
+          ? `<div class="muted-text">Sadece ilk 6 item onizleniyor. Toplam ${escapeHtml(String(validation.items.length))} item var.</div>`
+          : ""
+      }
+    </div>
+  `;
+}
+
+function syncExpressionPackDraftFromForm() {
+  const draft = getExpressionPackDraft();
+  const idInput = document.getElementById("expression-pack-id");
+  const versionInput = document.getElementById("expression-pack-version");
+  const titleInput = document.getElementById("expression-pack-title");
+  const subtitleInput = document.getElementById("expression-pack-subtitle");
+  const activeInput = document.getElementById("expression-pack-active");
+  const itemsInput = document.getElementById("expression-pack-items");
+  const archiveInput = document.getElementById("expression-pack-archive");
+
+  if (idInput) draft.id = idInput.value.trim();
+  if (versionInput) draft.version = versionInput.value.trim();
+  if (titleInput) draft.title = titleInput.value.trim();
+  if (subtitleInput) draft.subtitle = subtitleInput.value.trim();
+  if (activeInput) draft.isActive = activeInput.value === "true";
+  if (itemsInput) draft.itemsText = itemsInput.value;
+  if (archiveInput?.files?.[0]) {
+    draft.archiveFile = archiveInput.files[0];
+  }
+  return draft;
+}
+
+function refreshExpressionPackFormState() {
+  const draft = syncExpressionPackDraftFromForm();
+  const validation = parseExpressionPackItemsInput(draft.itemsText);
+  const previewNode = document.getElementById("expression-pack-items-preview");
+  const archiveNode = document.getElementById("expression-pack-archive-summary");
+  const submitButton = document.getElementById("expression-pack-submit");
+
+  if (previewNode) {
+    previewNode.innerHTML = renderExpressionPackItemsInspector(validation);
+  }
+
+  if (archiveNode) {
+    archiveNode.innerHTML = draft.archiveFile
+      ? `Secili zip: <strong>${escapeHtml(draft.archiveFile.name)}</strong> • ${escapeHtml(formatFileSize(draft.archiveFile.size || 0))}`
+      : draft.mode === "edit"
+        ? "Yeni zip secmezsen mevcut arsiv korunur."
+        : "Zip secmeden sadece metadata kaydedebilirsin."
+  }
+
+  if (submitButton) {
+    submitButton.disabled = !validation.ok;
+  }
+
+  return validation;
 }
 
 async function loadAuditLogs() {
@@ -1324,70 +1644,79 @@ function renderFeatureFlagsPage() {
 }
 
 function renderExpressionPacksPage() {
-  const itemPlaceholder = escapeHtml(
-    JSON.stringify(
-      [
-        {
-          id: "spark-hello",
-          emoji: "✨",
-          label: "Merhaba",
-          assetType: "static_webp",
-          relativeAssetPath: "stickers/spark-hello.webp",
-          palette: ["#FFE8AA", "#FFC857"]
-        }
-      ],
-      null,
-      2
-    )
-  );
+  const draft = getExpressionPackDraft();
+  const itemPlaceholder = escapeHtml(getDefaultExpressionPackItemsText());
+  const validation = parseExpressionPackItemsInput(draft.itemsText);
+  const isEditing = draft.mode === "edit";
+  const submitLabel = isEditing ? "Degisiklikleri kaydet" : "Kaydet ve yukle";
+  const title = isEditing ? "Sticker Pack Duzenle" : "Yeni Sticker Pack";
+  const subtitle = isEditing
+    ? "Secili pack metadata'sini guncelle, istersen ayni versiyona yeni zip yukle."
+    : "Metadata kaydini olustur, sonra zip arsivini ayni formdan yukle.";
 
   return `
     <section class="workspace">
       <section class="panel page-panel">
         <div class="panel-heading">
           <div>
-            <h2>Yeni Sticker Pack</h2>
-            <p>Metadata kaydini olustur, sonra zip arsivini ayni formdan yukle.</p>
+            <h2>${title}</h2>
+            <p>${subtitle}</p>
           </div>
+          ${
+            isEditing
+              ? '<span class="soft-badge">Duzenleme modu</span>'
+              : '<span class="soft-badge">Yeni kayit</span>'
+          }
         </div>
         <form id="expression-pack-form" class="stack-form">
           <div class="field-grid">
             <label class="field">
               <span>Pack ID</span>
-              <input id="expression-pack-id" type="text" placeholder="cozy-v2" required />
+              <input id="expression-pack-id" type="text" placeholder="cozy-v2" value="${escapeAttribute(draft.id)}" ${isEditing ? "readonly" : ""} required />
             </label>
             <label class="field">
               <span>Versiyon</span>
-              <input id="expression-pack-version" type="text" placeholder="1.0.0" required />
+              <input id="expression-pack-version" type="text" placeholder="1.0.0" value="${escapeAttribute(draft.version)}" ${isEditing ? "readonly" : ""} required />
             </label>
           </div>
           <div class="field-grid">
             <label class="field">
               <span>Baslik</span>
-              <input id="expression-pack-title" type="text" placeholder="Cozy Pack" required />
+              <input id="expression-pack-title" type="text" placeholder="Cozy Pack" value="${escapeAttribute(draft.title)}" required />
             </label>
             <label class="field">
               <span>Aktif</span>
               <select id="expression-pack-active">
-                <option value="true">Aktif</option>
-                <option value="false">Pasif</option>
+                <option value="true" ${draft.isActive ? "selected" : ""}>Aktif</option>
+                <option value="false" ${draft.isActive ? "" : "selected"}>Pasif</option>
               </select>
             </label>
           </div>
           <label class="field">
             <span>Alt baslik</span>
-            <input id="expression-pack-subtitle" type="text" placeholder="Kisa aciklama" />
+            <input id="expression-pack-subtitle" type="text" placeholder="Kisa aciklama" value="${escapeAttribute(draft.subtitle)}" />
           </label>
           <label class="field">
             <span>Pack item JSON</span>
-            <textarea id="expression-pack-items" spellcheck="false" placeholder="${itemPlaceholder}"></textarea>
+            <textarea id="expression-pack-items" spellcheck="false" placeholder="${itemPlaceholder}">${escapeHtml(draft.itemsText)}</textarea>
           </label>
+          <div id="expression-pack-items-preview">${renderExpressionPackItemsInspector(validation)}</div>
           <label class="field">
             <span>Zip arsivi</span>
             <input id="expression-pack-archive" type="file" accept=".zip,application/zip,application/octet-stream" />
           </label>
+          <div id="expression-pack-archive-summary" class="muted-text">
+            ${
+              draft.archiveFile
+                ? `Secili zip: <strong>${escapeHtml(draft.archiveFile.name)}</strong> • ${escapeHtml(formatFileSize(draft.archiveFile.size || 0))}`
+                : isEditing
+                  ? "Yeni zip secmezsen mevcut arsiv korunur."
+                  : "Zip secmeden sadece metadata kaydedebilirsin."
+            }
+          </div>
           <div class="notice-actions">
-            <button class="primary-button" type="submit">Kaydet ve yukle</button>
+            <button class="primary-button" id="expression-pack-submit" type="submit" ${validation.ok ? "" : "disabled"}>${submitLabel}</button>
+            <button class="ghost-button" id="expression-pack-reset" type="button">${isEditing ? "Yeni pack" : "Formu sifirla"}</button>
             <span class="inline-feedback ${state.expressionPackFeedbackTone === "error" ? "error-text" : "success-text"}">
               ${state.expressionPackFeedback ? escapeHtml(state.expressionPackFeedback) : "Zip icindeki dosya yollarinin JSON'daki relativeAssetPath ile birebir eslesmesi gerekiyor."}
             </span>
@@ -1435,6 +1764,14 @@ function renderExpressionPackCard(pack) {
         <button
           class="ghost-button"
           type="button"
+          data-expression-pack-edit="${escapeAttribute(pack.id)}"
+          data-expression-pack-edit-version="${escapeAttribute(pack.version)}"
+        >
+          Duzenle
+        </button>
+        <button
+          class="ghost-button"
+          type="button"
           data-expression-pack-toggle="${escapeAttribute(pack.id)}"
           data-expression-pack-version="${escapeAttribute(pack.version)}"
           data-expression-pack-active="${pack.isActive ? "true" : "false"}"
@@ -1447,54 +1784,67 @@ function renderExpressionPackCard(pack) {
 }
 
 function attachExpressionPacksPageEvents() {
+  const draft = getExpressionPackDraft();
   const form = document.getElementById("expression-pack-form");
   if (form) {
+    form.querySelectorAll("input, select, textarea").forEach((node) => {
+      const eventName =
+        node.tagName === "SELECT" || node.type === "file" ? "change" : "input";
+      node.addEventListener(eventName, () => {
+        if (node.type === "file" && !node.files?.length) {
+          draft.archiveFile = null;
+        }
+        refreshExpressionPackFormState();
+      });
+    });
+
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
-      state.expressionPackFeedback = "";
-      state.expressionPackFeedbackTone = "success";
-      renderCurrentPage();
-
-      const id = document.getElementById("expression-pack-id")?.value?.trim() || "";
-      const version = document.getElementById("expression-pack-version")?.value?.trim() || "";
-      const title = document.getElementById("expression-pack-title")?.value?.trim() || "";
-      const subtitle = document.getElementById("expression-pack-subtitle")?.value?.trim() || "";
-      const isActive = (document.getElementById("expression-pack-active")?.value || "true") === "true";
-      const itemsRaw = document.getElementById("expression-pack-items")?.value?.trim() || "";
-      const archiveInput = document.getElementById("expression-pack-archive");
-      const archiveFile = archiveInput?.files?.[0] || null;
-
-      let items;
-      try {
-        const parsed = JSON.parse(itemsRaw || "[]");
-        if (!Array.isArray(parsed) || !parsed.length) {
-          throw new Error("En az bir item gerekli.");
-        }
-        items = parsed;
-      } catch (error) {
-        state.expressionPackFeedback = error?.message || "Item JSON gecersiz.";
+      const currentDraft = syncExpressionPackDraftFromForm();
+      const validation = parseExpressionPackItemsInput(currentDraft.itemsText);
+      if (!validation.ok) {
+        state.expressionPackFeedback = validation.error || "Item JSON gecersiz.";
         state.expressionPackFeedbackTone = "error";
         renderCurrentPage();
         return;
       }
 
+      state.expressionPackFeedback = "";
+      state.expressionPackFeedbackTone = "success";
+      renderCurrentPage();
+      const archiveFile = currentDraft.archiveFile;
+
       try {
         await saveExpressionPackMetadata({
-          id,
-          version,
-          title,
-          subtitle: subtitle || null,
-          isActive,
-          items,
-          reason: "Expression pack admin panelden kaydedildi."
+          id: currentDraft.id,
+          version: currentDraft.version,
+          title: currentDraft.title,
+          subtitle: currentDraft.subtitle || null,
+          isActive: currentDraft.isActive,
+          items: validation.items,
+          reason:
+            currentDraft.mode === "edit"
+              ? "Expression pack admin panelden duzenlendi."
+              : "Expression pack admin panelden kaydedildi."
         });
         if (archiveFile) {
-          await uploadExpressionPackArchive(id, version, archiveFile);
+          await uploadExpressionPackArchive(currentDraft.id, currentDraft.version, archiveFile);
         }
         await loadExpressionPacks();
+        const latestPack = state.expressionPacks.find(
+          (pack) => pack.id === currentDraft.id && pack.version === currentDraft.version
+        );
+        state.expressionPackDraft = latestPack
+          ? buildExpressionPackDraftFromPack(latestPack)
+          : {
+              ...currentDraft,
+              archiveFile: null
+            };
         state.expressionPackFeedback = archiveFile
           ? "Pack metadata kaydedildi ve zip yuklendi."
-          : "Pack metadata kaydedildi. Zip sonradan da yuklenebilir.";
+          : currentDraft.mode === "edit"
+            ? "Pack metadata guncellendi."
+            : "Pack metadata kaydedildi. Zip sonradan da yuklenebilir.";
         state.expressionPackFeedbackTone = "success";
         renderCurrentPage();
       } catch (error) {
@@ -1505,6 +1855,27 @@ function attachExpressionPacksPageEvents() {
     });
   }
 
+  const resetButton = document.getElementById("expression-pack-reset");
+  if (resetButton) {
+    resetButton.addEventListener("click", () => {
+      state.expressionPackDraft = createEmptyExpressionPackDraft();
+      renderCurrentPage();
+    });
+  }
+
+  pageContent.querySelectorAll("[data-expression-pack-edit]").forEach((node) => {
+    node.addEventListener("click", () => {
+      const packId = node.dataset.expressionPackEdit;
+      const version = node.dataset.expressionPackEditVersion;
+      const pack = state.expressionPacks.find((entry) => entry.id === packId && entry.version === version);
+      if (!pack) return;
+      state.expressionPackDraft = buildExpressionPackDraftFromPack(pack);
+      state.expressionPackFeedback = `Pack duzenleme modunda acildi: ${pack.title || pack.id}`;
+      state.expressionPackFeedbackTone = "success";
+      renderCurrentPage();
+    });
+  });
+
   pageContent.querySelectorAll("[data-expression-pack-toggle]").forEach((node) => {
     node.addEventListener("click", async () => {
       const packId = node.dataset.expressionPackToggle;
@@ -1514,6 +1885,17 @@ function attachExpressionPacksPageEvents() {
       try {
         await updateExpressionPackStatus(packId, version, !isActive);
         await loadExpressionPacks();
+        if (state.expressionPackDraft?.id === packId && state.expressionPackDraft?.version === version) {
+          const updatedPack = state.expressionPacks.find(
+            (pack) => pack.id === packId && pack.version === version
+          );
+          if (updatedPack) {
+            state.expressionPackDraft = {
+              ...buildExpressionPackDraftFromPack(updatedPack),
+              archiveFile: state.expressionPackDraft.archiveFile
+            };
+          }
+        }
         state.expressionPackFeedback = !isActive
           ? "Pack aktif edildi."
           : "Pack pasife alindi.";
@@ -1526,6 +1908,8 @@ function attachExpressionPacksPageEvents() {
       }
     });
   });
+
+  refreshExpressionPackFormState();
 }
 
 function renderAuditLogsPage() {
