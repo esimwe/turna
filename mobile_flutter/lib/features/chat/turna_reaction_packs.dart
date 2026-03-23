@@ -854,6 +854,7 @@ class _TurnaStickerPack {
     required this.subtitle,
     required this.sourceKind,
     required this.version,
+    this.downloadUrl,
     required this.items,
   });
 
@@ -862,7 +863,10 @@ class _TurnaStickerPack {
   final String subtitle;
   final TurnaExpressionPackSourceKind sourceKind;
   final String version;
+  final String? downloadUrl;
   final List<_TurnaStickerItem> items;
+
+  String get cacheKey => '$id::$version';
 }
 
 class _TurnaStickerSelection {
@@ -930,6 +934,8 @@ class _TurnaComposerEmojiPanel extends StatefulWidget {
 class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
   TurnaReactionPackCatalog? _catalog;
   List<_TurnaStickerPack> _stickerPacks = const <_TurnaStickerPack>[];
+  Set<String> _readyStickerPackKeys = <String>{};
+  Set<String> _syncingStickerPackKeys = <String>{};
   final List<String> _sessionRecentEmojis = <String>[];
   final List<String> _sessionRecentStickerIds = <String>[];
   String? _selectedTabId;
@@ -1124,9 +1130,16 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
     try {
       final catalog = await ChatApi.fetchReactionPacks(widget.session);
       List<_TurnaStickerPack> stickerPacks = const <_TurnaStickerPack>[];
+      Set<String> readyPackKeys = <String>{};
       try {
         stickerPacks =
-            await TurnaExpressionPackCatalogLoader._loadStickerPacks();
+            await TurnaExpressionPackCatalogLoader._loadStickerPacksForSession(
+              widget.session,
+            );
+        readyPackKeys =
+            await TurnaExpressionPackCatalogLoader._resolveReadyPackKeys(
+              stickerPacks,
+            );
       } catch (error) {
         turnaLog('expression pack manifest load skipped', error);
       }
@@ -1134,10 +1147,13 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
       setState(() {
         _catalog = catalog;
         _stickerPacks = stickerPacks;
+        _readyStickerPackKeys = readyPackKeys;
+        _syncingStickerPackKeys = <String>{};
         _loading = false;
         _syncSelectedTab();
         _syncSelectedStickerTab();
       });
+      unawaited(_syncStickerPacks(stickerPacks));
     } on TurnaUnauthorizedException {
       if (!mounted) return;
       widget.onSessionExpired();
@@ -1147,6 +1163,38 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
         _loading = false;
         _error = error.toString();
       });
+    }
+  }
+
+  Future<void> _syncStickerPacks(List<_TurnaStickerPack> packs) async {
+    final pendingKeys = packs
+        .where(
+          (pack) =>
+              pack.sourceKind == TurnaExpressionPackSourceKind.remoteZip &&
+              !_readyStickerPackKeys.contains(pack.cacheKey),
+        )
+        .map((pack) => pack.cacheKey)
+        .toSet();
+    if (pendingKeys.isEmpty) return;
+    if (mounted) {
+      setState(() => _syncingStickerPackKeys = pendingKeys);
+    }
+    try {
+      final ready =
+          await TurnaExpressionPackCatalogLoader._ensureAutoInstalledPacks(
+            widget.session,
+            packs,
+          );
+      if (!mounted) return;
+      setState(() {
+        _readyStickerPackKeys = ready;
+        _syncingStickerPackKeys = <String>{};
+        _syncSelectedStickerTab();
+      });
+    } catch (error) {
+      if (!mounted) return;
+      turnaLog('expression pack auto sync failed', error);
+      setState(() => _syncingStickerPackKeys = <String>{});
     }
   }
 
@@ -1375,6 +1423,16 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
         _stickerPacks.firstWhere(
           (item) => item.items.any((entry) => entry.id == sticker.id),
         );
+    if (!_isStickerPackReady(pack)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Sticker paketi hazırlanıyor. Birkaç saniye sonra tekrar dene.',
+          ),
+        ),
+      );
+      return;
+    }
     setState(() {
       _sessionRecentStickerIds.remove(sticker.id);
       _sessionRecentStickerIds.insert(0, sticker.id);
@@ -1443,7 +1501,49 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
         color: selected ? Colors.white : TurnaColors.textMuted,
       );
     }
-    return Text(tab.previewEmoji, style: const TextStyle(fontSize: 20));
+    final pack = tab.pack;
+    final ready = pack == null || _isStickerPackReady(pack);
+    final syncing = pack != null && _isStickerPackSyncing(pack);
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Text(tab.previewEmoji, style: const TextStyle(fontSize: 20)),
+        if (!ready)
+          Positioned(
+            right: -5,
+            bottom: -5,
+            child: Container(
+              width: 16,
+              height: 16,
+              decoration: BoxDecoration(
+                color: selected ? Colors.white : Colors.black87,
+                shape: BoxShape.circle,
+              ),
+              child: syncing
+                  ? const Padding(
+                      padding: EdgeInsets.all(3),
+                      child: CircularProgressIndicator(strokeWidth: 1.4),
+                    )
+                  : Icon(
+                      Icons.cloud_download_rounded,
+                      size: 10,
+                      color: selected
+                          ? TurnaColors.primary
+                          : Colors.white.withValues(alpha: 0.92),
+                    ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  bool _isStickerPackReady(_TurnaStickerPack pack) {
+    return pack.sourceKind == TurnaExpressionPackSourceKind.bundledGenerated ||
+        _readyStickerPackKeys.contains(pack.cacheKey);
+  }
+
+  bool _isStickerPackSyncing(_TurnaStickerPack pack) {
+    return _syncingStickerPackKeys.contains(pack.cacheKey);
   }
 
   Widget _buildModeChip({
@@ -1652,6 +1752,11 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
     final title =
         selectedTab?.pack?.title ?? selectedTab?.label ?? 'Çıkartmalar';
     final subtitle = selectedTab?.pack?.subtitle;
+    final selectedPack = selectedTab?.pack;
+    final selectedPackReady =
+        selectedPack == null || _isStickerPackReady(selectedPack);
+    final selectedPackSyncing =
+        selectedPack != null && _isStickerPackSyncing(selectedPack);
 
     if (_stickerPacks.isEmpty) {
       return const <Widget>[
@@ -1720,9 +1825,18 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
                       padding: EdgeInsets.all(10),
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
-                  : const Icon(
-                      Icons.auto_awesome_rounded,
-                      color: TurnaColors.textMuted,
+                  : selectedPackSyncing
+                  ? const Padding(
+                      padding: EdgeInsets.all(10),
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Icon(
+                      selectedPackReady
+                          ? Icons.cloud_done_rounded
+                          : Icons.cloud_download_rounded,
+                      color: selectedPackReady
+                          ? TurnaColors.primary
+                          : TurnaColors.textMuted,
                     ),
             ),
           ],
@@ -1740,7 +1854,11 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
             if (subtitle != null && subtitle.trim().isNotEmpty) ...[
               const SizedBox(height: 4),
               Text(
-                subtitle,
+                !selectedPackReady
+                    ? (selectedPackSyncing
+                          ? 'Paket otomatik indiriliyor...'
+                          : 'Paket bu cihaza otomatik hazırlanacak.')
+                    : subtitle,
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                   fontSize: 12,
@@ -1750,10 +1868,14 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
               ),
             ] else ...[
               const SizedBox(height: 4),
-              const Text(
-                'Seçtiğin çıkartma gerçek resim mesajı olarak gider.',
+              Text(
+                !selectedPackReady
+                    ? (selectedPackSyncing
+                          ? 'Sticker paketi arka planda hazırlanıyor.'
+                          : 'Sticker paketi kullanıma hazırlanıyor.')
+                    : 'Seçtiğin çıkartma gerçek resim mesajı olarak gider.',
                 textAlign: TextAlign.center,
-                style: TextStyle(
+                style: const TextStyle(
                   fontSize: 12,
                   height: 1.35,
                   color: TurnaColors.textMuted,
@@ -1775,8 +1897,9 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
           itemCount: selectedTab?.items.length ?? 0,
           itemBuilder: (context, index) {
             final item = selectedTab!.items[index];
+            final enabled = selectedPackReady && !_sendingSticker;
             return InkWell(
-              onTap: _sendingSticker ? null : () => _handleStickerTap(item),
+              onTap: enabled ? () => _handleStickerTap(item) : null,
               borderRadius: BorderRadius.circular(22),
               child: Ink(
                 decoration: BoxDecoration(
@@ -1846,6 +1969,37 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
                         ],
                       ),
                     ),
+                    if (!enabled)
+                      Positioned.fill(
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.2),
+                            borderRadius: BorderRadius.circular(22),
+                          ),
+                          child: Center(
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 7,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withValues(alpha: 0.42),
+                                borderRadius: BorderRadius.circular(999),
+                              ),
+                              child: Text(
+                                selectedPackSyncing
+                                    ? 'Yükleniyor'
+                                    : 'Hazırlanıyor',
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
                   ],
                 ),
               ),

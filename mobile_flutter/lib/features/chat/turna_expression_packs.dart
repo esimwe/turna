@@ -40,10 +40,77 @@ class TurnaExpressionPackCatalogLoader {
       'assets/turna_packs/starter_manifest.json';
   static const String _cacheDirName = 'turna-expression-packs';
 
-  static List<_TurnaStickerPack>? _cachedStickerPacks;
+  static List<_TurnaStickerPack>? _cachedBundledStickerPacks;
+  static final Map<String, Future<void>> _inflightPackSyncs =
+      <String, Future<void>>{};
 
-  static Future<List<_TurnaStickerPack>> _loadStickerPacks() async {
-    final cached = _cachedStickerPacks;
+  static Future<List<_TurnaStickerPack>> _loadStickerPacksForSession(
+    AuthSession session,
+  ) async {
+    final bundled = await _loadBundledStickerPacks();
+    List<_TurnaStickerPack> remote = const <_TurnaStickerPack>[];
+    try {
+      final catalog = await ChatApi.fetchExpressionPackCatalog(session);
+      remote = _parseRemoteStickerPacks(catalog);
+    } catch (error) {
+      turnaLog('expression pack catalog fetch skipped', error);
+    }
+
+    final merged = <_TurnaStickerPack>[];
+    final seenIds = <String>{};
+    for (final pack in [...bundled, ...remote]) {
+      if (seenIds.add(pack.id)) {
+        merged.add(pack);
+      }
+    }
+    return merged;
+  }
+
+  static Future<Set<String>> _resolveReadyPackKeys(
+    List<_TurnaStickerPack> packs,
+  ) async {
+    final ready = <String>{};
+    for (final pack in packs) {
+      if (pack.sourceKind == TurnaExpressionPackSourceKind.bundledGenerated) {
+        ready.add(pack.cacheKey);
+        continue;
+      }
+      if (await isPackVersionCached(packId: pack.id, version: pack.version)) {
+        ready.add(pack.cacheKey);
+      }
+    }
+    return ready;
+  }
+
+  static Future<Set<String>> _ensureAutoInstalledPacks(
+    AuthSession session,
+    List<_TurnaStickerPack> packs,
+  ) async {
+    final ready = await _resolveReadyPackKeys(packs);
+    for (final pack in packs) {
+      if (pack.sourceKind != TurnaExpressionPackSourceKind.remoteZip) {
+        continue;
+      }
+      if (ready.contains(pack.cacheKey)) continue;
+      if ((pack.downloadUrl?.trim().isNotEmpty ?? false) != true) continue;
+      try {
+        await _ensureRemotePackCached(session, pack);
+      } catch (error) {
+        turnaLog('expression pack auto install skipped', {
+          'packId': pack.id,
+          'version': pack.version,
+          'error': '$error',
+        });
+      }
+      if (await isPackVersionCached(packId: pack.id, version: pack.version)) {
+        ready.add(pack.cacheKey);
+      }
+    }
+    return ready;
+  }
+
+  static Future<List<_TurnaStickerPack>> _loadBundledStickerPacks() async {
+    final cached = _cachedBundledStickerPacks;
     if (cached != null) return cached;
 
     final raw = await rootBundle.loadString(_starterManifestAsset);
@@ -58,8 +125,24 @@ class TurnaExpressionPackCatalogLoader {
         )
         .whereType<_TurnaStickerPack>()
         .toList(growable: false);
-    _cachedStickerPacks = packs;
+    _cachedBundledStickerPacks = packs;
     return packs;
+  }
+
+  static List<_TurnaStickerPack> _parseRemoteStickerPacks(
+    Map<String, dynamic> map,
+  ) {
+    final inheritedVersion = (map['catalogVersion'] ?? '').toString().trim();
+    return (map['packs'] as List<dynamic>? ?? const [])
+        .whereType<Map>()
+        .map(
+          (item) => _parseStickerPack(
+            Map<String, dynamic>.from(item),
+            inheritedVersion: inheritedVersion,
+          ),
+        )
+        .whereType<_TurnaStickerPack>()
+        .toList(growable: false);
   }
 
   static Future<Directory> ensureCachedZipPack({
@@ -120,6 +203,96 @@ class TurnaExpressionPackCatalogLoader {
     return null;
   }
 
+  static Future<void> _ensureRemotePackCached(
+    AuthSession session,
+    _TurnaStickerPack pack,
+  ) {
+    final inflight = _inflightPackSyncs[pack.cacheKey];
+    if (inflight != null) {
+      return inflight;
+    }
+    final future = _downloadAndCacheRemotePack(session, pack);
+    _inflightPackSyncs[pack.cacheKey] = future;
+    future.whenComplete(() {
+      _inflightPackSyncs.remove(pack.cacheKey);
+    });
+    return future;
+  }
+
+  static Future<void> _downloadAndCacheRemotePack(
+    AuthSession session,
+    _TurnaStickerPack pack,
+  ) async {
+    final rawUrl = pack.downloadUrl?.trim() ?? '';
+    if (rawUrl.isEmpty) {
+      throw TurnaApiException('Sticker paketi indirme adresi bulunamadı.');
+    }
+    final resolvedUrl = _resolveDownloadUrl(rawUrl);
+    if (resolvedUrl == null) {
+      throw TurnaApiException('Sticker paketi indirme adresi geçersiz.');
+    }
+
+    Future<http.Response> request(String? token) {
+      return http.get(
+        Uri.parse(resolvedUrl),
+        headers: buildTurnaAuthHeaders(token),
+      );
+    }
+
+    var response = await request(session.token);
+    if (response.statusCode >= 400 &&
+        session.token.trim().isNotEmpty &&
+        response.statusCode != 401 &&
+        response.statusCode != 403) {
+      response = await request(null);
+    }
+    if (response.statusCode >= 400 || response.bodyBytes.isEmpty) {
+      throw TurnaApiException('Sticker paketi indirilemedi.');
+    }
+
+    await ensureCachedZipPack(
+      packId: pack.id,
+      version: pack.version,
+      zipBytes: response.bodyBytes,
+    );
+    await _pruneObsoletePackVersions(
+      packId: pack.id,
+      keepVersion: pack.version,
+    );
+  }
+
+  static String? _resolveDownloadUrl(String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) return null;
+    final direct = Uri.tryParse(trimmed);
+    if (direct != null && direct.hasScheme) {
+      return normalizeTurnaRemoteUrl(trimmed);
+    }
+    final backend = Uri.tryParse(kBackendBaseUrl);
+    if (backend == null) return null;
+    return normalizeTurnaRemoteUrl(backend.resolve(trimmed).toString());
+  }
+
+  static Future<void> _pruneObsoletePackVersions({
+    required String packId,
+    required String keepVersion,
+  }) async {
+    final baseDir = await getApplicationSupportDirectory();
+    final packDir = Directory(
+      '${baseDir.path}/$_cacheDirName/${_safeSegment(packId)}',
+    );
+    if (!await packDir.exists()) return;
+    final keepSegment = _safeSegment(keepVersion);
+    await for (final entity in packDir.list(followLinks: false)) {
+      if (entity is! Directory) continue;
+      final currentName = entity.path.split(Platform.pathSeparator).last;
+      if (currentName == keepSegment) continue;
+      try {
+        await entity.delete(recursive: true);
+      } catch (_) {}
+    }
+  }
+
   static Future<Directory> _packVersionDirectory({
     required String packId,
     required String version,
@@ -171,6 +344,7 @@ class TurnaExpressionPackCatalogLoader {
       subtitle: subtitle,
       sourceKind: sourceKind,
       version: version.isEmpty ? '1' : version,
+      downloadUrl: (map['downloadUrl'] ?? '').toString().trim(),
       items: items,
     );
   }

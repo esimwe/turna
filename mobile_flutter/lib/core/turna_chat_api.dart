@@ -1750,6 +1750,25 @@ class ChatApi {
     }
   }
 
+  static Future<Map<String, dynamic>> fetchExpressionPackCatalog(
+    AuthSession session,
+  ) async {
+    try {
+      final res = await http.get(
+        Uri.parse('$kBackendBaseUrl/api/chats/expression-packs'),
+        headers: {'Authorization': 'Bearer ${session.token}'},
+      );
+      _throwIfApiError(res);
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = map['data'] as Map<String, dynamic>? ?? const {};
+      return Map<String, dynamic>.from(data);
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Sticker paketleri yüklenemedi.');
+    }
+  }
+
   static Future<TurnaPinnedMessageSummary> pinMessage(
     AuthSession session, {
     required String messageId,
