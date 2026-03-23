@@ -228,6 +228,13 @@ textarea {
   transform: translateY(-1px);
 }
 
+.primary-button:disabled,
+.ghost-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
 .primary-button {
   background: linear-gradient(135deg, var(--primary), var(--primary-strong));
   color: #fff;

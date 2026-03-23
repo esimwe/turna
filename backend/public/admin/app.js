@@ -103,6 +103,7 @@ const state = {
   systemHealth: null,
   expressionPackFeedback: "",
   expressionPackFeedbackTone: "success",
+  expressionPackUploadingKey: "",
   expressionPackDraft: createEmptyExpressionPackDraft(),
 
   selectedGlobalChatId: null,
@@ -510,6 +511,8 @@ function getDefaultExpressionPackItemsText() {
 function createEmptyExpressionPackDraft() {
   return {
     mode: "create",
+    lockId: false,
+    lockVersion: false,
     id: "",
     version: "",
     title: "",
@@ -523,6 +526,8 @@ function createEmptyExpressionPackDraft() {
 function buildExpressionPackDraftFromPack(pack) {
   return {
     mode: "edit",
+    lockId: true,
+    lockVersion: true,
     id: String(pack?.id || "").trim(),
     version: String(pack?.version || "").trim(),
     title: String(pack?.title || "").trim(),
@@ -531,6 +536,106 @@ function buildExpressionPackDraftFromPack(pack) {
     itemsText: JSON.stringify(Array.isArray(pack?.items) ? pack.items : [], null, 2),
     archiveFile: null
   };
+}
+
+function bumpExpressionPackVersion(version) {
+  const raw = String(version || "").trim();
+  if (!raw) return "1.0.0";
+  const match = raw.match(/^(\d+)\.(\d+)\.(\d+)(.*)$/);
+  if (match) {
+    return `${match[1]}.${match[2]}.${Number.parseInt(match[3], 10) + 1}${match[4] || ""}`;
+  }
+  const tokens = raw.split(".");
+  const last = tokens[tokens.length - 1] || "";
+  if (/^\d+$/.test(last)) {
+    tokens[tokens.length - 1] = String(Number.parseInt(last, 10) + 1);
+    return tokens.join(".");
+  }
+  return `${raw}.1`;
+}
+
+function buildExpressionPackVersionDraft(pack) {
+  return {
+    mode: "version",
+    lockId: true,
+    lockVersion: false,
+    id: String(pack?.id || "").trim(),
+    version: bumpExpressionPackVersion(pack?.version),
+    title: String(pack?.title || "").trim(),
+    subtitle: String(pack?.subtitle || "").trim(),
+    isActive: true,
+    itemsText: JSON.stringify(Array.isArray(pack?.items) ? pack.items : [], null, 2),
+    archiveFile: null
+  };
+}
+
+function expressionPackVersionKey(packId, version) {
+  return `${String(packId || "").trim()}::${String(version || "").trim()}`;
+}
+
+function getExpressionPackVersionSummary() {
+  const summary = new Map();
+
+  for (const pack of state.expressionPacks) {
+    const current = summary.get(pack.id) || {
+      latestVersion: pack.version,
+      activeVersion: pack.isActive ? pack.version : ""
+    };
+    if (compareLooseVersion(pack.version, current.latestVersion) > 0) {
+      current.latestVersion = pack.version;
+    }
+    if (pack.isActive && compareLooseVersion(pack.version, current.activeVersion) >= 0) {
+      current.activeVersion = pack.version;
+    }
+    summary.set(pack.id, current);
+  }
+
+  return summary;
+}
+
+function compareLooseVersion(left, right) {
+  const leftTokens = String(left || "")
+    .trim()
+    .split(/[^a-zA-Z0-9]+/)
+    .filter(Boolean);
+  const rightTokens = String(right || "")
+    .trim()
+    .split(/[^a-zA-Z0-9]+/)
+    .filter(Boolean);
+  const length = Math.max(leftTokens.length, rightTokens.length);
+
+  for (let index = 0; index < length; index += 1) {
+    const leftToken = leftTokens[index] ?? "";
+    const rightToken = rightTokens[index] ?? "";
+    const leftNumeric = /^\d+$/.test(leftToken);
+    const rightNumeric = /^\d+$/.test(rightToken);
+
+    if (leftNumeric && rightNumeric) {
+      const leftValue = Number.parseInt(leftToken, 10);
+      const rightValue = Number.parseInt(rightToken, 10);
+      if (leftValue !== rightValue) {
+        return leftValue - rightValue;
+      }
+      continue;
+    }
+
+    const compared = leftToken.localeCompare(rightToken, "tr", { sensitivity: "base" });
+    if (compared !== 0) return compared;
+  }
+
+  return String(left || "").localeCompare(String(right || ""), "tr", {
+    sensitivity: "base"
+  });
+}
+
+function findExpressionPackUploadInput(packId, version) {
+  return Array.from(
+    pageContent.querySelectorAll("[data-expression-pack-upload-input]")
+  ).find(
+    (input) =>
+      input.dataset.expressionPackUploadInput === packId &&
+      input.dataset.expressionPackUploadVersion === version
+  );
 }
 
 function getExpressionPackDraft() {
@@ -1645,14 +1750,26 @@ function renderFeatureFlagsPage() {
 
 function renderExpressionPacksPage() {
   const draft = getExpressionPackDraft();
+  const versionSummary = getExpressionPackVersionSummary();
   const itemPlaceholder = escapeHtml(getDefaultExpressionPackItemsText());
   const validation = parseExpressionPackItemsInput(draft.itemsText);
   const isEditing = draft.mode === "edit";
-  const submitLabel = isEditing ? "Degisiklikleri kaydet" : "Kaydet ve yukle";
-  const title = isEditing ? "Sticker Pack Duzenle" : "Yeni Sticker Pack";
+  const isVersioning = draft.mode === "version";
+  const submitLabel = isEditing
+    ? "Degisiklikleri kaydet"
+    : isVersioning
+      ? "Yeni versiyonu kaydet"
+      : "Kaydet ve yukle";
+  const title = isEditing
+    ? "Sticker Pack Duzenle"
+    : isVersioning
+      ? "Yeni Sticker Pack Versiyonu"
+      : "Yeni Sticker Pack";
   const subtitle = isEditing
     ? "Secili pack metadata'sini guncelle, istersen ayni versiyona yeni zip yukle."
-    : "Metadata kaydini olustur, sonra zip arsivini ayni formdan yukle.";
+    : isVersioning
+      ? "Mevcut pack'ten yeni bir versiyon turetildi. Yeni zip yukleyip aktif surumu ileri tasiyabilirsin."
+      : "Metadata kaydini olustur, sonra zip arsivini ayni formdan yukle.";
 
   return `
     <section class="workspace">
@@ -1665,18 +1782,20 @@ function renderExpressionPacksPage() {
           ${
             isEditing
               ? '<span class="soft-badge">Duzenleme modu</span>'
-              : '<span class="soft-badge">Yeni kayit</span>'
+              : isVersioning
+                ? '<span class="soft-badge">Yeni versiyon</span>'
+                : '<span class="soft-badge">Yeni kayit</span>'
           }
         </div>
         <form id="expression-pack-form" class="stack-form">
           <div class="field-grid">
             <label class="field">
               <span>Pack ID</span>
-              <input id="expression-pack-id" type="text" placeholder="cozy-v2" value="${escapeAttribute(draft.id)}" ${isEditing ? "readonly" : ""} required />
+              <input id="expression-pack-id" type="text" placeholder="cozy-v2" value="${escapeAttribute(draft.id)}" ${draft.lockId ? "readonly" : ""} required />
             </label>
             <label class="field">
               <span>Versiyon</span>
-              <input id="expression-pack-version" type="text" placeholder="1.0.0" value="${escapeAttribute(draft.version)}" ${isEditing ? "readonly" : ""} required />
+              <input id="expression-pack-version" type="text" placeholder="1.0.0" value="${escapeAttribute(draft.version)}" ${draft.lockVersion ? "readonly" : ""} required />
             </label>
           </div>
           <div class="field-grid">
@@ -1711,12 +1830,14 @@ function renderExpressionPacksPage() {
                 ? `Secili zip: <strong>${escapeHtml(draft.archiveFile.name)}</strong> • ${escapeHtml(formatFileSize(draft.archiveFile.size || 0))}`
                 : isEditing
                   ? "Yeni zip secmezsen mevcut arsiv korunur."
+                  : isVersioning
+                    ? "Yeni versiyon icin zip secmezsen metadata kaydi acilir, arsiv sonradan yuklenebilir."
                   : "Zip secmeden sadece metadata kaydedebilirsin."
             }
           </div>
           <div class="notice-actions">
             <button class="primary-button" id="expression-pack-submit" type="submit" ${validation.ok ? "" : "disabled"}>${submitLabel}</button>
-            <button class="ghost-button" id="expression-pack-reset" type="button">${isEditing ? "Yeni pack" : "Formu sifirla"}</button>
+            <button class="ghost-button" id="expression-pack-reset" type="button">${isEditing || isVersioning ? "Yeni pack" : "Formu sifirla"}</button>
             <span class="inline-feedback ${state.expressionPackFeedbackTone === "error" ? "error-text" : "success-text"}">
               ${state.expressionPackFeedback ? escapeHtml(state.expressionPackFeedback) : "Zip icindeki dosya yollarinin JSON'daki relativeAssetPath ile birebir eslesmesi gerekiyor."}
             </span>
@@ -1734,7 +1855,7 @@ function renderExpressionPacksPage() {
         <div class="table-list">
           ${
             state.expressionPacks.length
-              ? state.expressionPacks.map(renderExpressionPackCard).join("")
+              ? state.expressionPacks.map((pack) => renderExpressionPackCard(pack, versionSummary)).join("")
               : '<div class="empty-note">Henüz remote sticker pack yok.</div>'
           }
         </div>
@@ -1743,8 +1864,16 @@ function renderExpressionPacksPage() {
   `;
 }
 
-function renderExpressionPackCard(pack) {
+function renderExpressionPackCard(pack, versionSummary) {
   const preview = (pack.items || []).slice(0, 8).map((item) => escapeHtml(item.emoji || "🙂")).join(" ");
+  const summary = versionSummary.get(pack.id) || {
+    latestVersion: pack.version,
+    activeVersion: pack.isActive ? pack.version : ""
+  };
+  const isLatestVersion = summary.latestVersion === pack.version;
+  const isActiveVersion = summary.activeVersion === pack.version;
+  const uploadKey = expressionPackVersionKey(pack.id, pack.version);
+  const uploading = state.expressionPackUploadingKey === uploadKey;
   return `
     <article class="list-card expression-pack-card">
       <div class="list-title-row">
@@ -1752,6 +1881,8 @@ function renderExpressionPackCard(pack) {
         <div class="badge-row">
           <span class="status-badge ${pack.isActive ? "" : "status-suspended"}">${pack.isActive ? "Aktif" : "Pasif"}</span>
           <span class="soft-badge ${pack.archiveExists ? "" : "soft-badge-warning"}">${pack.archiveExists ? "Zip hazir" : "Zip bekleniyor"}</span>
+          ${isActiveVersion ? '<span class="soft-badge">Canli surum</span>' : ""}
+          ${isLatestVersion ? '<span class="soft-badge">En guncel</span>' : ""}
         </div>
       </div>
       <div class="message-body">${escapeHtml(pack.subtitle || "-")}</div>
@@ -1759,6 +1890,13 @@ function renderExpressionPackCard(pack) {
       <div class="user-subtitle">Archive: ${escapeHtml(pack.archivePath || "-")}</div>
       <div class="user-subtitle">Item: ${escapeHtml(String(pack.itemCount || 0))} • Boyut: ${escapeHtml(formatFileSize(pack.archiveSizeBytes || 0))}</div>
       <div class="user-subtitle">Yukleme: ${escapeHtml(formatDateTime(pack.uploadedAt))}</div>
+      ${
+        !isLatestVersion
+          ? `<div class="muted-text">Bu surum guncel degil. Son versiyon: v${escapeHtml(summary.latestVersion || "-")}.</div>`
+          : !isActiveVersion && pack.archiveExists
+            ? `<div class="muted-text">Arsiv hazir ama su an canli degil. Aktif et ile one alabilirsin.</div>`
+            : ""
+      }
       ${preview ? `<div class="expression-pack-preview">${preview}</div>` : ""}
       <div class="badge-row">
         <button
@@ -1772,12 +1910,36 @@ function renderExpressionPackCard(pack) {
         <button
           class="ghost-button"
           type="button"
+          data-expression-pack-new-version="${escapeAttribute(pack.id)}"
+          data-expression-pack-new-version-source="${escapeAttribute(pack.version)}"
+        >
+          Yeni versiyon
+        </button>
+        <button
+          class="ghost-button"
+          type="button"
           data-expression-pack-toggle="${escapeAttribute(pack.id)}"
           data-expression-pack-version="${escapeAttribute(pack.version)}"
           data-expression-pack-active="${pack.isActive ? "true" : "false"}"
         >
           ${pack.isActive ? "Pasife al" : "Aktif et"}
         </button>
+        <button
+          class="ghost-button"
+          type="button"
+          data-expression-pack-upload-trigger="${escapeAttribute(pack.id)}"
+          data-expression-pack-upload-version="${escapeAttribute(pack.version)}"
+          ${uploading ? "disabled" : ""}
+        >
+          ${uploading ? "Zip yukleniyor..." : pack.archiveExists ? "Zip degistir" : "Zip yukle"}
+        </button>
+        <input
+          class="hidden"
+          type="file"
+          accept=".zip,application/zip,application/octet-stream"
+          data-expression-pack-upload-input="${escapeAttribute(pack.id)}"
+          data-expression-pack-upload-version="${escapeAttribute(pack.version)}"
+        />
       </div>
     </article>
   `;
@@ -1844,6 +2006,8 @@ function attachExpressionPacksPageEvents() {
           ? "Pack metadata kaydedildi ve zip yuklendi."
           : currentDraft.mode === "edit"
             ? "Pack metadata guncellendi."
+            : currentDraft.mode === "version"
+              ? "Yeni pack versiyonu olusturuldu."
             : "Pack metadata kaydedildi. Zip sonradan da yuklenebilir.";
         state.expressionPackFeedbackTone = "success";
         renderCurrentPage();
@@ -1873,6 +2037,66 @@ function attachExpressionPacksPageEvents() {
       state.expressionPackFeedback = `Pack duzenleme modunda acildi: ${pack.title || pack.id}`;
       state.expressionPackFeedbackTone = "success";
       renderCurrentPage();
+    });
+  });
+
+  pageContent.querySelectorAll("[data-expression-pack-new-version]").forEach((node) => {
+    node.addEventListener("click", () => {
+      const packId = node.dataset.expressionPackNewVersion;
+      const sourceVersion = node.dataset.expressionPackNewVersionSource;
+      const pack = state.expressionPacks.find(
+        (entry) => entry.id === packId && entry.version === sourceVersion
+      );
+      if (!pack) return;
+      state.expressionPackDraft = buildExpressionPackVersionDraft(pack);
+      state.expressionPackFeedback =
+        `Yeni versiyon taslagi hazirlandi: ${pack.id} -> v${state.expressionPackDraft.version}`;
+      state.expressionPackFeedbackTone = "success";
+      renderCurrentPage();
+    });
+  });
+
+  pageContent.querySelectorAll("[data-expression-pack-upload-trigger]").forEach((node) => {
+    node.addEventListener("click", () => {
+      const packId = node.dataset.expressionPackUploadTrigger;
+      const version = node.dataset.expressionPackUploadVersion;
+      const input = findExpressionPackUploadInput(packId, version);
+      input?.click();
+    });
+  });
+
+  pageContent.querySelectorAll("[data-expression-pack-upload-input]").forEach((node) => {
+    node.addEventListener("change", async () => {
+      const packId = node.dataset.expressionPackUploadInput;
+      const version = node.dataset.expressionPackUploadVersion;
+      const file = node.files?.[0] || null;
+      if (!packId || !version || !file) return;
+
+      state.expressionPackUploadingKey = expressionPackVersionKey(packId, version);
+      state.expressionPackFeedback = "Zip yukleniyor...";
+      state.expressionPackFeedbackTone = "success";
+      renderCurrentPage();
+
+      try {
+        await uploadExpressionPackArchive(packId, version, file);
+        await loadExpressionPacks();
+        if (state.expressionPackDraft?.id === packId && state.expressionPackDraft?.version === version) {
+          const refreshedPack = state.expressionPacks.find(
+            (pack) => pack.id === packId && pack.version === version
+          );
+          if (refreshedPack) {
+            state.expressionPackDraft = buildExpressionPackDraftFromPack(refreshedPack);
+          }
+        }
+        state.expressionPackFeedback = `Zip yuklendi: ${packId} v${version}`;
+        state.expressionPackFeedbackTone = "success";
+      } catch (error) {
+        state.expressionPackFeedback = error?.message || "Zip yuklenemedi.";
+        state.expressionPackFeedbackTone = "error";
+      } finally {
+        state.expressionPackUploadingKey = "";
+        renderCurrentPage();
+      }
     });
   });
 
