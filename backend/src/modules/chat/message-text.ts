@@ -2,6 +2,7 @@ const TURNA_REPLY_MARKER_PATTERN = /^\[\[turna-reply:([A-Za-z0-9_-]+)\]\]\n?/;
 const TURNA_STATUS_MARKER_PATTERN = /^\[\[turna-status:([A-Za-z0-9_-]+)\]\]\n?/;
 const TURNA_LOCATION_MARKER_PATTERN = /^\[\[turna-location:([A-Za-z0-9_-]+)\]\]\n?/;
 const TURNA_CONTACT_MARKER_PATTERN = /^\[\[turna-contact:([A-Za-z0-9_-]+)\]\]\n?/;
+const TURNA_INLINE_EXPRESSION_MARKER_PATTERN = /\[\[turna-inline-expression:([A-Za-z0-9_-]+)\]\]/g;
 export const TURNA_DELETED_EVERYONE_MARKER = "[[turna-deleted-everyone]]";
 
 export interface TurnaLocationPayload {
@@ -37,6 +38,10 @@ export interface TurnaStatusPayload {
   authorDisplayName?: string | null;
   statusType?: string | null;
   previewText?: string | null;
+}
+
+interface TurnaInlineExpressionPayload {
+  emoji: string;
 }
 
 function nullableString(value: unknown): string | null {
@@ -114,6 +119,14 @@ function parseStatusPayload(value: unknown): TurnaStatusPayload | null {
   };
 }
 
+function parseInlineExpressionPayload(value: unknown): TurnaInlineExpressionPayload | null {
+  if (!value || typeof value !== "object") return null;
+  const map = value as Record<string, unknown>;
+  const emoji = nullableString(map.emoji);
+  if (!emoji) return null;
+  return { emoji };
+}
+
 function parseDate(value: string | null | undefined): Date | null {
   if (!value) return null;
   const parsed = new Date(value);
@@ -152,6 +165,17 @@ function summarizeStatus(payload: TurnaStatusPayload): string {
     default:
       return "Durum";
   }
+}
+
+function replaceInlineExpressionsWithEmoji(raw: string): string {
+  return raw.replace(TURNA_INLINE_EXPRESSION_MARKER_PATTERN, (_, encoded: string) => {
+    try {
+      const decoded = JSON.parse(decodeBase64Url(encoded)) as Record<string, unknown>;
+      return parseInlineExpressionPayload(decoded)?.emoji ?? "";
+    } catch {
+      return "";
+    }
+  });
 }
 
 export function parseTurnaMessageText(rawText: string | null | undefined): ParsedTurnaMessageText {
@@ -288,7 +312,7 @@ export function summarizeTurnaMessageText(rawText: string | null | undefined): s
   if (parsed.deletedForEveryone) return parsed.text;
   if (parsed.location) return summarizeLocation(parsed.location);
   if (parsed.contact) return summarizeContact(parsed.contact);
-  const cleaned = parsed.text.trim();
+  const cleaned = replaceInlineExpressionsWithEmoji(parsed.text).trim();
   if (cleaned) return cleaned;
   if (parsed.status) return summarizeStatus(parsed.status);
   return cleaned;
