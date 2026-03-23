@@ -852,6 +852,7 @@ class _TurnaStickerPack {
     required this.id,
     required this.title,
     required this.subtitle,
+    required this.previewEmoji,
     required this.sourceKind,
     required this.version,
     this.downloadUrl,
@@ -861,6 +862,7 @@ class _TurnaStickerPack {
   final String id;
   final String title;
   final String subtitle;
+  final String previewEmoji;
   final TurnaExpressionPackSourceKind sourceKind;
   final String version;
   final String? downloadUrl;
@@ -936,6 +938,7 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
   List<_TurnaStickerPack> _stickerPacks = const <_TurnaStickerPack>[];
   Set<String> _readyStickerPackKeys = <String>{};
   Set<String> _syncingStickerPackKeys = <String>{};
+  Map<String, String> _failedStickerPackErrors = <String, String>{};
   final List<String> _sessionRecentEmojis = <String>[];
   final List<String> _sessionRecentStickerIds = <String>[];
   String? _selectedTabId;
@@ -1042,7 +1045,7 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
         _TurnaStickerTab(
           id: pack.id,
           label: pack.title,
-          previewEmoji: pack.items.first.emoji,
+          previewEmoji: pack.previewEmoji,
           items: pack.items,
           pack: pack,
         ),
@@ -1149,6 +1152,7 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
         _stickerPacks = stickerPacks;
         _readyStickerPackKeys = readyPackKeys;
         _syncingStickerPackKeys = <String>{};
+        _failedStickerPackErrors = <String, String>{};
         _loading = false;
         _syncSelectedTab();
         _syncSelectedStickerTab();
@@ -1180,22 +1184,50 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
       setState(() => _syncingStickerPackKeys = pendingKeys);
     }
     try {
-      final ready =
+      final result =
           await TurnaExpressionPackCatalogLoader._ensureAutoInstalledPacks(
             widget.session,
             packs,
           );
       if (!mounted) return;
+      final nextFailed = Map<String, String>.from(_failedStickerPackErrors);
+      for (final key in pendingKeys) {
+        nextFailed.remove(key);
+      }
+      nextFailed.addAll(result.failedPackErrors);
+      final nextReady = <String>{
+        ..._readyStickerPackKeys,
+        ...result.readyPackKeys,
+      };
+      for (final key in nextReady) {
+        nextFailed.remove(key);
+      }
       setState(() {
-        _readyStickerPackKeys = ready;
+        _readyStickerPackKeys = nextReady;
         _syncingStickerPackKeys = <String>{};
+        _failedStickerPackErrors = nextFailed;
         _syncSelectedStickerTab();
       });
     } catch (error) {
       if (!mounted) return;
       turnaLog('expression pack auto sync failed', error);
-      setState(() => _syncingStickerPackKeys = <String>{});
+      setState(() {
+        _syncingStickerPackKeys = <String>{};
+        for (final key in pendingKeys) {
+          _failedStickerPackErrors[key] = _normalizeStickerPackError(error);
+        }
+      });
     }
+  }
+
+  Future<void> _retrySelectedStickerPack() async {
+    final pack = _selectedStickerTab?.pack;
+    if (pack == null ||
+        _isStickerPackReady(pack) ||
+        _isStickerPackSyncing(pack)) {
+      return;
+    }
+    await _syncStickerPacks(<_TurnaStickerPack>[pack]);
   }
 
   Future<void> _updatePreferences({
@@ -1424,10 +1456,13 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
           (item) => item.items.any((entry) => entry.id == sticker.id),
         );
     if (!_isStickerPackReady(pack)) {
+      final failure = _stickerPackFailure(pack);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text(
-            'Sticker paketi hazırlanıyor. Birkaç saniye sonra tekrar dene.',
+            failure?.trim().isNotEmpty == true
+                ? failure!
+                : 'Sticker paketi hazırlanıyor. Birkaç saniye sonra tekrar dene.',
           ),
         ),
       );
@@ -1504,6 +1539,7 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
     final pack = tab.pack;
     final ready = pack == null || _isStickerPackReady(pack);
     final syncing = pack != null && _isStickerPackSyncing(pack);
+    final failed = pack != null && _stickerPackFailure(pack) != null;
     return Stack(
       clipBehavior: Clip.none,
       children: [
@@ -1525,11 +1561,15 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
                       child: CircularProgressIndicator(strokeWidth: 1.4),
                     )
                   : Icon(
-                      Icons.cloud_download_rounded,
+                      failed
+                          ? Icons.refresh_rounded
+                          : Icons.cloud_download_rounded,
                       size: 10,
-                      color: selected
-                          ? TurnaColors.primary
-                          : Colors.white.withValues(alpha: 0.92),
+                      color: failed
+                          ? const Color(0xFFD97706)
+                          : (selected
+                                ? TurnaColors.primary
+                                : Colors.white.withValues(alpha: 0.92)),
                     ),
             ),
           ),
@@ -1544,6 +1584,26 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
 
   bool _isStickerPackSyncing(_TurnaStickerPack pack) {
     return _syncingStickerPackKeys.contains(pack.cacheKey);
+  }
+
+  String? _stickerPackFailure(_TurnaStickerPack pack) {
+    final text = _failedStickerPackErrors[pack.cacheKey]?.trim();
+    if (text == null || text.isEmpty) return null;
+    return text;
+  }
+
+  String _normalizeStickerPackError(Object error) {
+    if (error is TurnaApiException) {
+      final message = error.message.trim();
+      if (message.isNotEmpty) return message;
+    }
+    final raw = error.toString().trim();
+    if (raw.startsWith('Exception:')) {
+      final stripped = raw.substring('Exception:'.length).trim();
+      if (stripped.isNotEmpty) return stripped;
+    }
+    if (raw.isNotEmpty) return raw;
+    return 'Sticker paketi indirilemedi.';
   }
 
   Widget _buildModeChip({
@@ -1757,6 +1817,11 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
         selectedPack == null || _isStickerPackReady(selectedPack);
     final selectedPackSyncing =
         selectedPack != null && _isStickerPackSyncing(selectedPack);
+    final selectedPackFailure = selectedPack == null
+        ? null
+        : _stickerPackFailure(selectedPack);
+    final selectedPackHasFailure =
+        selectedPackFailure?.trim().isNotEmpty == true;
 
     if (_stickerPacks.isEmpty) {
       return const <Widget>[
@@ -1830,6 +1895,16 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
                       padding: EdgeInsets.all(10),
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
+                  : selectedPackHasFailure
+                  ? IconButton(
+                      onPressed: _retrySelectedStickerPack,
+                      tooltip: 'Tekrar dene',
+                      padding: EdgeInsets.zero,
+                      icon: const Icon(
+                        Icons.refresh_rounded,
+                        color: Color(0xFFD97706),
+                      ),
+                    )
                   : Icon(
                       selectedPackReady
                           ? Icons.cloud_done_rounded
@@ -1854,7 +1929,9 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
             if (subtitle != null && subtitle.trim().isNotEmpty) ...[
               const SizedBox(height: 4),
               Text(
-                !selectedPackReady
+                selectedPackHasFailure
+                    ? selectedPackFailure!
+                    : !selectedPackReady
                     ? (selectedPackSyncing
                           ? 'Paket otomatik indiriliyor...'
                           : 'Paket bu cihaza otomatik hazırlanacak.')
@@ -1869,7 +1946,9 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
             ] else ...[
               const SizedBox(height: 4),
               Text(
-                !selectedPackReady
+                selectedPackHasFailure
+                    ? selectedPackFailure!
+                    : !selectedPackReady
                     ? (selectedPackSyncing
                           ? 'Sticker paketi arka planda hazırlanıyor.'
                           : 'Sticker paketi kullanıma hazırlanıyor.')
@@ -1880,6 +1959,16 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
                   height: 1.35,
                   color: TurnaColors.textMuted,
                 ),
+              ),
+            ],
+            if (selectedPackHasFailure) ...[
+              const SizedBox(height: 10),
+              OutlinedButton.icon(
+                onPressed: selectedPackSyncing
+                    ? null
+                    : _retrySelectedStickerPack,
+                icon: const Icon(Icons.refresh_rounded),
+                label: const Text('Tekrar dene'),
               ),
             ],
           ],
@@ -1987,9 +2076,11 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
                                 borderRadius: BorderRadius.circular(999),
                               ),
                               child: Text(
-                                selectedPackSyncing
-                                    ? 'Yükleniyor'
-                                    : 'Hazırlanıyor',
+                                selectedPackHasFailure
+                                    ? 'Tekrar dene'
+                                    : (selectedPackSyncing
+                                          ? 'Yükleniyor'
+                                          : 'Hazırlanıyor'),
                                 style: const TextStyle(
                                   fontSize: 11,
                                   fontWeight: FontWeight.w700,

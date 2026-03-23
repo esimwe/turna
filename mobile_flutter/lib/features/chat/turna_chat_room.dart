@@ -769,6 +769,12 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                 : 'image/webp',
             filePath: cachedFile.path,
             sizeBytes: await cachedFile.length(),
+            onSent: () => ChatApi.trackExpressionPackUsage(
+              widget.session,
+              packId: selection.packId,
+              version: selection.version,
+              itemId: selection.stickerId,
+            ),
           );
           return;
         case TurnaExpressionAssetType.animatedLottie:
@@ -5601,6 +5607,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     int? width,
     int? height,
     int? durationSeconds,
+    Future<void> Function()? onSent,
   }) async {
     setState(() => _attachmentBusy = true);
 
@@ -5618,6 +5625,16 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         durationSeconds: durationSeconds,
       );
       await _sendAttachmentDrafts([draft]);
+      if (onSent != null) {
+        try {
+          await onSent();
+        } catch (error) {
+          turnaLog('attachment onSent hook failed', {
+            'chatId': widget.chat.chatId,
+            'error': '$error',
+          });
+        }
+      }
       await TurnaAnalytics.logEvent('attachment_sent', {
         'chat_id': widget.chat.chatId,
         'kind': kind.name,

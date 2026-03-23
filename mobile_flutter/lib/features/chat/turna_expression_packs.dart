@@ -35,6 +35,16 @@ extension TurnaExpressionAssetTypeX on TurnaExpressionAssetType {
   }
 }
 
+class _TurnaExpressionPackSyncResult {
+  const _TurnaExpressionPackSyncResult({
+    required this.readyPackKeys,
+    required this.failedPackErrors,
+  });
+
+  final Set<String> readyPackKeys;
+  final Map<String, String> failedPackErrors;
+}
+
 class TurnaExpressionPackCatalogLoader {
   static const String _starterManifestAsset =
       'assets/turna_packs/starter_manifest.json';
@@ -82,17 +92,21 @@ class TurnaExpressionPackCatalogLoader {
     return ready;
   }
 
-  static Future<Set<String>> _ensureAutoInstalledPacks(
+  static Future<_TurnaExpressionPackSyncResult> _ensureAutoInstalledPacks(
     AuthSession session,
     List<_TurnaStickerPack> packs,
   ) async {
     final ready = await _resolveReadyPackKeys(packs);
+    final failed = <String, String>{};
     for (final pack in packs) {
       if (pack.sourceKind != TurnaExpressionPackSourceKind.remoteZip) {
         continue;
       }
       if (ready.contains(pack.cacheKey)) continue;
-      if ((pack.downloadUrl?.trim().isNotEmpty ?? false) != true) continue;
+      if ((pack.downloadUrl?.trim().isNotEmpty ?? false) != true) {
+        failed[pack.cacheKey] = 'Sticker paketi indirme adresi bulunamadı.';
+        continue;
+      }
       try {
         await _ensureRemotePackCached(session, pack);
       } catch (error) {
@@ -101,12 +115,17 @@ class TurnaExpressionPackCatalogLoader {
           'version': pack.version,
           'error': '$error',
         });
+        failed[pack.cacheKey] = _asUserFacingSyncError(error);
       }
       if (await isPackVersionCached(packId: pack.id, version: pack.version)) {
         ready.add(pack.cacheKey);
+        failed.remove(pack.cacheKey);
       }
     }
-    return ready;
+    return _TurnaExpressionPackSyncResult(
+      readyPackKeys: ready,
+      failedPackErrors: failed,
+    );
   }
 
   static Future<List<_TurnaStickerPack>> _loadBundledStickerPacks() async {
@@ -261,6 +280,16 @@ class TurnaExpressionPackCatalogLoader {
     );
   }
 
+  static String _asUserFacingSyncError(Object error) {
+    if (error is TurnaApiException) {
+      final message = error.message.trim();
+      if (message.isNotEmpty) return message;
+    }
+    final raw = error.toString().trim();
+    if (raw.isNotEmpty) return raw;
+    return 'Sticker paketi indirilemedi.';
+  }
+
   static String? _resolveDownloadUrl(String value) {
     final trimmed = value.trim();
     if (trimmed.isEmpty) return null;
@@ -342,6 +371,10 @@ class TurnaExpressionPackCatalogLoader {
       id: id,
       title: title.isEmpty ? 'Paket' : title,
       subtitle: subtitle,
+      previewEmoji:
+          (map['iconEmoji'] ?? '').toString().trim().isNotEmpty
+          ? (map['iconEmoji'] ?? '').toString().trim()
+          : items.first.emoji,
       sourceKind: sourceKind,
       version: version.isEmpty ? '1' : version,
       downloadUrl: (map['downloadUrl'] ?? '').toString().trim(),

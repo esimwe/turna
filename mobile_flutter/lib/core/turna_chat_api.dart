@@ -1769,6 +1769,35 @@ class ChatApi {
     }
   }
 
+  static Future<void> trackExpressionPackUsage(
+    AuthSession session, {
+    required String packId,
+    required String version,
+    required String itemId,
+    String surface = 'composer_sticker',
+  }) async {
+    try {
+      final res = await http.post(
+        Uri.parse('$kBackendBaseUrl/api/chats/expression-packs/usage'),
+        headers: {
+          'Authorization': 'Bearer ${session.token}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'packId': packId,
+          'version': version,
+          'itemId': itemId,
+          'surface': surface,
+        }),
+      );
+      _throwIfApiError(res);
+    } on TurnaApiException {
+      rethrow;
+    } catch (_) {
+      throw TurnaApiException('Sticker paketi kullanımı kaydedilemedi.');
+    }
+  }
+
   static Future<TurnaPinnedMessageSummary> pinMessage(
     AuthSession session, {
     required String messageId,
