@@ -827,7 +827,7 @@ class _TurnaPackStyleBadge extends StatelessWidget {
   }
 }
 
-enum _TurnaComposerPanelMode { emoji, sticker }
+enum _TurnaComposerPanelMode { gif, sticker, emoji }
 
 class _TurnaStickerItem {
   const _TurnaStickerItem({
@@ -1122,6 +1122,15 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
     for (final pack in _stickerPacks) {
       for (final item in pack.items) {
         if (item.id == id) return item;
+      }
+    }
+    return null;
+  }
+
+  _TurnaStickerPack? _stickerPackForItem(String id) {
+    for (final pack in _stickerPacks) {
+      for (final item in pack.items) {
+        if (item.id == id) return pack;
       }
     }
     return null;
@@ -1674,6 +1683,12 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
     return 'Sticker paketi indirilemedi.';
   }
 
+  void _showGifComingSoon() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("GIF'ler sekmesi sonraki dilimde açılacak.")),
+    );
+  }
+
   Widget _buildModeChip({
     required String label,
     required bool selected,
@@ -1704,55 +1719,171 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
     );
   }
 
-  List<Widget> _buildEmojiSurface() {
-    final selectedTab = _selectedTab;
-    final title = selectedTab?.pack?.title ?? selectedTab?.label ?? 'İfade';
-    final subtitle = selectedTab?.pack?.subtitle;
-    return <Widget>[
-      Padding(
-        padding: const EdgeInsets.fromLTRB(14, 12, 10, 6),
-        child: Row(
-          children: [
-            Expanded(
-              child: SizedBox(
-                height: 44,
-                child: ListView.separated(
-                  scrollDirection: Axis.horizontal,
-                  itemCount: _tabs.length,
-                  separatorBuilder: (_, _) => const SizedBox(width: 8),
-                  itemBuilder: (context, index) {
-                    final tab = _tabs[index];
-                    final selected = tab.id == _selectedTabId;
-                    return InkWell(
-                      onTap: () => setState(() => _selectedTabId = tab.id),
-                      borderRadius: BorderRadius.circular(14),
-                      child: Ink(
-                        width: 42,
-                        height: 42,
-                        decoration: BoxDecoration(
-                          color: selected
-                              ? TurnaColors.primary
-                              : TurnaColors.backgroundMuted,
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(
-                            color: selected
-                                ? TurnaColors.primary
-                                : TurnaColors.border,
-                          ),
-                        ),
-                        child: Center(child: _buildTabIcon(tab, selected)),
+  Widget _buildStickerVisual({
+    required _TurnaStickerItem item,
+    required _TurnaStickerPack? pack,
+  }) {
+    final canResolveAsset =
+        pack != null &&
+        pack.sourceKind == TurnaExpressionPackSourceKind.remoteZip &&
+        (item.relativeAssetPath?.trim().isNotEmpty ?? false) &&
+        (item.assetType == TurnaExpressionAssetType.staticPng ||
+            item.assetType == TurnaExpressionAssetType.staticWebp);
+
+    if (!canResolveAsset) {
+      return Center(
+        child: Text(item.emoji, style: const TextStyle(fontSize: 46)),
+      );
+    }
+
+    return FutureBuilder<File?>(
+      future: TurnaExpressionPackCatalogLoader.resolveCachedAsset(
+        packId: pack.id,
+        version: pack.version,
+        relativePath: item.relativeAssetPath!.trim(),
+      ),
+      builder: (context, snapshot) {
+        final file = snapshot.data;
+        if (file == null) {
+          return Center(
+            child: Text(item.emoji, style: const TextStyle(fontSize: 46)),
+          );
+        }
+        return Padding(
+          padding: const EdgeInsets.all(4),
+          child: Image.file(
+            file,
+            fit: BoxFit.contain,
+            errorBuilder: (_, _, _) =>
+                Center(child: Text(item.emoji, style: const TextStyle(fontSize: 46))),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildBottomModeBar() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+      child: Row(
+        children: [
+          Expanded(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.94),
+                borderRadius: BorderRadius.circular(999),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x16000000),
+                    blurRadius: 18,
+                    offset: Offset(0, 6),
+                  ),
+                ],
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(4),
+                child: Row(
+                  children: [
+                    _buildModeChip(
+                      label: "GIF'ler",
+                      selected: _mode == _TurnaComposerPanelMode.gif,
+                      onTap: () {
+                        setState(() => _mode = _TurnaComposerPanelMode.gif);
+                        _showGifComingSoon();
+                      },
+                    ),
+                    _buildModeChip(
+                      label: 'Çıkartmalar',
+                      selected: _mode == _TurnaComposerPanelMode.sticker,
+                      onTap: () => setState(
+                        () => _mode = _TurnaComposerPanelMode.sticker,
                       ),
-                    );
-                  },
+                    ),
+                    _buildModeChip(
+                      label: 'İfade',
+                      selected: _mode == _TurnaComposerPanelMode.emoji,
+                      onTap: () => setState(
+                        () => _mode = _TurnaComposerPanelMode.emoji,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
-            IconButton(
+          ),
+          const SizedBox(width: 10),
+          Material(
+            color: Colors.white.withValues(alpha: 0.96),
+            elevation: 2,
+            shape: const CircleBorder(),
+            child: IconButton(
               onPressed: _updatingPreferences ? null : _openManagePacks,
               tooltip: 'Paketleri yönet',
               icon: const Icon(Icons.settings_outlined),
             ),
-          ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  List<Widget> _buildGifSurface() {
+    return const <Widget>[
+      Expanded(
+        child: Center(
+          child: Padding(
+            padding: EdgeInsets.symmetric(horizontal: 24),
+            child: Text(
+              "GIF'ler sekmesi sonraki dilimde açılacak.",
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: TurnaColors.textMuted,
+                fontSize: 14,
+                height: 1.4,
+              ),
+            ),
+          ),
+        ),
+      ),
+    ];
+  }
+
+  List<Widget> _buildEmojiSurface() {
+    final selectedTab = _selectedTab;
+    return <Widget>[
+      Padding(
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
+        child: SizedBox(
+          height: 44,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: _tabs.length,
+            separatorBuilder: (_, _) => const SizedBox(width: 8),
+            itemBuilder: (context, index) {
+              final tab = _tabs[index];
+              final selected = tab.id == _selectedTabId;
+              return InkWell(
+                onTap: () => setState(() => _selectedTabId = tab.id),
+                borderRadius: BorderRadius.circular(14),
+                child: Ink(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: selected
+                        ? TurnaColors.primary
+                        : TurnaColors.backgroundMuted,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color: selected
+                          ? TurnaColors.primary
+                          : TurnaColors.border,
+                    ),
+                  ),
+                  child: Center(child: _buildTabIcon(tab, selected)),
+                ),
+              );
+            },
+          ),
         ),
       ),
       if (_loading)
@@ -1794,36 +1925,9 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
           ),
         )
       else ...[
-        Padding(
-          padding: const EdgeInsets.fromLTRB(18, 2, 18, 12),
-          child: Column(
-            children: [
-              Text(
-                title,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              if (subtitle != null && subtitle.trim().isNotEmpty) ...[
-                const SizedBox(height: 4),
-                Text(
-                  subtitle,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    height: 1.35,
-                    color: TurnaColors.textMuted,
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
         Expanded(
           child: GridView.builder(
-            padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+            padding: const EdgeInsets.fromLTRB(14, 6, 14, 86),
             gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: 5,
               mainAxisSpacing: 10,
@@ -1879,7 +1983,6 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
     final selectedTab = _selectedStickerTab;
     final title =
         selectedTab?.pack?.title ?? selectedTab?.label ?? 'Çıkartmalar';
-    final subtitle = selectedTab?.pack?.subtitle;
     final selectedPack = selectedTab?.pack;
     final selectedPackReady =
         selectedPack == null || _isStickerPackReady(selectedPack);
@@ -1910,7 +2013,7 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
 
     return <Widget>[
       Padding(
-        padding: const EdgeInsets.fromLTRB(14, 12, 14, 6),
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
         child: Row(
           children: [
             Expanded(
@@ -1994,16 +2097,10 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
               textAlign: TextAlign.center,
               style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
             ),
-            if (subtitle != null && subtitle.trim().isNotEmpty) ...[
+            if (selectedPackHasFailure) ...[
               const SizedBox(height: 4),
               Text(
-                selectedPackHasFailure
-                    ? selectedPackFailure!
-                    : !selectedPackReady
-                    ? (selectedPackSyncing
-                          ? 'Paket otomatik indiriliyor...'
-                          : 'Paket bu cihaza otomatik hazırlanacak.')
-                    : subtitle,
+                selectedPackFailure!,
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                   fontSize: 12,
@@ -2011,16 +2108,12 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
                   color: TurnaColors.textMuted,
                 ),
               ),
-            ] else ...[
+            ] else if (!selectedPackReady) ...[
               const SizedBox(height: 4),
               Text(
-                selectedPackHasFailure
-                    ? selectedPackFailure!
-                    : !selectedPackReady
-                    ? (selectedPackSyncing
-                          ? 'Sticker paketi arka planda hazırlanıyor.'
-                          : 'Sticker paketi kullanıma hazırlanıyor.')
-                    : 'Seçtiğin çıkartma gerçek resim mesajı olarak gider.',
+                selectedPackSyncing
+                    ? 'Sticker paketi arka planda hazırlanıyor.'
+                    : 'Sticker paketi kullanıma hazırlanıyor.',
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                   fontSize: 12,
@@ -2044,7 +2137,7 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
       ),
       Expanded(
         child: GridView.builder(
-          padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+          padding: const EdgeInsets.fromLTRB(14, 0, 14, 86),
           gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
             crossAxisCount: 4,
             mainAxisSpacing: 12,
@@ -2054,73 +2147,26 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
           itemCount: selectedTab?.items.length ?? 0,
           itemBuilder: (context, index) {
             final item = selectedTab!.items[index];
+            final itemPack = selectedPack ?? _stickerPackForItem(item.id);
             final enabled = selectedPackReady && !_sendingSticker;
             return InkWell(
               onTap: enabled ? () => _handleStickerTap(item) : null,
               borderRadius: BorderRadius.circular(22),
               child: Ink(
                 decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: item.colors,
-                  ),
+                  color: Colors.transparent,
                   borderRadius: BorderRadius.circular(22),
-                  border: Border.all(
-                    color: Colors.white.withValues(alpha: 0.5),
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: item.colors.last.withValues(alpha: 0.18),
-                      blurRadius: 14,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
                 ),
                 child: Stack(
                   children: [
-                    Positioned(
-                      top: -14,
-                      right: -10,
-                      child: Container(
-                        width: 52,
-                        height: 52,
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.16),
-                          shape: BoxShape.circle,
-                        ),
-                      ),
-                    ),
                     Padding(
-                      padding: const EdgeInsets.fromLTRB(8, 10, 8, 10),
+                      padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
                       child: Column(
                         children: [
                           Expanded(
-                            child: Center(
-                              child: Text(
-                                item.emoji,
-                                style: const TextStyle(fontSize: 42),
-                              ),
-                            ),
-                          ),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 10,
-                              vertical: 6,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.white.withValues(alpha: 0.2),
-                              borderRadius: BorderRadius.circular(999),
-                            ),
-                            child: Text(
-                              item.label,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w700,
-                                color: Colors.white,
-                              ),
+                            child: _buildStickerVisual(
+                              item: item,
+                              pack: itemPack,
                             ),
                           ),
                         ],
@@ -2186,41 +2232,23 @@ class _TurnaComposerEmojiPanelState extends State<_TurnaComposerEmojiPanel> {
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(28),
-        child: Column(
+        child: Stack(
           children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(14, 12, 14, 4),
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: TurnaColors.backgroundMuted,
-                  borderRadius: BorderRadius.circular(999),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(4),
-                  child: Row(
-                    children: [
-                      _buildModeChip(
-                        label: 'İfade',
-                        selected: _mode == _TurnaComposerPanelMode.emoji,
-                        onTap: () => setState(
-                          () => _mode = _TurnaComposerPanelMode.emoji,
-                        ),
-                      ),
-                      _buildModeChip(
-                        label: 'Çıkartmalar',
-                        selected: _mode == _TurnaComposerPanelMode.sticker,
-                        onTap: () => setState(
-                          () => _mode = _TurnaComposerPanelMode.sticker,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
+            Column(
+              children: [
+                ...(_mode == _TurnaComposerPanelMode.gif
+                    ? _buildGifSurface()
+                    : _mode == _TurnaComposerPanelMode.emoji
+                    ? _buildEmojiSurface()
+                    : _buildStickerSurface()),
+              ],
             ),
-            ...(_mode == _TurnaComposerPanelMode.emoji
-                ? _buildEmojiSurface()
-                : _buildStickerSurface()),
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: _buildBottomModeBar(),
+            ),
           ],
         ),
       ),
