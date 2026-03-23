@@ -274,6 +274,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   Set<String> _selectedMessageIds = <String>{};
   final Map<String, _TurnaInlineTranslationState> _inlineTranslations =
       <String, _TurnaInlineTranslationState>{};
+  final Map<String, TurnaInlineExpressionPayload>
+  _composerInlineExpressionDrafts = <String, TurnaInlineExpressionPayload>{};
   final Map<String, _ResolvedChatMessageText> _resolvedMessageTextCache =
       <String, _ResolvedChatMessageText>{};
   final Map<String, GlobalKey> _messageKeys = <String, GlobalKey>{};
@@ -302,6 +304,10 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   Offset? _voicePointerOriginGlobal;
   static const int _trackedMessageKeyLimit = 32;
   static const int _resolvedMessageTextCacheLimit = 256;
+  static const int _composerInlineExpressionStartCodePoint = 0xE000;
+  static const int _composerInlineExpressionEndCodePoint = 0xF8FF;
+  int _nextComposerInlineExpressionCodePoint =
+      _composerInlineExpressionStartCodePoint;
 
   bool get _isSelectionMode => _selectedMessageIds.isNotEmpty;
   bool get _isGroupChat => widget.chat.chatType == TurnaChatType.group;
@@ -607,10 +613,14 @@ class _ChatRoomPageState extends State<ChatRoomPage>
 
   void _handleComposerChanged() {
     final text = _controller.text;
+    final previousInlineCount = _composerInlineExpressionDrafts.length;
+    _syncComposerInlineExpressionDrafts();
     _client.updateComposerText(text);
     _updateMentionSuggestions(text);
     final hasComposerText = text.trim().isNotEmpty;
-    if (hasComposerText != _hasComposerText && mounted) {
+    final inlineDraftsChanged =
+        previousInlineCount != _composerInlineExpressionDrafts.length;
+    if ((hasComposerText != _hasComposerText || inlineDraftsChanged) && mounted) {
       setState(() => _hasComposerText = hasComposerText);
     }
   }
@@ -669,6 +679,107 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       selection: TextSelection.collapsed(offset: nextOffset),
       composing: TextRange.empty,
     );
+  }
+
+  String _allocateComposerInlineExpressionPlaceholder() {
+    for (var offset = 0;
+        offset <=
+            (_composerInlineExpressionEndCodePoint -
+                _composerInlineExpressionStartCodePoint);
+        offset++) {
+      final candidateCodePoint =
+          _composerInlineExpressionStartCodePoint +
+          ((_nextComposerInlineExpressionCodePoint -
+                      _composerInlineExpressionStartCodePoint +
+                  offset) %
+              (_composerInlineExpressionEndCodePoint -
+                  _composerInlineExpressionStartCodePoint +
+                  1));
+      final candidate = String.fromCharCode(candidateCodePoint);
+      if (_controller.text.contains(candidate) ||
+          _composerInlineExpressionDrafts.containsKey(candidate)) {
+        continue;
+      }
+      _nextComposerInlineExpressionCodePoint = candidateCodePoint + 1;
+      if (_nextComposerInlineExpressionCodePoint >
+          _composerInlineExpressionEndCodePoint) {
+        _nextComposerInlineExpressionCodePoint =
+            _composerInlineExpressionStartCodePoint;
+      }
+      return candidate;
+    }
+    throw TurnaApiException('Metin içi ifade için yeni yer tutulamadı.');
+  }
+
+  void _syncComposerInlineExpressionDrafts() {
+    if (_composerInlineExpressionDrafts.isEmpty) return;
+    final next = Map<String, TurnaInlineExpressionPayload>.from(
+      _composerInlineExpressionDrafts,
+    )..removeWhere((placeholder, _) => !_controller.text.contains(placeholder));
+    if (mapEquals(next, _composerInlineExpressionDrafts)) {
+      return;
+    }
+    _composerInlineExpressionDrafts
+      ..clear()
+      ..addAll(next);
+  }
+
+  void _clearComposerInlineExpressionDrafts() {
+    if (_composerInlineExpressionDrafts.isEmpty) return;
+    _composerInlineExpressionDrafts.clear();
+  }
+
+  void _insertComposerInlineExpression(_TurnaStickerSelection selection) {
+    final placeholder = _allocateComposerInlineExpressionPlaceholder();
+    _composerInlineExpressionDrafts[placeholder] = TurnaInlineExpressionPayload(
+      packId: selection.packId,
+      version: selection.version,
+      itemId: selection.stickerId,
+      emoji: selection.emoji,
+      label: selection.label,
+      assetType: switch (selection.assetType) {
+        TurnaExpressionAssetType.staticPng => 'static_png',
+        TurnaExpressionAssetType.staticWebp => 'static_webp',
+        TurnaExpressionAssetType.animatedLottie => 'animated_lottie',
+        TurnaExpressionAssetType.videoWebm => 'video_webm',
+      },
+      relativeAssetPath: selection.relativeAssetPath,
+    );
+    final value = _controller.value;
+    final text = value.text;
+    final currentSelection = value.selection;
+    var start = currentSelection.isValid
+        ? currentSelection.start.clamp(0, text.length).toInt()
+        : text.length;
+    var end = currentSelection.isValid
+        ? currentSelection.end.clamp(0, text.length).toInt()
+        : text.length;
+    if (start > end) {
+      final temp = start;
+      start = end;
+      end = temp;
+    }
+    final nextText = text.replaceRange(start, end, placeholder);
+    final nextOffset = start + placeholder.length;
+    _controller.value = TextEditingValue(
+      text: nextText,
+      selection: TextSelection.collapsed(offset: nextOffset),
+      composing: TextRange.empty,
+    );
+  }
+
+  String _serializeComposerTextForSend(String raw) {
+    if (_composerInlineExpressionDrafts.isEmpty || raw.isEmpty) {
+      return raw;
+    }
+    var result = raw;
+    _composerInlineExpressionDrafts.forEach((placeholder, payload) {
+      result = result.replaceAll(
+        placeholder,
+        buildTurnaInlineExpressionMarker(payload: payload),
+      );
+    });
+    return result;
   }
 
   Future<List<int>> _renderComposerStickerPng(
@@ -759,12 +870,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
 
     final hasDraftText = _controller.text.trim().isNotEmpty;
     if (hasDraftText) {
-      _insertComposerEmoji(
-        TurnaPackEmojiSelection(
-          packId: selection.packId,
-          emoji: selection.emoji,
-        ),
-      );
+      _insertComposerInlineExpression(selection);
       _composerFocusNode.requestFocus();
       return;
     }
@@ -1339,6 +1445,150 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     return resolved;
   }
 
+  Widget _buildInlineExpressionSpanChild(
+    TurnaInlineExpressionPayload payload, {
+    required TextStyle baseStyle,
+    required double size,
+  }) {
+    final fallback = Text(
+      payload.emoji,
+      style: baseStyle.copyWith(fontSize: size, height: 1),
+    );
+    final relativeAssetPath = payload.relativeAssetPath?.trim() ?? '';
+    final assetType = TurnaExpressionAssetTypeX.fromWire(payload.assetType);
+    final canResolveAsset =
+        relativeAssetPath.isNotEmpty &&
+        (assetType == TurnaExpressionAssetType.staticPng ||
+            assetType == TurnaExpressionAssetType.staticWebp);
+    if (!canResolveAsset) {
+      return SizedBox(
+        width: size * 1.18,
+        height: size * 1.18,
+        child: Center(child: fallback),
+      );
+    }
+    return SizedBox(
+      width: size * 1.18,
+      height: size * 1.18,
+      child: FutureBuilder<File?>(
+        future: TurnaExpressionPackCatalogLoader.resolveCachedAsset(
+          packId: payload.packId,
+          version: payload.version,
+          relativePath: relativeAssetPath,
+        ),
+        builder: (context, snapshot) {
+          final file = snapshot.data;
+          if (file == null) {
+            return Center(child: fallback);
+          }
+          return Padding(
+            padding: const EdgeInsets.all(1),
+            child: Image.file(
+              file,
+              fit: BoxFit.contain,
+              errorBuilder: (_, _, _) => Center(child: fallback),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  List<InlineSpan> _buildLinkifiedInlineSpans(
+    String text, {
+    required TextStyle baseStyle,
+    required bool mine,
+  }) {
+    final linkMatches = kTurnaSharedUrlPattern.allMatches(text).toList();
+    final inlineMatches = findTurnaInlineExpressionMatches(text);
+    final spans = <InlineSpan>[];
+    var cursor = 0;
+    var linkIndex = 0;
+    var inlineIndex = 0;
+
+    void pushPlainText(String value) {
+      if (value.isEmpty) return;
+      spans.add(TextSpan(text: value));
+    }
+
+    while (cursor < text.length) {
+      while (linkIndex < linkMatches.length &&
+          linkMatches[linkIndex].end <= cursor) {
+        linkIndex += 1;
+      }
+      while (inlineIndex < inlineMatches.length &&
+          inlineMatches[inlineIndex].end <= cursor) {
+        inlineIndex += 1;
+      }
+
+      final nextLink = linkIndex < linkMatches.length ? linkMatches[linkIndex] : null;
+      final nextInline = inlineIndex < inlineMatches.length
+          ? inlineMatches[inlineIndex]
+          : null;
+      final nextStart = [
+        if (nextLink != null) nextLink.start,
+        if (nextInline != null) nextInline.start,
+      ];
+      if (nextStart.isEmpty) {
+        pushPlainText(text.substring(cursor));
+        break;
+      }
+      final earliestStart = nextStart.reduce(math.min);
+      if (earliestStart > cursor) {
+        pushPlainText(text.substring(cursor, earliestStart));
+        cursor = earliestStart;
+        continue;
+      }
+
+      if (nextInline != null && nextInline.start == cursor) {
+        spans.add(
+          WidgetSpan(
+            alignment: PlaceholderAlignment.middle,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 1),
+              child: _buildInlineExpressionSpanChild(
+                nextInline.payload,
+                baseStyle: baseStyle,
+                size: baseStyle.fontSize ?? 16,
+              ),
+            ),
+          ),
+        );
+        cursor = nextInline.end;
+        inlineIndex += 1;
+        continue;
+      }
+
+      if (nextLink != null && nextLink.start == cursor) {
+        final raw = nextLink.group(0) ?? '';
+        final uri = parseTurnaSharedUrl(raw);
+        if (uri == null) {
+          spans.add(TextSpan(text: raw));
+        } else {
+          spans.add(
+            TextSpan(
+              text: raw,
+              style: baseStyle.copyWith(
+                color: mine ? TurnaColors.primary800 : TurnaColors.primary,
+                decoration: TextDecoration.underline,
+              ),
+              recognizer: TapGestureRecognizer()
+                ..onTap = () => _openSharedUri(uri),
+            ),
+          );
+        }
+        cursor = nextLink.end;
+        linkIndex += 1;
+        continue;
+      }
+
+      pushPlainText(text.substring(cursor, cursor + 1));
+      cursor += 1;
+    }
+
+    return spans;
+  }
+
   Widget _buildLinkifiedMessageText(
     String text, {
     required bool mine,
@@ -1356,42 +1606,78 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                 : TurnaColors.chatIncomingText),
       fontStyle: deletedPlaceholder ? FontStyle.italic : FontStyle.normal,
     );
-    final matches = kTurnaSharedUrlPattern.allMatches(text).toList();
-    if (matches.isEmpty) {
+    final spans = _buildLinkifiedInlineSpans(
+      text,
+      baseStyle: baseStyle,
+      mine: mine,
+    );
+    if (spans.isEmpty) {
       return Text(text, style: baseStyle);
-    }
-
-    final spans = <InlineSpan>[];
-    var cursor = 0;
-    for (final match in matches) {
-      if (match.start > cursor) {
-        spans.add(TextSpan(text: text.substring(cursor, match.start)));
-      }
-      final raw = match.group(0) ?? '';
-      final uri = parseTurnaSharedUrl(raw);
-      if (uri == null) {
-        spans.add(TextSpan(text: raw));
-      } else {
-        spans.add(
-          TextSpan(
-            text: raw,
-            style: baseStyle.copyWith(
-              color: mine ? TurnaColors.primary800 : TurnaColors.primary,
-              decoration: TextDecoration.underline,
-            ),
-            recognizer: TapGestureRecognizer()
-              ..onTap = () => _openSharedUri(uri),
-          ),
-        );
-      }
-      cursor = match.end;
-    }
-    if (cursor < text.length) {
-      spans.add(TextSpan(text: text.substring(cursor)));
     }
 
     return RichText(
       text: TextSpan(style: baseStyle, children: spans),
+    );
+  }
+
+  List<InlineSpan> _buildComposerPreviewSpans(TextStyle baseStyle) {
+    final spans = <InlineSpan>[];
+    final buffer = StringBuffer();
+    final text = _controller.text;
+
+    void flushBuffer() {
+      if (buffer.isEmpty) return;
+      spans.add(TextSpan(text: buffer.toString()));
+      buffer.clear();
+    }
+
+    for (final rune in text.runes) {
+      final character = String.fromCharCode(rune);
+      final payload = _composerInlineExpressionDrafts[character];
+      if (payload == null) {
+        buffer.write(character);
+        continue;
+      }
+      flushBuffer();
+      spans.add(
+        WidgetSpan(
+          alignment: PlaceholderAlignment.middle,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 1),
+            child: _buildInlineExpressionSpanChild(
+              payload,
+              baseStyle: baseStyle,
+              size: baseStyle.fontSize ?? 16,
+            ),
+          ),
+        ),
+      );
+    }
+    flushBuffer();
+    return spans;
+  }
+
+  Widget? _buildComposerTextPreview() {
+    if (_composerInlineExpressionDrafts.isEmpty || _controller.text.isEmpty) {
+      return null;
+    }
+    const baseStyle = TextStyle(
+      fontSize: 16,
+      height: 1.25,
+      color: TurnaColors.text,
+    );
+    return IgnorePointer(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 11, 8, 11),
+        child: RichText(
+          text: TextSpan(
+            style: baseStyle,
+            children: _buildComposerPreviewSpans(baseStyle),
+          ),
+          maxLines: 4,
+          overflow: TextOverflow.clip,
+        ),
+      ),
     );
   }
 
@@ -2198,7 +2484,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     if (parsed.status != null) {
       return parsed.status!.previewLabel;
     }
-    final text = resolved.trimmedText;
+    final text = replaceTurnaInlineExpressionsWithEmoji(
+      resolved.trimmedText,
+    ).trim();
     if (text.isNotEmpty) {
       return text.length > 72 ? '${text.substring(0, 72)}...' : text;
     }
@@ -4096,7 +4384,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     _TurnaComposerSendAction action = _TurnaComposerSendAction.normal,
   }) async {
     if (_attachmentBusy || _composerActionBusy) return;
-    final text = _controller.text.trim();
+    final text = _serializeComposerTextForSend(_controller.text).trim();
     if (text.isEmpty) return;
     final editingDraft = _editingDraft;
     if (editingDraft != null) {
@@ -4114,6 +4402,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         if (!mounted) return;
         setState(() => _editingDraft = null);
         _controller.clear();
+        _clearComposerInlineExpressionDrafts();
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(const SnackBar(content: Text('Mesaj duzenlendi.')));
@@ -4142,6 +4431,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         'mode': 'default',
       });
       _controller.clear();
+      _clearComposerInlineExpressionDrafts();
       if (mounted) {
         setState(() => _replyDraft = null);
       }
@@ -4163,6 +4453,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         );
         if (!mounted) return;
         _controller.clear();
+        _clearComposerInlineExpressionDrafts();
         setState(() {
           _replyDraft = null;
           _composerActionBusy = false;
@@ -4219,6 +4510,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       });
       if (!mounted) return;
       _controller.clear();
+      _clearComposerInlineExpressionDrafts();
       setState(() {
         _replyDraft = null;
         _composerActionBusy = false;
@@ -4991,6 +5283,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   Widget _buildComposer() {
     final focused = _composerFocusNode.hasFocus;
     final composerActive = focused || _showComposerEmojiPanel;
+    final composerPreview = _buildComposerTextPreview();
     final child = _voiceRecording
         ? SafeArea(
             top: false,
@@ -5198,29 +5491,41 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                               crossAxisAlignment: CrossAxisAlignment.center,
                               children: [
                                 Expanded(
-                                  child: TextField(
-                                    controller: _controller,
-                                    focusNode: _composerFocusNode,
-                                    minLines: 1,
-                                    maxLines: 4,
-                                    textCapitalization:
-                                        TextCapitalization.sentences,
-                                    style: const TextStyle(
-                                      fontSize: 16,
-                                      height: 1.25,
-                                    ),
-                                    decoration: InputDecoration(
-                                      hintText: _editingDraft == null
-                                          ? 'Mesaj yazın'
-                                          : 'Duzenlenmis mesaji yaz',
-                                      border: InputBorder.none,
-                                      contentPadding: const EdgeInsets.fromLTRB(
-                                        14,
-                                        11,
-                                        8,
-                                        11,
+                                  child: Stack(
+                                    children: [
+                                      if (composerPreview != null)
+                                        Positioned.fill(child: composerPreview),
+                                      TextField(
+                                        controller: _controller,
+                                        focusNode: _composerFocusNode,
+                                        minLines: 1,
+                                        maxLines: 4,
+                                        textCapitalization:
+                                            TextCapitalization.sentences,
+                                        style: TextStyle(
+                                          fontSize: 16,
+                                          height: 1.25,
+                                          color:
+                                              _composerInlineExpressionDrafts.isEmpty
+                                              ? TurnaColors.text
+                                              : Colors.transparent,
+                                        ),
+                                        cursorColor: TurnaColors.text,
+                                        decoration: InputDecoration(
+                                          hintText: _editingDraft == null
+                                              ? 'Mesaj yazın'
+                                              : 'Duzenlenmis mesaji yaz',
+                                          border: InputBorder.none,
+                                          contentPadding:
+                                              const EdgeInsets.fromLTRB(
+                                                14,
+                                                11,
+                                                8,
+                                                11,
+                                              ),
+                                        ),
                                       ),
-                                    ),
+                                    ],
                                   ),
                                 ),
                                 SizedBox(

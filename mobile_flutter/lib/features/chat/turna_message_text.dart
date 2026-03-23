@@ -15,6 +15,9 @@ final RegExp _kTurnaLocationMarkerPattern = RegExp(
 final RegExp _kTurnaContactMarkerPattern = RegExp(
   r'^\[\[turna-contact:([A-Za-z0-9_-]+)\]\]\n?',
 );
+final RegExp _kTurnaInlineExpressionMarkerPattern = RegExp(
+  r'\[\[turna-inline-expression:([A-Za-z0-9_-]+)\]\]',
+);
 const String _kTurnaDeletedEveryoneMarker = '[[turna-deleted-everyone]]';
 
 class TurnaReplyPayload {
@@ -109,6 +112,62 @@ class ParsedTurnaMessageText {
   final TurnaLocationPayload? location;
   final TurnaSharedContactPayload? contact;
   final bool deletedForEveryone;
+}
+
+class TurnaInlineExpressionPayload {
+  const TurnaInlineExpressionPayload({
+    required this.packId,
+    required this.version,
+    required this.itemId,
+    required this.emoji,
+    required this.label,
+    required this.assetType,
+    this.relativeAssetPath,
+  });
+
+  final String packId;
+  final String version;
+  final String itemId;
+  final String emoji;
+  final String label;
+  final String assetType;
+  final String? relativeAssetPath;
+
+  Map<String, dynamic> toMap() => {
+    'packId': packId,
+    'version': version,
+    'itemId': itemId,
+    'emoji': emoji,
+    'label': label,
+    'assetType': assetType,
+    'relativeAssetPath': relativeAssetPath,
+  };
+
+  factory TurnaInlineExpressionPayload.fromMap(Map<String, dynamic> map) {
+    return TurnaInlineExpressionPayload(
+      packId: (map['packId'] ?? '').toString(),
+      version: (map['version'] ?? '').toString(),
+      itemId: (map['itemId'] ?? '').toString(),
+      emoji: (map['emoji'] ?? '').toString(),
+      label: (map['label'] ?? '').toString(),
+      assetType: (map['assetType'] ?? '').toString(),
+      relativeAssetPath: (map['relativeAssetPath'] ?? '').toString().trim().isEmpty
+          ? null
+          : (map['relativeAssetPath'] ?? '').toString().trim(),
+    );
+  }
+}
+
+class TurnaInlineExpressionMatch {
+  const TurnaInlineExpressionMatch({
+    required this.start,
+    required this.end,
+    required this.payload,
+  });
+
+  final int start;
+  final int end;
+  final TurnaInlineExpressionPayload payload;
 }
 
 ParsedTurnaMessageText parseTurnaMessageText(String raw) {
@@ -242,6 +301,61 @@ String buildTurnaContactEncodedText({
   return '[[turna-contact:$encoded]]';
 }
 
+String buildTurnaInlineExpressionMarker({
+  required TurnaInlineExpressionPayload payload,
+}) {
+  final encoded = base64UrlEncode(
+    utf8.encode(jsonEncode(payload.toMap())),
+  ).replaceAll('=', '');
+  return '[[turna-inline-expression:$encoded]]';
+}
+
+List<TurnaInlineExpressionMatch> findTurnaInlineExpressionMatches(String raw) {
+  final matches = <TurnaInlineExpressionMatch>[];
+  for (final match in _kTurnaInlineExpressionMarkerPattern.allMatches(raw)) {
+    try {
+      final encoded = match.group(1)!;
+      final decoded = utf8.decode(
+        base64Url.decode(base64Url.normalize(encoded)),
+      );
+      final payload = TurnaInlineExpressionPayload.fromMap(
+        jsonDecode(decoded) as Map<String, dynamic>,
+      );
+      if (payload.emoji.trim().isEmpty) {
+        continue;
+      }
+      matches.add(
+        TurnaInlineExpressionMatch(
+          start: match.start,
+          end: match.end,
+          payload: payload,
+        ),
+      );
+    } catch (_) {
+      continue;
+    }
+  }
+  return matches;
+}
+
+String replaceTurnaInlineExpressionsWithEmoji(String raw) {
+  final matches = findTurnaInlineExpressionMatches(raw);
+  if (matches.isEmpty) return raw;
+  final buffer = StringBuffer();
+  var cursor = 0;
+  for (final match in matches) {
+    if (match.start > cursor) {
+      buffer.write(raw.substring(cursor, match.start));
+    }
+    buffer.write(match.payload.emoji);
+    cursor = match.end;
+  }
+  if (cursor < raw.length) {
+    buffer.write(raw.substring(cursor));
+  }
+  return buffer.toString();
+}
+
 String sanitizeTurnaChatPreviewText(String raw) {
   final parsed = parseTurnaMessageText(raw);
   if (parsed.deletedForEveryone) return parsed.text;
@@ -251,7 +365,7 @@ String sanitizeTurnaChatPreviewText(String raw) {
   if (parsed.contact != null) {
     return parsed.contact!.previewLabel;
   }
-  final cleaned = parsed.text.trim();
+  final cleaned = replaceTurnaInlineExpressionsWithEmoji(parsed.text).trim();
   if (cleaned.isNotEmpty) return cleaned;
   if (parsed.status != null) {
     return parsed.status!.previewLabel;
